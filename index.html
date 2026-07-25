@@ -2,11 +2,15 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#0f1115">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Mes Séries">
+<link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
 <title>Mes Séries</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230f1115'/%3E%3Crect x='18' y='30' width='64' height='44' rx='7' fill='none' stroke='%23ff6b57' stroke-width='7'/%3E%3Cpath d='M36 30 50 16 64 30' fill='none' stroke='%23ff6b57' stroke-width='7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
@@ -18,22 +22,38 @@
     --safe-t:env(safe-area-inset-top,0px);
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html{background:var(--bg);height:100%;-webkit-text-size-adjust:100%}
   html,body{margin:0;padding:0;background:var(--bg);color:var(--text)}
   body{
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,system-ui,sans-serif;
-    font-size:15px;line-height:1.45;overscroll-behavior-y:none;
+    font-size:15px;line-height:1.45;
+    min-height:100%;
+    overscroll-behavior:none;              /* supprime le rebond « page web » */
+    touch-action:manipulation;             /* supprime le zoom au double-tap */
+    -webkit-user-select:none;user-select:none;
+    -webkit-font-smoothing:antialiased;
   }
+  input,textarea{-webkit-user-select:text;user-select:text}
+  body.booting .app,body.booting nav{opacity:0}
   button,input,select,textarea{font:inherit;color:inherit}
   button{background:none;border:0;cursor:pointer;padding:0}
   a{color:var(--accent);text-decoration:none}
   img{display:block}
-  .app{max-width:720px;margin:0 auto;min-height:100vh;padding-bottom:calc(72px + var(--safe-b))}
+  .app{max-width:720px;margin:0 auto;min-height:100vh;padding-bottom:calc(76px + var(--safe-b))}
+  @supports (min-height:100dvh){ .app{min-height:100dvh} }
+  /* transition d'écran, façon application */
+  .app.enter{animation:slidein .26s cubic-bezier(.22,.68,.32,1)}
+  .app.back{animation:slideback .26s cubic-bezier(.22,.68,.32,1)}
+  @keyframes slidein{from{opacity:.25;transform:translateX(16px)}to{opacity:1;transform:none}}
+  @keyframes slideback{from{opacity:.25;transform:translateX(-16px)}to{opacity:1;transform:none}}
+  @media (prefers-reduced-motion:reduce){ .app.enter,.app.back{animation:none} }
 
   /* ---------- Header ---------- */
   header{
-    position:sticky;top:0;z-index:30;background:rgba(15,17,21,.88);
-    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    position:sticky;top:0;z-index:30;background:rgba(15,17,21,.9);
+    backdrop-filter:blur(18px) saturate(160%);-webkit-backdrop-filter:blur(18px) saturate(160%);
     border-bottom:1px solid var(--line);padding-top:var(--safe-t);
+    padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px);
   }
   .hbar{display:flex;align-items:center;gap:10px;padding:12px 16px;min-height:56px}
   .htitle{font-size:19px;font-weight:700;letter-spacing:-.02em;flex:1;
@@ -151,13 +171,16 @@
 
   /* ---------- Nav ---------- */
   nav{position:fixed;bottom:0;left:0;right:0;z-index:40;background:rgba(15,17,21,.94);
-    backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
-    border-top:1px solid var(--line);padding-bottom:var(--safe-b)}
+    backdrop-filter:blur(18px) saturate(160%);-webkit-backdrop-filter:blur(18px) saturate(160%);
+    border-top:1px solid var(--line);padding-bottom:var(--safe-b);
+    padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
   .navin{max-width:720px;margin:0 auto;display:grid;grid-template-columns:repeat(3,1fr)}
-  .tab{padding:9px 0 8px;display:flex;flex-direction:column;align-items:center;gap:3px;
-    color:var(--muted);font-size:10.5px;font-weight:600}
-  .tab svg{width:22px;height:22px}
+  .tab{padding:10px 0 9px;min-height:52px;display:flex;flex-direction:column;align-items:center;gap:3px;
+    color:var(--muted);font-size:10.5px;font-weight:600;transition:color .15s}
+  .tab svg{width:23px;height:23px;transition:transform .18s}
   .tab.on{color:var(--accent)}
+  .tab.on svg{transform:translateY(-1px) scale(1.06)}
+  .tab:active svg{transform:scale(.9)}
 
   /* ---------- Misc ---------- */
   .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + var(--safe-b));
@@ -227,7 +250,7 @@
   .sectitle .cnt{color:var(--accent);margin-left:4px}
 </style>
 </head>
-<body>
+<body class="booting">
 <div class="app" id="app"></div>
 <nav><div class="navin" id="nav"></div></nav>
 <div class="toast" id="toast"></div>
@@ -255,9 +278,34 @@ const I = {
 };
 
 /* ============================ Stockage ============================ */
+/* IndexedDB en base principale (quota large, non purgé comme localStorage),
+   miroir localStorage en secours, et écriture forcée dès que l'app passe en arrière-plan. */
 const KEY = 'mesSeries.v1';
-let memoryOnly = false;
+const IDB_NAME = 'mesSeries', IDB_STORE = 'kv', IDB_KEY = 'db';
+let memoryOnly = false, storageMode = 'idb';
 let db = { apiKey:'', lang:'fr-FR', shows:{}, movies:{}, lastExport:null, v:1 };
+
+function idbOpen(){
+  return new Promise((res,rej)=>{
+    if(!self.indexedDB) return rej(new Error('no idb'));
+    const r = indexedDB.open(IDB_NAME, 1);
+    r.onupgradeneeded = ()=>{ if(!r.result.objectStoreNames.contains(IDB_STORE)) r.result.createObjectStore(IDB_STORE); };
+    r.onsuccess = ()=> res(r.result);
+    r.onerror = ()=> rej(r.error || new Error('idb error'));
+    r.onblocked = ()=> rej(new Error('idb blocked'));
+  });
+}
+function idbReq(mode, fn){
+  return idbOpen().then(conn => new Promise((res,rej)=>{
+    const tx = conn.transaction(IDB_STORE, mode);
+    const rq = fn(tx.objectStore(IDB_STORE));
+    rq.onsuccess = ()=> res(rq.result);
+    rq.onerror = ()=> rej(rq.error);
+    tx.oncomplete = ()=> conn.close();
+  }));
+}
+const idbGet = ()=> idbReq('readonly', st => st.get(IDB_KEY));
+const idbSet = v => idbReq('readwrite', st => st.put(v, IDB_KEY));
 
 /* Demande au navigateur de marquer le stockage comme "persistant" :
    il ne sera pas purgé automatiquement pour faire de la place. */
@@ -269,22 +317,52 @@ async function askPersist(){
   }catch(e){}
 }
 
-function loadDB(){
-  try{
-    const raw = localStorage.getItem(KEY);
-    localStorage.setItem(KEY+'.probe','1'); localStorage.removeItem(KEY+'.probe');
-    if(raw) db = Object.assign(db, JSON.parse(raw));
-  }catch(e){ memoryOnly = true; }
+async function loadDB(){
+  let loaded = null;
+  try{ loaded = await idbGet(); }
+  catch(e){ storageMode = 'ls'; }
+
+  if(!loaded){
+    /* Première ouverture après la mise à jour : on récupère l'ancienne base localStorage */
+    try{
+      const raw = localStorage.getItem(KEY);
+      if(raw){ loaded = JSON.parse(raw); }
+    }catch(e){}
+  }
+  if(loaded && typeof loaded === 'object') db = Object.assign(db, loaded);
+
+  /* Vérifie qu'au moins un canal d'écriture fonctionne */
+  try{ await writeNow(); }
+  catch(e){
+    try{ localStorage.setItem(KEY, JSON.stringify(db)); storageMode = 'ls'; }
+    catch(e2){ memoryOnly = true; }
+  }
 }
-let saveTimer = null;
+
+let saveTimer = null, dirty = false;
 function saveDB(){
+  dirty = true;
   if(memoryOnly) return;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(()=>{
-    try{ localStorage.setItem(KEY, JSON.stringify(db)); }
-    catch(e){ memoryOnly = true; toast("Stockage plein ou indisponible — pense à exporter"); }
-  }, 120);
+  saveTimer = setTimeout(()=>{ writeNow().catch(()=>{}); }, 150);
 }
+async function writeNow(){
+  if(memoryOnly) return;
+  const snapshot = JSON.parse(JSON.stringify(db));
+  let ok = false;
+  try{ await idbSet(snapshot); ok = true; storageMode = 'idb'; }
+  catch(e){ storageMode = 'ls'; }
+  /* miroir localStorage : secours si IndexedDB est vidé, et compatibilité avec l'ancienne version */
+  try{ localStorage.setItem(KEY, JSON.stringify(snapshot)); ok = true; }
+  catch(e){}
+  if(!ok) throw new Error('aucun stockage disponible');
+  dirty = false;
+}
+/* iOS peut tuer l'app sans prévenir : on écrit dès qu'elle passe en arrière-plan */
+function flushDB(){ if(dirty){ clearTimeout(saveTimer); writeNow().catch(()=>{}); } }
+document.addEventListener('visibilitychange', ()=>{ if(document.hidden) flushDB(); });
+window.addEventListener('pagehide', flushDB);
+window.addEventListener('blur', flushDB);
 
 /* ============================ TMDB ============================ */
 const IMG = (p,size)=> p ? 'https://image.tmdb.org/t/p/'+size+p : '';
@@ -453,7 +531,41 @@ let params = {};
 let ui = { profTab:'series', searchType:'tv', searchQ:'', searchRes:null, searching:false,
            openSeasons:{}, busy:false };
 
-function go(v, p){ view = v; params = p||{}; window.scrollTo(0,0); render(); }
+const DEPTH = { search:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1 };
+let navDir = 'none';
+function go(v, p, dir){
+  if(view===v && JSON.stringify(params)===JSON.stringify(p||{})) { window.scrollTo(0,0); return; }
+  const a = DEPTH[view]||0, b = DEPTH[v]||0;
+  navDir = dir || (b > a ? 'enter' : b < a ? 'back' : 'none');
+  view = v; params = p||{}; window.scrollTo(0,0); render();
+}
+/* Cible du retour selon l'écran courant — utilisée par la flèche et par le balayage */
+function currentBack(){
+  if(view==='show' || view==='movie') return params.from || 'follow';
+  if(view==='preview') return 'search';
+  if(view==='settings') return params.from || null;
+  return null;
+}
+function goBack(){
+  if(document.getElementById('sheet').classList.contains('show')) return closeSheet();
+  const t = currentBack();
+  if(t) go(t, {}, 'back');
+}
+/* Balayage depuis le bord gauche pour revenir en arrière */
+(function swipeBack(){
+  let x0=null, y0=null, t0=0;
+  document.addEventListener('touchstart', e=>{
+    const t = e.touches[0];
+    if(t.clientX <= 28 && currentBack()){ x0=t.clientX; y0=t.clientY; t0=Date.now(); } else x0=null;
+  }, {passive:true});
+  document.addEventListener('touchend', e=>{
+    if(x0===null) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX-x0, dy = Math.abs(t.clientY-y0);
+    if(dx > 60 && dy < 45 && Date.now()-t0 < 700) goBack();
+    x0=null;
+  }, {passive:true});
+})();
 
 /* ============================ Rendu ============================ */
 function render(){
@@ -467,6 +579,9 @@ function render(){
   else if(view==='preview') html = viewPreview();
   else if(view==='movie') html = viewMovie();
   app.innerHTML = html;
+  app.classList.remove('enter','back');
+  if(navDir==='enter' || navDir==='back'){ void app.offsetWidth; app.classList.add(navDir); }
+  navDir = 'none';
   renderNav();
   if(view==='search'){
     const inp = document.getElementById('q');
@@ -809,7 +924,7 @@ function castStrip(credits){
 
 function viewPreview(){
   const isTv = params.type==='tv';
-  const back = "go('search')";
+  const back = "goBack()";
   const st = ui.preview || {};
 
   if(st.loading) return header('Chargement…',{back:back})+
@@ -892,7 +1007,7 @@ function viewPreview(){
 /* ---------- Vue : fiche film de ma liste ---------- */
 function viewMovie(){
   const m = db.movies[params.id];
-  const back = "go('"+(params.from||'profile')+"')";
+  const back = "goBack()";
   if(!m) return header('Introuvable',{back:"go('profile')"});
   let html = header(m.title,{back:back,
     right:'<button class="iconbtn" onclick="movieMenu('+m.id+')">'+I.dots+'</button>'});
@@ -929,7 +1044,7 @@ function removeMovie(id){
 function viewShow(){
   const s = db.shows[params.id];
   if(!s) return header('Introuvable',{back:"go('follow')"});
-  const back = "go('"+(params.from||'follow')+"')";
+  const back = "goBack()";
   const p = progress(s);
   const nx = nextToWatch(s);
   const total = allEpisodes(s,false).filter(ep=>s.watched[key(ep.s,ep.e)])
@@ -1067,7 +1182,7 @@ function quickWatch(id, ev){
 
 /* ---------- Vue : Réglages ---------- */
 function viewSettings(){
-  let html = header('Réglages', {back: params.from ? "go('"+params.from+"')" : null});
+  let html = header('Réglages', {back: params.from ? "goBack()" : null});
 
   html += '<div class="sectitle">Connexion TMDB</div>';
   html += '<div class="wrap" style="padding-top:0">'+
@@ -1168,27 +1283,24 @@ function doWipe(){
 }
 
 /* ============================ Démarrage ============================ */
-loadDB();
-// migration douce : garantir la présence des champs
-Object.values(db.shows).forEach(s=>{ if(!s.watched) s.watched={}; if(!s.seasons) s.seasons={}; });
+async function boot(){
+  await loadDB();
+  // migration douce : garantir la présence des champs
+  Object.values(db.shows).forEach(s=>{ if(!s.watched) s.watched={}; if(!s.seasons) s.seasons={}; });
+  askPersist();
+  document.body.classList.remove('booting');
+  render();
+  if(!db.apiKey) go('settings', {from:'follow'});
+  if(memoryOnly) toast('Stockage indisponible : pense à exporter tes données');
+}
+boot();
 
-// manifeste PWA généré à la volée (permet "Ajouter à l'écran d'accueil")
-try{
-  const mf = {
-    name:'Mes Séries', short_name:'Mes Séries', start_url:'.', display:'standalone',
-    background_color:'#0f1115', theme_color:'#0f1115',
-    icons:[{ src:"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230f1115'/%3E%3Crect x='18' y='30' width='64' height='44' rx='7' fill='none' stroke='%23ff6b57' stroke-width='7'/%3E%3Cpath d='M36 30 50 16 64 30' fill='none' stroke='%23ff6b57' stroke-width='7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E",
-      sizes:'any', type:'image/svg+xml' }]
-  };
-  const link = document.createElement('link');
-  link.rel='manifest';
-  link.href = URL.createObjectURL(new Blob([JSON.stringify(mf)],{type:'application/manifest+json'}));
-  document.head.appendChild(link);
-}catch(e){}
-
-askPersist();
-render();
-if(!db.apiKey) go('settings', {from:'follow'});
+/* Service worker : démarrage instantané et fonctionnement hors-ligne */
+if('serviceWorker' in navigator && location.protocol.startsWith('http')){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('./sw.js').catch(()=>{});
+  });
+}
 </script>
 </body>
 </html>
