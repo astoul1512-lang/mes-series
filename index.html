@@ -283,7 +283,8 @@ const I = {
 const KEY = 'mesSeries.v1';
 const IDB_NAME = 'mesSeries', IDB_STORE = 'kv', IDB_KEY = 'db';
 let memoryOnly = false, storageMode = 'idb';
-let db = { apiKey:'', lang:'fr-FR', shows:{}, movies:{}, lastExport:null, v:1 };
+let db = { apiKey:'', lang:'fr-FR', shows:{}, movies:{}, lastExport:null,
+           sync:{url:'',key:''}, auth:null, deleted:{shows:{},movies:{}}, syncedAt:null, v:1 };
 
 function idbOpen(){
   return new Promise((res,rej)=>{
@@ -342,6 +343,7 @@ async function loadDB(){
 let saveTimer = null, dirty = false;
 function saveDB(){
   dirty = true;
+  if(typeof scheduleSync === 'function') scheduleSync();
   if(memoryOnly) return;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(()=>{ writeNow().catch(()=>{}); }, 150);
@@ -416,6 +418,141 @@ async function fetchShowFull(id, onStep){
     } : null,
     seasons, updated: Date.now()
   };
+}
+
+/* ============================ Synchronisation ============================ */
+/* Sauvegarde en ligne via Supabase : chaque utilisateur possède une ligne unique
+   contenant l'ensemble de ses données. Les appareils fusionnent au lieu d'écraser. */
+
+const TABLE = 'mes_series';
+let syncing = false, syncTimer = null, syncState = 'off', syncError = '';
+
+const syncReady = ()=> !!(db.sync && db.sync.url && db.sync.key);
+const signedIn  = ()=> !!(db.auth && db.auth.token && db.auth.uid);
+const sbBase    = ()=> String(db.sync.url).replace(/\/+$/,'');
+
+async function sbFetch(path, opt, retry){
+  opt = opt || {};
+  const h = Object.assign({ apikey: db.sync.key, 'Content-Type':'application/json' }, opt.headers||{});
+  if(signedIn() && !opt.noAuth) h.Authorization = 'Bearer ' + db.auth.token;
+  const r = await fetch(sbBase()+path, Object.assign({}, opt, {headers:h}));
+  if(r.status === 401 && signedIn() && !retry){
+    if(await sbRefresh()) return sbFetch(path, opt, true);
+  }
+  const txt = await r.text();
+  let body = null; try{ body = txt ? JSON.parse(txt) : null; }catch(e){ body = txt; }
+  if(!r.ok){
+    const msg = (body && (body.msg || body.message || body.error_description || body.error)) || ('erreur '+r.status);
+    const err = new Error(msg); err.status = r.status; throw err;
+  }
+  return body;
+}
+
+async function sbSignUp(email, password){
+  const d = await sbFetch('/auth/v1/signup', {method:'POST', noAuth:true,
+    body: JSON.stringify({email, password})});
+  if(d && d.access_token) return applySession(d);
+  /* confirmation par e-mail activée côté Supabase */
+  throw new Error('CONFIRM');
+}
+async function sbSignIn(email, password){
+  const d = await sbFetch('/auth/v1/token?grant_type=password', {method:'POST', noAuth:true,
+    body: JSON.stringify({email, password})});
+  return applySession(d);
+}
+async function sbRefresh(){
+  try{
+    const d = await sbFetch('/auth/v1/token?grant_type=refresh_token', {method:'POST', noAuth:true,
+      body: JSON.stringify({refresh_token: db.auth.refresh})});
+    applySession(d); return true;
+  }catch(e){ return false; }
+}
+function applySession(d){
+  if(!d || !d.access_token) throw new Error('réponse inattendue du serveur');
+  db.auth = { token:d.access_token, refresh:d.refresh_token,
+              uid:(d.user&&d.user.id)||(db.auth&&db.auth.uid), email:(d.user&&d.user.email)||(db.auth&&db.auth.email) };
+  saveDB();
+  return db.auth;
+}
+function sbSignOut(){ db.auth = null; syncState='off'; saveDB(); render(); }
+
+/* --- Fusion : on ne perd jamais un épisode coché, et les suppressions se propagent --- */
+function payload(){
+  return { apiKey: db.apiKey, lang: db.lang, shows: db.shows, movies: db.movies,
+           deleted: db.deleted || {shows:{},movies:{}} };
+}
+function mergeRemote(rem){
+  if(!rem || typeof rem !== 'object') return false;
+  const del = db.deleted = db.deleted || {shows:{},movies:{}};
+  const rdel = rem.deleted || {shows:{},movies:{}};
+  ['shows','movies'].forEach(k=>{
+    Object.keys(rdel[k]||{}).forEach(id=>{
+      if(!del[k][id] || rdel[k][id] > del[k][id]) del[k][id] = rdel[k][id];
+    });
+  });
+
+  let changed = false;
+  /* séries */
+  Object.values(rem.shows||{}).forEach(rs=>{
+    if(del.shows[rs.id] && del.shows[rs.id] > (rs.addedAt||0)) return;   // supprimée ici après coup
+    const ls = db.shows[rs.id];
+    if(!ls){ db.shows[rs.id] = rs; changed = true; return; }
+    /* fiche la plus récente, union des épisodes vus */
+    const base = (rs.updated||0) > (ls.updated||0) ? Object.assign({}, rs) : Object.assign({}, ls);
+    const w = Object.assign({}, ls.watched||{});
+    Object.keys(rs.watched||{}).forEach(k=>{ if(!w[k]) { w[k] = rs.watched[k]; changed = true; } });
+    base.watched = w;
+    base.addedAt = Math.min(ls.addedAt||Date.now(), rs.addedAt||Date.now());
+    db.shows[rs.id] = base;
+  });
+  /* films */
+  Object.values(rem.movies||{}).forEach(rm=>{
+    if(del.movies[rm.id] && del.movies[rm.id] > (rm.addedAt||0)) return;
+    const lm = db.movies[rm.id];
+    if(!lm){ db.movies[rm.id] = rm; changed = true; return; }
+    if((rm.watchedAt||0) > (lm.watchedAt||0)){ db.movies[rm.id] = rm; changed = true; }
+  });
+  /* suppressions distantes à appliquer localement */
+  ['shows','movies'].forEach(k=>{
+    Object.keys(del[k]).forEach(id=>{
+      const it = db[k][id];
+      if(it && del[k][id] > (it.addedAt||0)){ delete db[k][id]; changed = true; }
+    });
+  });
+  if(!db.apiKey && rem.apiKey){ db.apiKey = rem.apiKey; changed = true; }
+  return changed;
+}
+function markDeleted(kind, id){
+  db.deleted = db.deleted || {shows:{},movies:{}};
+  db.deleted[kind][id] = Date.now();
+}
+
+async function syncNow(silent){
+  if(!syncReady() || !signedIn() || syncing) return;
+  syncing = true; syncState = 'busy'; syncError = ''; if(!silent) render();
+  try{
+    const got = await sbFetch('/rest/v1/'+TABLE+'?select=data&user_id=eq.'+encodeURIComponent(db.auth.uid), {});
+    if(Array.isArray(got) && got.length) mergeRemote(got[0].data);
+    await sbFetch('/rest/v1/'+TABLE, {
+      method:'POST',
+      headers:{ Prefer:'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ user_id: db.auth.uid, data: payload(), updated_at: new Date().toISOString() })
+    });
+    db.syncedAt = Date.now(); syncState = 'ok';
+    await writeNow().catch(()=>{});
+    if(!silent) toast('Synchronisé');
+    render();
+  }catch(e){
+    syncState = 'err'; syncError = e.message || 'échec';
+    if(!silent) toast('Synchro impossible : '+syncError);
+    render();
+  }
+  syncing = false;
+}
+function scheduleSync(){
+  if(!syncReady() || !signedIn()) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(()=> syncNow(true), 4000);
 }
 
 /* ============================ Utilitaires ============================ */
@@ -531,10 +668,10 @@ let params = {};
 let ui = { profTab:'series', searchType:'tv', searchQ:'', searchRes:null, searching:false,
            openSeasons:{}, busy:false };
 
-const DEPTH = { search:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1 };
+const DEPTH = { search:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, account:2 };
 let navDir = 'none';
 function go(v, p, dir){
-  if(view===v && JSON.stringify(params)===JSON.stringify(p||{})) { window.scrollTo(0,0); return; }
+  if(view===v && JSON.stringify(params)===JSON.stringify(p||{})){ window.scrollTo(0,0); render(); return; }
   const a = DEPTH[view]||0, b = DEPTH[v]||0;
   navDir = dir || (b > a ? 'enter' : b < a ? 'back' : 'none');
   view = v; params = p||{}; window.scrollTo(0,0); render();
@@ -544,6 +681,7 @@ function currentBack(){
   if(view==='show' || view==='movie') return params.from || 'follow';
   if(view==='preview') return 'search';
   if(view==='settings') return params.from || null;
+  if(view==='account') return 'settings';
   return null;
 }
 function goBack(){
@@ -578,6 +716,7 @@ function render(){
   else if(view==='show') html = viewShow();
   else if(view==='preview') html = viewPreview();
   else if(view==='movie') html = viewMovie();
+  else if(view==='account') html = viewAccount();
   app.innerHTML = html;
   app.classList.remove('enter','back');
   if(navDir==='enter' || navDir==='back'){ void app.offsetWidth; app.classList.add(navDir); }
@@ -595,6 +734,7 @@ function renderNav(){
     ['profile','Mon profil',I.user]
   ];
   const cur = (view==='preview') ? 'search'
+            : (view==='account') ? 'profile'
             : (view==='show'||view==='movie'||view==='settings') ? (params.from==='search'?'search':(params.from||'profile'))
             : view;
   document.getElementById('nav').style.gridTemplateColumns = '';
@@ -794,6 +934,7 @@ function movieCard(m){
 
 function profileMenu(){
   openSheet('<h3>Options</h3><p class="small muted" style="margin:0 0 8px">Réglages et sauvegardes</p>'+
+    '<button class="opt" onclick="closeSheet();go(\'account\',{from:\'profile\'})">Compte & synchro</button>'+
     '<button class="opt" onclick="closeSheet();go(\'settings\',{from:\'profile\'})">Réglages</button>'+
     '<button class="opt" onclick="closeSheet();exportData()">Exporter une sauvegarde</button>'+
     '<button class="opt" onclick="closeSheet();document.getElementById(\'impHidden\').click()">Importer une sauvegarde</button>'+
@@ -1036,7 +1177,7 @@ function movieMenu(id){
     '<button class="opt" onclick="closeSheet()">Annuler</button>');
 }
 function removeMovie(id){
-  delete db.movies[id]; saveDB(); closeSheet();
+  markDeleted('movies',id); delete db.movies[id]; saveDB(); closeSheet();
   if(view==='movie'){ ui.profTab='films'; go('profile'); } else render();
 }
 
@@ -1138,7 +1279,7 @@ function markAllAired(id){
   saveDB(); closeSheet(); render(); toast('Tout marqué comme vu');
 }
 function unmarkAll(id){ db.shows[id].watched = {}; saveDB(); closeSheet(); render(); }
-function removeShow(id){ delete db.shows[id]; saveDB(); closeSheet(); go('follow'); }
+function removeShow(id){ markDeleted('shows',id); delete db.shows[id]; saveDB(); closeSheet(); go('follow'); }
 
 function toggleEp(id,s,e){
   const sh = db.shows[id], k = key(s,e);
@@ -1180,6 +1321,99 @@ function quickWatch(id, ev){
   toast('S'+nx.s+'E'+nx.e+' vu ✓');
 }
 
+/* ---------- Vue : Compte & synchronisation ---------- */
+function viewAccount(){
+  let html = header('Compte & synchro', {back:"goBack()"});
+
+  if(!syncReady()){
+    html += '<div class="wrap">'+
+      '<div class="card" style="padding:16px">'+
+        '<div style="font-weight:680;margin-bottom:6px">Connecter une sauvegarde en ligne</div>'+
+        '<div class="small muted">Tes séries sont stockées sur ton propre espace Supabase (gratuit). '+
+        'Elles deviennent impossibles à perdre et identiques sur tous tes appareils.</div>'+
+      '</div>'+
+      '<div style="height:16px"></div>'+
+      '<label class="fld"><span>URL du projet Supabase</span>'+
+        '<input type="text" id="sburl" placeholder="https://xxxx.supabase.co" autocapitalize="off" autocorrect="off" spellcheck="false" value="'+esc(db.sync.url)+'"></label>'+
+      '<label class="fld"><span>Clé publique (anon)</span>'+
+        '<input type="text" id="sbkey" placeholder="eyJhbGciOi..." autocapitalize="off" autocorrect="off" spellcheck="false" value="'+esc(db.sync.key)+'">'+
+        '<em>Dans Supabase : Project Settings → API. Cette clé est prévue pour être publique.</em></label>'+
+      '<button class="btn block" onclick="saveSync()">Enregistrer</button>'+
+    '</div>';
+    return html + '<div style="height:30px"></div>';
+  }
+
+  if(!signedIn()){
+    html += '<div class="wrap">'+
+      '<div class="small muted" style="margin-bottom:14px">Serveur connecté. Crée ton compte, ou connecte-toi si tu en as déjà un sur un autre appareil.</div>'+
+      '<label class="fld"><span>Adresse e-mail</span>'+
+        '<input type="text" id="acmail" inputmode="email" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="toi@exemple.fr" value="'+esc((db.auth&&db.auth.email)||'')+'"></label>'+
+      '<label class="fld"><span>Mot de passe</span>'+
+        '<input type="password" id="acpass" placeholder="au moins 6 caractères">'+
+        '<em>Choisis un mot de passe dédié à cette app. Il n\'est jamais stocké sur l\'appareil.</em></label>'+
+      '<button class="btn block" style="margin-bottom:10px" onclick="doSignIn()">Se connecter</button>'+
+      '<button class="btn ghost block" onclick="doSignUp()">Créer un compte</button>'+
+    '</div>';
+    return html + '<div style="height:30px"></div>';
+  }
+
+  const etat = syncState==='busy' ? 'Synchronisation en cours…'
+             : syncState==='err'  ? 'Dernière tentative en échec : '+esc(syncError)
+             : db.syncedAt ? 'Dernière synchro : '+fmtDate(new Date(db.syncedAt).toISOString().slice(0,10))
+             : 'Jamais synchronisé';
+  const col = syncState==='err' ? 'var(--warn)' : syncState==='ok' ? 'var(--ok)' : 'var(--muted)';
+
+  html += '<div class="wrap">'+
+    '<div class="card" style="padding:16px;margin-bottom:16px">'+
+      '<div class="small muted">Connecté en tant que</div>'+
+      '<div style="font-weight:680;margin-top:2px">'+esc(db.auth.email||'—')+'</div>'+
+      '<div class="small" style="color:'+col+';margin-top:8px">'+
+        (syncState==='busy'?'<span class="spin"></span> ':'')+etat+'</div>'+
+    '</div>'+
+    '<button class="btn block" style="margin-bottom:10px" onclick="syncNow()">Synchroniser maintenant</button>'+
+    '<button class="btn ghost block" style="margin-bottom:10px" onclick="go(\'account\',{reset:1});resetSync()">Changer de serveur</button>'+
+    '<button class="btn ghost block" style="color:#ff5a5a" onclick="sbSignOut()">Se déconnecter</button>'+
+    '<div class="tiny muted" style="margin-top:14px">La synchro part automatiquement quelques secondes après chaque changement, et à chaque ouverture de l\'app.</div>'+
+  '</div>';
+  return html + '<div style="height:30px"></div>';
+}
+
+function saveSync(){
+  const url = document.getElementById('sburl').value.trim();
+  const k   = document.getElementById('sbkey').value.trim();
+  if(!/^https?:\/\/.+/.test(url)) return toast('URL invalide');
+  if(k.length < 20) return toast('Clé invalide');
+  db.sync = {url:url.replace(/\/+$/,''), key:k}; saveDB(); render();
+  toast('Serveur enregistré');
+}
+function resetSync(){ db.sync={url:'',key:''}; db.auth=null; saveDB(); render(); }
+
+async function doSignIn(){
+  const email = document.getElementById('acmail').value.trim();
+  const pass  = document.getElementById('acpass').value;
+  if(!email || !pass) return toast('Renseigne e-mail et mot de passe');
+  toast('Connexion…');
+  try{
+    await sbSignIn(email, pass);
+    render(); toast('Connecté');
+    await syncNow();
+  }catch(e){ toast(/Invalid/i.test(e.message) ? 'E-mail ou mot de passe incorrect' : 'Échec : '+e.message); }
+}
+async function doSignUp(){
+  const email = document.getElementById('acmail').value.trim();
+  const pass  = document.getElementById('acpass').value;
+  if(!email || pass.length < 6) return toast('E-mail requis, mot de passe de 6 caractères minimum');
+  toast('Création du compte…');
+  try{
+    await sbSignUp(email, pass);
+    render(); toast('Compte créé');
+    await syncNow();
+  }catch(e){
+    if(e.message === 'CONFIRM') toast('Compte créé : confirme l\'e-mail reçu, puis connecte-toi');
+    else toast('Échec : '+e.message);
+  }
+}
+
 /* ---------- Vue : Réglages ---------- */
 function viewSettings(){
   let html = header('Réglages', {back: params.from ? "goBack()" : null});
@@ -1196,6 +1430,14 @@ function viewSettings(){
         ['fr-FR','en-US','es-ES','de-DE','it-IT'].map(l=>'<option value="'+l+'" '+(db.lang===l?'selected':'')+'>'+l+'</option>').join('')+
       '</select></label>'+
     '<button class="btn block" onclick="saveSettings()">Enregistrer</button>'+
+  '</div>';
+
+  html += '<div class="sectitle">Sauvegarde en ligne</div>';
+  html += '<div class="wrap" style="padding-top:0">'+
+    '<button class="btn ghost block" onclick="go(\'account\',{from:\'profile\'})">'+
+      (signedIn() ? 'Compte connecté · '+esc(db.auth.email||'') : 'Configurer la synchro entre appareils')+
+    '</button>'+
+    (signedIn() ? '' : '<div class="tiny muted" style="margin-top:8px">Recommandé : tes données sont alors sauvegardées en ligne et identiques sur iPhone et ordinateur.</div>')+
   '</div>';
 
   html += '<div class="sectitle">Mes données</div>';
@@ -1292,6 +1534,7 @@ async function boot(){
   render();
   if(!db.apiKey) go('settings', {from:'follow'});
   if(memoryOnly) toast('Stockage indisponible : pense à exporter tes données');
+  if(syncReady() && signedIn()) syncNow(true);
 }
 boot();
 
