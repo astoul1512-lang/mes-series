@@ -153,7 +153,7 @@
   nav{position:fixed;bottom:0;left:0;right:0;z-index:40;background:rgba(15,17,21,.94);
     backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
     border-top:1px solid var(--line);padding-bottom:var(--safe-b)}
-  .navin{max-width:720px;margin:0 auto;display:grid;grid-template-columns:repeat(4,1fr)}
+  .navin{max-width:720px;margin:0 auto;display:grid;grid-template-columns:repeat(3,1fr)}
   .tab{padding:9px 0 8px;display:flex;flex-direction:column;align-items:center;gap:3px;
     color:var(--muted);font-size:10.5px;font-weight:600}
   .tab svg{width:22px;height:22px}
@@ -206,6 +206,25 @@
     padding:9px 13px;text-align:center;min-width:78px}
   .spill b{display:block;font-size:13px}
   .spill span{display:block;font-size:11px;color:var(--muted);line-height:1.35}
+
+  /* ---------- Profil ---------- */
+  .phead{display:flex;align-items:center;gap:14px;padding:18px 16px 4px}
+  .avatar{width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#b3452f);
+    display:grid;place-items:center;font-size:22px;font-weight:750;color:#fff;flex:none}
+  .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:12px;padding:4px 16px;align-items:start}
+  .pcard{position:relative;text-align:left}
+  .pcard .poster{width:100%;height:auto;aspect-ratio:2/3}
+  .pcard .pbadge{position:absolute;top:6px;right:6px;background:rgba(10,12,16,.82);
+    backdrop-filter:blur(6px);color:#fff;font-size:10.5px;font-weight:700;padding:3px 6px;border-radius:6px}
+  .pcard .pbadge.done{background:rgba(62,207,142,.9);color:#08130d}
+  .pcard .pbar{position:absolute;left:0;right:0;bottom:0;height:4px;background:rgba(0,0,0,.55)}
+  .pcard .pbar>i{display:block;height:100%;background:var(--accent)}
+  .pcard .pbar>i.full{background:var(--ok)}
+  .pcard .wrapimg{position:relative;border-radius:9px;overflow:hidden}
+  .pname{font-size:12.5px;font-weight:640;margin-top:6px;min-height:2.5em;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .psub{font-size:11px;color:var(--muted)}
+  .sectitle .cnt{color:var(--accent);margin-left:4px}
 </style>
 </head>
 <body>
@@ -231,7 +250,8 @@ const I = {
   refresh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>',
   star:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="m12 2 2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.3 5.9 20.6l1.4-6.8L2.2 9.1l6.9-.8z"/></svg>',
   eye:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
-  bookmark:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21 12 16l-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>'
+  bookmark:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21 12 16l-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>',
+  user:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg>'
 };
 
 /* ============================ Stockage ============================ */
@@ -383,6 +403,11 @@ function fmtDate(iso){
   const d = new Date(iso+'T12:00:00');
   return d.getDate()+' '+MOIS[d.getMonth()]+' '+d.getFullYear();
 }
+function fmtDateShort(iso){
+  if(!iso) return '';
+  const d = new Date(iso+'T12:00:00');
+  return d.getDate()+' '+MOIS[d.getMonth()];
+}
 function fmtDayLabel(iso){
   const t = todayISO();
   if(iso===t) return "Aujourd'hui";
@@ -396,8 +421,16 @@ function fmtDayLabel(iso){
 const year = iso => iso ? iso.slice(0,4) : '';
 
 function posterEl(path, size, cls, alt){
-  if(path) return '<img class="poster '+(cls||'')+'" loading="lazy" src="'+IMG(path,size)+'" alt="'+esc(alt||'')+'">';
+  if(path) return '<img class="poster '+(cls||'')+'" loading="lazy" onerror="posterFail(this)" src="'+
+    IMG(path,size)+'" alt="'+esc(alt||'')+'">';
   return '<div class="poster ph '+(cls||'')+'">'+esc((alt||'?').slice(0,18))+'</div>';
+}
+/* Si l'affiche ne charge pas, on retombe proprement sur le titre plutôt qu'une image cassée */
+function posterFail(img){
+  const d = document.createElement('div');
+  d.className = img.className + ' ph';
+  d.textContent = (img.getAttribute('alt')||'?').slice(0,18);
+  img.replaceWith(d);
 }
 
 /* ============================ UI helpers ============================ */
@@ -415,10 +448,10 @@ function closeSheet(){ document.getElementById('sheet').classList.remove('show')
 document.getElementById('sheet').addEventListener('click', e=>{ if(e.target.id==='sheet') closeSheet(); });
 
 /* ============================ État de navigation ============================ */
-let view = 'list';
+let view = 'follow';
 let params = {};
-let ui = { listFilter:'encours', searchType:'tv', searchQ:'', searchRes:null, searching:false,
-           openSeasons:{}, calRange:'up', busy:false };
+let ui = { profTab:'series', searchType:'tv', searchQ:'', searchRes:null, searching:false,
+           openSeasons:{}, busy:false };
 
 function go(v, p){ view = v; params = p||{}; window.scrollTo(0,0); render(); }
 
@@ -426,14 +459,13 @@ function go(v, p){ view = v; params = p||{}; window.scrollTo(0,0); render(); }
 function render(){
   const app = document.getElementById('app');
   let html = '';
-  if(view==='list') html = viewList();
+  if(view==='follow') html = viewFollow();
   else if(view==='search') html = viewSearch();
-  else if(view==='calendar') html = viewCalendar();
+  else if(view==='profile') html = viewProfile();
   else if(view==='settings') html = viewSettings();
   else if(view==='show') html = viewShow();
   else if(view==='preview') html = viewPreview();
   else if(view==='movie') html = viewMovie();
-  else if(view==='movies') html = viewMovies();
   app.innerHTML = html;
   renderNav();
   if(view==='search'){
@@ -443,13 +475,14 @@ function render(){
 }
 function renderNav(){
   const tabs = [
-    ['list','Mes séries',I.tv],
     ['search','Recherche',I.search],
-    ['calendar','Calendrier',I.cal],
-    ['settings','Réglages',I.cog]
+    ['follow','À suivre',I.cal],
+    ['profile','Mon profil',I.user]
   ];
-  const cur = (view==='show'||view==='movies'||view==='movie') ? 'list'
-            : (view==='preview' ? 'search' : view);
+  const cur = (view==='preview') ? 'search'
+            : (view==='show'||view==='movie'||view==='settings') ? (params.from==='search'?'search':(params.from||'profile'))
+            : view;
+  document.getElementById('nav').style.gridTemplateColumns = '';
   document.getElementById('nav').innerHTML = tabs.map(([id,label,icon])=>
     '<button class="tab '+(cur===id?'on':'')+'" onclick="go(\''+id+'\')">'+icon+'<span>'+label+'</span></button>'
   ).join('');
@@ -470,90 +503,190 @@ function needKeyBanner(){
          "C'est gratuit et ça prend 2 minutes.</div>";
 }
 
-/* ---------- Vue : Mes séries ---------- */
-function viewList(){
+/* ---------- Vue : À suivre (à rattraper + à venir) ---------- */
+function viewFollow(){
   const shows = Object.values(db.shows);
-  const filters = [
-    ['encours','En cours'], ['ajour','À jour'], ['pas','Pas commencées'],
-    ['fini','Terminées'], ['films','Films']
-  ];
-  const sub = '<div class="chips">'+filters.map(([id,l])=>
-    '<button class="chip '+(ui.listFilter===id?'on':'')+'" onclick="setFilter(\''+id+'\')">'+l+'</button>').join('')+'</div>';
+  const t = todayISO();
 
-  let body;
-  if(ui.listFilter==='films'){
-    body = listMovies();
-  } else {
-    let sel;
-    if(ui.listFilter==='encours') sel = shows.filter(s=>isStarted(s) && !isUpToDate(s));
-    else if(ui.listFilter==='ajour') sel = shows.filter(s=>isUpToDate(s) && !isFinished(s));
-    else if(ui.listFilter==='pas') sel = shows.filter(s=>!isStarted(s));
-    else sel = shows.filter(isFinished);
+  /* --- À rattraper : le prochain épisode non vu de chaque série --- */
+  const todo = [];
+  shows.forEach(s=>{ const nx = nextToWatch(s); if(nx) todo.push({s:s, ep:nx}); });
+  todo.sort((a,b)=>{
+    const sa = isStarted(a.s), sb = isStarted(b.s);
+    if(sa!==sb) return sa ? -1 : 1;                       // séries commencées d'abord
+    return (b.ep.d||'').localeCompare(a.ep.d||'');        // puis épisode le plus récent
+  });
 
-    sel.sort((a,b)=>{
-      const na = nextToWatch(a), nb = nextToWatch(b);
-      if(na && nb) return (na.d||'9999') < (nb.d||'9999') ? 1 : -1;
-      return (b.addedAt||0)-(a.addedAt||0);
-    });
+  /* --- À venir : diffusions futures --- */
+  const items = [];
+  shows.forEach(s=>{
+    allEpisodes(s,false).forEach(ep=>{ if(ep.d && ep.d >= t) items.push({d:ep.d, show:s, ep:ep}); });
+    if(s.next && s.next.d && s.next.d >= t && !(s.seasons[s.next.s]||[]).some(e=>e.e===s.next.e))
+      items.push({d:s.next.d, show:s, ep:{s:s.next.s, e:s.next.e, n:s.next.n, d:s.next.d}});
+  });
+  items.sort((a,b)=>a.d.localeCompare(b.d));
+  const upcoming = items.slice(0,80);
 
-    if(!shows.length){
-      body = '<div class="empty">'+I.tv+'<h3>Aucune série suivie</h3>'+
-        '<p>Cherche une série et ajoute-la à ta liste pour commencer à cocher tes épisodes.</p>'+
-        '<button class="btn" onclick="go(\'search\')">Chercher une série</button></div>';
-    } else if(!sel.length){
-      body = '<div class="empty"><p style="margin-top:24px">Rien dans cette catégorie.</p></div>';
-    } else {
-      body = '<div class="list">'+sel.map(showRow).join('')+'</div>';
-    }
+  let html = header('À suivre', {right:'<button class="iconbtn" onclick="go(\'search\')">'+I.plus+'</button>'});
+  html += needKeyBanner();
+
+  if(!shows.length){
+    return html + '<div class="empty">'+I.tv+'<h3>Rien à suivre pour l\'instant</h3>'+
+      '<p>Ajoute une série ou un film depuis la recherche : tu retrouveras ici tes prochains épisodes et les dates de diffusion.</p>'+
+      '<button class="btn" onclick="go(\'search\')">Chercher une série</button></div>';
   }
-  return header('Mes séries', {sub:sub, right:'<button class="iconbtn" onclick="go(\'search\')">'+I.plus+'</button>'})
-    + needKeyBanner() + body + '<div style="height:20px"></div>';
+
+  /* Section 1 */
+  html += '<div class="sectitle">À rattraper'+(todo.length?'<span class="cnt">'+todo.length+'</span>':'')+'</div>';
+  if(!todo.length){
+    html += '<div class="wrap" style="padding-top:0"><div class="card" style="padding:18px;text-align:center">'+
+      '<div style="font-size:15px;font-weight:650">Tu es à jour partout 🎉</div>'+
+      '<div class="small muted" style="margin-top:3px">Plus aucun épisode diffusé en attente.</div></div></div>';
+  } else {
+    html += '<div class="list">'+todo.map(x=>catchupRow(x.s,x.ep)).join('')+'</div>';
+  }
+
+  /* Section 2 */
+  html += '<div class="sectitle">À venir</div>';
+  if(!upcoming.length){
+    html += '<div class="wrap" style="padding-top:0"><div class="card" style="padding:18px;text-align:center">'+
+      '<div class="small muted">Aucune date de diffusion annoncée pour tes séries.</div></div></div>';
+  } else {
+    let cur = '', out = '<div class="day">';
+    upcoming.forEach(i=>{
+      if(i.d !== cur){ cur = i.d; out += '<div class="daylbl">'+fmtDayLabel(i.d)+'</div>'; }
+      const thumb = IMG(i.ep.st,'w300') || IMG(i.show.backdrop,'w300') || IMG(i.show.poster,'w154');
+      out += '<div class="crow" onclick="go(\'show\',{id:'+i.show.id+',from:\'follow\'})">'+
+        (thumb ? '<img class="cthumb" loading="lazy" src="'+thumb+'" alt="">' : '<div class="cthumb"></div>')+
+        '<div class="epinfo">'+
+          '<div class="epname">'+esc(i.show.name)+'</div>'+
+          '<div class="epsub">S'+i.ep.s+'E'+i.ep.e+' · '+esc(i.ep.n||'')+'</div>'+
+        '</div></div>';
+    });
+    out += '</div>';
+    html += out;
+  }
+  return html + '<div style="height:24px"></div>';
 }
 
-function showRow(s){
+function catchupRow(s, nx){
   const p = progress(s);
-  const nx = nextToWatch(s);
-  let line;
-  if(nx) line = 'Prochain : <b>S'+nx.s+'E'+nx.e+'</b> · '+esc(nx.n);
-  else if(s.next) line = 'À venir : <b>S'+s.next.s+'E'+s.next.e+'</b> · '+fmtDate(s.next.d);
-  else if(p.total && p.watched===p.total) line = 'Tu es à jour 🎉';
-  else line = esc(s.status==='Ended'?'Série terminée':(s.status||''));
-
+  const recent = nx.d && nx.d < todayISO() && (Date.now()-Date.parse(nx.d)) < 45*86400000;
   return '<div class="srow">'+
-    '<div style="display:flex;gap:12px;flex:1;min-width:0" onclick="go(\'show\',{id:'+s.id+'})">'+
+    '<div style="display:flex;gap:12px;flex:1;min-width:0" onclick="go(\'show\',{id:'+s.id+',from:\'follow\'})">'+
       posterEl(s.poster,'w154','',s.name)+
       '<div class="sinfo">'+
         '<div class="sname">'+esc(s.name)+'</div>'+
-        '<div class="snext">'+line+'</div>'+
-        '<div class="tiny muted" style="margin-top:2px">'+p.watched+' / '+p.total+' épisodes'+(p.total?' · '+p.pct+'%':'')+'</div>'+
-        '<div class="bar '+(p.pct===100?'done':'')+'"><i style="width:'+p.pct+'%"></i></div>'+
+        '<div class="snext"><b>S'+nx.s+'E'+nx.e+'</b> · '+esc(nx.n)+'</div>'+
+        '<div class="tiny muted" style="margin-top:2px">'+
+          (isStarted(s) ? p.watched+' / '+p.total+' épisodes' : 'Jamais commencée')+
+          (recent ? ' · sorti le '+fmtDateShort(nx.d) : '')+'</div>'+
+        '<div class="bar"><i style="width:'+p.pct+'%"></i></div>'+
       '</div>'+
     '</div>'+
-    (nx ? '<button class="watchbtn" title="Marquer S'+nx.s+'E'+nx.e+' comme vu" onclick="quickWatch('+s.id+',event)">'+I.check+'</button>' : '')+
+    '<button class="watchbtn" title="Marquer S'+nx.s+'E'+nx.e+' comme vu" onclick="quickWatch('+s.id+',event)">'+I.check+'</button>'+
   '</div>';
 }
 
-function listMovies(){
-  const ms = Object.values(db.movies).sort((a,b)=>(b.watchedAt||b.addedAt||0)-(a.watchedAt||a.addedAt||0));
-  if(!ms.length) return '<div class="empty">'+I.tv+'<h3>Aucun film</h3><p>Ajoute des films depuis la recherche.</p>'+
-    '<button class="btn" onclick="ui.searchType=\'movie\';ui.searchRes=null;go(\'search\')">Chercher un film</button></div>';
-  return '<div class="list">'+ms.map(m=>
-    '<div class="srow">'+
-      '<div style="display:flex;gap:12px;flex:1;min-width:0" onclick="go(\'movie\',{id:'+m.id+'})">'+
-      posterEl(m.poster,'w154','',m.title)+
-      '<div class="sinfo">'+
-        '<div class="sname">'+esc(m.title)+'</div>'+
-        '<div class="snext">'+esc(year(m.date))+(m.runtime?' · '+m.runtime+' min':'')+'</div>'+
-        '<div class="tiny '+(m.seen?'':'muted')+'" style="margin-top:4px;color:'+(m.seen?'var(--ok)':'')+'">'+
-          (m.seen&&m.watchedAt?'Vu le '+fmtDate(new Date(m.watchedAt).toISOString().slice(0,10)):(m.seen?'Vu':'À voir'))+'</div>'+
-      '</div>'+
-      '</div>'+
-      '<button class="watchbtn" style="'+(m.seen?'background:var(--ok);border-color:var(--ok);color:#08130d':'')+'" onclick="toggleMovie('+m.id+')">'+I.check+'</button>'+
-      '<button class="iconbtn" onclick="movieMenu('+m.id+')">'+I.dots+'</button>'+
-    '</div>').join('')+'</div>';
+/* ---------- Vue : Mon profil ---------- */
+function lastWatchedAt(s){
+  let m = 0;
+  for(const k in s.watched){ if(s.watched[k] > m) m = s.watched[k]; }
+  return m;
 }
 
-function setFilter(f){ ui.listFilter=f; render(); }
+function viewProfile(){
+  let epCount = 0, minutes = 0, doneShows = 0;
+  Object.values(db.shows).forEach(s=>{
+    allEpisodes(s,true).forEach(ep=>{
+      if(s.watched[key(ep.s,ep.e)]){ epCount++; minutes += epRuntime(s,ep); }
+    });
+    if(isFinished(s)) doneShows++;
+  });
+  const seenMovies = Object.values(db.movies).filter(m=>m.seen);
+  seenMovies.forEach(m=> minutes += (m.runtime||100));
+
+  const startedShows = Object.values(db.shows).filter(isStarted)
+    .sort((a,b)=>lastWatchedAt(b)-lastWatchedAt(a));
+  const watchedMovies = seenMovies.slice().sort((a,b)=>(b.watchedAt||0)-(a.watchedAt||0));
+  const toWatch = [].concat(
+    Object.values(db.shows).filter(s=>!isStarted(s)).map(s=>({type:'show', o:s})),
+    Object.values(db.movies).filter(m=>!m.seen).map(m=>({type:'movie', o:m}))
+  );
+
+  const tabs = [['series','Séries',startedShows.length],
+                ['films','Films',watchedMovies.length],
+                ['avoir','À voir',toWatch.length]];
+
+  let html = header('Mon profil', {
+    right:'<button class="iconbtn" onclick="profileMenu()">'+I.dots+'</button>',
+    sub:'<div class="chips">'+tabs.map(([id,l,n])=>
+      '<button class="chip '+(ui.profTab===id?'on':'')+'" onclick="ui.profTab=\''+id+'\';render()">'+
+      l+' <span style="opacity:.65">'+n+'</span></button>').join('')+'</div>'
+  });
+
+  html += '<div class="stats">'+
+    '<div class="stat"><b>'+epCount+'</b><span>épisodes vus</span></div>'+
+    '<div class="stat"><b>'+fmtDurShort(minutes)+'</b><span>de visionnage</span></div>'+
+    '<div class="stat"><b>'+doneShows+'</b><span>séries finies</span></div>'+
+  '</div>';
+  html += '<div class="wrap" style="padding-top:0"><div class="card" style="padding:13px;text-align:center">'+
+    '<span class="small muted">'+startedShows.length+' série'+(startedShows.length>1?'s':'')+' suivie'+(startedShows.length>1?'s':'')+
+    ' · '+watchedMovies.length+' film'+(watchedMovies.length>1?'s':'')+' vu'+(watchedMovies.length>1?'s':'')+
+    ' · soit '+fmtDur(minutes)+'</span></div></div>';
+
+  let cards = '';
+  if(ui.profTab==='series'){
+    if(!startedShows.length) cards = emptyProf('Aucune série commencée', 'Coche un épisode et la série apparaîtra ici.');
+    else cards = '<div class="pgrid">'+startedShows.map(showCard).join('')+'</div>';
+  } else if(ui.profTab==='films'){
+    if(!watchedMovies.length) cards = emptyProf('Aucun film vu', 'Marque un film comme vu depuis la recherche.');
+    else cards = '<div class="pgrid">'+watchedMovies.map(movieCard).join('')+'</div>';
+  } else {
+    if(!toWatch.length) cards = emptyProf('Rien en attente', 'Les séries ajoutées mais pas commencées et les films « à voir » se rangent ici.');
+    else cards = '<div class="pgrid">'+toWatch.map(x=> x.type==='show' ? showCard(x.o) : movieCard(x.o)).join('')+'</div>';
+  }
+  return html + cards + '<div style="height:26px"></div>';
+}
+
+function emptyProf(title, sub){
+  return '<div class="empty" style="padding:38px 24px"><h3>'+esc(title)+'</h3><p>'+esc(sub)+'</p>'+
+    '<button class="btn ghost" onclick="go(\'search\')">Ouvrir la recherche</button></div>';
+}
+
+function showCard(s){
+  const p = progress(s);
+  const full = p.total>0 && p.watched===p.total;
+  return '<button class="pcard" onclick="go(\'show\',{id:'+s.id+',from:\'profile\'})">'+
+    '<div class="wrapimg">'+posterEl(s.poster,'w342','',s.name)+
+      (p.total ? '<div class="pbadge '+(full?'done':'')+'">'+p.watched+'/'+p.total+'</div>' : '')+
+      '<div class="pbar"><i class="'+(full?'full':'')+'" style="width:'+p.pct+'%"></i></div>'+
+    '</div>'+
+    '<div class="pname">'+esc(s.name)+'</div>'+
+    '<div class="psub">'+(full ? (isFinished(s)?'Terminée':'À jour') : p.pct+'%')+'</div>'+
+  '</button>';
+}
+
+function movieCard(m){
+  return '<button class="pcard" onclick="go(\'movie\',{id:'+m.id+',from:\'profile\'})">'+
+    '<div class="wrapimg">'+posterEl(m.poster,'w342','',m.title)+
+      (m.seen ? '<div class="pbadge done">vu</div>' : '')+
+    '</div>'+
+    '<div class="pname">'+esc(m.title)+'</div>'+
+    '<div class="psub">'+esc(year(m.date))+'</div>'+
+  '</button>';
+}
+
+function profileMenu(){
+  openSheet('<h3>Options</h3><p class="small muted" style="margin:0 0 8px">Réglages et sauvegardes</p>'+
+    '<button class="opt" onclick="closeSheet();go(\'settings\',{from:\'profile\'})">Réglages</button>'+
+    '<button class="opt" onclick="closeSheet();exportData()">Exporter une sauvegarde</button>'+
+    '<button class="opt" onclick="closeSheet();document.getElementById(\'impHidden\').click()">Importer une sauvegarde</button>'+
+    '<button class="opt" onclick="closeSheet();refreshAll()">Actualiser toutes les séries</button>'+
+    '<button class="opt" onclick="closeSheet()">Annuler</button>'+
+    '<input type="file" id="impHidden" accept="application/json,.json" style="display:none" onchange="importData(this)">');
+}
+
 
 /* ---------- Vue : Recherche ---------- */
 function viewSearch(){
@@ -759,8 +892,9 @@ function viewPreview(){
 /* ---------- Vue : fiche film de ma liste ---------- */
 function viewMovie(){
   const m = db.movies[params.id];
-  if(!m) return header('Introuvable',{back:"go('list')"});
-  let html = header(m.title,{back:"go('list')",
+  const back = "go('"+(params.from||'profile')+"')";
+  if(!m) return header('Introuvable',{back:"go('profile')"});
+  let html = header(m.title,{back:back,
     right:'<button class="iconbtn" onclick="movieMenu('+m.id+')">'+I.dots+'</button>'});
   html += '<div class="hero">'+(m.backdrop?'<img src="'+IMG(m.backdrop,'w780')+'" alt="">':'')+'</div>';
   html += '<div class="dhead">'+posterEl(m.poster,'w342','',m.title)+
@@ -788,19 +922,20 @@ function movieMenu(id){
 }
 function removeMovie(id){
   delete db.movies[id]; saveDB(); closeSheet();
-  if(view==='movie'){ ui.listFilter='films'; go('list'); } else render();
+  if(view==='movie'){ ui.profTab='films'; go('profile'); } else render();
 }
 
 /* ---------- Vue : détail série ---------- */
 function viewShow(){
   const s = db.shows[params.id];
-  if(!s) return header('Introuvable',{back:"go('list')"});
+  if(!s) return header('Introuvable',{back:"go('follow')"});
+  const back = "go('"+(params.from||'follow')+"')";
   const p = progress(s);
   const nx = nextToWatch(s);
   const total = allEpisodes(s,false).filter(ep=>s.watched[key(ep.s,ep.e)])
                  .reduce((a,ep)=>a+epRuntime(s,ep),0);
 
-  let html = header(s.name,{back:"go('list')", right:'<button class="iconbtn" onclick="showMenu('+s.id+')">'+I.dots+'</button>'});
+  let html = header(s.name,{back:back, right:'<button class="iconbtn" onclick="showMenu('+s.id+')">'+I.dots+'</button>'});
   html += '<div class="hero">'+(s.backdrop?'<img src="'+IMG(s.backdrop,'w780')+'" alt="">':'')+'</div>';
   html += '<div class="dhead">'+posterEl(s.poster,'w342','',s.name)+
     '<div class="dmeta">'+
@@ -888,7 +1023,7 @@ function markAllAired(id){
   saveDB(); closeSheet(); render(); toast('Tout marqué comme vu');
 }
 function unmarkAll(id){ db.shows[id].watched = {}; saveDB(); closeSheet(); render(); }
-function removeShow(id){ delete db.shows[id]; saveDB(); closeSheet(); go('list'); }
+function removeShow(id){ delete db.shows[id]; saveDB(); closeSheet(); go('follow'); }
 
 function toggleEp(id,s,e){
   const sh = db.shows[id], k = key(s,e);
@@ -930,85 +1065,9 @@ function quickWatch(id, ev){
   toast('S'+nx.s+'E'+nx.e+' vu ✓');
 }
 
-/* ---------- Vue : Calendrier ---------- */
-function viewCalendar(){
-  const t = todayISO();
-  const items = [];
-  Object.values(db.shows).forEach(s=>{
-    allEpisodes(s,false).forEach(ep=>{
-      if(!ep.d) return;
-      items.push({ d:ep.d, show:s, ep:ep });
-    });
-    if(s.next && !(s.seasons[s.next.s]||[]).some(e=>e.e===s.next.e)){
-      items.push({ d:s.next.d, show:s, ep:{s:s.next.s, e:s.next.e, n:s.next.n, d:s.next.d} });
-    }
-  });
-
-  const up = ui.calRange==='up';
-  let sel = up ? items.filter(i=>i.d >= t) : items.filter(i=>i.d < t);
-  sel.sort((a,b)=> up ? a.d.localeCompare(b.d) : b.d.localeCompare(a.d));
-  sel = sel.slice(0,150);
-
-  const sub = '<div class="chips">'+
-    '<button class="chip '+(up?'on':'')+'" onclick="ui.calRange=\'up\';render()">À venir</button>'+
-    '<button class="chip '+(!up?'on':'')+'" onclick="ui.calRange=\'past\';render()">Déjà diffusés</button>'+
-    '</div>';
-
-  let body;
-  if(!Object.keys(db.shows).length){
-    body = '<div class="empty">'+I.cal+'<h3>Calendrier vide</h3><p>Ajoute des séries : leurs dates de diffusion apparaîtront ici.</p>'+
-      '<button class="btn" onclick="go(\'search\')">Chercher une série</button></div>';
-  } else if(!sel.length){
-    body = '<div class="empty"><p style="margin-top:24px">'+(up?'Aucun épisode annoncé pour tes séries.':'Rien à afficher.')+'</p></div>';
-  } else {
-    let cur = '', out = '<div class="day">';
-    sel.forEach(i=>{
-      if(i.d !== cur){
-        cur = i.d;
-        out += '<div class="daylbl '+(i.d<t?'past':'')+'">'+fmtDayLabel(i.d)+'</div>';
-      }
-      const seen = !!i.show.watched[key(i.ep.s,i.ep.e)];
-      const thumb = IMG(i.ep.st,'w300') || IMG(i.show.backdrop,'w300') || IMG(i.show.poster,'w154');
-      out += '<div class="crow" onclick="go(\'show\',{id:'+i.show.id+'})">'+
-        (thumb ? '<img class="cthumb" loading="lazy" src="'+thumb+'" alt="">' : '<div class="cthumb"></div>')+
-        '<div class="epinfo">'+
-          '<div class="epname">'+esc(i.show.name)+'</div>'+
-          '<div class="epsub">S'+i.ep.s+'E'+i.ep.e+' · '+esc(i.ep.n||'')+'</div>'+
-        '</div>'+
-        (i.d<=t ? '<button class="ck '+(seen?'on':'')+'" onclick="event.stopPropagation();toggleEp('+i.show.id+','+i.ep.s+','+i.ep.e+')">'+I.check+'</button>' : '')+
-      '</div>';
-    });
-    out += '</div>';
-    body = out;
-  }
-  return header('Calendrier',{sub:sub}) + body + '<div style="height:24px"></div>';
-}
-
 /* ---------- Vue : Réglages ---------- */
 function viewSettings(){
-  let epCount = 0, minutes = 0, doneShows = 0;
-  Object.values(db.shows).forEach(s=>{
-    allEpisodes(s,true).forEach(ep=>{
-      if(s.watched[key(ep.s,ep.e)]){ epCount++; minutes += epRuntime(s,ep); }
-    });
-    if(isFinished(s)) doneShows++;
-  });
-  const seenMovies = Object.values(db.movies).filter(m=>m.seen);
-  seenMovies.forEach(m=> minutes += (m.runtime||100));
-
-  let html = header('Réglages');
-
-  html += '<div class="sectitle">Mes statistiques</div>';
-  html += '<div class="stats">'+
-    '<div class="stat"><b>'+Object.keys(db.shows).length+'</b><span>séries suivies</span></div>'+
-    '<div class="stat"><b>'+epCount+'</b><span>épisodes vus</span></div>'+
-    '<div class="stat"><b>'+doneShows+'</b><span>séries finies</span></div>'+
-  '</div>';
-  html += '<div class="wrap" style="padding-top:0"><div class="card" style="padding:18px;text-align:center">'+
-    '<div class="small muted">Temps total de visionnage</div>'+
-    '<div style="font-size:26px;font-weight:750;letter-spacing:-.03em;margin-top:2px">'+fmtDur(minutes)+'</div>'+
-    '<div class="tiny muted" style="margin-top:4px">'+seenMovies.length+' film'+(seenMovies.length>1?'s':'')+' vu'+(seenMovies.length>1?'s':'')+' inclus</div>'+
-  '</div></div>';
+  let html = header('Réglages', {back: params.from ? "go('"+params.from+"')" : null});
 
   html += '<div class="sectitle">Connexion TMDB</div>';
   html += '<div class="wrap" style="padding-top:0">'+
@@ -1105,11 +1164,8 @@ function wipe(){
 }
 function doWipe(){
   db.shows = {}; db.movies = {};
-  saveDB(); closeSheet(); go('list'); toast('Données effacées');
+  saveDB(); closeSheet(); go('follow'); toast('Données effacées');
 }
-
-/* ---------- Vue films (raccourci) ---------- */
-function viewMovies(){ ui.listFilter='films'; return viewList(); }
 
 /* ============================ Démarrage ============================ */
 loadDB();
@@ -1132,7 +1188,7 @@ try{
 
 askPersist();
 render();
-if(!db.apiKey) go('settings');
+if(!db.apiKey) go('settings', {from:'follow'});
 </script>
 </body>
 </html>
