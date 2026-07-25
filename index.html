@@ -283,8 +283,13 @@ const I = {
 const KEY = 'mesSeries.v1';
 const IDB_NAME = 'mesSeries', IDB_STORE = 'kv', IDB_KEY = 'db';
 let memoryOnly = false, storageMode = 'idb';
+/* Serveur de sauvegarde pré-configuré (clé publiable : conçue pour être dans le client,
+   les données sont protégées par les règles RLS côté base). Modifiable dans l'écran Compte. */
+const DEFAULT_SYNC = { url:'https://mqwryzopmtykjidabqfv.supabase.co',
+                       key:'sb_publishable_ZnfMBfcEQOhdpg3g9u0eZg_Iaw_Fo7y' };
 let db = { apiKey:'', lang:'fr-FR', shows:{}, movies:{}, lastExport:null,
-           sync:{url:'',key:''}, auth:null, deleted:{shows:{},movies:{}}, syncedAt:null, v:1 };
+           sync:Object.assign({}, DEFAULT_SYNC), auth:null,
+           deleted:{shows:{},movies:{}}, syncedAt:null, v:1 };
 
 function idbOpen(){
   return new Promise((res,rej)=>{
@@ -331,6 +336,8 @@ async function loadDB(){
     }catch(e){}
   }
   if(loaded && typeof loaded === 'object') db = Object.assign(db, loaded);
+  if(!db.sync || !db.sync.url || !db.sync.key) db.sync = Object.assign({}, DEFAULT_SYNC);
+  if(!db.deleted) db.deleted = {shows:{},movies:{}};
 
   /* Vérifie qu'au moins un canal d'écriture fonctionne */
   try{ await writeNow(); }
@@ -665,7 +672,7 @@ document.getElementById('sheet').addEventListener('click', e=>{ if(e.target.id==
 /* ============================ État de navigation ============================ */
 let view = 'follow';
 let params = {};
-let ui = { profTab:'series', searchType:'tv', searchQ:'', searchRes:null, searching:false,
+let ui = { profTab:'series', editServer:false, searchType:'tv', searchQ:'', searchRes:null, searching:false,
            openSeasons:{}, busy:false };
 
 const DEPTH = { search:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, account:2 };
@@ -1325,7 +1332,7 @@ function quickWatch(id, ev){
 function viewAccount(){
   let html = header('Compte & synchro', {back:"goBack()"});
 
-  if(!syncReady()){
+  if(!syncReady() || ui.editServer){
     html += '<div class="wrap">'+
       '<div class="card" style="padding:16px">'+
         '<div style="font-weight:680;margin-bottom:6px">Connecter une sauvegarde en ligne</div>'+
@@ -1339,20 +1346,25 @@ function viewAccount(){
         '<input type="text" id="sbkey" placeholder="eyJhbGciOi..." autocapitalize="off" autocorrect="off" spellcheck="false" value="'+esc(db.sync.key)+'">'+
         '<em>Dans Supabase : Project Settings → API. Cette clé est prévue pour être publique.</em></label>'+
       '<button class="btn block" onclick="saveSync()">Enregistrer</button>'+
+      (syncReady() ? '<button class="btn ghost block" style="margin-top:10px" onclick="ui.editServer=false;render()">Annuler</button>' : '')+
     '</div>';
     return html + '<div style="height:30px"></div>';
   }
 
   if(!signedIn()){
     html += '<div class="wrap">'+
-      '<div class="small muted" style="margin-bottom:14px">Serveur connecté. Crée ton compte, ou connecte-toi si tu en as déjà un sur un autre appareil.</div>'+
+      '<div class="card" style="padding:14px;margin-bottom:16px">'+
+        '<div style="font-weight:660;margin-bottom:4px">Sauvegarde en ligne prête</div>'+
+        '<div class="small muted">Crée ton compte la première fois. Sur tes autres appareils, connecte-toi avec les mêmes identifiants : tout se retrouve automatiquement.</div>'+
+      '</div>'+
       '<label class="fld"><span>Adresse e-mail</span>'+
         '<input type="text" id="acmail" inputmode="email" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="toi@exemple.fr" value="'+esc((db.auth&&db.auth.email)||'')+'"></label>'+
       '<label class="fld"><span>Mot de passe</span>'+
         '<input type="password" id="acpass" placeholder="au moins 6 caractères">'+
         '<em>Choisis un mot de passe dédié à cette app. Il n\'est jamais stocké sur l\'appareil.</em></label>'+
       '<button class="btn block" style="margin-bottom:10px" onclick="doSignIn()">Se connecter</button>'+
-      '<button class="btn ghost block" onclick="doSignUp()">Créer un compte</button>'+
+      '<button class="btn ghost block" style="margin-bottom:14px" onclick="doSignUp()">Créer un compte</button>'+
+      '<button class="tiny muted" style="display:block;width:100%;text-align:center;padding:8px" onclick="ui.editServer=true;render()">Modifier le serveur</button>'+
     '</div>';
     return html + '<div style="height:30px"></div>';
   }
@@ -1371,7 +1383,7 @@ function viewAccount(){
         (syncState==='busy'?'<span class="spin"></span> ':'')+etat+'</div>'+
     '</div>'+
     '<button class="btn block" style="margin-bottom:10px" onclick="syncNow()">Synchroniser maintenant</button>'+
-    '<button class="btn ghost block" style="margin-bottom:10px" onclick="go(\'account\',{reset:1});resetSync()">Changer de serveur</button>'+
+    '<button class="btn ghost block" style="margin-bottom:10px" onclick="ui.editServer=true;render()">Modifier le serveur</button>'+
     '<button class="btn ghost block" style="color:#ff5a5a" onclick="sbSignOut()">Se déconnecter</button>'+
     '<div class="tiny muted" style="margin-top:14px">La synchro part automatiquement quelques secondes après chaque changement, et à chaque ouverture de l\'app.</div>'+
   '</div>';
@@ -1383,10 +1395,10 @@ function saveSync(){
   const k   = document.getElementById('sbkey').value.trim();
   if(!/^https?:\/\/.+/.test(url)) return toast('URL invalide');
   if(k.length < 20) return toast('Clé invalide');
-  db.sync = {url:url.replace(/\/+$/,''), key:k}; saveDB(); render();
+  db.sync = {url:url.replace(/\/+$/,''), key:k}; ui.editServer=false; saveDB(); render();
   toast('Serveur enregistré');
 }
-function resetSync(){ db.sync={url:'',key:''}; db.auth=null; saveDB(); render(); }
+function resetSync(){ db.sync=Object.assign({},DEFAULT_SYNC); db.auth=null; saveDB(); render(); }
 
 async function doSignIn(){
   const email = document.getElementById('acmail').value.trim();
