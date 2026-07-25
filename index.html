@@ -119,15 +119,22 @@
   .badge.end{background:#8b92a422;color:var(--muted)}
 
   /* ---------- Search grid ---------- */
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:12px;padding:4px 16px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:12px;padding:4px 16px;align-items:start}
   .gcard{text-align:left;position:relative}
   .gcard .poster{width:100%;height:auto;aspect-ratio:2/3}
-  .gname{font-size:12.5px;font-weight:640;margin-top:6px;
+  .gname{font-size:12.5px;font-weight:640;margin-top:6px;min-height:2.5em;
     display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .gyear{font-size:11px;color:var(--muted)}
-  .gcard .tick{position:absolute;top:6px;right:6px;width:24px;height:24px;border-radius:50%;
-    background:var(--ok);color:#08130d;display:grid;place-items:center}
+  .gcard .tick{position:absolute;top:6px;right:6px;min-width:24px;height:24px;border-radius:12px;
+    padding:0 6px;background:var(--ok);color:#08130d;display:grid;place-items:center;
+    font-size:10.5px;font-weight:750;box-shadow:0 2px 8px rgba(0,0,0,.45)}
   .gcard .tick svg{width:14px;height:14px}
+  .gcard .tick.avoir{background:var(--accent);color:#fff}
+  .gcard .tick.suivi{background:var(--accent);color:#fff}
+  .gstat{font-size:10.5px;font-weight:750;margin-top:1px}
+  .gstat.avoir{color:var(--accent)}
+  .gstat.asuivre{color:var(--accent)}
+  .gstat.vu{color:var(--ok)}
 
   /* ---------- Detail ---------- */
   .hero{position:relative;height:190px;background:var(--surface2);overflow:hidden}
@@ -149,14 +156,23 @@
   .shead b{font-size:15px}
   .shead .caret{transition:transform .18s;color:var(--muted);display:grid;place-items:center}
   .shead.open .caret{transform:rotate(90deg)}
-  .eprow{display:flex;align-items:center;gap:12px;padding:9px 16px 9px 16px}
+  .eprow{display:flex;align-items:center;gap:11px;padding:9px 16px}
+  .epthumb{width:100px;aspect-ratio:16/9;border-radius:8px;overflow:hidden;flex:none;
+    background:var(--surface2);position:relative}
+  .epthumb img{width:100%;height:100%;object-fit:cover;display:block}
+  .epthumb.ph{display:grid;place-items:center;color:var(--line)}
+  .epthumb.ph svg{width:26px;height:26px}
+  .eprow.seen .epthumb{opacity:.42}
+  .eprow.future .epthumb{opacity:.35}
   .eprow+.eprow{border-top:1px solid rgba(43,48,60,.5)}
   .ck{width:26px;height:26px;border-radius:50%;border:2px solid var(--line);flex:none;
     display:grid;place-items:center;color:transparent}
   .ck.on{background:var(--ok);border-color:var(--ok);color:#08130d}
   .ck svg{width:14px;height:14px}
   .epinfo{flex:1;min-width:0}
-  .epname{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .epname{font-size:14px;font-weight:600;line-height:1.3;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .crow .epname{-webkit-line-clamp:1}
   .epsub{font-size:12px;color:var(--muted)}
   .future .epname,.future .epsub{opacity:.5}
 
@@ -183,11 +199,20 @@
   .tab:active svg{transform:scale(.9)}
 
   /* ---------- Misc ---------- */
-  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + var(--safe-b));
+  .toast{position:fixed;left:50%;transform:translateX(-50%);width:max-content;bottom:calc(84px + var(--safe-b));
     background:var(--surface2);border:1px solid var(--line);padding:11px 18px;border-radius:12px;
     z-index:90;font-size:14px;font-weight:600;box-shadow:0 10px 30px rgba(0,0,0,.5);
     opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;max-width:90vw;text-align:center}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(-6px)}
+  .undobar{position:fixed;left:16px;right:16px;bottom:calc(84px + var(--safe-b));
+    max-width:688px;margin:0 auto;
+    background:var(--surface2);border:1px solid var(--line);padding:10px 10px 10px 16px;border-radius:12px;
+    z-index:85;font-size:13.5px;box-shadow:0 10px 30px rgba(0,0,0,.55);display:none;
+    align-items:center;justify-content:space-between;gap:12px}
+  .undobar.show{display:flex}
+  .undobar span{color:var(--text);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .undobar button{color:var(--accent);font-weight:750;padding:6px 10px;border-radius:8px;
+    background:var(--accent-dim);white-space:nowrap}
   .sheet{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.6);display:none;
     align-items:flex-end;justify-content:center}
   .sheet.show{display:flex}
@@ -214,6 +239,7 @@
   .note svg{width:12px;height:12px}
   .actions{display:flex;gap:10px;padding:16px 16px 0}
   .actions .btn{flex:1}
+  .actions.stack{flex-direction:column}
   .cast{display:flex;gap:12px;overflow-x:auto;padding:2px 16px 4px;scrollbar-width:none}
   .cast::-webkit-scrollbar{display:none}
   .cperson{width:74px;flex:none;text-align:center}
@@ -236,6 +262,7 @@
     display:grid;place-items:center;font-size:22px;font-weight:750;color:#fff;flex:none}
   .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:12px;padding:4px 16px;align-items:start}
   .pcard{position:relative;text-align:left}
+  .ptap{cursor:pointer}
   .pcard .poster{width:100%;height:auto;aspect-ratio:2/3}
   .pcard .pbadge{position:absolute;top:6px;right:6px;background:rgba(10,12,16,.82);
     backdrop-filter:blur(6px);color:#fff;font-size:10.5px;font-weight:700;padding:3px 6px;border-radius:6px}
@@ -248,12 +275,20 @@
     display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .psub{font-size:11px;color:var(--muted)}
   .sectitle .cnt{color:var(--accent);margin-left:4px}
+  .sectitle.rowt{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .minibtn{font-size:11.5px;font-weight:750;letter-spacing:0;text-transform:none;
+    padding:6px 11px;border-radius:9px;background:var(--accent-dim);color:var(--accent);
+    border:1px solid var(--accent);display:inline-flex;align-items:center;gap:5px}
+  .minibtn svg{width:12px;height:12px}
+  .minibtn.on{background:var(--surface2);color:var(--muted);border-color:var(--line)}
+  .minibtn:active{filter:brightness(1.2)}
 </style>
 </head>
 <body class="booting">
 <div class="app" id="app"></div>
 <nav><div class="navin" id="nav"></div></nav>
 <div class="toast" id="toast"></div>
+<div class="undobar" id="undo"></div>
 <div class="sheet" id="sheet"><div class="sheetin" id="sheetin"></div></div>
 
 <script>
@@ -274,6 +309,7 @@ const I = {
   star:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="m12 2 2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.3 5.9 20.6l1.4-6.8L2.2 9.1l6.9-.8z"/></svg>',
   eye:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
   bookmark:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21 12 16l-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>',
+  frame:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.4"/><path d="m21 16-5-5-4.5 4.5L9 13l-6 6"/></svg>',
   user:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg>'
 };
 
@@ -377,17 +413,18 @@ window.addEventListener('blur', flushDB);
 const IMG = (p,size)=> p ? 'https://image.tmdb.org/t/p/'+size+p : '';
 const isBearer = ()=> db.apiKey.startsWith('eyJ') || db.apiKey.length > 60;
 
-async function tmdb(path, params){
+async function tmdb(path, params, extra){
   if(!db.apiKey) throw new Error('NOKEY');
   const u = new URL('https://api.themoviedb.org/3'+path);
   u.searchParams.set('language', db.lang || 'fr-FR');
   for(const k in (params||{})) u.searchParams.set(k, params[k]);
   const opt = {};
+  if(extra && extra.signal) opt.signal = extra.signal;      // permet d'abandonner la requête
   if(isBearer()) opt.headers = { Authorization:'Bearer '+db.apiKey };
   else u.searchParams.set('api_key', db.apiKey);
   const r = await fetch(u.toString(), opt);
   if(r.status === 401) throw new Error('BADKEY');
-  if(r.status === 429){ await sleep(1200); return tmdb(path, params); }
+  if(r.status === 429){ await sleep(1200); return tmdb(path, params, extra); }
   if(!r.ok) throw new Error('HTTP '+r.status);
   return r.json();
 }
@@ -599,8 +636,22 @@ function isFinished(show){
   const ended = show.status==='Ended' || show.status==='Canceled';
   return p.total>0 && p.watched===p.total && ended && !show.next;
 }
-function isUpToDate(show){ const p=progress(show); return p.total>0 && p.watched===p.total; }
-function isStarted(show){ return progress(show).watched > 0; }
+
+/* ===== STATUT D'UN TITRE — source unique de vérité =====
+   Un titre a exactement un statut, déduit des épisodes réellement cochés :
+     'avoir'   : rien de vu             (films non vus, séries à 0 épisode vu)
+     'asuivre' : commencé, pas terminé  (séries en cours, y compris « à jour »)
+     'vu'      : terminé                (films vus, séries finies intégralement)
+   Les épisodes hors-série (saison 0) sont visibles mais ne comptent jamais.
+   Aucun écran ne doit appliquer sa propre règle : tout passe par ici.        */
+function statutSerie(s){
+  if(progress(s).watched === 0) return 'avoir';
+  if(isFinished(s)) return 'vu';
+  return 'asuivre';
+}
+function statutFilm(m){ return m.seen ? 'vu' : 'avoir'; }
+function statut(o){ return o && o.seasons !== undefined ? statutSerie(o) : statutFilm(o); }
+const LIB_STATUT = { avoir:'À voir', asuivre:'À suivre', vu:'Vu' };
 
 function fmtDur(min){
   if(!min) return '0 min';
@@ -611,6 +662,11 @@ function fmtDur(min){
   if(m && !d) p.push(m+' min');
   return p.join(' ') || '0 min';
 }
+/* ===== Numérotation des épisodes — une seule fonction pour toute l'app =====
+   Forme unique « S5E132 », utilisée partout : liste des épisodes, à rattraper,
+   calendrier, fenêtres de confirmation et messages. */
+function codeEp(s, e){ return 'S'+s+'E'+e; }
+
 function fmtDurShort(min){
   if(!min) return '0h';
   const d = Math.floor(min/1440), h = Math.floor((min%1440)/60), m = min%60;
@@ -647,6 +703,19 @@ function posterEl(path, size, cls, alt){
     IMG(path,size)+'" alt="'+esc(alt||'')+'">';
   return '<div class="poster ph '+(cls||'')+'">'+esc((alt||'?').slice(0,18))+'</div>';
 }
+/* Vignette d'épisode : image TMDB si elle existe, sinon un cadre neutre de même taille.
+   Chargement différé pour que les longues saisons restent fluides. */
+function epThumb(ep){
+  if(ep && ep.st)
+    return '<div class="epthumb"><img loading="lazy" decoding="async" alt="" '+
+           'onerror="thumbFail(this)" src="'+IMG(ep.st,'w300')+'"></div>';
+  return '<div class="epthumb ph">'+I.frame+'</div>';
+}
+function thumbFail(img){
+  const box = img.parentNode;
+  if(box){ box.classList.add('ph'); box.innerHTML = I.frame; }
+}
+
 /* Si l'affiche ne charge pas, on retombe proprement sur le titre plutôt qu'une image cassée */
 function posterFail(img){
   const d = document.createElement('div');
@@ -672,7 +741,7 @@ document.getElementById('sheet').addEventListener('click', e=>{ if(e.target.id==
 /* ============================ État de navigation ============================ */
 let view = 'follow';
 let params = {};
-let ui = { profTab:'series', editServer:false, searchType:'tv', searchQ:'', searchRes:null, searching:false,
+let ui = { profTab:'series', editServer:false, searchType:'tv', searchQ:'', searchRes:null, searching:false, searchErr:'',
            openSeasons:{}, busy:false };
 
 const DEPTH = { search:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, account:2 };
@@ -681,7 +750,9 @@ function go(v, p, dir){
   if(view===v && JSON.stringify(params)===JSON.stringify(p||{})){ window.scrollTo(0,0); render(); return; }
   const a = DEPTH[view]||0, b = DEPTH[v]||0;
   navDir = dir || (b > a ? 'enter' : b < a ? 'back' : 'none');
-  view = v; params = p||{}; window.scrollTo(0,0); render();
+  view = v; params = p||{}; window.scrollTo(0,0);
+  if(typeof hideUndo === 'function') hideUndo();
+  render();
 }
 /* Cible du retour selon l'écran courant — utilisée par la flèche et par le balayage */
 function currentBack(){
@@ -772,12 +843,12 @@ function viewFollow(){
 
   /* --- À rattraper : le prochain épisode non vu de chaque série --- */
   const todo = [];
-  shows.forEach(s=>{ const nx = nextToWatch(s); if(nx) todo.push({s:s, ep:nx}); });
-  todo.sort((a,b)=>{
-    const sa = isStarted(a.s), sb = isStarted(b.s);
-    if(sa!==sb) return sa ? -1 : 1;                       // séries commencées d'abord
-    return (b.ep.d||'').localeCompare(a.ep.d||'');        // puis épisode le plus récent
+  shows.forEach(s=>{
+    if(statutSerie(s) !== 'asuivre') return;   // ni les non commencées, ni les terminées
+    const nx = nextToWatch(s);
+    if(nx) todo.push({s:s, ep:nx});
   });
+  todo.sort((a,b)=> (b.ep.d||'').localeCompare(a.ep.d||''));   // épisode le plus récent d'abord
 
   /* --- À venir : diffusions futures --- */
   const items = [];
@@ -801,9 +872,16 @@ function viewFollow(){
   /* Section 1 */
   html += '<div class="sectitle">À rattraper'+(todo.length?'<span class="cnt">'+todo.length+'</span>':'')+'</div>';
   if(!todo.length){
+    const enAttente = shows.filter(x=>statutSerie(x)==='avoir').length;
     html += '<div class="wrap" style="padding-top:0"><div class="card" style="padding:18px;text-align:center">'+
-      '<div style="font-size:15px;font-weight:650">Tu es à jour partout 🎉</div>'+
-      '<div class="small muted" style="margin-top:3px">Plus aucun épisode diffusé en attente.</div></div></div>';
+      (enAttente
+        ? '<div style="font-size:15px;font-weight:650">Rien de commencé</div>'+
+          '<div class="small muted" style="margin-top:3px">'+enAttente+' série'+(enAttente>1?'s':'')+
+          ' t\'attend'+(enAttente>1?'ent':'')+' dans « À voir ».</div>'+
+          '<button class="btn ghost" style="margin-top:12px" onclick="ui.profTab=\'avoir\';go(\'profile\')">Ouvrir À voir</button>'
+        : '<div style="font-size:15px;font-weight:650">Tu es à jour partout 🎉</div>'+
+          '<div class="small muted" style="margin-top:3px">Plus aucun épisode diffusé en attente.</div>')+
+      '</div></div>';
   } else {
     html += '<div class="list">'+todo.map(x=>catchupRow(x.s,x.ep)).join('')+'</div>';
   }
@@ -822,7 +900,7 @@ function viewFollow(){
         (thumb ? '<img class="cthumb" loading="lazy" src="'+thumb+'" alt="">' : '<div class="cthumb"></div>')+
         '<div class="epinfo">'+
           '<div class="epname">'+esc(i.show.name)+'</div>'+
-          '<div class="epsub">S'+i.ep.s+'E'+i.ep.e+' · '+esc(i.ep.n||'')+'</div>'+
+          '<div class="epsub">'+codeEp(i.ep.s,i.ep.e)+' · '+esc(i.ep.n||'')+'</div>'+
         '</div></div>';
     });
     out += '</div>';
@@ -839,14 +917,14 @@ function catchupRow(s, nx){
       posterEl(s.poster,'w154','',s.name)+
       '<div class="sinfo">'+
         '<div class="sname">'+esc(s.name)+'</div>'+
-        '<div class="snext"><b>S'+nx.s+'E'+nx.e+'</b> · '+esc(nx.n)+'</div>'+
+        '<div class="snext"><b>'+codeEp(nx.s,nx.e)+'</b> · '+esc(nx.n)+'</div>'+
         '<div class="tiny muted" style="margin-top:2px">'+
-          (isStarted(s) ? p.watched+' / '+p.total+' épisodes' : 'Jamais commencée')+
+          p.watched+' / '+p.total+' épisodes'+
           (recent ? ' · sorti le '+fmtDateShort(nx.d) : '')+'</div>'+
         '<div class="bar"><i style="width:'+p.pct+'%"></i></div>'+
       '</div>'+
     '</div>'+
-    '<button class="watchbtn" title="Marquer S'+nx.s+'E'+nx.e+' comme vu" onclick="quickWatch('+s.id+',event)">'+I.check+'</button>'+
+    '<button class="watchbtn" title="Marquer '+codeEp(nx.s,nx.e)+' comme vu" onclick="quickWatch('+s.id+',event)">'+I.check+'</button>'+
   '</div>';
 }
 
@@ -868,12 +946,13 @@ function viewProfile(){
   const seenMovies = Object.values(db.movies).filter(m=>m.seen);
   seenMovies.forEach(m=> minutes += (m.runtime||100));
 
-  const startedShows = Object.values(db.shows).filter(isStarted)
+  const startedShows = Object.values(db.shows).filter(s=>statutSerie(s)!=='avoir')
     .sort((a,b)=>lastWatchedAt(b)-lastWatchedAt(a));
-  const watchedMovies = seenMovies.slice().sort((a,b)=>(b.watchedAt||0)-(a.watchedAt||0));
+  const watchedMovies = Object.values(db.movies).filter(m=>statutFilm(m)==='vu')
+    .sort((a,b)=>(b.watchedAt||0)-(a.watchedAt||0));
   const toWatch = [].concat(
-    Object.values(db.shows).filter(s=>!isStarted(s)).map(s=>({type:'show', o:s})),
-    Object.values(db.movies).filter(m=>!m.seen).map(m=>({type:'movie', o:m}))
+    Object.values(db.shows).filter(s=>statutSerie(s)==='avoir').map(s=>({type:'show', o:s})),
+    Object.values(db.movies).filter(m=>statutFilm(m)==='avoir').map(m=>({type:'movie', o:m}))
   );
 
   const tabs = [['series','Séries',startedShows.length],
@@ -919,24 +998,32 @@ function emptyProf(title, sub){
 function showCard(s){
   const p = progress(s);
   const full = p.total>0 && p.watched===p.total;
-  return '<button class="pcard" onclick="go(\'show\',{id:'+s.id+',from:\'profile\'})">'+
-    '<div class="wrapimg">'+posterEl(s.poster,'w342','',s.name)+
-      (p.total ? '<div class="pbadge '+(full?'done':'')+'">'+p.watched+'/'+p.total+'</div>' : '')+
-      '<div class="pbar"><i class="'+(full?'full':'')+'" style="width:'+p.pct+'%"></i></div>'+
+  const st = statutSerie(s);
+  const sub = st==='avoir'
+      ? (p.total ? p.total+' épisode'+(p.total>1?'s':'') : 'Pas encore diffusée')
+      : (full ? (isFinished(s)?'Terminée':'À jour') : p.pct+'%');
+  return '<div class="pcard">'+
+    '<div class="ptap" onclick="go(\'show\',{id:'+s.id+',from:\'profile\'})">'+
+      '<div class="wrapimg">'+posterEl(s.poster,'w342','',s.name)+
+        (st!=='avoir' && p.total ? '<div class="pbadge '+(full?'done':'')+'">'+p.watched+'/'+p.total+'</div>' : '')+
+        (st!=='avoir' ? '<div class="pbar"><i class="'+(full?'full':'')+'" style="width:'+p.pct+'%"></i></div>' : '')+
+      '</div>'+
+      '<div class="pname">'+esc(s.name)+'</div>'+
+      '<div class="psub">'+sub+'</div>'+
     '</div>'+
-    '<div class="pname">'+esc(s.name)+'</div>'+
-    '<div class="psub">'+(full ? (isFinished(s)?'Terminée':'À jour') : p.pct+'%')+'</div>'+
-  '</button>';
+  '</div>';
 }
 
 function movieCard(m){
-  return '<button class="pcard" onclick="go(\'movie\',{id:'+m.id+',from:\'profile\'})">'+
-    '<div class="wrapimg">'+posterEl(m.poster,'w342','',m.title)+
-      (m.seen ? '<div class="pbadge done">vu</div>' : '')+
+  return '<div class="pcard">'+
+    '<div class="ptap" onclick="go(\'movie\',{id:'+m.id+',from:\'profile\'})">'+
+      '<div class="wrapimg">'+posterEl(m.poster,'w342','',m.title)+
+        (statutFilm(m)==='vu' ? '<div class="pbadge done">vu</div>' : '')+
+      '</div>'+
+      '<div class="pname">'+esc(m.title)+'</div>'+
+      '<div class="psub">'+esc(year(m.date))+'</div>'+
     '</div>'+
-    '<div class="pname">'+esc(m.title)+'</div>'+
-    '<div class="psub">'+esc(year(m.date))+'</div>'+
-  '</button>';
+  '</div>';
 }
 
 function profileMenu(){
@@ -952,54 +1039,154 @@ function profileMenu(){
 
 
 /* ---------- Vue : Recherche ---------- */
+/* Recherche progressive : 2 caractères minimum, 300 ms d'attente après la dernière
+   frappe, requête précédente abandonnée, 8 résultats au maximum. Le champ n'est jamais
+   redessiné pendant la frappe — seule la zone de résultats est rafraîchie. */
+const SEARCH_MIN = 2, SEARCH_WAIT = 300, SEARCH_MAX = 8;
+let searchTimer = null, searchAbort = null, searchSeq = 0;
+
 function viewSearch(){
   const sub = '<div class="chips">'+
     '<button class="chip '+(ui.searchType==='tv'?'on':'')+'" onclick="setSearchType(\'tv\')">Séries</button>'+
     '<button class="chip '+(ui.searchType==='movie'?'on':'')+'" onclick="setSearchType(\'movie\')">Films</button>'+
     '</div>';
-  let body = '<div class="wrap" style="padding-bottom:4px">'+
-    '<input type="search" id="q" placeholder="'+(ui.searchType==='tv'?'Nom d\'une série…':'Titre d\'un film…')+'" '+
-    'value="'+esc(ui.searchQ)+'" onkeydown="if(event.key===\'Enter\')doSearch()" oninput="ui.searchQ=this.value">'+
-    '</div>';
-
-  if(ui.searching) body += '<div class="empty"><span class="spin"></span><p style="margin-top:12px">Recherche…</p></div>';
-  else if(ui.searchRes === null) body += '<div class="empty">'+I.search+'<h3>Cherche quelque chose</h3><p>Tape un titre puis valide.</p></div>';
-  else if(!ui.searchRes.length) body += '<div class="empty"><p>Aucun résultat.</p></div>';
-  else body += '<div class="grid">'+ui.searchRes.map(searchCard).join('')+'</div>';
-
+  const body = '<div class="wrap" style="padding-bottom:4px">'+
+    '<input type="search" id="q" enterkeyhint="search" autocomplete="off" autocorrect="off" '+
+    'placeholder="'+(ui.searchType==='tv'?'Nom d\'une série…':'Titre d\'un film…')+'" '+
+    'value="'+esc(ui.searchQ)+'" oninput="onSearchInput(this.value)" '+
+    'onkeydown="if(event.key===\'Enter\'){this.blur();searchNow()}">'+
+    '</div>'+
+    '<div id="sres">'+searchBody()+'</div>';
   return header('Recherche',{sub:sub}) + needKeyBanner() + body + '<div style="height:20px"></div>';
 }
-function setSearchType(t){ ui.searchType=t; ui.searchRes=null; render(); }
+
+/* Zone de résultats seule : chargement, erreur, aucun résultat, ou la grille */
+function searchBody(){
+  if(ui.searching)
+    return '<div class="empty"><span class="spin"></span><p style="margin-top:12px">Recherche…</p></div>';
+  if(ui.searchErr)
+    return '<div class="empty">'+I.search+'<h3>'+esc(ui.searchErr)+'</h3>'+
+      '<p>Vérifie ta connexion, puis réessaie.</p>'+
+      '<button class="btn ghost" onclick="searchNow()">Réessayer</button></div>';
+  if(ui.searchRes === null)
+    return '<div class="empty">'+I.search+'<h3>Cherche '+(ui.searchType==='tv'?'une série':'un film')+'</h3>'+
+      '<p>Les suggestions apparaissent dès '+SEARCH_MIN+' lettres.</p></div>';
+  if(!ui.searchRes.length)
+    return '<div class="empty"><h3>Aucun résultat</h3><p>Essaie une autre orthographe, ou l\'autre onglet.</p></div>';
+  return '<div class="grid">'+ui.searchRes.map(searchCard).join('')+'</div>';
+}
+
+/* Rafraîchit uniquement les résultats : le champ garde le focus et le curseur */
+function paintSearch(){
+  const el = document.getElementById('sres');
+  if(view==='search' && el) el.innerHTML = searchBody();
+  else render();
+}
+
+function onSearchInput(v){
+  ui.searchQ = v;
+  clearTimeout(searchTimer);
+  abortSearch();
+  const q = v.trim();
+  if(q.length < SEARCH_MIN){
+    ui.searchRes = null; ui.searching = false; ui.searchErr = '';
+    paintSearch(); return;
+  }
+  ui.searching = true; ui.searchErr = '';
+  paintSearch();
+  searchTimer = setTimeout(()=> runSearch(q), SEARCH_WAIT);
+}
+
+function searchNow(){
+  clearTimeout(searchTimer);
+  const q = (ui.searchQ||'').trim();
+  if(q.length < SEARCH_MIN) return;
+  ui.searching = true; ui.searchErr = ''; paintSearch();
+  runSearch(q);
+}
+
+function abortSearch(){
+  if(searchAbort){ try{ searchAbort.abort(); }catch(e){} searchAbort = null; }
+}
+
+async function runSearch(q){
+  if(!db.apiKey){
+    ui.searching = false; paintSearch();
+    toast('Ajoute ta clé TMDB dans Réglages');
+    return go('settings', {from:'search'});
+  }
+  const seq = ++searchSeq;
+  const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  searchAbort = ctrl;
+  try{
+    const d = await tmdb('/search/'+ui.searchType, { query:q, include_adult:'false' },
+                         ctrl ? {signal:ctrl.signal} : null);
+    if(seq !== searchSeq) return;                      // une frappe plus récente a pris la main
+    ui.searchRes = (d.results||[]).slice(0, SEARCH_MAX);
+    ui.searching = false; ui.searchErr = '';
+    paintSearch();
+  }catch(e){
+    if((e && e.name === 'AbortError') || seq !== searchSeq) return;
+    ui.searching = false;
+    ui.searchErr = (e.message === 'BADKEY') ? 'Clé TMDB refusée' : 'Pas de connexion';
+    ui.searchRes = [];
+    paintSearch();
+  }
+}
+
+function setSearchType(t){
+  if(ui.searchType === t) return;
+  ui.searchType = t; ui.searchRes = null; ui.searchErr = '';
+  clearTimeout(searchTimer); abortSearch();
+  render();
+  if((ui.searchQ||'').trim().length >= SEARCH_MIN) searchNow();
+}
 
 function searchCard(r){
   const isTv = ui.searchType==='tv';
   const id = r.id;
   const name = isTv ? r.name : r.title;
   const date = isTv ? r.first_air_date : r.release_date;
-  const has = isTv ? !!db.shows[id] : !!db.movies[id];
+  const item = isTv ? db.shows[id] : db.movies[id];
+  const st   = item ? statut(item) : null;
   const note = r.vote_average ? Math.round(r.vote_average*10)/10 : null;
+
+  let coin = '';
+  if(st === 'vu')      coin = '<div class="tick vu">'+I.check+'</div>';
+  else if(st === 'avoir')   coin = '<div class="tick avoir">'+I.bookmark+'</div>';
+  else if(st === 'asuivre'){
+    const p = progress(item);
+    coin = '<div class="tick suivi">'+p.watched+'/'+p.total+'</div>';
+  }
+
   return '<button class="gcard" onclick="openPreview('+id+',\''+(isTv?'tv':'movie')+'\')">'+
-    posterEl(r.poster_path,'w342','',name)+
-    (has?'<div class="tick">'+I.check+'</div>':'')+
+    posterEl(r.poster_path,'w342','',name)+ coin +
     '<div class="gname">'+esc(name)+'</div>'+
     '<div class="gyear">'+esc(year(date))+(note?' · ★ '+note:'')+'</div>'+
+    (st ? '<div class="gstat '+st+'">'+LIB_STATUT[st]+'</div>' : '')+
   '</button>';
 }
 
-async function doSearch(){
-  const q = (ui.searchQ||'').trim();
-  if(!q) return;
-  if(!db.apiKey){ toast('Ajoute ta clé TMDB dans Réglages'); return go('settings'); }
-  document.activeElement && document.activeElement.blur();
-  ui.searching = true; render();
+/* Ajoute la série puis la marque intégralement vue, sans transiter par « À voir » */
+async function addEtVu(id){
+  if(db.shows[id]){ go('show',{id:id, from:'search'}); return marquerToutVu(id); }
+  if(ui.busy) return;
+  ui.busy = true;
+  const btn = document.getElementById('seenbtn');
+  const setBtn = t=>{ if(btn) btn.innerHTML = '<span class="spin"></span> '+t; };
+  if(btn) btn.setAttribute('disabled','');
+  setBtn('Chargement des épisodes…');
   try{
-    const d = await tmdb('/search/'+ui.searchType, { query:q, include_adult:'false' });
-    ui.searchRes = (d.results||[]).filter(r=>r.popularity!==undefined).slice(0,40);
+    const sh = await fetchShowFull(id, (a,b)=> setBtn('Saisons '+a+'/'+b+'…'));
+    sh.watched = {}; sh.addedAt = Date.now();
+    db.shows[id] = sh;
+    ui.busy = false;
+    go('show', {id:id, from:'search'});
+    marquerToutVu(id);
   }catch(e){
-    ui.searchRes = [];
-    toast(e.message==='BADKEY' ? 'Clé TMDB invalide' : 'Erreur réseau');
+    ui.busy = false; render();
+    toast(e.message==='BADKEY' ? 'Clé TMDB invalide' : "Impossible de charger cette série");
   }
-  ui.searching = false; render();
 }
 
 async function addOrOpenShow(id){
@@ -1103,10 +1290,14 @@ function viewPreview(){
 
   /* Boutons d'action */
   if(isTv){
-    html += '<div class="actions">'+ (inList
+    html += '<div class="actions'+(inList?'':' stack')+'">'+ (inList
       ? '<button class="btn" onclick="go(\'show\',{id:'+d.id+'})">'+I.eye+' Ouvrir ma fiche</button>'
-      : '<button class="btn" id="addbtn" onclick="addOrOpenShow('+d.id+')">'+I.plus+' Ajouter à ma liste</button>')
-      +'</div>';
+      : '<button class="btn" id="addbtn" onclick="addOrOpenShow('+d.id+')">'+I.plus+' Ajouter à ma liste</button>'+
+        '<button class="btn ghost" id="seenbtn" onclick="addEtVu('+d.id+')">'+I.check+" J'ai déjà vu</button>")
+      +'</div>'+
+      (inList ? '' : '<div class="tiny muted" style="padding:8px 16px 0;text-align:center">'+
+        '« J\'ai déjà vu » enregistre la série comme vue, sans passer par ta liste à voir. '+
+        'Tu pourras ensuite ajuster saison par saison.</div>');
   } else {
     const m = db.movies[d.id];
     html += '<div class="actions">'+
@@ -1212,12 +1403,12 @@ function viewShow(){
 
   if(nx){
     html += '<div class="wrap" style="padding-bottom:0"><button class="btn block" onclick="quickWatch('+s.id+')">'+
-      I.check+' Marquer S'+nx.s+'E'+nx.e+' comme vu</button>'+
+      I.check+' Marquer '+codeEp(nx.s,nx.e)+' comme vu</button>'+
       '<div class="tiny muted center" style="margin-top:8px">'+esc(nx.n)+'</div></div>';
   } else if(s.next){
     html += '<div class="wrap" style="padding-bottom:0"><div class="card" style="padding:14px;text-align:center">'+
       '<div class="small muted">Prochain épisode</div>'+
-      '<div style="font-weight:700;margin-top:2px">S'+s.next.s+'E'+s.next.e+' · '+esc(s.next.n||'')+'</div>'+
+      '<div style="font-weight:700;margin-top:2px">'+codeEp(s.next.s,s.next.e)+' · '+esc(s.next.n||'')+'</div>'+
       '<div class="small" style="color:var(--accent);margin-top:2px">'+fmtDate(s.next.d)+'</div></div></div>';
   }
 
@@ -1229,7 +1420,10 @@ function viewShow(){
 
   if(s.overview) html += '<div class="overview clamp" onclick="this.classList.toggle(\'clamp\')">'+esc(s.overview)+'</div>';
 
-  html += '<div class="sectitle">Épisodes</div>';
+  const toutVu = p.total > 0 && p.watched === p.total;
+  html += '<div class="sectitle rowt">Épisodes'+
+    '<button class="minibtn'+(toutVu?' on':'')+'" onclick="toggleToutVu('+s.id+')">'+
+      (toutVu ? 'Tout décocher' : I.check+' Toute la série vue')+'</button></div>';
   html += '<div class="card" style="margin:0 16px;overflow:hidden">';
   seasonNums(s,true).forEach(n=>{
     const eps = s.seasons[n]||[];
@@ -1247,10 +1441,11 @@ function viewShow(){
       html += eps.map(ep=>{
         const on = !!s.watched[key(n,ep.e)];
         const fut = !aired(ep);
-        return '<div class="eprow '+(fut?'future':'')+'">'+
-          '<button class="ck '+(on?'on':'')+'" onclick="toggleEp('+s.id+','+n+','+ep.e+')">'+I.check+'</button>'+
-          '<div class="epinfo" onclick="epMenu('+s.id+','+n+','+ep.e+')">'+
-            '<div class="epname">'+n+'×'+String(ep.e).padStart(2,'0')+' · '+esc(ep.n)+'</div>'+
+        return '<div class="eprow '+(fut?'future':'')+(on?' seen':'')+'" onclick="tapEp('+s.id+','+n+','+ep.e+')">'+
+          '<span class="ck '+(on?'on':'')+'">'+I.check+'</span>'+
+          epThumb(ep)+
+          '<div class="epinfo">'+
+            '<div class="epname">'+codeEp(n, ep.e)+' · '+esc(ep.n)+'</div>'+
             '<div class="epsub">'+(ep.d?fmtDate(ep.d):'Date inconnue')+(ep.r?' · '+ep.r+' min':'')+'</div>'+
           '</div></div>';
       }).join('');
@@ -1280,12 +1475,8 @@ async function refreshShow(id){
     db.shows[id] = fresh; saveDB(); render(); toast('À jour');
   }catch(e){ toast('Échec de l\'actualisation'); }
 }
-function markAllAired(id){
-  const s = db.shows[id];
-  allEpisodes(s,true).forEach(ep=>{ if(aired(ep)) s.watched[key(ep.s,ep.e)] = Date.now(); });
-  saveDB(); closeSheet(); render(); toast('Tout marqué comme vu');
-}
-function unmarkAll(id){ db.shows[id].watched = {}; saveDB(); closeSheet(); render(); }
+function markAllAired(id){ closeSheet(); marquerToutVu(id); }
+function unmarkAll(id){ closeSheet(); toutDecocher(id); }
 function removeShow(id){ markDeleted('shows',id); delete db.shows[id]; saveDB(); closeSheet(); go('follow'); }
 
 function toggleEp(id,s,e){
@@ -1293,39 +1484,130 @@ function toggleEp(id,s,e){
   if(sh.watched[k]) delete sh.watched[k]; else sh.watched[k] = Date.now();
   saveDB(); render();
 }
-function toggleWholeSeason(id,n){
-  const sh = db.shows[id], eps = sh.seasons[n]||[];
-  const allOn = eps.every(ep=>sh.watched[key(n,ep.e)]);
-  eps.forEach(ep=>{ if(allOn) delete sh.watched[key(n,ep.e)]; else sh.watched[key(n,ep.e)] = Date.now(); });
-  saveDB(); render();
-}
-function epMenu(id,n,e){
+/* Cocher une saison marque aussi les précédentes ; la décocher libère les suivantes.
+   Les hors-série (saison 0) restent indépendants et ne déclenchent aucune cascade. */
+function toggleWholeSeason(id, n){
   const sh = db.shows[id];
+  const eps = sh.seasons[n] || [];
+  const allOn = eps.length > 0 && eps.every(ep => sh.watched[key(n, ep.e)]);
+  const cibles = (n === 0) ? [0]
+      : allOn ? seasonNums(sh,false).filter(x => x >= n)
+              : seasonNums(sh,false).filter(x => x <= n);
+
+  let nb = 0;
+  cibles.forEach(x => (sh.seasons[x]||[]).forEach(ep=>{
+    const on = !!sh.watched[key(x, ep.e)];
+    if(allOn ? on : (!on && aired(ep))) nb++;
+  }));
+  if(!nb) return;
+
+  const quoi = (n === 0) ? 'Hors-série'
+      : cibles.length > 1 ? 'Saisons '+Math.min.apply(null,cibles)+' à '+Math.max.apply(null,cibles)
+      : 'Saison '+n;
+  applyWatched(id, s2=>{
+    const t = Date.now();
+    cibles.forEach(x => (s2.seasons[x]||[]).forEach(ep=>{
+      if(allOn) delete s2.watched[key(x, ep.e)];
+      else if(aired(ep)) s2.watched[key(x, ep.e)] = t;
+    }));
+  }, quoi+' · '+nb+(allOn ? ' décoché' : ' vu')+(nb>1?'s':''));
+}
+
+/* Toute la série vue / tout décocher — même moteur, donc annulable */
+function marquerToutVu(id){
+  const sh = db.shows[id];
+  const nb = allEpisodes(sh,true).filter(ep=>aired(ep) && !sh.watched[key(ep.s,ep.e)]).length;
+  if(!nb) return toast('Déjà tout vu');
+  applyWatched(id, s=>{
+    const t = Date.now();
+    allEpisodes(s,true).forEach(ep=>{ if(aired(ep)) s.watched[key(ep.s,ep.e)] = t; });
+  }, nb+' épisode'+(nb>1?'s':'')+' marqué'+(nb>1?'s':'')+' vu'+(nb>1?'s':''));
+}
+function toutDecocher(id){
+  const nb = Object.keys(db.shows[id].watched).length;
+  if(!nb) return;
+  applyWatched(id, s=>{ s.watched = {}; },
+    nb+' épisode'+(nb>1?'s':'')+' décoché'+(nb>1?'s':''));
+}
+function toggleToutVu(id){
+  const p = progress(db.shows[id]);
+  if(p.total > 0 && p.watched === p.total) toutDecocher(id); else marquerToutVu(id);
+}
+/* ===== Marquage groupé, statut recalculé une seule fois, action annulable ===== */
+let undoData = null, undoTimer = null;
+
+function pushUndo(showId, prevWatched, label){
+  undoData = { showId, prev: prevWatched };
+  const el = document.getElementById('undo');
+  el.innerHTML = '<span>'+esc(label)+'</span><button onclick="doUndo()">Annuler</button>';
+  el.classList.add('show');
+  clearTimeout(undoTimer);
+  undoTimer = setTimeout(hideUndo, 10000);
+}
+function hideUndo(){
+  clearTimeout(undoTimer);
+  const el = document.getElementById('undo');
+  if(el) el.classList.remove('show');
+  undoData = null;
+}
+function doUndo(){
+  if(!undoData) return;
+  const sh = db.shows[undoData.showId];
+  if(sh){ sh.watched = undoData.prev; saveDB(); }
+  hideUndo(); render(); toast('Annulé');
+}
+
+/* Applique une modification d'un coup : une sauvegarde, un rendu, un statut recalculé */
+function applyWatched(showId, mutate, label){
+  const sh = db.shows[showId];
+  if(!sh) return;
+  const prev = Object.assign({}, sh.watched);
+  mutate(sh);
+  saveDB(); render();
+  pushUndo(showId, prev, label);
+}
+
+/* Épisodes antérieurs, diffusés et non vus, sur toute la série (hors-série exclus) */
+function episodesAvant(sh, n, e){
+  return allEpisodes(sh, false).filter(ep=>
+    (ep.s < n || (ep.s === n && ep.e < e)) && aired(ep) && !sh.watched[key(ep.s,ep.e)]);
+}
+
+/* Appui sur une ligne d'épisode */
+function tapEp(id, n, e){
+  const sh = db.shows[id];
+  if(!sh) return;
+  if(sh.watched[key(n,e)]){ toggleEp(id,n,e); return; }      // déjà vu → on décoche, sans question
+  const avant = episodesAvant(sh, n, e);
+  if(!avant.length){ marquerSeul(id, n, e); return; }         // rien derrière → on coche directement
   const ep = (sh.seasons[n]||[]).find(x=>x.e===e) || {};
-  const on = !!sh.watched[key(n,e)];
-  openSheet('<h3>'+n+'×'+String(e).padStart(2,'0')+' · '+esc(ep.n||'')+'</h3>'+
-    '<p class="small muted" style="margin:0 0 8px">'+(ep.d?fmtDate(ep.d):'Date inconnue')+(ep.r?' · '+ep.r+' min':'')+'</p>'+
-    '<button class="opt" onclick="closeSheet();toggleEp('+id+','+n+','+e+')">'+(on?'Marquer comme non vu':'Marquer comme vu')+'</button>'+
-    '<button class="opt" onclick="closeSheet();markUpTo('+id+','+n+','+e+')">Tout marquer vu jusqu\'ici</button>'+
+  const nb = avant.length;
+  openSheet('<h3>'+codeEp(n,e)+' · '+esc(ep.n||'')+'</h3>'+
+    '<p class="small muted" style="margin:0 0 8px">Marquer aussi '+
+      (nb>1 ? 'les '+nb+' épisodes précédents' : "l'épisode précédent")+' comme vus&nbsp;?</p>'+
+    '<button class="opt" onclick="closeSheet();marquerCascade('+id+','+n+','+e+')">Tout marquer</button>'+
+    '<button class="opt" onclick="closeSheet();marquerSeul('+id+','+n+','+e+')">Cet épisode uniquement</button>'+
     '<button class="opt" onclick="closeSheet()">Annuler</button>');
 }
-function markUpTo(id,n,e){
-  const sh = db.shows[id];
-  let count = 0;
-  allEpisodes(sh,true).forEach(ep=>{
-    if(ep.s < n || (ep.s===n && ep.e<=e)){
-      if(!sh.watched[key(ep.s,ep.e)]){ sh.watched[key(ep.s,ep.e)] = Date.now(); count++; }
-    }
-  });
-  saveDB(); render();
-  toast(count ? count+' épisode'+(count>1?'s':'')+' marqué'+(count>1?'s':'')+' comme vu'+(count>1?'s':'') : 'Déjà vu');
+
+function marquerSeul(id, n, e){
+  applyWatched(id, sh=>{ sh.watched[key(n,e)] = Date.now(); },
+               codeEp(n,e)+' marqué vu');
 }
+function marquerCascade(id, n, e){
+  const sh = db.shows[id];
+  const liste = episodesAvant(sh, n, e).concat([{s:n, e:e}]);
+  const nb = liste.length;
+  applyWatched(id, s2=>{ const t = Date.now(); liste.forEach(ep=> s2.watched[key(ep.s,ep.e)] = t); },
+               nb+' épisodes marqués vus');
+}
+
 function quickWatch(id, ev){
   if(ev) ev.stopPropagation();
   const s = db.shows[id], nx = nextToWatch(s);
   if(!nx) return;
   s.watched[key(nx.s,nx.e)] = Date.now(); saveDB(); render();
-  toast('S'+nx.s+'E'+nx.e+' vu ✓');
+  toast(codeEp(nx.s,nx.e)+' vu ✓');
 }
 
 /* ---------- Vue : Compte & synchronisation ---------- */
@@ -1540,7 +1822,19 @@ function doWipe(){
 async function boot(){
   await loadDB();
   // migration douce : garantir la présence des champs
-  Object.values(db.shows).forEach(s=>{ if(!s.watched) s.watched={}; if(!s.seasons) s.seasons={}; });
+  Object.values(db.shows).forEach(s=>{
+    if(!s.watched) s.watched={};
+    if(!s.seasons) s.seasons={};
+    /* Les toutes premières versions nommaient l'image d'épisode « s » au lieu de « st ». */
+    Object.values(s.seasons).forEach(eps=>{
+      if(!Array.isArray(eps)) return;
+      eps.forEach(ep=>{
+        if(ep && ep.st === undefined && typeof ep.s === 'string' && ep.s.charAt(0) === '/'){
+          ep.st = ep.s; delete ep.s;
+        }
+      });
+    });
+  });
   askPersist();
   document.body.classList.remove('booting');
   render();
