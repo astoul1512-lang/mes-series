@@ -138,6 +138,19 @@
   .gstat.asuivre{color:var(--accent)}
   .gstat.vu{color:var(--ok)}
 
+  /* ---------- Decouvrir ---------- */
+  .gcard .gnote{position:absolute;left:6px;top:6px;background:rgba(0,0,0,.74);color:#ffd166;
+    font-size:11px;font-weight:750;padding:3px 7px;border-radius:9px;
+    display:flex;align-items:center;gap:3px;box-shadow:0 2px 8px rgba(0,0,0,.45)}
+  .gcard .gnote svg{width:10px;height:10px}
+  .resume{padding:0 16px 10px;font-size:12px;color:var(--muted);display:flex;gap:8px;align-items:baseline}
+  .resume b{color:var(--text);font-weight:650}
+  .iconbtn.actif{color:var(--accent)}
+  .fgrp{font-size:11px;font-weight:750;letter-spacing:.6px;text-transform:uppercase;
+    color:var(--muted);margin:14px 0 8px}
+  .fchips{display:flex;flex-wrap:wrap;gap:8px}
+  .plus{padding:16px;text-align:center}
+
   /* ---------- Detail ---------- */
   .hero{position:relative;height:190px;background:var(--surface2);overflow:hidden}
   .hero img{width:100%;height:100%;object-fit:cover;opacity:.5}
@@ -325,7 +338,9 @@ const I = {
   bookmark:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21 12 16l-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>',
   frame:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.4"/><path d="m21 16-5-5-4.5 4.5L9 13l-6 6"/></svg>',
   close:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
-  user:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg>'
+  user:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg>',
+  boussole:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/></svg>',
+  filtre:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M7 12h10M10 17h4"/></svg>'
 };
 
 /* ============================ Stockage ============================ */
@@ -857,9 +872,12 @@ document.getElementById('sheet').addEventListener('click', e=>{ if(e.target.id==
 let view = 'follow';
 let params = {};
 let ui = { profTab:'series', editServer:false, searchType:'tv', searchQ:'', searchRes:null, searching:false, searchErr:'',
-           openSeasons:{}, busy:false };
+           openSeasons:{}, busy:false,
+           /* Découvrir : type affiché, genres cochés, tri, note minimale, page en cours */
+           disc:{ type:'tv', genres:[], tri:'nouveau', noteMin:0,
+                  page:1, pages:1, res:[], loading:false, err:'', charge:false } };
 
-const DEPTH = { search:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, account:2, biblio:2 };
+const DEPTH = { search:0, discover:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, account:2, biblio:2 };
 let navDir = 'none';
 function go(v, p, dir){
   if(view===v && JSON.stringify(params)===JSON.stringify(p||{})){ window.scrollTo(0,0); render(); return; }
@@ -872,7 +890,7 @@ function go(v, p, dir){
 /* Cible du retour selon l'écran courant — utilisée par la flèche et par le balayage */
 function currentBack(){
   if(view==='show' || view==='movie') return params.from || 'follow';
-  if(view==='preview') return 'search';
+  if(view==='preview') return params.from || 'search';
   if(view==='settings') return params.from || null;
   if(view==='account') return 'settings';
   if(view==='abos') return params.from || 'profile';
@@ -906,6 +924,7 @@ function render(){
   let html = '';
   if(view==='follow') html = viewFollow();
   else if(view==='search') html = viewSearch();
+  else if(view==='discover') html = viewDiscover();
   else if(view==='profile') html = viewProfile();
   else if(view==='settings') html = viewSettings();
   else if(view==='show') html = viewShow();
@@ -923,18 +942,23 @@ function render(){
     const inp = document.getElementById('q');
     if(inp && ui.focusSearch){ inp.focus(); ui.focusSearch=false; }
   }
+  /* Premier passage sur Découvrir : on va chercher les suggestions */
+  if(view==='discover' && !ui.disc.charge && !ui.disc.loading && db.apiKey) chargerDecouverte();
 }
 function renderNav(){
   const tabs = [
     ['search','Recherche',I.search],
+    ['discover','Découvrir',I.boussole],
     ['follow','À suivre',I.cal],
     ['profile','Mon profil',I.user]
   ];
-  const cur = (view==='preview') ? 'search'
+  const depuis = params.from;
+  const cur = (view==='preview') ? (depuis==='discover' ? 'discover' : 'search')
             : (view==='account'||view==='abos'||view==='biblio') ? 'profile'
-            : (view==='show'||view==='movie'||view==='settings') ? (params.from==='search'?'search':(params.from||'profile'))
+            : (view==='show'||view==='movie'||view==='settings')
+              ? ((depuis==='search'||depuis==='discover') ? depuis : (depuis||'profile'))
             : view;
-  document.getElementById('nav').style.gridTemplateColumns = '';
+  document.getElementById('nav').style.gridTemplateColumns = 'repeat('+tabs.length+',1fr)';
   document.getElementById('nav').innerHTML = tabs.map(([id,label,icon])=>
     '<button class="tab '+(cur===id?'on':'')+'" onclick="go(\''+id+'\')">'+icon+'<span>'+label+'</span></button>'
   ).join('');
@@ -1296,7 +1320,7 @@ function searchCard(r){
     coin = '<div class="tick suivi">'+p.watched+'/'+p.total+'</div>';
   }
 
-  return '<button class="gcard" onclick="openPreview('+id+',\''+(isTv?'tv':'movie')+'\')">'+
+  return '<button class="gcard" onclick="openPreview('+id+',\''+(isTv?'tv':'movie')+'\',\'search\')">'+
     posterEl(r.poster_path,'w342','',name)+ coin +
     '<div class="gname">'+esc(name)+'</div>'+
     '<div class="gyear">'+esc(year(date))+(note?' · ★ '+note:'')+'</div>'+
@@ -1313,7 +1337,7 @@ function versLesSaisons(){
 }
 
 async function addOrOpenShow(id){
-  if(db.shows[id]) return go('show',{id:id});
+  if(db.shows[id]) return go('show',{id:id, from: params.from || 'search'});
   if(ui.busy) return;
   ui.busy = true;
   const btn = document.getElementById('addbtn');
@@ -1325,7 +1349,7 @@ async function addOrOpenShow(id){
     s.watched = {}; s.addedAt = Date.now();
     db.shows[id] = s; saveDB();
     toast('« '+s.name+' » ajoutée');
-    ui.busy = false; go('show',{id:id, from:'search'});
+    ui.busy = false; go('show',{id:id, from: params.from || 'search'});
     versLesSaisons();
   }catch(e){
     ui.busy = false; render();
@@ -1351,10 +1375,225 @@ async function addMovie(id, seen){
   }catch(e){ toast("Erreur lors de l'ajout"); }
 }
 
+/* ---------- Vue : Découvrir (suggestions, filtres, nouveautés) ----------
+   Tout passe par /discover/tv et /discover/movie. Les genres ne sont jamais
+   codés en dur : ils sont demandés à TMDB (/genre/tv/list, /genre/movie/list)
+   pour que les identifiants et les libellés français viennent de la source. */
+
+const DISC_TYPES = [
+  { id:'tv',    label:'Séries' },
+  { id:'movie', label:'Films' },
+  { id:'mini',  label:'Mini-séries' },
+  { id:'anime', label:'Animés' }
+];
+const DISC_TRIS = [
+  { id:'nouveau',   label:'Sorti récemment' },
+  { id:'populaire', label:'Populaire' },
+  { id:'note',      label:'Mieux notés' }
+];
+const DISC_NOTES = [
+  { v:0, label:'Toutes' }, { v:6, label:'6 et +' }, { v:7, label:'7 et +' }, { v:8, label:'8 et +' }
+];
+const DISC_FENETRE = 90;     // « sorti récemment » = les 90 derniers jours
+
+const genresTMDB = { tv:null, movie:null };
+let discSeq = 0;
+
+/* Le média TMDB derrière chaque puce : mini-séries et animés restent des séries. */
+function discMedia(){ return ui.disc.type === 'movie' ? 'movie' : 'tv'; }
+function isoIlYA(jours){ return new Date(Date.now() - jours*86400000).toISOString().slice(0,10); }
+
+function genreParNom(media, nom){
+  const l = genresTMDB[media] || [];
+  const g = l.find(x => (x.nom||'').toLowerCase() === nom.toLowerCase());
+  return g ? g.id : null;
+}
+
+/* Traduit l'état des filtres en paramètres TMDB. */
+function discParams(){
+  const d = ui.disc, media = discMedia();
+  const p = { include_adult:'false', page:String(d.page) };
+
+  const genres = d.genres.slice();
+  if(d.type === 'mini') p.with_type = '2';                       // 2 = mini-série chez TMDB
+  if(d.type === 'anime'){
+    p.with_original_language = 'ja';
+    const anim = genreParNom('tv','Animation');
+    if(anim && genres.indexOf(anim) < 0) genres.unshift(anim);
+  }
+  if(genres.length) p.with_genres = genres.join(',');
+
+  if(d.tri === 'note'){ p.sort_by = 'vote_average.desc'; p['vote_count.gte'] = '300'; }
+  else p.sort_by = 'popularity.desc';
+
+  if(d.tri === 'nouveau'){
+    const champ = media === 'movie' ? 'primary_release_date' : 'first_air_date';
+    p[champ+'.gte'] = isoIlYA(DISC_FENETRE);
+    p[champ+'.lte'] = todayISO();
+  }
+  if(d.noteMin){
+    p['vote_average.gte'] = String(d.noteMin);
+    if(!p['vote_count.gte']) p['vote_count.gte'] = '100';        // évite les 10/10 à trois votes
+  }
+  return p;
+}
+
+async function chargerGenres(media){
+  if(genresTMDB[media]) return genresTMDB[media];
+  const d = await tmdb('/genre/'+media+'/list');
+  genresTMDB[media] = (d.genres||[]).map(g=>({ id:g.id, nom:g.name }));
+  return genresTMDB[media];
+}
+
+async function chargerDecouverte(suite){
+  const d = ui.disc;
+  if(!db.apiKey){ toast('Ajoute ta clé TMDB dans Réglages'); return go('settings', {from:'discover'}); }
+  const seq = ++discSeq;
+  d.page = suite ? d.page + 1 : 1;
+  if(!suite){ d.res = []; d.pages = 1; }
+  d.loading = true; d.err = '';
+  peindreDisc();
+  try{
+    const media = discMedia();
+    await chargerGenres(media);
+    const data = await tmdb('/discover/'+media, discParams());
+    if(seq !== discSeq) return;
+    const trouves = (data.results||[]).filter(r => r.poster_path);
+    d.res = suite ? d.res.concat(trouves) : trouves;
+    d.pages = data.total_pages || 1;
+    d.loading = false; d.err = ''; d.charge = true;
+    peindreDisc();
+  }catch(e){
+    if(seq !== discSeq) return;
+    if(suite) d.page = Math.max(1, d.page - 1);
+    d.loading = false; d.charge = true;
+    d.err = (e.message === 'BADKEY') ? 'Clé TMDB refusée' : 'Pas de connexion';
+    peindreDisc();
+  }
+}
+
+/* Ne repeint que la zone des résultats : les puces gardent leur défilement. */
+function peindreDisc(){
+  const el = document.getElementById('dres');
+  if(view === 'discover' && el) el.innerHTML = discBody();
+  else if(view === 'discover') render();
+}
+
+function setDiscType(t){
+  const d = ui.disc;
+  if(d.type === t) return;
+  const avant = discMedia();
+  d.type = t;
+  if(discMedia() !== avant) d.genres = [];    // les genres séries et films n'ont pas les mêmes identifiants
+  render();
+  chargerDecouverte();
+}
+function setDiscTri(t){ ui.disc.tri = t; ouvrirFiltres(); chargerDecouverte(); }
+function setDiscNote(n){ ui.disc.noteMin = n; ouvrirFiltres(); chargerDecouverte(); }
+function bascGenre(id){
+  const g = ui.disc.genres, i = g.indexOf(id);
+  if(i < 0) g.push(id); else g.splice(i,1);
+  ouvrirFiltres(); chargerDecouverte();
+}
+function resetFiltres(){
+  ui.disc.genres = []; ui.disc.tri = 'nouveau'; ui.disc.noteMin = 0;
+  ouvrirFiltres(); chargerDecouverte();
+}
+
+function resumeFiltres(){
+  const d = ui.disc;
+  const bouts = [ (DISC_TRIS.find(t=>t.id===d.tri)||{}).label ];
+  if(d.noteMin) bouts.push('note '+d.noteMin+' et +');
+  const l = genresTMDB[discMedia()] || [];
+  d.genres.forEach(id=>{ const g = l.find(x=>x.id===id); if(g) bouts.push(g.nom.toLowerCase()); });
+  return bouts.join(' · ');
+}
+function filtresActifs(){ return ui.disc.genres.length > 0 || ui.disc.noteMin > 0 || ui.disc.tri !== 'nouveau'; }
+
+function ouvrirFiltres(){
+  const d = ui.disc;
+  const genres = genresTMDB[discMedia()] || [];
+  let h = '<h3>Filtres</h3>';
+  h += '<div class="fgrp">Trier par</div><div class="fchips">'+
+    DISC_TRIS.map(t=>'<button class="chip '+(d.tri===t.id?'on':'')+'" onclick="setDiscTri(\''+t.id+'\')">'+
+      t.label+'</button>').join('')+'</div>';
+  h += '<div class="fgrp">Note minimale</div><div class="fchips">'+
+    DISC_NOTES.map(n=>'<button class="chip '+(d.noteMin===n.v?'on':'')+'" onclick="setDiscNote('+n.v+')">'+
+      n.label+'</button>').join('')+'</div>';
+  h += '<div class="fgrp">Genres'+(d.genres.length?' ('+d.genres.length+')':'')+'</div>';
+  h += genres.length
+    ? '<div class="fchips">'+genres.map(g=>'<button class="chip '+(d.genres.indexOf(g.id)>=0?'on':'')+
+        '" onclick="bascGenre('+g.id+')">'+esc(g.nom)+'</button>').join('')+'</div>'
+    : '<div class="small muted">Les genres arrivent avec les premiers résultats.</div>';
+  h += '<button class="btn" style="margin-top:18px" onclick="closeSheet()">Voir les résultats</button>';
+  if(filtresActifs()) h += '<button class="opt" onclick="resetFiltres()">Tout effacer</button>';
+  openSheet(h);
+}
+
+function viewDiscover(){
+  const d = ui.disc;
+  const sub = '<div class="chips">'+DISC_TYPES.map(t=>
+    '<button class="chip '+(d.type===t.id?'on':'')+'" onclick="setDiscType(\''+t.id+'\')">'+
+      t.label+'</button>').join('')+'</div>'+
+    '<div class="resume"><b>'+esc(resumeFiltres())+'</b></div>';
+  const bouton = '<button class="iconbtn '+(filtresActifs()?'actif':'')+'" onclick="ouvrirFiltres()">'+I.filtre+'</button>';
+  return header('Découvrir', {right:bouton, sub:sub}) + needKeyBanner() +
+    '<div id="dres">'+discBody()+'</div>' + '<div style="height:20px"></div>';
+}
+
+function discBody(){
+  const d = ui.disc;
+  if(!db.apiKey)
+    return '<div class="empty">'+I.boussole+'<h3>Clé TMDB manquante</h3>'+
+      '<p>Les suggestions viennent de TMDB : ajoute ta clé dans les réglages.</p>'+
+      '<button class="btn ghost" onclick="go(\'settings\',{from:\'discover\'})">Ouvrir les réglages</button></div>';
+  if(d.loading && !d.res.length)
+    return '<div class="empty"><span class="spin"></span><p style="margin-top:12px">Recherche de titres…</p></div>';
+  if(d.err)
+    return '<div class="empty">'+I.boussole+'<h3>'+esc(d.err)+'</h3>'+
+      '<p>Vérifie ta connexion, puis réessaie.</p>'+
+      '<button class="btn ghost" onclick="chargerDecouverte()">Réessayer</button></div>';
+  if(!d.res.length)
+    return '<div class="empty">'+I.boussole+'<h3>Rien avec ces filtres</h3>'+
+      '<p>Élargis la note minimale ou retire un genre.</p>'+
+      '<button class="btn ghost" onclick="ouvrirFiltres()">Ouvrir les filtres</button></div>';
+  return '<div class="grid">'+d.res.map(discCard).join('')+'</div>'+
+    (d.page < d.pages
+      ? '<div class="plus"><button class="btn ghost" onclick="chargerDecouverte(true)"'+
+        (d.loading?' disabled':'')+'>'+(d.loading?'<span class="spin"></span> Chargement…':'Voir plus')+'</button></div>'
+      : '');
+}
+
+function discCard(r){
+  const media = discMedia(), isTv = media === 'tv';
+  const name = isTv ? r.name : r.title;
+  const date = isTv ? r.first_air_date : r.release_date;
+  const item = isTv ? db.shows[r.id] : db.movies[r.id];
+  const st   = item ? statut(item) : null;
+  const note = r.vote_average ? Math.round(r.vote_average*10)/10 : null;
+  const votes = r.vote_count || 0;
+
+  let coin = '';
+  if(st === 'vu')         coin = '<div class="tick vu">'+I.check+'</div>';
+  else if(st === 'avoir') coin = '<div class="tick avoir">'+I.bookmark+'</div>';
+  else if(st === 'asuivre'){
+    const p = progress(item);
+    coin = '<div class="tick suivi">'+p.watched+'/'+p.total+'</div>';
+  }
+
+  return '<button class="gcard" onclick="openPreview('+r.id+',\''+media+'\',\'discover\')">'+
+    posterEl(r.poster_path,'w342','',name)+ coin +
+    (note ? '<div class="gnote">'+I.star+note.toFixed(1)+'</div>' : '')+
+    '<div class="gname">'+esc(name)+'</div>'+
+    '<div class="gyear">'+esc(year(date))+(votes?' · '+votes+' vote'+(votes>1?'s':''):'')+'</div>'+
+    (st ? '<div class="gstat '+st+'">'+LIB_STATUT[st]+'</div>' : '')+
+  '</button>';
+}
+
 /* ---------- Vue : aperçu avant ajout (série ou film) ---------- */
-function openPreview(id, type){
+function openPreview(id, type, from){
   ui.preview = { id:id, type:type, loading:true, data:null };
-  go('preview', {id:id, type:type});
+  go('preview', {id:id, type:type, from:from||'search'});
   loadPreview();
 }
 async function loadPreview(){
