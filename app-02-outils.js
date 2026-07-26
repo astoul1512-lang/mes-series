@@ -143,25 +143,41 @@ let view = 'follow';
 let params = {};
 let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searching:false, searchErr:'',
            openSeasons:{}, busy:false,
-           /* Découvrir : type affiché, genres cochés, plateformes cochées, tri,
-              note minimale, page en cours */
-           disc:{ type:'tv', genres:[], plates:[], toutesPlates:false,
-                  perimetre:'recent', tri:'populaire', noteMin:0,
+           /* Découvrir : type affiché, genres cochés, tri, note minimale, page en cours */
+           disc:{ type:'tv', genres:[], perimetre:'recent', tri:'populaire', noteMin:0,
                   page:1, pages:1, res:[], loading:false, err:'', charge:false } };
 
 const DEPTH = { discover:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, account:2, biblio:2 };
 let navDir = 'none';
+/* Position de défilement mémorisée pour les écrans qui sont des listes.
+   Quitter une liste puis y revenir doit rendre la page là où on l'avait laissée ;
+   une fiche, elle, s'ouvre toujours en haut. */
+const LISTES = { discover:1, follow:1, profile:1, abos:1, biblio:1 };
+const memDefil = {};
+
+function cleDefil(v, p){
+  return v === 'biblio' ? 'biblio:'+((p||params||{}).id||'') : v;
+}
+
 function go(v, p, dir){
   if(view===v && JSON.stringify(params)===JSON.stringify(p||{})){ window.scrollTo(0,0); render(); return; }
+  if(LISTES[view]) memDefil[cleDefil(view)] = window.scrollY || 0;
   /* En revenant sur Découvrir sans recherche en cours, le champ se referme :
      on retrouve l'écran de suggestions net. Une recherche en cours, elle, survit. */
   if(v === 'discover' && !(ui.searchQ||'').trim()) ui.champOuvert = false;
   const a = DEPTH[view]||0, b = DEPTH[v]||0;
   navDir = dir || (b > a ? 'enter' : b < a ? 'back' : 'none');
-  view = v; params = p||{}; window.scrollTo(0,0);
+  view = v; params = p||{};
   if(typeof hideUndo === 'function') hideUndo();
   render();
+  const y = LISTES[v] ? (memDefil[cleDefil(v, p)] || 0) : 0;
+  window.scrollTo(0, y);
+  /* La grille se peuple parfois juste après le rendu : on repositionne une fois de plus. */
+  if(y) requestAnimationFrame(()=> window.scrollTo(0, y));
 }
+
+/* Une liste qui repart de zéro (nouvelle recherche, filtre changé) oublie sa position. */
+function oublierDefil(v){ delete memDefil[cleDefil(v)]; }
 /* Cible du retour selon l'écran courant — utilisée par la flèche et par le balayage */
 function currentBack(){
   if(view==='show' || view==='movie') return params.from || 'follow';
