@@ -204,12 +204,15 @@ const platesTMDB = { tv:null, movie:null };
 const PLATES_VEDETTE = 12;
 /* TMDB mélange dans une même liste les abonnements (Netflix) et les boutiques de
    location à l'acte (Canal VOD, Orange VOD), sans jamais dire lesquelles sont
-   lesquelles. Comme le filtre ne porte que sur l'abonnement, une boutique de
-   location ne renverrait jamais rien. On le découvre en le demandant à TMDB :
-   une plateforme dont le catalogue en abonnement est vide est écartée.
-   Sondage limité aux plus en vue, en petits paquets pour ne pas saturer l'API. */
-const PLATES_SONDEES = 30, PLATES_PAQUET = 6;
-const platesAbo = { tv:{}, movie:{} };      // id → true (a du catalogue en abonnement) · false
+   lesquelles. Et son paramètre « type d'offre » est ignoré dès qu'on le combine
+   avec un fournisseur : demander Canal VOD en abonnement renvoie quand même ses
+   films à louer. On ne peut donc pas se fier à la requête ; on apprend la réponse
+   ailleurs. Sur un échantillon de titres populaires, on relève les plateformes
+   qui apparaissent réellement en « flatrate » : celles-là font de l'abonnement,
+   les autres sont des boutiques et n'ont rien à faire dans ce filtre. */
+const PLATES_ECHANTILLON = 18, PLATES_PAQUET = 6, PLATES_MINI = 4;
+const platesAbo = { tv:{}, movie:{} };      // id → true (fait de l'abonnement en France)
+const platesAboFait = { tv:false, movie:false };
 let sondageEnCours = false;
 let discSeq = 0;
 
@@ -237,8 +240,9 @@ function genresAffiches(){
    plateforme n'a pas été sondée, on la garde — mieux vaut la montrer trop tôt
    que la faire disparaître sous les doigts. */
 function platesRetenues(){
-  const media = discMedia(), su = platesAbo[media];
-  return (platesTMDB[media] || []).filter(p => su[p.id] !== false);
+  const media = discMedia(), l = platesTMDB[media] || [];
+  if(!platesAboFait[media]) return l;                 // rien d'appris : on montre tout
+  return l.filter(p => platesAbo[media][p.id]);
 }
 function platesAffichees(){
   const l = platesRetenues();
@@ -248,26 +252,30 @@ function platesCachees(){
   return Math.max(0, platesRetenues().length - PLATES_VEDETTE);
 }
 
-/* Sonde les plateformes les plus en vue : une plateforme dont le catalogue en
-   abonnement est vide n'a rien à faire dans la liste. En cas d'erreur réseau on
-   la garde : on n'écarte que sur une réponse claire de TMDB. */
+/* Apprend quelles plateformes font de l'abonnement, en regardant les offres
+   réelles d'un échantillon de titres populaires. Un échantillon trop pauvre est
+   ignoré : mieux vaut proposer trop de plateformes que vider la liste. */
 async function sonderPlates(media){
-  if(sondageEnCours) return false;
-  const liste = (platesTMDB[media] || []).slice(0, PLATES_SONDEES);
-  const su = platesAbo[media];
-  const aTester = liste.filter(p => su[p.id] === undefined);
-  if(!aTester.length) return false;
+  if(sondageEnCours || platesAboFait[media]) return false;
   sondageEnCours = true;
   try{
-    for(let i=0; i<aTester.length; i+=PLATES_PAQUET){
-      await Promise.all(aTester.slice(i, i+PLATES_PAQUET).map(async p=>{
+    const d = await tmdb('/discover/'+media, { page:'1', sort_by:'popularity.desc' });
+    const ids = (d.results||[]).slice(0, PLATES_ECHANTILLON).map(r=>r.id);
+    const vues = {};
+    for(let i=0; i<ids.length; i+=PLATES_PAQUET){
+      await Promise.all(ids.slice(i, i+PLATES_PAQUET).map(async id=>{
         try{
-          const d = await tmdb('/discover/'+media, { page:'1', watch_region:REGION_PLATO,
-            with_watch_monetization_types:'flatrate', with_watch_providers:String(p.id) });
-          su[p.id] = (d.total_results||0) > 0;
-        }catch(e){ su[p.id] = true; }
+          const w = await tmdb('/'+media+'/'+id+'/watch/providers');
+          const fr = (w && w.results && w.results[REGION_PLATO]) || {};
+          (fr.flatrate||[]).forEach(p=>{ if(p && p.provider_id) vues[p.provider_id] = true; });
+        }catch(e){}
       }));
     }
+    if(Object.keys(vues).length < PLATES_MINI) return false;
+    /* Ce qu'on a coché reste proposé, même si l'échantillon ne l'a pas croisé. */
+    ui.disc.plates.forEach(p=> vues[p.id] = true);
+    platesAbo[media] = vues;
+    platesAboFait[media] = true;
   } finally { sondageEnCours = false; }
   return true;
 }
