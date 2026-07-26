@@ -1,9 +1,17 @@
 /* Service worker — démarrage instantané et fonctionnement hors-ligne.
    Stratégie : network-first sur les fichiers de l'app (pour recevoir les mises à jour),
    repli sur le cache quand le réseau est absent. Les appels TMDB ne sont jamais mis en cache. */
-const CACHE = 'mes-series-v11';
-const SHELL = ['./', './index.html', './manifest.json',
-               './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
+const CACHE = 'mes-series-v13';
+const SHELL = ['./', './index.html', './app.css', './manifest.json',
+               './icon-192.png', './icon-512.png', './apple-touch-icon.png',
+               './app-01-noyau.js',
+               './app-02-outils.js',
+               './app-03-vues.js',
+               './app-04-decouvrir.js',
+               './app-05-plateformes.js',
+               './app-06-serie.js',
+               './app-07-partage.js',
+               './app-08-reglages.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil(

@@ -1,0 +1,409 @@
+"use strict";
+
+/* ============================ Icônes ============================ */
+const I = {
+  tv:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="15" rx="2"/><path d="m17 2-5 5-5-5"/></svg>',
+  search:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+  cal:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18M8 2v4M16 2v4"/></svg>',
+  cog:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+  check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+  back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
+  caret:'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>',
+  dots:'<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>',
+  plus:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  refresh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>',
+  star:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="m12 2 2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.3 5.9 20.6l1.4-6.8L2.2 9.1l6.9-.8z"/></svg>',
+  eye:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  bookmark:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21 12 16l-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>',
+  frame:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.4"/><path d="m21 16-5-5-4.5 4.5L9 13l-6 6"/></svg>',
+  close:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+  user:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg>',
+  boussole:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/></svg>',
+  filtre:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M7 12h10M10 17h4"/></svg>'
+};
+
+/* ============================ Stockage ============================ */
+/* IndexedDB en base principale (quota large, non purgé comme localStorage),
+   miroir localStorage en secours, et écriture forcée dès que l'app passe en arrière-plan. */
+const KEY = 'mesSeries.v1';
+const IDB_NAME = 'mesSeries', IDB_STORE = 'kv', IDB_KEY = 'db';
+let memoryOnly = false, storageMode = 'idb';
+/* Serveur de sauvegarde pré-configuré (clé publiable : conçue pour être dans le client,
+   les données sont protégées par les règles RLS côté base). Modifiable dans l'écran Compte. */
+const DEFAULT_SYNC = { url:'https://mqwryzopmtykjidabqfv.supabase.co',
+                       key:'sb_publishable_ZnfMBfcEQOhdpg3g9u0eZg_Iaw_Fo7y' };
+let db = { apiKey:'', lang:'fr-FR', shows:{}, movies:{}, lastExport:null,
+           sync:Object.assign({}, DEFAULT_SYNC), auth:null, pseudo:'',
+           deleted:{shows:{},movies:{}}, syncedAt:null, v:1 };
+
+function idbOpen(){
+  return new Promise((res,rej)=>{
+    if(!self.indexedDB) return rej(new Error('no idb'));
+    const r = indexedDB.open(IDB_NAME, 1);
+    r.onupgradeneeded = ()=>{ if(!r.result.objectStoreNames.contains(IDB_STORE)) r.result.createObjectStore(IDB_STORE); };
+    r.onsuccess = ()=> res(r.result);
+    r.onerror = ()=> rej(r.error || new Error('idb error'));
+    r.onblocked = ()=> rej(new Error('idb blocked'));
+  });
+}
+function idbReq(mode, fn){
+  return idbOpen().then(conn => new Promise((res,rej)=>{
+    const tx = conn.transaction(IDB_STORE, mode);
+    const rq = fn(tx.objectStore(IDB_STORE));
+    rq.onsuccess = ()=> res(rq.result);
+    rq.onerror = ()=> rej(rq.error);
+    tx.oncomplete = ()=> conn.close();
+  }));
+}
+const idbGet = ()=> idbReq('readonly', st => st.get(IDB_KEY));
+const idbSet = v => idbReq('readwrite', st => st.put(v, IDB_KEY));
+
+/* Demande au navigateur de marquer le stockage comme "persistant" :
+   il ne sera pas purgé automatiquement pour faire de la place. */
+async function askPersist(){
+  try{
+    if(navigator.storage && navigator.storage.persist){
+      if(!(await navigator.storage.persisted())) await navigator.storage.persist();
+    }
+  }catch(e){}
+}
+
+async function loadDB(){
+  let loaded = null;
+  try{ loaded = await idbGet(); }
+  catch(e){ storageMode = 'ls'; }
+
+  if(!loaded){
+    /* Première ouverture après la mise à jour : on récupère l'ancienne base localStorage */
+    try{
+      const raw = localStorage.getItem(KEY);
+      if(raw){ loaded = JSON.parse(raw); }
+    }catch(e){}
+  }
+  if(loaded && typeof loaded === 'object') db = Object.assign(db, loaded);
+  if(!db.sync || !db.sync.url || !db.sync.key) db.sync = Object.assign({}, DEFAULT_SYNC);
+  if(!db.deleted) db.deleted = {shows:{},movies:{}};
+
+  /* Vérifie qu'au moins un canal d'écriture fonctionne */
+  try{ await writeNow(); }
+  catch(e){
+    try{ localStorage.setItem(KEY, JSON.stringify(db)); storageMode = 'ls'; }
+    catch(e2){ memoryOnly = true; }
+  }
+}
+
+let saveTimer = null, dirty = false;
+function saveDB(){
+  dirty = true;
+  if(typeof scheduleSync === 'function') scheduleSync();
+  if(memoryOnly) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(()=>{ writeNow().catch(()=>{}); }, 150);
+}
+async function writeNow(){
+  if(memoryOnly) return;
+  const snapshot = JSON.parse(JSON.stringify(db));
+  let ok = false;
+  try{ await idbSet(snapshot); ok = true; storageMode = 'idb'; }
+  catch(e){ storageMode = 'ls'; }
+  /* miroir localStorage : secours si IndexedDB est vidé, et compatibilité avec l'ancienne version */
+  try{ localStorage.setItem(KEY, JSON.stringify(snapshot)); ok = true; }
+  catch(e){}
+  if(!ok) throw new Error('aucun stockage disponible');
+  dirty = false;
+}
+/* iOS peut tuer l'app sans prévenir : on écrit dès qu'elle passe en arrière-plan */
+function flushDB(){ if(dirty){ clearTimeout(saveTimer); writeNow().catch(()=>{}); } }
+document.addEventListener('visibilitychange', ()=>{ if(document.hidden) flushDB(); });
+window.addEventListener('pagehide', flushDB);
+window.addEventListener('blur', flushDB);
+
+/* ============================ TMDB ============================ */
+const IMG = (p,size)=> p ? 'https://image.tmdb.org/t/p/'+size+p : '';
+const isBearer = ()=> db.apiKey.startsWith('eyJ') || db.apiKey.length > 60;
+
+async function tmdb(path, params, extra){
+  if(!db.apiKey) throw new Error('NOKEY');
+  const u = new URL('https://api.themoviedb.org/3'+path);
+  u.searchParams.set('language', db.lang || 'fr-FR');
+  for(const k in (params||{})) u.searchParams.set(k, params[k]);
+  const opt = {};
+  if(extra && extra.signal) opt.signal = extra.signal;      // permet d'abandonner la requête
+  if(isBearer()) opt.headers = { Authorization:'Bearer '+db.apiKey };
+  else u.searchParams.set('api_key', db.apiKey);
+  const r = await fetch(u.toString(), opt);
+  if(r.status === 401) throw new Error('BADKEY');
+  if(r.status === 429){ await sleep(1200); return tmdb(path, params, extra); }
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  return r.json();
+}
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+
+/* Récupère la série + toutes ses saisons (par paquets de 20 via append_to_response) */
+async function fetchShowFull(id, onStep){
+  const base = await tmdb('/tv/'+id);
+  const nums = (base.seasons||[]).map(s=>s.season_number).sort((a,b)=>a-b);
+  const seasons = {};
+  for(let i=0;i<nums.length;i+=20){
+    const chunk = nums.slice(i,i+20);
+    if(onStep) onStep(Math.min(i+20,nums.length), nums.length);
+    const d = await tmdb('/tv/'+id, { append_to_response: chunk.map(n=>'season/'+n).join(',') });
+    chunk.forEach(n=>{
+      const sd = d['season/'+n];
+      if(sd && sd.episodes && sd.episodes.length){
+        seasons[n] = sd.episodes.map(ep=>({
+          e: ep.episode_number, n: ep.name || ('Épisode '+ep.episode_number),
+          d: ep.air_date || null, r: ep.runtime || null, st: ep.still_path || null
+        }));
+      }
+    });
+  }
+  return {
+    id: base.id, name: base.name, poster: base.poster_path, backdrop: base.backdrop_path,
+    overview: base.overview, first: base.first_air_date, status: base.status,
+    runtime: (base.episode_run_time && base.episode_run_time[0]) || null,
+    genres: (base.genres||[]).map(g=>g.name),
+    note: base.vote_average || null,
+    network: (base.networks && base.networks[0] && base.networks[0].name) || null,
+    next: base.next_episode_to_air ? {
+      s: base.next_episode_to_air.season_number, e: base.next_episode_to_air.episode_number,
+      n: base.next_episode_to_air.name, d: base.next_episode_to_air.air_date
+    } : null,
+    seasons, updated: Date.now()
+  };
+}
+
+/* ============================ Synchronisation ============================ */
+/* Sauvegarde en ligne via Supabase : chaque utilisateur possède une ligne unique
+   contenant l'ensemble de ses données. Les appareils fusionnent au lieu d'écraser. */
+
+const TABLE = 'mes_series';
+let syncing = false, syncTimer = null, syncState = 'off', syncError = '';
+
+const syncReady = ()=> !!(db.sync && db.sync.url && db.sync.key);
+const signedIn  = ()=> !!(db.auth && db.auth.token && db.auth.uid);
+const sbBase    = ()=> String(db.sync.url).replace(/\/+$/,'');
+
+async function sbFetch(path, opt, retry){
+  opt = opt || {};
+  const h = Object.assign({ apikey: db.sync.key, 'Content-Type':'application/json' }, opt.headers||{});
+  if(signedIn() && !opt.noAuth) h.Authorization = 'Bearer ' + db.auth.token;
+  const r = await fetch(sbBase()+path, Object.assign({}, opt, {headers:h}));
+  if(r.status === 401 && signedIn() && !retry){
+    if(await sbRefresh()) return sbFetch(path, opt, true);
+  }
+  const txt = await r.text();
+  let body = null; try{ body = txt ? JSON.parse(txt) : null; }catch(e){ body = txt; }
+  if(!r.ok){
+    const msg = (body && (body.msg || body.message || body.error_description || body.error)) || ('erreur '+r.status);
+    const err = new Error(msg); err.status = r.status; throw err;
+  }
+  return body;
+}
+
+async function sbSignUp(email, password){
+  const d = await sbFetch('/auth/v1/signup', {method:'POST', noAuth:true,
+    body: JSON.stringify({email, password})});
+  if(d && d.access_token) return applySession(d);
+  /* confirmation par e-mail activée côté Supabase */
+  throw new Error('CONFIRM');
+}
+async function sbSignIn(email, password){
+  const d = await sbFetch('/auth/v1/token?grant_type=password', {method:'POST', noAuth:true,
+    body: JSON.stringify({email, password})});
+  return applySession(d);
+}
+async function sbRefresh(){
+  try{
+    const d = await sbFetch('/auth/v1/token?grant_type=refresh_token', {method:'POST', noAuth:true,
+      body: JSON.stringify({refresh_token: db.auth.refresh})});
+    applySession(d); return true;
+  }catch(e){ return false; }
+}
+function applySession(d){
+  if(!d || !d.access_token) throw new Error('réponse inattendue du serveur');
+  db.auth = { token:d.access_token, refresh:d.refresh_token,
+              uid:(d.user&&d.user.id)||(db.auth&&db.auth.uid), email:(d.user&&d.user.email)||(db.auth&&db.auth.email) };
+  saveDB();
+  return db.auth;
+}
+function sbSignOut(){ db.auth = null; syncState='off'; saveDB(); render(); }
+
+/* --- Fusion : on ne perd jamais un épisode coché, et les suppressions se propagent --- */
+function payload(){
+  return { apiKey: db.apiKey, lang: db.lang, pseudo: db.pseudo, shows: db.shows, movies: db.movies,
+           deleted: db.deleted || {shows:{},movies:{}} };
+}
+function mergeRemote(rem){
+  if(!rem || typeof rem !== 'object') return false;
+  const del = db.deleted = db.deleted || {shows:{},movies:{}};
+  const rdel = rem.deleted || {shows:{},movies:{}};
+  ['shows','movies'].forEach(k=>{
+    Object.keys(rdel[k]||{}).forEach(id=>{
+      if(!del[k][id] || rdel[k][id] > del[k][id]) del[k][id] = rdel[k][id];
+    });
+  });
+
+  let changed = false;
+  /* séries */
+  Object.values(rem.shows||{}).forEach(rs=>{
+    if(del.shows[rs.id] && del.shows[rs.id] > (rs.addedAt||0)) return;   // supprimée ici après coup
+    const ls = db.shows[rs.id];
+    if(!ls){ db.shows[rs.id] = rs; changed = true; return; }
+    /* fiche la plus récente, union des épisodes vus */
+    const base = (rs.updated||0) > (ls.updated||0) ? Object.assign({}, rs) : Object.assign({}, ls);
+    const w = Object.assign({}, ls.watched||{});
+    Object.keys(rs.watched||{}).forEach(k=>{ if(!w[k]) { w[k] = rs.watched[k]; changed = true; } });
+    base.watched = w;
+    base.addedAt = Math.min(ls.addedAt||Date.now(), rs.addedAt||Date.now());
+    db.shows[rs.id] = base;
+  });
+  /* films */
+  Object.values(rem.movies||{}).forEach(rm=>{
+    if(del.movies[rm.id] && del.movies[rm.id] > (rm.addedAt||0)) return;
+    const lm = db.movies[rm.id];
+    if(!lm){ db.movies[rm.id] = rm; changed = true; return; }
+    if((rm.watchedAt||0) > (lm.watchedAt||0)){ db.movies[rm.id] = rm; changed = true; }
+  });
+  /* suppressions distantes à appliquer localement */
+  ['shows','movies'].forEach(k=>{
+    Object.keys(del[k]).forEach(id=>{
+      const it = db[k][id];
+      if(it && del[k][id] > (it.addedAt||0)){ delete db[k][id]; changed = true; }
+    });
+  });
+  if(!db.apiKey && rem.apiKey){ db.apiKey = rem.apiKey; changed = true; }
+  if(!db.pseudo && rem.pseudo){ db.pseudo = rem.pseudo; changed = true; }
+  return changed;
+}
+function markDeleted(kind, id){
+  db.deleted = db.deleted || {shows:{},movies:{}};
+  db.deleted[kind][id] = Date.now();
+}
+
+async function syncNow(silent){
+  if(!syncReady() || !signedIn() || syncing) return;
+  syncing = true; syncState = 'busy'; syncError = ''; if(!silent) render();
+  try{
+    const got = await sbFetch('/rest/v1/'+TABLE+'?select=data&user_id=eq.'+encodeURIComponent(db.auth.uid), {});
+    if(Array.isArray(got) && got.length) mergeRemote(got[0].data);
+    await sbFetch('/rest/v1/'+TABLE, {
+      method:'POST',
+      headers:{ Prefer:'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ user_id: db.auth.uid, data: payload(), updated_at: new Date().toISOString() })
+    });
+    db.syncedAt = Date.now(); syncState = 'ok';
+    await writeNow().catch(()=>{});
+    if(!silent) toast('Synchronisé');
+    render();
+  }catch(e){
+    syncState = 'err'; syncError = e.message || 'échec';
+    if(!silent) toast('Synchro impossible : '+syncError);
+    render();
+  }
+  syncing = false;
+}
+function scheduleSync(){
+  if(!syncReady() || !signedIn()) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(()=> syncNow(true), 4000);
+}
+
+/* ============================ Partage par abonnement ============================ */
+/* On ne consulte jamais la bibliothèque de quelqu'un sans y être abonné, et on ne
+   s'abonne que par un code que la personne a elle-même généré. Tout est en lecture
+   seule : rien de ce qui suit n'écrit dans les données d'autrui. */
+
+let partage = { suivis:[], abonnes:[], charge:false, occupe:false, code:null };
+const biblios = {};                       // caches mémoire, jamais enregistrés localement
+
+async function majProfil(){
+  if(!signedIn()) return;
+  const pseudo = (db.pseudo || '').trim() || (db.auth.email||'').split('@')[0];
+  db.pseudo = pseudo;
+  try{
+    await sbFetch('/rest/v1/profils', { method:'POST',
+      headers:{ Prefer:'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ user_id: db.auth.uid, pseudo: pseudo, maj: new Date().toISOString() }) });
+  }catch(e){}
+}
+
+async function chargerPartage(){
+  if(!signedIn()) return;
+  partage.occupe = true; partage.erreur = null;
+  try{
+    const liens = await sbFetch('/rest/v1/abonnements?select=suiveur,suivi,depuis', {});
+    const moi = db.auth.uid;
+    const idsSuivis  = liens.filter(l=>l.suiveur===moi).map(l=>l.suivi);
+    const idsAbonnes = liens.filter(l=>l.suivi===moi).map(l=>l.suiveur);
+    const tous = [...new Set(idsSuivis.concat(idsAbonnes))];
+    let noms = {};
+    if(tous.length){
+      const ps = await sbFetch('/rest/v1/profils?select=user_id,pseudo&user_id=in.('+tous.join(',')+')', {});
+      ps.forEach(p=> noms[p.user_id] = p.pseudo);
+    }
+    partage.suivis  = idsSuivis.map(id=>({ id, pseudo: noms[id] || 'Sans nom' }));
+    partage.abonnes = idsAbonnes.map(id=>({ id, pseudo: noms[id] || 'Sans nom' }));
+    partage.charge = true;
+  }catch(e){ partage.erreur = e.message; }
+  partage.occupe = false;
+  if(view==='abos') render();
+}
+
+async function genererCode(){
+  if(!signedIn()) return;
+  const lettres = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   // sans I, O, 0, 1 pour éviter les confusions
+  let code = '';
+  const buf = new Uint32Array(6);
+  (self.crypto || window.crypto).getRandomValues(buf);
+  for(let i=0;i<6;i++) code += lettres[buf[i] % lettres.length];
+  try{
+    await majProfil();
+    await sbFetch('/rest/v1/codes_partage', { method:'POST',
+      headers:{ Prefer:'return=minimal' },
+      body: JSON.stringify({ code: code, proprio: db.auth.uid }) });
+    partage.code = code;
+    render();
+  }catch(e){ toast('Impossible de créer le code'); }
+}
+
+async function utiliserCode(saisi){
+  const code = (saisi||'').trim().toUpperCase();
+  if(code.length < 4) return toast('Code trop court');
+  try{
+    await majProfil();
+    const r = await sbFetch('/rest/v1/rpc/utiliser_code', { method:'POST',
+      body: JSON.stringify({ le_code: code }) });
+    const nom = (Array.isArray(r) && r[0] && r[0].pseudo) || 'cette personne';
+    toast('Tu suis maintenant '+nom);
+    await chargerPartage();
+    render();
+  }catch(e){
+    const m = String(e.message||'');
+    if(/CODE_INVALIDE/.test(m))   toast('Code inconnu, déjà utilisé ou expiré');
+    else if(/CODE_A_SOI/.test(m)) toast('Ce code est le tien');
+    else toast('Échec : '+m);
+  }
+}
+
+async function rompre(id, jeSuis){
+  const q = jeSuis === 'suiveur'
+    ? '?suiveur=eq.'+db.auth.uid+'&suivi=eq.'+id
+    : '?suiveur=eq.'+id+'&suivi=eq.'+db.auth.uid;
+  try{
+    await sbFetch('/rest/v1/abonnements'+q, { method:'DELETE', headers:{ Prefer:'return=minimal' } });
+    delete biblios[id];
+    await chargerPartage();
+    render();
+    toast(jeSuis === 'suiveur' ? 'Désabonné' : 'Abonné retiré');
+  }catch(e){ toast('Échec : '+e.message); }
+}
+
+/* Récupère la bibliothèque d'une personne suivie — lecture seule, gardée en mémoire */
+async function chargerBiblio(id){
+  try{
+    const r = await sbFetch('/rest/v1/'+TABLE+'?select=data&user_id=eq.'+encodeURIComponent(id), {});
+    biblios[id] = (Array.isArray(r) && r.length) ? (r[0].data || {}) : {};
+  }catch(e){ biblios[id] = { erreur: e.message }; }
+  if(view==='biblio') render();
+}
