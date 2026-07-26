@@ -202,6 +202,15 @@ const platesTMDB = { tv:null, movie:null };
 /* Nombre de plateformes montrées d'emblée dans les filtres ; le reste
    se déplie à la demande. TMDB en recense plus de cent pour la France. */
 const PLATES_VEDETTE = 12;
+/* TMDB mélange dans une même liste les abonnements (Netflix) et les boutiques de
+   location à l'acte (Canal VOD, Orange VOD), sans jamais dire lesquelles sont
+   lesquelles. Comme le filtre ne porte que sur l'abonnement, une boutique de
+   location ne renverrait jamais rien. On le découvre en le demandant à TMDB :
+   une plateforme dont le catalogue en abonnement est vide est écartée.
+   Sondage limité aux plus en vue, en petits paquets pour ne pas saturer l'API. */
+const PLATES_SONDEES = 30, PLATES_PAQUET = 6;
+const platesAbo = { tv:{}, movie:{} };      // id → true (a du catalogue en abonnement) · false
+let sondageEnCours = false;
 let discSeq = 0;
 
 /* Le média TMDB derrière chaque puce : mini-séries et animés restent des séries. */
@@ -224,13 +233,43 @@ function genresAffiches(){
 /* Les plateformes proposées viennent de TMDB pour la France, classées par
    l'ordre d'affichage que JustWatch donne au pays : Netflix et Disney+ avant
    les catalogues confidentiels. La liste diffère entre séries et films. */
+/* Liste utilisable : on retire ce qu'on sait être sans abonnement. Tant qu'une
+   plateforme n'a pas été sondée, on la garde — mieux vaut la montrer trop tôt
+   que la faire disparaître sous les doigts. */
+function platesRetenues(){
+  const media = discMedia(), su = platesAbo[media];
+  return (platesTMDB[media] || []).filter(p => su[p.id] !== false);
+}
 function platesAffichees(){
-  const l = platesTMDB[discMedia()] || [];
+  const l = platesRetenues();
   return ui.disc.toutesPlates ? l : l.slice(0, PLATES_VEDETTE);
 }
 function platesCachees(){
-  const l = platesTMDB[discMedia()] || [];
-  return Math.max(0, l.length - PLATES_VEDETTE);
+  return Math.max(0, platesRetenues().length - PLATES_VEDETTE);
+}
+
+/* Sonde les plateformes les plus en vue : une plateforme dont le catalogue en
+   abonnement est vide n'a rien à faire dans la liste. En cas d'erreur réseau on
+   la garde : on n'écarte que sur une réponse claire de TMDB. */
+async function sonderPlates(media){
+  if(sondageEnCours) return false;
+  const liste = (platesTMDB[media] || []).slice(0, PLATES_SONDEES);
+  const su = platesAbo[media];
+  const aTester = liste.filter(p => su[p.id] === undefined);
+  if(!aTester.length) return false;
+  sondageEnCours = true;
+  try{
+    for(let i=0; i<aTester.length; i+=PLATES_PAQUET){
+      await Promise.all(aTester.slice(i, i+PLATES_PAQUET).map(async p=>{
+        try{
+          const d = await tmdb('/discover/'+media, { page:'1', watch_region:REGION_PLATO,
+            with_watch_monetization_types:'flatrate', with_watch_providers:String(p.id) });
+          su[p.id] = (d.total_results||0) > 0;
+        }catch(e){ su[p.id] = true; }
+      }));
+    }
+  } finally { sondageEnCours = false; }
+  return true;
 }
 
 /* Traduit l'état des filtres en paramètres TMDB.
@@ -313,7 +352,9 @@ async function chargerDecouverte(suite){
     await chargerGenres(media);
     /* La liste des plateformes n'est pas bloquante : elle vient en arrière-plan
        et la feuille de filtres se remet à jour toute seule si elle est ouverte. */
-    chargerPlates(media).then(()=>{ if(feuilleFiltresOuverte()) ouvrirFiltres(); });
+    chargerPlates(media)
+      .then(()=>{ if(feuilleFiltresOuverte()) ouvrirFiltres(); return sonderPlates(media); })
+      .then(change=>{ if(change && feuilleFiltresOuverte()) ouvrirFiltres(); });
     /* Un genre qui n'existe pas pour ce type est retiré, mais on le dit. */
     const perdus = d.genres.filter(n => genreParNom(media, n) == null);
     if(perdus.length){
@@ -432,6 +473,8 @@ function blocFiltrePlates(){
           ' · abonnement en France</div>';
   if(!liste.length)
     return h + '<div class="small muted">La liste des plateformes arrive avec les premiers résultats.</div>';
+  /* La feuille peut s'ouvrir avant la fin du sondage : on le termine et on redessine. */
+  if(!sondageEnCours) sonderPlates(discMedia()).then(ch=>{ if(ch && feuilleFiltresOuverte()) ouvrirFiltres(); });
   h += '<div class="fchips">'+liste.map((p,i)=>{
     const on = d.plates.some(x => x.id === p.id);
     const logo = p.logo ? '<img loading="lazy" src="'+IMG(p.logo,'w45')+'" alt="">' : '';
