@@ -150,6 +150,23 @@
     color:var(--muted);margin:14px 0 8px}
   .fchips{display:flex;flex-wrap:wrap;gap:8px}
   .plus{padding:16px;text-align:center}
+  /* Rangée de Découvrir : la loupe vient s'ajouter aux quatre types,
+     on resserre un peu pour que tout tienne sans défilement sur un iPhone. */
+  .chips.types{gap:6px}
+  .chips.types .chip{padding:7px 9px;font-size:13px}
+  .chip.chipico{padding:7px 8px;display:grid;place-items:center;flex:0 0 auto}
+  .chip.chipico svg{width:16px;height:16px;display:block}
+  .chip.chipico.ouvert{border-color:var(--accent);color:var(--accent);background:var(--surface)}
+  @keyframes deplie{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+  .qbar{animation:deplie .16s ease-out}
+  .qbar{position:relative;margin:0 16px 12px;display:flex;align-items:center}
+  .qbar > svg{position:absolute;left:13px;width:17px;height:17px;color:var(--muted);pointer-events:none}
+  .qbar input{padding-left:38px;padding-right:38px}
+  .qbar input::-webkit-search-cancel-button{display:none}   /* la croix du navigateur ferait doublon */
+  .qclear{position:absolute;right:8px;width:26px;height:26px;border-radius:13px;
+    display:grid;place-items:center;color:var(--muted)}
+  .qclear svg{width:15px;height:15px}
+  .masque{visibility:hidden;pointer-events:none}
 
   /* ---------- Detail ---------- */
   .hero{position:relative;height:190px;background:var(--surface2);overflow:hidden}
@@ -871,16 +888,19 @@ document.getElementById('sheet').addEventListener('click', e=>{ if(e.target.id==
 /* ============================ État de navigation ============================ */
 let view = 'follow';
 let params = {};
-let ui = { profTab:'series', editServer:false, searchType:'tv', searchQ:'', searchRes:null, searching:false, searchErr:'',
+let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searching:false, searchErr:'',
            openSeasons:{}, busy:false,
            /* Découvrir : type affiché, genres cochés, tri, note minimale, page en cours */
            disc:{ type:'tv', genres:[], tri:'nouveau', noteMin:0,
                   page:1, pages:1, res:[], loading:false, err:'', charge:false } };
 
-const DEPTH = { search:0, discover:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, account:2, biblio:2 };
+const DEPTH = { discover:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, account:2, biblio:2 };
 let navDir = 'none';
 function go(v, p, dir){
   if(view===v && JSON.stringify(params)===JSON.stringify(p||{})){ window.scrollTo(0,0); render(); return; }
+  /* En revenant sur Découvrir sans recherche en cours, le champ se referme :
+     on retrouve l'écran de suggestions net. Une recherche en cours, elle, survit. */
+  if(v === 'discover' && !(ui.searchQ||'').trim()) ui.champOuvert = false;
   const a = DEPTH[view]||0, b = DEPTH[v]||0;
   navDir = dir || (b > a ? 'enter' : b < a ? 'back' : 'none');
   view = v; params = p||{}; window.scrollTo(0,0);
@@ -890,7 +910,7 @@ function go(v, p, dir){
 /* Cible du retour selon l'écran courant — utilisée par la flèche et par le balayage */
 function currentBack(){
   if(view==='show' || view==='movie') return params.from || 'follow';
-  if(view==='preview') return params.from || 'search';
+  if(view==='preview') return params.from || 'discover';
   if(view==='settings') return params.from || null;
   if(view==='account') return 'settings';
   if(view==='abos') return params.from || 'profile';
@@ -923,7 +943,6 @@ function render(){
   const app = document.getElementById('app');
   let html = '';
   if(view==='follow') html = viewFollow();
-  else if(view==='search') html = viewSearch();
   else if(view==='discover') html = viewDiscover();
   else if(view==='profile') html = viewProfile();
   else if(view==='settings') html = viewSettings();
@@ -938,25 +957,24 @@ function render(){
   if(navDir==='enter' || navDir==='back'){ void app.offsetWidth; app.classList.add(navDir); }
   navDir = 'none';
   renderNav();
-  if(view==='search'){
+  if(view==='discover'){
     const inp = document.getElementById('q');
     if(inp && ui.focusSearch){ inp.focus(); ui.focusSearch=false; }
+    /* Premier passage sur Découvrir : on va chercher les suggestions */
+    if(!ui.disc.charge && !ui.disc.loading && db.apiKey) chargerDecouverte();
   }
-  /* Premier passage sur Découvrir : on va chercher les suggestions */
-  if(view==='discover' && !ui.disc.charge && !ui.disc.loading && db.apiKey) chargerDecouverte();
 }
 function renderNav(){
   const tabs = [
-    ['search','Recherche',I.search],
     ['discover','Découvrir',I.boussole],
     ['follow','À suivre',I.cal],
     ['profile','Mon profil',I.user]
   ];
   const depuis = params.from;
-  const cur = (view==='preview') ? (depuis==='discover' ? 'discover' : 'search')
+  const cur = (view==='preview') ? 'discover'
             : (view==='account'||view==='abos'||view==='biblio') ? 'profile'
             : (view==='show'||view==='movie'||view==='settings')
-              ? ((depuis==='search'||depuis==='discover') ? depuis : (depuis||'profile'))
+              ? (depuis==='discover' ? 'discover' : (depuis||'profile'))
             : view;
   document.getElementById('nav').style.gridTemplateColumns = 'repeat('+tabs.length+',1fr)';
   document.getElementById('nav').innerHTML = tabs.map(([id,label,icon])=>
@@ -1006,13 +1024,13 @@ function viewFollow(){
   items.sort((a,b)=>a.d.localeCompare(b.d));
   const upcoming = items.slice(0,80);
 
-  let html = header('À suivre', {right:'<button class="iconbtn" onclick="go(\'search\')">'+I.plus+'</button>'});
+  let html = header('À suivre', {right:'<button class="iconbtn" onclick="go(\'discover\')">'+I.plus+'</button>'});
   html += needKeyBanner();
 
   if(!shows.length){
     return html + '<div class="empty">'+I.tv+'<h3>Rien à suivre pour l\'instant</h3>'+
       '<p>Ajoute une série ou un film depuis la recherche : tu retrouveras ici tes prochains épisodes et les dates de diffusion.</p>'+
-      '<button class="btn" onclick="go(\'search\')">Chercher une série</button></div>';
+      '<button class="btn" onclick="go(\'discover\')">Chercher une série</button></div>';
   }
 
   /* Section 1 */
@@ -1148,7 +1166,7 @@ function viewProfile(){
 
 function emptyProf(title, sub){
   return '<div class="empty" style="padding:38px 24px"><h3>'+esc(title)+'</h3><p>'+esc(sub)+'</p>'+
-    '<button class="btn ghost" onclick="go(\'search\')">Ouvrir la recherche</button></div>';
+    '<button class="btn ghost" onclick="go(\'discover\')">Ouvrir la recherche</button></div>';
 }
 
 function showCard(s){
@@ -1206,20 +1224,9 @@ function profileMenu(){
 const SEARCH_MIN = 2, SEARCH_WAIT = 300, SEARCH_MAX = 8;
 let searchTimer = null, searchAbort = null, searchSeq = 0;
 
-function viewSearch(){
-  const sub = '<div class="chips">'+
-    '<button class="chip '+(ui.searchType==='tv'?'on':'')+'" onclick="setSearchType(\'tv\')">Séries</button>'+
-    '<button class="chip '+(ui.searchType==='movie'?'on':'')+'" onclick="setSearchType(\'movie\')">Films</button>'+
-    '</div>';
-  const body = '<div class="wrap" style="padding-bottom:4px">'+
-    '<input type="search" id="q" enterkeyhint="search" autocomplete="off" autocorrect="off" '+
-    'placeholder="'+(ui.searchType==='tv'?'Nom d\'une série…':'Titre d\'un film…')+'" '+
-    'value="'+esc(ui.searchQ)+'" oninput="onSearchInput(this.value)" '+
-    'onkeydown="if(event.key===\'Enter\'){this.blur();searchNow()}">'+
-    '</div>'+
-    '<div id="sres">'+searchBody()+'</div>';
-  return header('Recherche',{sub:sub}) + needKeyBanner() + body + '<div style="height:20px"></div>';
-}
+/* Une recherche est « active » dès qu'il y a assez de lettres dans le champ.
+   Tant qu'elle ne l'est pas, l'écran montre les suggestions. */
+function enRecherche(){ return (ui.searchQ||'').trim().length >= SEARCH_MIN; }
 
 /* Zone de résultats seule : chargement, erreur, aucun résultat, ou la grille */
 function searchBody(){
@@ -1229,19 +1236,10 @@ function searchBody(){
     return '<div class="empty">'+I.search+'<h3>'+esc(ui.searchErr)+'</h3>'+
       '<p>Vérifie ta connexion, puis réessaie.</p>'+
       '<button class="btn ghost" onclick="searchNow()">Réessayer</button></div>';
-  if(ui.searchRes === null)
-    return '<div class="empty">'+I.search+'<h3>Cherche '+(ui.searchType==='tv'?'une série':'un film')+'</h3>'+
-      '<p>Les suggestions apparaissent dès '+SEARCH_MIN+' lettres.</p></div>';
-  if(!ui.searchRes.length)
-    return '<div class="empty"><h3>Aucun résultat</h3><p>Essaie une autre orthographe, ou l\'autre onglet.</p></div>';
-  return '<div class="grid">'+ui.searchRes.map(searchCard).join('')+'</div>';
-}
-
-/* Rafraîchit uniquement les résultats : le champ garde le focus et le curseur */
-function paintSearch(){
-  const el = document.getElementById('sres');
-  if(view==='search' && el) el.innerHTML = searchBody();
-  else render();
+  if(!ui.searchRes || !ui.searchRes.length)
+    return '<div class="empty"><h3>Rien trouvé dans '+esc(libelleCherche())+'</h3>'+
+      '<p>Essaie une autre orthographe, ou change de type juste au-dessus.</p></div>';
+  return '<div class="grid">'+ui.searchRes.map(r=>carteTitre(r, discMedia())).join('')+'</div>';
 }
 
 function onSearchInput(v){
@@ -1251,10 +1249,10 @@ function onSearchInput(v){
   const q = v.trim();
   if(q.length < SEARCH_MIN){
     ui.searchRes = null; ui.searching = false; ui.searchErr = '';
-    paintSearch(); return;
+    peindreDisc(); return;                    // on retombe sur les suggestions
   }
   ui.searching = true; ui.searchErr = '';
-  paintSearch();
+  peindreDisc();
   searchTimer = setTimeout(()=> runSearch(q), SEARCH_WAIT);
 }
 
@@ -1262,68 +1260,83 @@ function searchNow(){
   clearTimeout(searchTimer);
   const q = (ui.searchQ||'').trim();
   if(q.length < SEARCH_MIN) return;
-  ui.searching = true; ui.searchErr = ''; paintSearch();
+  ui.searching = true; ui.searchErr = ''; peindreDisc();
   runSearch(q);
+}
+
+function viderRecherche(){
+  clearTimeout(searchTimer); abortSearch();
+  ui.searchQ = ''; ui.searchRes = null; ui.searching = false; ui.searchErr = '';
+  render();
 }
 
 function abortSearch(){
   if(searchAbort){ try{ searchAbort.abort(); }catch(e){} searchAbort = null; }
 }
 
+/* La recherche TMDB n'accepte ni genre ni langue : quand la puce Animés est
+   choisie, on écarte nous-mêmes ce qui n'est pas de l'animation japonaise.
+   Si les résultats ne portent pas ces informations, on ne filtre pas à l'aveugle. */
+function garderAnimes(res){
+  if(ui.disc.type !== 'anime') return res;
+  const anim = genreParNom('tv','Animation');
+  if(anim == null) return res;
+  const exploitables = res.every(r => r && typeof r.original_language === 'string' && Array.isArray(r.genre_ids));
+  if(!exploitables) return res;
+  return res.filter(r => r.original_language === 'ja' && r.genre_ids.indexOf(anim) >= 0);
+}
+
 async function runSearch(q){
   if(!db.apiKey){
-    ui.searching = false; paintSearch();
+    ui.searching = false; peindreDisc();
     toast('Ajoute ta clé TMDB dans Réglages');
-    return go('settings', {from:'search'});
+    return go('settings', {from:'discover'});
   }
   const seq = ++searchSeq;
   const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
   searchAbort = ctrl;
   try{
-    const d = await tmdb('/search/'+ui.searchType, { query:q, include_adult:'false' },
+    if(ui.disc.type === 'anime') await chargerGenres('tv');   // besoin de l'id du genre Animation
+    if(seq !== searchSeq) return;
+    /* Mini-séries et animés restent des séries : TMDB ne cherche que dans tv ou movie. */
+    const d = await tmdb('/search/'+discMedia(), { query:q, include_adult:'false' },
                          ctrl ? {signal:ctrl.signal} : null);
     if(seq !== searchSeq) return;                      // une frappe plus récente a pris la main
-    ui.searchRes = (d.results||[]).slice(0, SEARCH_MAX);
+    ui.searchRes = garderAnimes(d.results||[]).slice(0, SEARCH_MAX);
     ui.searching = false; ui.searchErr = '';
-    paintSearch();
+    peindreDisc();
   }catch(e){
     if((e && e.name === 'AbortError') || seq !== searchSeq) return;
     ui.searching = false;
     ui.searchErr = (e.message === 'BADKEY') ? 'Clé TMDB refusée' : 'Pas de connexion';
     ui.searchRes = [];
-    paintSearch();
+    peindreDisc();
   }
 }
 
-function setSearchType(t){
-  if(ui.searchType === t) return;
-  ui.searchType = t; ui.searchRes = null; ui.searchErr = '';
-  clearTimeout(searchTimer); abortSearch();
-  render();
-  if((ui.searchQ||'').trim().length >= SEARCH_MIN) searchNow();
-}
-
-function searchCard(r){
-  const isTv = ui.searchType==='tv';
-  const id = r.id;
+/* Vignette commune aux suggestions et aux résultats de recherche. */
+function carteTitre(r, media){
+  const isTv = media === 'tv';
   const name = isTv ? r.name : r.title;
   const date = isTv ? r.first_air_date : r.release_date;
-  const item = isTv ? db.shows[id] : db.movies[id];
+  const item = isTv ? db.shows[r.id] : db.movies[r.id];
   const st   = item ? statut(item) : null;
   const note = r.vote_average ? Math.round(r.vote_average*10)/10 : null;
+  const votes = r.vote_count || 0;
 
   let coin = '';
-  if(st === 'vu')      coin = '<div class="tick vu">'+I.check+'</div>';
-  else if(st === 'avoir')   coin = '<div class="tick avoir">'+I.bookmark+'</div>';
+  if(st === 'vu')         coin = '<div class="tick vu">'+I.check+'</div>';
+  else if(st === 'avoir') coin = '<div class="tick avoir">'+I.bookmark+'</div>';
   else if(st === 'asuivre'){
     const p = progress(item);
     coin = '<div class="tick suivi">'+p.watched+'/'+p.total+'</div>';
   }
 
-  return '<button class="gcard" onclick="openPreview('+id+',\''+(isTv?'tv':'movie')+'\',\'search\')">'+
+  return '<button class="gcard" onclick="openPreview('+r.id+',\''+media+'\',\'discover\')">'+
     posterEl(r.poster_path,'w342','',name)+ coin +
+    (note ? '<div class="gnote">'+I.star+note.toFixed(1)+'</div>' : '')+
     '<div class="gname">'+esc(name)+'</div>'+
-    '<div class="gyear">'+esc(year(date))+(note?' · ★ '+note:'')+'</div>'+
+    '<div class="gyear">'+esc(year(date))+(votes?' · '+votes+' vote'+(votes>1?'s':''):'')+'</div>'+
     (st ? '<div class="gstat '+st+'">'+LIB_STATUT[st]+'</div>' : '')+
   '</button>';
 }
@@ -1337,7 +1350,7 @@ function versLesSaisons(){
 }
 
 async function addOrOpenShow(id){
-  if(db.shows[id]) return go('show',{id:id, from: params.from || 'search'});
+  if(db.shows[id]) return go('show',{id:id, from: params.from || 'discover'});
   if(ui.busy) return;
   ui.busy = true;
   const btn = document.getElementById('addbtn');
@@ -1349,7 +1362,7 @@ async function addOrOpenShow(id){
     s.watched = {}; s.addedAt = Date.now();
     db.shows[id] = s; saveDB();
     toast('« '+s.name+' » ajoutée');
-    ui.busy = false; go('show',{id:id, from: params.from || 'search'});
+    ui.busy = false; go('show',{id:id, from: params.from || 'discover'});
     versLesSaisons();
   }catch(e){
     ui.busy = false; render();
@@ -1496,18 +1509,26 @@ function peindreDisc(){
   if(view !== 'discover') return;
   const el = document.getElementById('dres');
   if(!el) return render();
-  el.innerHTML = discBody();
+  const cherche = enRecherche();
+  el.innerHTML = cherche ? searchBody() : discBody();
   const r = document.querySelector('.resume');
-  if(r) r.innerHTML = '<b>'+esc(resumeFiltres())+'</b>';
-  const b = document.querySelector('header .iconbtn');
-  if(b) b.classList.toggle('actif', filtresActifs());
+  if(r) r.innerHTML = '<b>'+esc(cherche ? resumeRecherche() : resumeFiltres())+'</b>';
+  const b = document.getElementById('fbtn');
+  if(b){ b.classList.toggle('actif', filtresActifs()); b.classList.toggle('masque', cherche); }
+  const c = document.querySelector('.qclear');
+  if(c) c.classList.toggle('masque', !ui.searchQ);
 }
 
 function setDiscType(t){
   if(ui.disc.type === t) return;
   ui.disc.type = t;
+  if(enRecherche()){                      // la recherche suit la puce choisie
+    clearTimeout(searchTimer); abortSearch();
+    ui.searchRes = null; ui.searchErr = ''; ui.searching = true;
+  }
   render();
   chargerDecouverte();
+  if(enRecherche()) searchNow();
 }
 function setDiscTri(t){ ui.disc.tri = t; ouvrirFiltres(); chargerDecouverte(); }
 function setDiscNote(n){ ui.disc.noteMin = n; ouvrirFiltres(); chargerDecouverte(); }
@@ -1555,15 +1576,55 @@ function ouvrirFiltres(){
   openSheet(h);
 }
 
+function ouvrirChamp(){
+  if(ui.champOuvert) return fermerChamp();
+  ui.champOuvert = true; ui.focusSearch = true; render();
+}
+function fermerChamp(){
+  ui.champOuvert = false;
+  viderRecherche();                 // referme et rend la main aux suggestions
+}
+
+function champRecherche(){
+  const t = ui.disc.type;
+  const quoi = t==='anime' ? "Chercher un animé…"
+             : t==='mini'  ? "Chercher une série…"
+             : discMedia()==='tv' ? "Chercher une série…" : "Chercher un film…";
+  return '<div class="qbar">'+I.search+
+    '<input type="search" id="q" enterkeyhint="search" autocomplete="off" autocorrect="off" '+
+    'placeholder="'+quoi+'" value="'+esc(ui.searchQ)+'" oninput="onSearchInput(this.value)" '+
+    'onkeydown="if(event.key===\'Enter\'){this.blur();searchNow()}">'+
+    '<button class="qclear '+(ui.searchQ?'':'masque')+'" onclick="viderRecherche()">'+I.close+'</button>'+
+  '</div>';
+}
+
 function viewDiscover(){
-  const d = ui.disc;
-  const sub = '<div class="chips">'+DISC_TYPES.map(t=>
-    '<button class="chip '+(d.type===t.id?'on':'')+'" onclick="setDiscType(\''+t.id+'\')">'+
-      t.label+'</button>').join('')+'</div>'+
-    '<div class="resume"><b>'+esc(resumeFiltres())+'</b></div>';
-  const bouton = '<button class="iconbtn '+(filtresActifs()?'actif':'')+'" onclick="ouvrirFiltres()">'+I.filtre+'</button>';
+  const d = ui.disc, cherche = enRecherche();
+  /* La loupe vit dans la rangée des puces. On appuie : le champ se déplie
+     sur toute la largeur et les puces descendent d'un cran. */
+  const sub = (ui.champOuvert ? champRecherche() : '') +
+    '<div class="chips types">'+
+      '<button class="chip chipico '+(ui.champOuvert?'ouvert':'')+'" onclick="ouvrirChamp()" '+
+        'aria-label="'+(ui.champOuvert?'Fermer la recherche':'Chercher un titre')+'">'+
+        (ui.champOuvert ? I.close : I.search)+'</button>'+
+      DISC_TYPES.map(t=>
+        '<button class="chip '+(d.type===t.id?'on':'')+'" onclick="setDiscType(\''+t.id+'\')">'+
+          t.label+'</button>').join('')+'</div>'+
+    '<div class="resume"><b>'+esc(cherche ? resumeRecherche() : resumeFiltres())+'</b></div>';
+  /* Les filtres ne s'appliquent pas à une recherche par titre : le bouton s'efface. */
+  const bouton = '<button class="iconbtn '+(filtresActifs()?'actif ':'')+(cherche?'masque':'')+
+    '" id="fbtn" onclick="ouvrirFiltres()">'+I.filtre+'</button>';
   return header('Découvrir', {right:bouton, sub:sub}) + needKeyBanner() +
-    '<div id="dres">'+discBody()+'</div>' + '<div style="height:20px"></div>';
+    '<div id="dres">'+(cherche ? searchBody() : discBody())+'</div>' + '<div style="height:20px"></div>';
+}
+
+function libelleCherche(){
+  const t = ui.disc.type;
+  if(t === 'anime') return 'les animés';
+  return discMedia()==='tv' ? 'les séries' : 'les films';
+}
+function resumeRecherche(){
+  return 'Recherche dans '+libelleCherche()+' · « '+(ui.searchQ||'').trim()+' »';
 }
 
 function discBody(){
@@ -1582,43 +1643,17 @@ function discBody(){
     return '<div class="empty">'+I.boussole+'<h3>Rien avec ces filtres</h3>'+
       '<p>Élargis la note minimale ou retire un genre.</p>'+
       '<button class="btn ghost" onclick="ouvrirFiltres()">Ouvrir les filtres</button></div>';
-  return '<div class="grid">'+d.res.map(discCard).join('')+'</div>'+
+  return '<div class="grid">'+d.res.map(r=>carteTitre(r, discMedia())).join('')+'</div>'+
     (d.page < d.pages
       ? '<div class="plus"><button class="btn ghost" onclick="chargerDecouverte(true)"'+
         (d.loading?' disabled':'')+'>'+(d.loading?'<span class="spin"></span> Chargement…':'Voir plus')+'</button></div>'
       : '');
 }
 
-function discCard(r){
-  const media = discMedia(), isTv = media === 'tv';
-  const name = isTv ? r.name : r.title;
-  const date = isTv ? r.first_air_date : r.release_date;
-  const item = isTv ? db.shows[r.id] : db.movies[r.id];
-  const st   = item ? statut(item) : null;
-  const note = r.vote_average ? Math.round(r.vote_average*10)/10 : null;
-  const votes = r.vote_count || 0;
-
-  let coin = '';
-  if(st === 'vu')         coin = '<div class="tick vu">'+I.check+'</div>';
-  else if(st === 'avoir') coin = '<div class="tick avoir">'+I.bookmark+'</div>';
-  else if(st === 'asuivre'){
-    const p = progress(item);
-    coin = '<div class="tick suivi">'+p.watched+'/'+p.total+'</div>';
-  }
-
-  return '<button class="gcard" onclick="openPreview('+r.id+',\''+media+'\',\'discover\')">'+
-    posterEl(r.poster_path,'w342','',name)+ coin +
-    (note ? '<div class="gnote">'+I.star+note.toFixed(1)+'</div>' : '')+
-    '<div class="gname">'+esc(name)+'</div>'+
-    '<div class="gyear">'+esc(year(date))+(votes?' · '+votes+' vote'+(votes>1?'s':''):'')+'</div>'+
-    (st ? '<div class="gstat '+st+'">'+LIB_STATUT[st]+'</div>' : '')+
-  '</button>';
-}
-
 /* ---------- Vue : aperçu avant ajout (série ou film) ---------- */
 function openPreview(id, type, from){
   ui.preview = { id:id, type:type, loading:true, data:null };
-  go('preview', {id:id, type:type, from:from||'search'});
+  go('preview', {id:id, type:type, from:from||'discover'});
   loadPreview();
 }
 async function loadPreview(){
