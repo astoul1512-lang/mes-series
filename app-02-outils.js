@@ -45,13 +45,16 @@ function isFinished(show){
    Les épisodes hors-série (saison 0) sont visibles mais ne comptent jamais.
    Aucun écran ne doit appliquer sa propre règle : tout passe par ici.        */
 function statutSerie(s){
+  /* Seule exception au calcul : une mise en pause posée à la main l'emporte.
+     Les épisodes cochés sont conservés, la série reprendra où elle en était. */
+  if(s && s.pause) return 'pause';
   if(progress(s).watched === 0) return 'avoir';
   if(isFinished(s)) return 'vu';
   return 'asuivre';
 }
 function statutFilm(m){ return m.seen ? 'vu' : 'avoir'; }
 function statut(o){ return o && o.seasons !== undefined ? statutSerie(o) : statutFilm(o); }
-const LIB_STATUT = { avoir:'À voir', asuivre:'À suivre', vu:'Vu' };
+const LIB_STATUT = { avoir:'À voir', asuivre:'À suivre', vu:'Vu', pause:'En pause' };
 
 function fmtDur(min){
   if(!min) return '0 min';

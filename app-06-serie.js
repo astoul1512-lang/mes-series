@@ -21,7 +21,14 @@ function viewShow(){
       '<div class="small muted" style="margin-top:6px">'+esc((s.genres||[]).slice(0,3).join(' · '))+'</div>'+
     '</div></div>';
 
-  if(nx){
+  if(s.pause){
+    html += '<div class="wrap" style="padding-bottom:0"><div class="card enpause">'+
+      '<div><b>Série en pause</b><div class="tiny muted" style="margin-top:2px">'+
+      'Elle n\'apparaît ni dans « À rattraper » ni dans le calendrier.</div></div>'+
+      '<button class="btn ghost" onclick="basculerPause('+s.id+')">Reprendre</button></div></div>';
+  }
+
+  if(nx && !s.pause){
     html += '<div class="wrap" style="padding-bottom:0"><button class="btn block" onclick="quickWatch('+s.id+')">'+
       I.check+' Marquer '+codeEp(nx.s,nx.e)+' comme vu</button>'+
       '<div class="tiny muted center" style="margin-top:8px">'+esc(nx.n)+'</div></div>';
@@ -83,17 +90,39 @@ function showMenu(id){
   const s = db.shows[id];
   openSheet('<h3>'+esc(s.name)+'</h3><p class="small muted" style="margin:0 0 6px">Mise à jour : '+
       fmtDate(new Date(s.updated||Date.now()).toISOString().slice(0,10))+'</p>'+
+    '<button class="opt" onclick="basculerPause('+id+')">'+
+      (s.pause ? 'Reprendre cette série' : 'Mettre en pause')+'</button>'+
     '<button class="opt" onclick="refreshShow('+id+')">Actualiser les épisodes</button>'+
     '<button class="opt" onclick="markAllAired('+id+')">Tout marquer comme vu</button>'+
     '<button class="opt" onclick="unmarkAll('+id+')">Tout décocher</button>'+
     '<button class="opt danger" onclick="removeShow('+id+')">Retirer de ma liste</button>'+
     '<button class="opt" onclick="closeSheet()">Annuler</button>');
 }
+
+/* Mettre de côté sans rien perdre : la série quitte « À rattraper » et le
+   calendrier, ses épisodes cochés restent intacts, et « Reprendre » la remet
+   exactement où elle en était. */
+function basculerPause(id){
+  const s = db.shows[id];
+  if(!s) return;
+  closeSheet();
+  if(s.pause){
+    delete s.pause; delete s.pauseLe;
+    s.updated = Date.now(); saveDB(); render();
+    toast('« '+s.name+' » reprise');
+  } else {
+    s.pause = true; s.pauseLe = Date.now();
+    s.updated = Date.now(); saveDB(); render();
+    toast('« '+s.name+' » mise en pause');
+  }
+}
 async function refreshShow(id){
   closeSheet(); toast('Actualisation…');
   try{
     const fresh = await fetchShowFull(id);
-    fresh.watched = db.shows[id].watched; fresh.addedAt = db.shows[id].addedAt;
+    const ancien = db.shows[id];
+    fresh.watched = ancien.watched; fresh.addedAt = ancien.addedAt;
+    if(ancien.pause){ fresh.pause = true; fresh.pauseLe = ancien.pauseLe; }   // l'actualisation ne réveille pas une série mise de côté
     db.shows[id] = fresh; saveDB(); render(); toast('À jour');
   }catch(e){ toast('Échec de l\'actualisation'); }
 }

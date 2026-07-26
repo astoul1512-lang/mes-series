@@ -59,6 +59,11 @@
   .puces i{width:7px;height:7px;border-radius:50%;background:var(--line);transition:background .2s,width .2s}
   .puces i.on{background:var(--accent);width:20px;border-radius:4px}
 
+  .card.enpause{display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:13px 14px;margin:0}
+  .card.enpause .btn{flex:none;padding:9px 14px}
+  .gstat.pause,.pstat.pause{color:var(--warn)}
+
   /* ---------- Header ---------- */
   header{
     position:sticky;top:0;z-index:30;background:rgba(15,17,21,.9);

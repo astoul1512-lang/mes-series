@@ -196,7 +196,8 @@ function viewFollow(){
      cet onglet ne parle que de ce qu'on suit réellement. */
   const items = [];
   shows.forEach(s=>{
-    if(statutSerie(s) === 'avoir') return;
+    const st = statutSerie(s);
+    if(st === 'avoir' || st === 'pause') return;
     allEpisodes(s,false).forEach(ep=>{ if(ep.d && ep.d >= t) items.push({d:ep.d, show:s, ep:ep}); });
     if(s.next && s.next.d && s.next.d >= t && !(s.seasons[s.next.s]||[]).some(e=>e.e===s.next.e))
       items.push({d:s.next.d, show:s, ep:{s:s.next.s, e:s.next.e, n:s.next.n, d:s.next.d}});
@@ -253,11 +254,38 @@ function viewFollow(){
   return html + '<div style="height:24px"></div>';
 }
 
+/* Appui long sur une ligne « À rattraper » : c'est là qu'on se dit qu'on ne
+   suit plus la série. On propose de la mettre de côté sans quitter l'écran. */
+let pressTimer = null, pressLong = false;
+function pressStart(id){
+  pressLong = false;
+  clearTimeout(pressTimer);
+  pressTimer = setTimeout(()=>{ pressLong = true; menuPause(id); }, 550);
+}
+function pressEnd(){ clearTimeout(pressTimer); }
+function pressClic(id, ev){
+  if(pressLong){ pressLong = false; if(ev) ev.stopPropagation(); return; }
+  go('show', {id:id, from:'follow'});
+}
+function menuPause(id){
+  const s = db.shows[id];
+  if(!s) return;
+  if(navigator.vibrate) try{ navigator.vibrate(8); }catch(e){}
+  openSheet('<h3>'+esc(s.name)+'</h3>'+
+    '<p class="small muted" style="margin:0 0 8px">Elle disparaîtra d\'« À rattraper » et du calendrier. '+
+    'Tes épisodes cochés sont conservés.</p>'+
+    '<button class="opt" onclick="basculerPause('+id+')">Mettre en pause</button>'+
+    '<button class="opt" onclick="closeSheet();go(\'show\',{id:'+id+',from:\'follow\'})">Ouvrir la fiche</button>'+
+    '<button class="opt" onclick="closeSheet()">Annuler</button>');
+}
+
 function catchupRow(s, nx){
   const p = progress(s);
   const recent = nx.d && nx.d < todayISO() && (Date.now()-Date.parse(nx.d)) < 45*86400000;
   return '<div class="srow">'+
-    '<div style="display:flex;gap:12px;flex:1;min-width:0" onclick="go(\'show\',{id:'+s.id+',from:\'follow\'})">'+
+    '<div style="display:flex;gap:12px;flex:1;min-width:0" onclick="pressClic('+s.id+',event)"'+
+      ' ontouchstart="pressStart('+s.id+')" ontouchend="pressEnd()" ontouchmove="pressEnd()"'+
+      ' ontouchcancel="pressEnd()">'+
       posterEl(s.poster,'w154','',s.name)+
       '<div class="sinfo">'+
         '<div class="sname">'+esc(s.name)+'</div>'+
@@ -290,7 +318,8 @@ function viewProfile(){
   const seenMovies = Object.values(db.movies).filter(m=>m.seen);
   seenMovies.forEach(m=> minutes += (m.runtime||100));
 
-  const startedShows = Object.values(db.shows).filter(s=>statutSerie(s)!=='avoir')
+  const startedShows = Object.values(db.shows)
+    .filter(s=>{ const st = statutSerie(s); return st!=='avoir' && st!=='pause'; })
     .sort((a,b)=>lastWatchedAt(b)-lastWatchedAt(a));
   const watchedMovies = Object.values(db.movies).filter(m=>statutFilm(m)==='vu')
     .sort((a,b)=>(b.watchedAt||0)-(a.watchedAt||0));
@@ -299,9 +328,13 @@ function viewProfile(){
     Object.values(db.movies).filter(m=>statutFilm(m)==='avoir').map(m=>({type:'movie', o:m}))
   );
 
+  const enPause = Object.values(db.shows).filter(s=>statutSerie(s)==='pause')
+    .sort((a,b)=>(b.pauseLe||0)-(a.pauseLe||0));
+
   const tabs = [['series','Séries',startedShows.length],
                 ['films','Films',watchedMovies.length],
                 ['avoir','À voir',toWatch.length]];
+  if(enPause.length) tabs.push(['pause','En pause',enPause.length]);
 
   let html = header('Mon profil', {
     right:'<button class="iconbtn" onclick="profileMenu()">'+I.dots+'</button>',
@@ -337,6 +370,9 @@ function viewProfile(){
   } else if(ui.profTab==='films'){
     if(!watchedMovies.length) cards = emptyProf('Aucun film vu', 'Marque un film comme vu depuis la recherche.');
     else cards = '<div class="pgrid">'+watchedMovies.map(movieCard).join('')+'</div>';
+  } else if(ui.profTab==='pause'){
+    if(!enPause.length) cards = emptyProf('Aucune série en pause', 'Une série mise de côté se range ici, sans rien perdre.');
+    else cards = '<div class="pgrid">'+enPause.map(showCard).join('')+'</div>';
   } else {
     if(!toWatch.length) cards = emptyProf('Rien en attente', 'Les séries ajoutées mais pas commencées et les films « à voir » se rangent ici.');
     else cards = '<div class="pgrid">'+toWatch.map(x=> x.type==='show' ? showCard(x.o) : movieCard(x.o)).join('')+'</div>';
@@ -353,7 +389,9 @@ function showCard(s){
   const p = progress(s);
   const full = p.total>0 && p.watched===p.total;
   const st = statutSerie(s);
-  const sub = st==='avoir'
+  const sub = st==='pause'
+      ? 'En pause · '+p.watched+'/'+p.total
+      : st==='avoir'
       ? (p.total ? p.total+' épisode'+(p.total>1?'s':'') : 'Pas encore diffusée')
       : (full ? (isFinished(s)?'Terminée':'À jour') : p.pct+'%');
   return '<div class="pcard">'+
