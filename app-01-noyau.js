@@ -32,7 +32,7 @@ let memoryOnly = false, storageMode = 'idb';
    les données sont protégées par les règles RLS côté base). Modifiable dans l'écran Compte. */
 const DEFAULT_SYNC = { url:'https://mqwryzopmtykjidabqfv.supabase.co',
                        key:'sb_publishable_ZnfMBfcEQOhdpg3g9u0eZg_Iaw_Fo7y' };
-let db = { apiKey:'', lang:'fr-FR', shows:{}, movies:{}, lastExport:null,
+let db = { apiKey:'', lang:'fr-FR', shows:{}, movies:{}, lastExport:null, onboarde:false,
            sync:Object.assign({}, DEFAULT_SYNC), auth:null, pseudo:'',
            deleted:{shows:{},movies:{}}, syncedAt:null, v:1 };
 

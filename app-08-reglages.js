@@ -129,7 +129,10 @@ async function boot(){
   askPersist();
   document.body.classList.remove('booting');
   render();
-  if(!db.apiKey) go('settings', {from:'follow'});
+  /* Première ouverture : on déroule la mise en route plutôt que de lâcher
+     l'arrivant devant des onglets vides et un mot inconnu. */
+  if(!db.apiKey && !db.onboarde) demarrerAccueil();
+  else if(!db.apiKey) go('settings', {from:'follow'});
   if(memoryOnly) toast('Stockage indisponible : pense à exporter tes données');
   if(syncReady() && signedIn()){ syncNow(true); majProfil(); chargerPartage(); }
 }

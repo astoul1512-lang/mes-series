@@ -36,6 +36,29 @@
   @keyframes slideback{from{opacity:.62;transform:translate3d(-11px,0,0)}to{opacity:1;transform:none}}
   @media (prefers-reduced-motion:reduce){ .app.enter,.app.back{animation:none} }
 
+  /* ---------- Mise en route ---------- */
+  body.accueil nav{display:none}
+  body.accueil .app{padding-bottom:24px}
+  .acc{max-width:440px;margin:0 auto;padding:calc(38px + var(--safe-t)) 22px 30px;
+    min-height:100vh;display:flex;flex-direction:column}
+  @supports (min-height:100dvh){ .acc{min-height:100dvh} }
+  .acc h1{font-size:26px;line-height:1.2;margin:0 0 10px;letter-spacing:-.4px}
+  .accsub{color:var(--muted);font-size:15px;line-height:1.5;margin:0}
+  .acclogo{width:64px;height:64px;border-radius:18px;background:var(--accent-dim);color:var(--accent);
+    display:grid;place-items:center;margin:0 0 20px}
+  .acclogo svg{width:32px;height:32px}
+  .acclogo.ok{background:#3ecf8e1e;color:var(--ok)}
+  .etapes{margin:22px 0 22px;padding:0 0 0 20px;color:var(--text);font-size:14.5px;line-height:1.55}
+  .etapes li{margin-bottom:10px}
+  .etapes li::marker{color:var(--accent);font-weight:750}
+  .accerr{margin-top:12px;background:#ff6b5718;border:1px solid #ff6b5755;color:#ffb1a3;
+    border-radius:11px;padding:10px 12px;font-size:13.5px}
+  .accliens{display:flex;justify-content:center;gap:22px;margin-top:16px}
+  .accliens button{color:var(--muted);font-size:13.5px;font-weight:650;padding:8px}
+  .puces{display:flex;gap:7px;justify-content:center;margin-top:auto;padding-top:28px}
+  .puces i{width:7px;height:7px;border-radius:50%;background:var(--line);transition:background .2s,width .2s}
+  .puces i.on{background:var(--accent);width:20px;border-radius:4px}
+
   /* ---------- Header ---------- */
   header{
     position:sticky;top:0;z-index:30;background:rgba(15,17,21,.9);
