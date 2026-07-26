@@ -5,7 +5,7 @@
     --safe-b:env(safe-area-inset-bottom,0px);
     --safe-t:env(safe-area-inset-top,0px);
   }
-  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
   html{background:var(--bg);height:100%;-webkit-text-size-adjust:100%}
   html,body{margin:0;padding:0;background:var(--bg);color:var(--text)}
   body{
@@ -126,6 +126,11 @@
   .bar{height:4px;border-radius:3px;background:var(--surface2);overflow:hidden;margin-top:auto}
   .bar>i{display:block;height:100%;background:var(--accent);border-radius:3px}
   .bar.done>i{background:var(--ok)}
+  .srowact{flex:none;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:8px}
+  .rowdots{width:30px;height:26px;border-radius:8px;display:grid;place-items:center;color:var(--muted)}
+  .rowdots svg{width:18px;height:18px}
+  .rowdots:active{background:var(--surface2)}
   .watchbtn{align-self:center;flex:none;width:44px;height:44px;border-radius:50%;
     background:var(--accent-dim);color:var(--accent);display:grid;place-items:center;border:1px solid var(--accent)}
   .watchbtn:active{background:var(--accent);color:#fff}

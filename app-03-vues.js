@@ -256,11 +256,20 @@ function viewFollow(){
 
 /* Appui long sur une ligne « À rattraper » : c'est là qu'on se dit qu'on ne
    suit plus la série. On propose de la mettre de côté sans quitter l'écran. */
-let pressTimer = null, pressLong = false;
-function pressStart(id){
+let pressTimer = null, pressLong = false, pressX = 0, pressY = 0;
+function pressStart(id, ev){
   pressLong = false;
+  const t = ev && ev.touches && ev.touches[0];
+  pressX = t ? t.clientX : 0; pressY = t ? t.clientY : 0;
   clearTimeout(pressTimer);
-  pressTimer = setTimeout(()=>{ pressLong = true; menuPause(id); }, 550);
+  pressTimer = setTimeout(()=>{ pressLong = true; menuPause(id); }, 500);
+}
+/* Un doigt posé bouge toujours de quelques pixels : on ne renonce qu'au-delà
+   de 12 px, sinon le geste est annulé avant même d'avoir commencé. */
+function pressMove(ev){
+  const t = ev && ev.touches && ev.touches[0];
+  if(!t) return;
+  if(Math.abs(t.clientX - pressX) > 12 || Math.abs(t.clientY - pressY) > 12) pressEnd();
 }
 function pressEnd(){ clearTimeout(pressTimer); }
 function pressClic(id, ev){
@@ -284,7 +293,7 @@ function catchupRow(s, nx){
   const recent = nx.d && nx.d < todayISO() && (Date.now()-Date.parse(nx.d)) < 45*86400000;
   return '<div class="srow">'+
     '<div style="display:flex;gap:12px;flex:1;min-width:0" onclick="pressClic('+s.id+',event)"'+
-      ' ontouchstart="pressStart('+s.id+')" ontouchend="pressEnd()" ontouchmove="pressEnd()"'+
+      ' ontouchstart="pressStart('+s.id+',event)" ontouchend="pressEnd()" ontouchmove="pressMove(event)"'+
       ' ontouchcancel="pressEnd()">'+
       posterEl(s.poster,'w154','',s.name)+
       '<div class="sinfo">'+
@@ -296,7 +305,11 @@ function catchupRow(s, nx){
         '<div class="bar"><i style="width:'+p.pct+'%"></i></div>'+
       '</div>'+
     '</div>'+
-    '<button class="watchbtn" title="Marquer '+codeEp(nx.s,nx.e)+' comme vu" onclick="quickWatch('+s.id+',event)">'+I.check+'</button>'+
+    /* Le menu est visible : la mise en pause ne doit pas dépendre d'un geste caché. */
+    '<div class="srowact">'+
+      '<button class="rowdots" title="Options" onclick="menuPause('+s.id+')">'+I.dots+'</button>'+
+      '<button class="watchbtn" title="Marquer '+codeEp(nx.s,nx.e)+' comme vu" onclick="quickWatch('+s.id+',event)">'+I.check+'</button>'+
+    '</div>'+
   '</div>';
 }
 
