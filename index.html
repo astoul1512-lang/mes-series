@@ -41,6 +41,8 @@
   img{display:block}
   .app{max-width:720px;margin:0 auto;min-height:100vh;padding-bottom:calc(76px + var(--safe-b))}
   @supports (min-height:100dvh){ .app{min-height:100dvh} }
+  /* le bandeau d'annulation flotte au-dessus de la barre : on réserve la place correspondante */
+  body.undo .app{padding-bottom:calc(142px + var(--safe-b))}
   /* transition d'écran, façon application */
   .app.enter{animation:slidein .26s cubic-bezier(.22,.68,.32,1)}
   .app.back{animation:slideback .26s cubic-bezier(.22,.68,.32,1)}
@@ -1523,6 +1525,7 @@ function pushUndo(showId, prevWatched, label){
   const el = document.getElementById('undo');
   el.innerHTML = '<span>'+esc(label)+'</span><button onclick="doUndo()">Annuler</button>';
   el.classList.add('show');
+  document.body.classList.add('undo');
   clearTimeout(undoTimer);
   undoTimer = setTimeout(hideUndo, 10000);
 }
@@ -1530,6 +1533,7 @@ function hideUndo(){
   clearTimeout(undoTimer);
   const el = document.getElementById('undo');
   if(el) el.classList.remove('show');
+  document.body.classList.remove('undo');
   undoData = null;
 }
 function doUndo(){
