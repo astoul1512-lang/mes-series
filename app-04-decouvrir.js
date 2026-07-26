@@ -209,10 +209,15 @@ const PLATES_VEDETTE = 12;
    films à louer. On ne peut donc pas se fier à la requête ; on apprend la réponse
    ailleurs. Sur un échantillon de titres populaires, on relève les plateformes
    qui apparaissent réellement en « flatrate » : celles-là font de l'abonnement,
-   les autres sont des boutiques et n'ont rien à faire dans ce filtre. */
+   les autres sont des boutiques et n'ont rien à faire dans ce filtre.
+   L'échantillon suit ce que l'écran montre : sur la puce Animés il est fait
+   d'animés, ce qui fait apparaître Crunchyroll et ADN, invisibles dans un
+   échantillon de séries généralistes. Ce qui a été appris ne se perd jamais :
+   les plateformes s'accumulent d'un type à l'autre. */
 const PLATES_ECHANTILLON = 18, PLATES_PAQUET = 6, PLATES_MINI = 4;
 const platesAbo = { tv:{}, movie:{} };      // id → true (fait de l'abonnement en France)
 const platesAboFait = { tv:false, movie:false };
+const sondagesFaits = {};                   // « tv:anime » → true
 let sondageEnCours = false;
 let discSeq = 0;
 
@@ -235,10 +240,9 @@ function genresAffiches(){
 
 /* Les plateformes proposées viennent de TMDB pour la France, classées par
    l'ordre d'affichage que JustWatch donne au pays : Netflix et Disney+ avant
-   les catalogues confidentiels. La liste diffère entre séries et films. */
-/* Liste utilisable : on retire ce qu'on sait être sans abonnement. Tant qu'une
-   plateforme n'a pas été sondée, on la garde — mieux vaut la montrer trop tôt
-   que la faire disparaître sous les doigts. */
+   les catalogues confidentiels. La liste diffère entre séries et films.
+   Tant que rien n'a été appris sur l'abonnement, on montre tout — mieux vaut
+   une plateforme de trop qu'une liste qui s'évapore sous les doigts. */
 function platesRetenues(){
   const media = discMedia(), l = platesTMDB[media] || [];
   if(!platesAboFait[media]) return l;                 // rien d'appris : on montre tout
@@ -256,26 +260,34 @@ function platesCachees(){
    réelles d'un échantillon de titres populaires. Un échantillon trop pauvre est
    ignoré : mieux vaut proposer trop de plateformes que vider la liste. */
 async function sonderPlates(media){
-  if(sondageEnCours || platesAboFait[media]) return false;
+  const cle = media+':'+ui.disc.type;
+  if(sondageEnCours || sondagesFaits[cle]) return false;
   sondageEnCours = true;
   try{
-    const d = await tmdb('/discover/'+media, { page:'1', sort_by:'popularity.desc' });
+    /* Même requête que l'écran, sans le filtre plateformes : l'échantillon
+       ressemble à ce que l'utilisateur regarde. */
+    const p = discParams();
+    delete p.with_watch_providers; delete p.watch_region; delete p.with_watch_monetization_types;
+    p.page = '1'; p.sort_by = 'popularity.desc';
+    delete p['vote_count.gte']; delete p['vote_average.gte'];
+    const d = await tmdb('/discover/'+media, p);
     const ids = (d.results||[]).slice(0, PLATES_ECHANTILLON).map(r=>r.id);
-    const vues = {};
+    const vues = Object.assign({}, platesAbo[media]);   // on accumule, jamais on n'oublie
     for(let i=0; i<ids.length; i+=PLATES_PAQUET){
       await Promise.all(ids.slice(i, i+PLATES_PAQUET).map(async id=>{
         try{
           const w = await tmdb('/'+media+'/'+id+'/watch/providers');
           const fr = (w && w.results && w.results[REGION_PLATO]) || {};
-          (fr.flatrate||[]).forEach(p=>{ if(p && p.provider_id) vues[p.provider_id] = true; });
+          (fr.flatrate||[]).forEach(f=>{ if(f && f.provider_id) vues[f.provider_id] = true; });
         }catch(e){}
       }));
     }
     if(Object.keys(vues).length < PLATES_MINI) return false;
     /* Ce qu'on a coché reste proposé, même si l'échantillon ne l'a pas croisé. */
-    ui.disc.plates.forEach(p=> vues[p.id] = true);
+    ui.disc.plates.forEach(x=> vues[x.id] = true);
     platesAbo[media] = vues;
     platesAboFait[media] = true;
+    sondagesFaits[cle] = true;
   } finally { sondageEnCours = false; }
   return true;
 }
