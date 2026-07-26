@@ -970,8 +970,11 @@ function viewFollow(){
   todo.sort((a,b)=> (b.ep.d||'').localeCompare(a.ep.d||''));   // épisode le plus récent d'abord
 
   /* --- À venir : diffusions futures --- */
+  /* Les séries pas encore commencées (« À voir ») n'apparaissent pas ici :
+     cet onglet ne parle que de ce qu'on suit réellement. */
   const items = [];
   shows.forEach(s=>{
+    if(statutSerie(s) === 'avoir') return;
     allEpisodes(s,false).forEach(ep=>{ if(ep.d && ep.d >= t) items.push({d:ep.d, show:s, ep:ep}); });
     if(s.next && s.next.d && s.next.d >= t && !(s.seasons[s.next.s]||[]).some(e=>e.e===s.next.e))
       items.push({d:s.next.d, show:s, ep:{s:s.next.s, e:s.next.e, n:s.next.n, d:s.next.d}});
