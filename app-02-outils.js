@@ -26,8 +26,9 @@ function progress(show){
 function nextToWatch(show){
   const eps = allEpisodes(show,false);
   for(const ep of eps){
-    if(!aired(ep)) break;
-    if(!show.watched[key(ep.s,ep.e)]) return ep;
+    if(show.watched[key(ep.s,ep.e)]) continue;   // déjà vu : on passe, même sans date de diffusion
+    if(!aired(ep)) break;                        // premier épisode non vu et pas encore diffusé : plus rien à rattraper
+    return ep;
   }
   return null;
 }

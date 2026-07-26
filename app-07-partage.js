@@ -79,11 +79,16 @@ function ligneAbo(p, role){
       '</div>'+
     '</div>'+
     '<button class="iconbtn" title="'+(role==='suiveur'?'Se désabonner':'Retirer')+'" '+
-      'onclick="confirmerRupture(\''+p.id+'\',\''+role+'\',\''+esc(p.pseudo).replace(/'/g,"")+'\')">'+I.close+'</button>'+
+      'onclick="confirmerRupture(\''+p.id+'\',\''+role+'\')">'+I.close+'</button>'+
   '</div>';
 }
 
-function confirmerRupture(id, role, nom){
+/* Le nom n'est jamais recopié dans l'attribut onclick : une apostrophe suffirait à
+   casser le bouton. On le retrouve dans les listes au moment d'ouvrir le panneau. */
+function confirmerRupture(id, role){
+  const liste = (role==='suiveur' ? partage.suivis : partage.abonnes) || [];
+  const p = liste.find(x=>String(x.id) === String(id));
+  const nom = (p && p.pseudo) || 'Cette personne';
   openSheet('<h3>'+esc(nom)+'</h3>'+
     '<p class="small muted" style="margin:0 0 8px">'+
       (role==='suiveur' ? 'Tu ne verras plus sa bibliothèque.' : 'Cette personne ne verra plus la tienne.')+'</p>'+

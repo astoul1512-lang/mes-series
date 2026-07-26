@@ -1,7 +1,7 @@
 /* Service worker — démarrage instantané et fonctionnement hors-ligne.
    Stratégie : network-first sur les fichiers de l'app (pour recevoir les mises à jour),
    repli sur le cache quand le réseau est absent. Les appels TMDB ne sont jamais mis en cache. */
-const CACHE = 'mes-series-v19';
+const CACHE = 'mes-series-v20';
 const SHELL = ['./', './index.html', './app.css', './manifest.json',
                './icon-192.png', './icon-512.png', './apple-touch-icon.png',
                './app-01-noyau.js',
@@ -16,7 +16,9 @@ const SHELL = ['./', './index.html', './app.css', './manifest.json',
 self.addEventListener('install', e => {
   e.waitUntil(
     caches.open(CACHE)
-      .then(c => c.addAll(SHELL).catch(()=>{}))
+      /* Pas de .catch() ici : si un fichier manque, l'installation doit échouer
+         pour que l'ancienne version, elle, reste utilisable hors-ligne. */
+      .then(c => c.addAll(SHELL))
       .then(() => self.skipWaiting())
   );
 });
@@ -39,8 +41,12 @@ self.addEventListener('fetch', e => {
     e.respondWith(
       fetch(req)
         .then(res => {
-          const copy = res.clone();
-          caches.open(CACHE).then(c => c.put(req, copy)).catch(()=>{});
+          /* On ne met en cache qu'une vraie réponse : une page d'erreur 404 gardée
+             en secours rendrait l'app inutilisable hors-ligne. */
+          if (res && res.ok && res.type === 'basic') {
+            const copy = res.clone();
+            caches.open(CACHE).then(c => c.put(req, copy)).catch(()=>{});
+          }
           return res;
         })
         .catch(() => caches.match(req).then(m => m || caches.match('./index.html')))

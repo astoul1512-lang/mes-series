@@ -17,7 +17,7 @@ async function chargerPlateformes(type, id){
       abo:  Array.isArray(r.flatrate) ? r.flatrate : [],
       lien: (typeof r.link === 'string') ? r.link : ''
     };
-  }catch(e){ platos[k] = null; }
+  }catch(e){ delete platos[k]; }   // on oublie l'échec pour pouvoir réessayer à la prochaine ouverture
   peindrePlateformes(k);
 }
 
@@ -98,7 +98,7 @@ function viewPreview(){
   /* Boutons d'action */
   if(isTv){
     html += '<div class="actions">'+ (inList
-      ? '<button class="btn" onclick="go(\'show\',{id:'+d.id+'})">'+I.eye+' Ouvrir ma fiche</button>'
+      ? '<button class="btn" onclick="go(\'show\',{id:'+d.id+', from:\''+(params.from||'discover')+'\'})">'+I.eye+' Ouvrir ma fiche</button>'
       : '<button class="btn" id="addbtn" onclick="addOrOpenShow('+d.id+')">'+I.plus+' Ajouter à ma liste</button>')
       +'</div>';
   } else {

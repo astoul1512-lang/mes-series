@@ -67,21 +67,50 @@ function exportData(){
   db.lastExport = Date.now(); saveDB(); render();
   toast('Sauvegarde générée');
 }
+const objetSimple = o => !!o && typeof o === 'object' && !Array.isArray(o);
+let importEnAttente = null;
+
 function importData(input){
   const f = input.files[0]; if(!f) return;
   const r = new FileReader();
   r.onload = ()=>{
-    try{
-      const d = JSON.parse(r.result);
-      if(!d.shows) throw new Error('bad');
-      db.shows = d.shows||{}; db.movies = d.movies||{};
-      if(d.apiKey) db.apiKey = d.apiKey;
-      if(d.lang) db.lang = d.lang;
-      saveDB(); render(); toast('Données importées');
-    }catch(e){ toast('Fichier invalide'); }
+    let d;
+    try{ d = JSON.parse(r.result); }catch(e){ return toast('Fichier illisible'); }
+    if(!objetSimple(d) || !objetSimple(d.shows) || (d.movies !== undefined && !objetSimple(d.movies)))
+      return toast('Ce fichier n\'est pas une sauvegarde Mes séries');
+
+    importEnAttente = d;
+    const nb = Object.keys(d.shows).length, nf = Object.keys(d.movies||{}).length;
+    const actuel = Object.keys(db.shows).length + Object.keys(db.movies).length;
+    if(!actuel) return appliquerImport();
+    openSheet('<h3>Remplacer la bibliothèque ?</h3>'+
+      '<p class="small muted" style="margin:0 0 8px">La sauvegarde contient '+nb+' série(s) et '+nf+
+      ' film(s). Elle remplacera les '+actuel+' titre(s) actuellement enregistrés, ici et sur les '+
+      'appareils synchronisés.</p>'+
+      '<button class="opt danger" onclick="closeSheet();appliquerImport()">Remplacer</button>'+
+      '<button class="opt" onclick="closeSheet();importEnAttente=null">Annuler</button>');
   };
   r.readAsText(f);
   input.value='';
+}
+/* On note les titres qui disparaissent : sans cela, la synchro les ramènerait. */
+function appliquerImport(){
+  const d = importEnAttente; if(!d) return;
+  importEnAttente = null;
+  const neufs = { shows: d.shows||{}, movies: d.movies||{} };
+  const del = db.deleted = db.deleted || {shows:{},movies:{}};
+  ['shows','movies'].forEach(k=>{
+    Object.keys(db[k]).forEach(id=>{ if(!neufs[k][id]) markDeleted(k, id); });
+    /* un titre restauré depuis une sauvegarde doit l'emporter sur son ancienne suppression */
+    Object.keys(neufs[k]).forEach(id=>{
+      const it = neufs[k][id];
+      if(it && del[k][id] && del[k][id] >= (it.addedAt||0)) it.addedAt = Date.now();
+    });
+  });
+  db.shows = neufs.shows; db.movies = neufs.movies;
+  if(d.apiKey) db.apiKey = d.apiKey;
+  if(d.lang) db.lang = d.lang;
+  saveDB(); render(); toast('Données importées');
 }
 async function refreshAll(){
   const ids = Object.keys(db.shows);
@@ -91,7 +120,10 @@ async function refreshAll(){
   for(const id of ids){
     try{
       const fresh = await fetchShowFull(id);
-      fresh.watched = db.shows[id].watched; fresh.addedAt = db.shows[id].addedAt;
+      const ancien = db.shows[id];
+      fresh.watched = ancien.watched; fresh.addedAt = ancien.addedAt;
+      if(ancien.unwatched) fresh.unwatched = ancien.unwatched;
+      if(ancien.pause){ fresh.pause = true; fresh.pauseLe = ancien.pauseLe; }   // une actualisation groupée ne réveille pas une série mise de côté
       db.shows[id] = fresh; ok++;
     }catch(e){}
     await sleep(120);
@@ -105,6 +137,8 @@ function wipe(){
     '<button class="opt" onclick="closeSheet()">Annuler</button>');
 }
 function doWipe(){
+  /* On marque chaque titre comme supprimé, sinon la synchro les ferait revenir. */
+  ['shows','movies'].forEach(k=> Object.keys(db[k]).forEach(id=> markDeleted(k, id)));
   db.shows = {}; db.movies = {};
   saveDB(); closeSheet(); go('follow'); toast('Données effacées');
 }

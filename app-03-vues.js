@@ -358,6 +358,9 @@ function viewProfile(){
                 ['films','Films',watchedMovies.length],
                 ['avoir','À voir',toWatch.length]];
   if(enPause.length) tabs.push(['pause','En pause',enPause.length]);
+  /* la puce « En pause » disparaît quand la dernière série reprend : on ne laisse pas
+     l'onglet sélectionné pointer dans le vide */
+  if(!tabs.some(t=>t[0]===ui.profTab)) ui.profTab = 'series';
 
   let html = header('Mon profil', {
     right:'<button class="iconbtn" onclick="profileMenu()">'+I.dots+'</button>',

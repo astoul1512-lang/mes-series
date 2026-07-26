@@ -27,7 +27,7 @@ const I = {
    miroir localStorage en secours, et écriture forcée dès que l'app passe en arrière-plan. */
 const KEY = 'mesSeries.v1';
 const IDB_NAME = 'mesSeries', IDB_STORE = 'kv', IDB_KEY = 'db';
-let memoryOnly = false, storageMode = 'idb';
+let memoryOnly = false, storageMode = 'idb', storageKO = false;
 /* Serveur de sauvegarde pré-configuré (clé publiable : conçue pour être dans le client,
    les données sont protégées par les règles RLS côté base). Modifiable dans l'écran Compte. */
 const DEFAULT_SYNC = { url:'https://mqwryzopmtykjidabqfv.supabase.co',
@@ -103,13 +103,21 @@ function saveDB(){
 async function writeNow(){
   if(memoryOnly) return;
   const snapshot = JSON.parse(JSON.stringify(db));
-  let ok = false;
-  try{ await idbSet(snapshot); ok = true; storageMode = 'idb'; }
-  catch(e){ storageMode = 'ls'; }
-  /* miroir localStorage : secours si IndexedDB est vidé, et compatibilité avec l'ancienne version */
-  try{ localStorage.setItem(KEY, JSON.stringify(snapshot)); ok = true; }
-  catch(e){}
-  if(!ok) throw new Error('aucun stockage disponible');
+  /* Le miroir localStorage passe EN PREMIER : c'est la seule écriture synchrone,
+     donc la seule qui aboutisse si iOS gèle l'app juste après un geste de fermeture.
+     IndexedDB, plus lent mais sans limite de taille, suit. Le mode n'est annoncé
+     qu'une fois les deux tentatives faites, pour ne jamais afficher un état
+     intermédiaire pendant l'écriture. */
+  let okLS = false, okIDB = false;
+  try{ localStorage.setItem(KEY, JSON.stringify(snapshot)); okLS = true; }catch(e){}
+  try{ await idbSet(snapshot); okIDB = true; }catch(e){}
+  const ok = okLS || okIDB;
+  storageMode = okIDB ? 'idb' : okLS ? 'ls' : storageMode;
+  if(!ok){
+    if(!storageKO){ storageKO = true; try{ toast('Sauvegarde impossible : pense à exporter tes données'); }catch(e2){} }
+    throw new Error('aucun stockage disponible');
+  }
+  storageKO = false;
   dirty = false;
 }
 /* iOS peut tuer l'app sans prévenir : on écrit dès qu'elle passe en arrière-plan */
@@ -131,9 +139,25 @@ async function tmdb(path, params, extra){
   if(extra && extra.signal) opt.signal = extra.signal;      // permet d'abandonner la requête
   if(isBearer()) opt.headers = { Authorization:'Bearer '+db.apiKey };
   else u.searchParams.set('api_key', db.apiKey);
-  const r = await fetch(u.toString(), opt);
+  /* Sans délai maximal, un réseau qui ne répond plus laisse l'interface en
+     « chargement » pour toujours. */
+  let minuteur = null;
+  if(!opt.signal && typeof AbortController !== 'undefined'){
+    const ctrl = new AbortController();
+    opt.signal = ctrl.signal;
+    minuteur = setTimeout(()=>{ try{ ctrl.abort(); }catch(e){} }, 15000);
+  }
+  let r;
+  try{ r = await fetch(u.toString(), opt); }
+  finally{ if(minuteur) clearTimeout(minuteur); }
   if(r.status === 401) throw new Error('BADKEY');
-  if(r.status === 429){ await sleep(1200); return tmdb(path, params, extra); }
+  /* Trop de requêtes : on patiente, mais trois fois au maximum. */
+  if(r.status === 429){
+    const essai = (extra && extra.essai) || 0;
+    if(essai >= 3) throw new Error('TROP_DE_REQUETES');
+    await sleep(1200 * (essai + 1));
+    return tmdb(path, params, Object.assign({}, extra, {essai: essai + 1}));
+  }
   if(!r.ok) throw new Error('HTTP '+r.status);
   return r.json();
 }
@@ -229,6 +253,22 @@ function applySession(d){
 }
 function sbSignOut(){ db.auth = null; syncState='off'; saveDB(); render(); }
 
+/* --- Décochage : on garde une trace horodatée, sinon la synchro suivante remettrait
+   l'épisode coché (l'autre appareil, lui, le croit toujours vu). Ces traces s'effacent
+   d'elles-mêmes au bout de trois mois. --- */
+const RETENTION_DECOCHE = 90 * 86400000;
+function noterDecoches(sh, avant){
+  if(!sh) return;
+  const apres = sh.watched || {};
+  const uw = Object.assign({}, sh.unwatched || {});
+  const t = Date.now();
+  Object.keys(avant || {}).forEach(k=>{ if(!apres[k]) uw[k] = t; });
+  Object.keys(apres).forEach(k=>{ if(uw[k]) delete uw[k]; });
+  Object.keys(uw).forEach(k=>{ if(t - uw[k] > RETENTION_DECOCHE) delete uw[k]; });
+  if(Object.keys(uw).length) sh.unwatched = uw; else delete sh.unwatched;
+  sh.updated = t;
+}
+
 /* --- Fusion : on ne perd jamais un épisode coché, et les suppressions se propagent --- */
 function payload(){
   return { apiKey: db.apiKey, lang: db.lang, pseudo: db.pseudo, shows: db.shows, movies: db.movies,
@@ -250,11 +290,23 @@ function mergeRemote(rem){
     if(del.shows[rs.id] && del.shows[rs.id] > (rs.addedAt||0)) return;   // supprimée ici après coup
     const ls = db.shows[rs.id];
     if(!ls){ db.shows[rs.id] = rs; changed = true; return; }
-    /* fiche la plus récente, union des épisodes vus */
+    /* fiche la plus récente, union des épisodes vus — sauf ceux décochés depuis */
     const base = (rs.updated||0) > (ls.updated||0) ? Object.assign({}, rs) : Object.assign({}, ls);
-    const w = Object.assign({}, ls.watched||{});
-    Object.keys(rs.watched||{}).forEach(k=>{ if(!w[k]) { w[k] = rs.watched[k]; changed = true; } });
+    const t = Date.now();
+    const uw = Object.assign({}, ls.unwatched||{});
+    Object.keys(rs.unwatched||{}).forEach(k=>{ if(!uw[k] || rs.unwatched[k] > uw[k]) uw[k] = rs.unwatched[k]; });
+    Object.keys(uw).forEach(k=>{ if(t - uw[k] > RETENTION_DECOCHE) delete uw[k]; });
+
+    const tous = Object.assign({}, rs.watched||{});
+    Object.keys(ls.watched||{}).forEach(k=>{ if(!tous[k] || ls.watched[k] > tous[k]) tous[k] = ls.watched[k]; });
+    const w = {};
+    Object.keys(tous).forEach(k=>{ if(!(uw[k] && uw[k] >= tous[k])) w[k] = tous[k]; });
+
+    const avant = ls.watched||{};
+    if(Object.keys(w).length !== Object.keys(avant).length ||
+       Object.keys(w).some(k=>!avant[k])) changed = true;
     base.watched = w;
+    if(Object.keys(uw).length) base.unwatched = uw; else delete base.unwatched;
     base.addedAt = Math.min(ls.addedAt||Date.now(), rs.addedAt||Date.now());
     db.shows[rs.id] = base;
   });

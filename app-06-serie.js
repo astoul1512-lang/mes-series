@@ -122,6 +122,7 @@ async function refreshShow(id){
     const fresh = await fetchShowFull(id);
     const ancien = db.shows[id];
     fresh.watched = ancien.watched; fresh.addedAt = ancien.addedAt;
+    if(ancien.unwatched) fresh.unwatched = ancien.unwatched;
     if(ancien.pause){ fresh.pause = true; fresh.pauseLe = ancien.pauseLe; }   // l'actualisation ne réveille pas une série mise de côté
     db.shows[id] = fresh; saveDB(); render(); toast('À jour');
   }catch(e){ toast('Échec de l\'actualisation'); }
@@ -132,7 +133,9 @@ function removeShow(id){ markDeleted('shows',id); delete db.shows[id]; saveDB();
 
 function toggleEp(id,s,e){
   const sh = db.shows[id], k = key(s,e);
+  const avant = Object.assign({}, sh.watched);
   if(sh.watched[k]) delete sh.watched[k]; else sh.watched[k] = Date.now();
+  noterDecoches(sh, avant);
   saveDB(); render();
 }
 /* Cocher une saison marque aussi les précédentes ; la décocher libère les suivantes.
@@ -206,7 +209,12 @@ function hideUndo(){
 function doUndo(){
   if(!undoData) return;
   const sh = db.shows[undoData.showId];
-  if(sh){ sh.watched = undoData.prev; saveDB(); }
+  if(sh){
+    const avant = Object.assign({}, sh.watched);
+    sh.watched = undoData.prev;
+    noterDecoches(sh, avant);
+    saveDB();
+  }
   hideUndo(); render(); toast('Annulé');
 }
 
@@ -216,6 +224,7 @@ function applyWatched(showId, mutate, label){
   if(!sh) return;
   const prev = Object.assign({}, sh.watched);
   mutate(sh);
+  noterDecoches(sh, prev);
   saveDB(); render();
   pushUndo(showId, prev, label);
 }
@@ -259,6 +268,9 @@ function quickWatch(id, ev){
   if(ev) ev.stopPropagation();
   const s = db.shows[id], nx = nextToWatch(s);
   if(!nx) return;
-  s.watched[key(nx.s,nx.e)] = Date.now(); saveDB(); render();
+  const avant = Object.assign({}, s.watched);
+  s.watched[key(nx.s,nx.e)] = Date.now();
+  noterDecoches(s, avant);
+  saveDB(); render();
   toast(codeEp(nx.s,nx.e)+' vu ✓');
 }
