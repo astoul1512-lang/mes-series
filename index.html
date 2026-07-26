@@ -1409,19 +1409,28 @@ function genreParNom(media, nom){
   return g ? g.id : null;
 }
 
-/* Traduit l'état des filtres en paramètres TMDB. */
+/* Les genres proposés dépendent du type choisi. Pour les animés, « Animation »
+   est déjà imposé : inutile de le proposer une deuxième fois. */
+function genresAffiches(){
+  const l = genresTMDB[discMedia()] || [];
+  return ui.disc.type === 'anime' ? l.filter(g => (g.nom||'').toLowerCase() !== 'animation') : l;
+}
+
+/* Traduit l'état des filtres en paramètres TMDB.
+   Les genres sont retenus par leur nom : « Comédie » suit quand on passe
+   des séries aux films, même si TMDB ne lui donne pas le même identifiant. */
 function discParams(){
   const d = ui.disc, media = discMedia();
   const p = { include_adult:'false', page:String(d.page) };
 
-  const genres = d.genres.slice();
+  const noms = d.genres.slice();
   if(d.type === 'mini') p.with_type = '2';                       // 2 = mini-série chez TMDB
   if(d.type === 'anime'){
     p.with_original_language = 'ja';
-    const anim = genreParNom('tv','Animation');
-    if(anim && genres.indexOf(anim) < 0) genres.unshift(anim);
+    if(noms.indexOf('Animation') < 0) noms.unshift('Animation');
   }
-  if(genres.length) p.with_genres = genres.join(',');
+  const ids = noms.map(n => genreParNom(media, n)).filter(x => x != null);
+  if(ids.length) p.with_genres = ids.join(',');
 
   if(d.tri === 'note'){ p.sort_by = 'vote_average.desc'; p['vote_count.gte'] = '300'; }
   else p.sort_by = 'popularity.desc';
@@ -1456,6 +1465,14 @@ async function chargerDecouverte(suite){
   try{
     const media = discMedia();
     await chargerGenres(media);
+    /* Un genre qui n'existe pas pour ce type est retiré, mais on le dit. */
+    const perdus = d.genres.filter(n => genreParNom(media, n) == null);
+    if(perdus.length){
+      d.genres = d.genres.filter(n => genreParNom(media, n) != null);
+      toast(perdus.length > 1
+        ? 'Genres sans équivalent ici : '+perdus.join(', ')
+        : '« '+perdus[0]+' » n\'existe pas pour ce type');
+    }
     const data = await tmdb('/discover/'+media, discParams());
     if(seq !== discSeq) return;
     const trouves = (data.results||[]).filter(r => r.poster_path);
@@ -1472,27 +1489,33 @@ async function chargerDecouverte(suite){
   }
 }
 
-/* Ne repeint que la zone des résultats : les puces gardent leur défilement. */
+/* Ne repeint que la zone des résultats : les puces gardent leur défilement.
+   La ligne de résumé et le bouton Filtres sont remis à jour au passage,
+   pour que l'état des filtres reste visible sous les puces de type. */
 function peindreDisc(){
+  if(view !== 'discover') return;
   const el = document.getElementById('dres');
-  if(view === 'discover' && el) el.innerHTML = discBody();
-  else if(view === 'discover') render();
+  if(!el) return render();
+  el.innerHTML = discBody();
+  const r = document.querySelector('.resume');
+  if(r) r.innerHTML = '<b>'+esc(resumeFiltres())+'</b>';
+  const b = document.querySelector('header .iconbtn');
+  if(b) b.classList.toggle('actif', filtresActifs());
 }
 
 function setDiscType(t){
-  const d = ui.disc;
-  if(d.type === t) return;
-  const avant = discMedia();
-  d.type = t;
-  if(discMedia() !== avant) d.genres = [];    // les genres séries et films n'ont pas les mêmes identifiants
+  if(ui.disc.type === t) return;
+  ui.disc.type = t;
   render();
   chargerDecouverte();
 }
 function setDiscTri(t){ ui.disc.tri = t; ouvrirFiltres(); chargerDecouverte(); }
 function setDiscNote(n){ ui.disc.noteMin = n; ouvrirFiltres(); chargerDecouverte(); }
-function bascGenre(id){
-  const g = ui.disc.genres, i = g.indexOf(id);
-  if(i < 0) g.push(id); else g.splice(i,1);
+function bascGenre(i){
+  const g = genresAffiches()[i];
+  if(!g) return;
+  const sel = ui.disc.genres, k = sel.indexOf(g.nom);
+  if(k < 0) sel.push(g.nom); else sel.splice(k,1);
   ouvrirFiltres(); chargerDecouverte();
 }
 function resetFiltres(){
@@ -1504,26 +1527,28 @@ function resumeFiltres(){
   const d = ui.disc;
   const bouts = [ (DISC_TRIS.find(t=>t.id===d.tri)||{}).label ];
   if(d.noteMin) bouts.push('note '+d.noteMin+' et +');
-  const l = genresTMDB[discMedia()] || [];
-  d.genres.forEach(id=>{ const g = l.find(x=>x.id===id); if(g) bouts.push(g.nom.toLowerCase()); });
+  d.genres.forEach(n=> bouts.push(n.toLowerCase()));
   return bouts.join(' · ');
 }
 function filtresActifs(){ return ui.disc.genres.length > 0 || ui.disc.noteMin > 0 || ui.disc.tri !== 'nouveau'; }
 
 function ouvrirFiltres(){
   const d = ui.disc;
-  const genres = genresTMDB[discMedia()] || [];
-  let h = '<h3>Filtres</h3>';
+  const genres = genresAffiches();
+  const quoi = (DISC_TYPES.find(t=>t.id===d.type)||{}).label || '';
+  let h = '<h3>Filtres</h3><div class="small muted" style="margin-top:-4px">'+
+    'Ces réglages s\'appliquent à <b>'+esc(quoi.toLowerCase())+'</b>.</div>';
   h += '<div class="fgrp">Trier par</div><div class="fchips">'+
     DISC_TRIS.map(t=>'<button class="chip '+(d.tri===t.id?'on':'')+'" onclick="setDiscTri(\''+t.id+'\')">'+
       t.label+'</button>').join('')+'</div>';
   h += '<div class="fgrp">Note minimale</div><div class="fchips">'+
     DISC_NOTES.map(n=>'<button class="chip '+(d.noteMin===n.v?'on':'')+'" onclick="setDiscNote('+n.v+')">'+
       n.label+'</button>').join('')+'</div>';
-  h += '<div class="fgrp">Genres'+(d.genres.length?' ('+d.genres.length+')':'')+'</div>';
+  h += '<div class="fgrp">Genres'+(d.genres.length?' ('+d.genres.length+')':'')+
+       (d.type==='anime'?' · animation déjà incluse':'')+'</div>';
   h += genres.length
-    ? '<div class="fchips">'+genres.map(g=>'<button class="chip '+(d.genres.indexOf(g.id)>=0?'on':'')+
-        '" onclick="bascGenre('+g.id+')">'+esc(g.nom)+'</button>').join('')+'</div>'
+    ? '<div class="fchips">'+genres.map((g,i)=>'<button class="chip '+(d.genres.indexOf(g.nom)>=0?'on':'')+
+        '" onclick="bascGenre('+i+')">'+esc(g.nom)+'</button>').join('')+'</div>'
     : '<div class="small muted">Les genres arrivent avec les premiers résultats.</div>';
   h += '<button class="btn" style="margin-top:18px" onclick="closeSheet()">Voir les résultats</button>';
   if(filtresActifs()) h += '<button class="opt" onclick="resetFiltres()">Tout effacer</button>';
