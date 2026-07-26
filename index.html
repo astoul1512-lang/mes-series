@@ -159,6 +159,15 @@
   .chip.chipico.ouvert{border-color:var(--accent);color:var(--accent);background:var(--surface)}
   @keyframes deplie{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
   .qbar{animation:deplie .16s ease-out}
+  /* Où regarder */
+  .plats{display:flex;flex-wrap:wrap;gap:8px;margin:0 16px}
+  .plato{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line);
+    border-radius:12px;padding:6px 12px 6px 6px;font-size:12.5px;font-weight:650}
+  .plato img{width:28px;height:28px;border-radius:8px;background:#000}
+  .plato .ph3{width:28px;height:28px;border-radius:8px;background:var(--surface2);display:grid;
+    place-items:center;font-size:12px;color:var(--muted)}
+  .credit{font-size:10.5px;color:var(--muted);margin:10px 16px 0}
+  .credit a{color:var(--muted);text-decoration:underline}
   .qbar{position:relative;margin:0 16px 12px;display:flex;align-items:center}
   .qbar > svg{position:absolute;left:13px;width:17px;height:17px;color:var(--muted);pointer-events:none}
   .qbar input{padding-left:38px;padding-right:38px}
@@ -1668,6 +1677,59 @@ async function loadPreview(){
   if(view==='preview') render();
 }
 
+/* ---------- Où regarder : plateformes de streaming ----------
+   TMDB fournit la disponibilité par pays grâce à son partenariat avec JustWatch,
+   qui doit être cité. On ne montre que ce qui est inclus dans un abonnement
+   (« flatrate ») ; le lien renvoie vers la page TMDB qui liste toutes les offres. */
+const REGION_PLATO = 'FR';
+const platos = {};                 // clé « tv:1399 » → {abo, lien} · 'attente' · null si échec
+
+async function chargerPlateformes(type, id){
+  const k = type+':'+id;
+  if(platos[k] !== undefined) return;
+  platos[k] = 'attente';
+  try{
+    const d = await tmdb('/'+type+'/'+id+'/watch/providers');
+    const r = (d && d.results && d.results[REGION_PLATO]) || {};
+    platos[k] = {
+      abo:  Array.isArray(r.flatrate) ? r.flatrate : [],
+      lien: (typeof r.link === 'string') ? r.link : ''
+    };
+  }catch(e){ platos[k] = null; }
+  peindrePlateformes(k);
+}
+
+function peindrePlateformes(k){
+  const el = document.getElementById('plats');
+  if(el && el.getAttribute('data-cle') === k) el.innerHTML = corpsPlateformes(k);
+}
+
+/* Emplacement réservé dans la page ; le contenu arrive dès la réponse. */
+function blocPlateformes(type, id){
+  const k = type+':'+id;
+  if(platos[k] === undefined) setTimeout(()=>chargerPlateformes(type, id), 0);
+  return '<div id="plats" data-cle="'+esc(k)+'">'+corpsPlateformes(k)+'</div>';
+}
+
+function corpsPlateformes(k){
+  const p = platos[k];
+  if(p === undefined || p === 'attente' || p === null) return '';   // rien tant qu'on ne sait pas
+  const credit = '<div class="credit">Disponibilité fournie par JustWatch'+
+    (p.lien ? ' · <a href="'+esc(p.lien)+'" target="_blank" rel="noopener">toutes les offres</a>' : '')+
+    '</div>';
+  if(!p.abo.length)
+    return '<div class="sectitle">Où le regarder</div>'+
+      '<div class="small muted" style="margin:0 16px">Aucun abonnement ne le propose en France.</div>'+
+      credit;
+  return '<div class="sectitle">Où le regarder</div><div class="plats">'+
+    p.abo.map(f=>{
+      const nom = f && f.provider_name ? String(f.provider_name) : '';
+      const img = f && f.logo_path ? '<img loading="lazy" src="'+IMG(f.logo_path,'w92')+'" alt="">'
+                                   : '<div class="ph3">'+esc(nom.slice(0,1))+'</div>';
+      return '<div class="plato">'+img+'<span>'+esc(nom)+'</span></div>';
+    }).join('')+'</div>'+credit;
+}
+
 function castStrip(credits){
   const cast = ((credits||{}).cast||[]).slice(0,12);
   if(!cast.length) return '';
@@ -1749,6 +1811,8 @@ function viewPreview(){
   if(d.overview) html += '<div class="sectitle">Synopsis</div><div class="overview" style="margin-top:0">'+esc(d.overview)+'</div>';
   else html += '<div class="overview muted" style="font-style:italic">Pas de synopsis disponible en français.</div>';
 
+  html += blocPlateformes(isTv ? 'tv' : 'movie', d.id);
+
   /* Détail des saisons */
   if(isTv && d.seasons && d.seasons.length){
     html += '<div class="sectitle">Saisons</div><div class="seasonpill">'+
@@ -1779,6 +1843,7 @@ function viewMovie(){
   html += '<div class="actions"><button class="btn block" style="'+(m.seen?'background:var(--ok);color:#08130d':'')+
     '" onclick="toggleMovie('+m.id+')">'+I.check+(m.seen?' Vu le '+fmtDate(new Date(m.watchedAt).toISOString().slice(0,10)):' Marquer comme vu')+'</button></div>';
   if(m.overview) html += '<div class="sectitle">Synopsis</div><div class="overview" style="margin-top:0">'+esc(m.overview)+'</div>';
+  html += blocPlateformes('movie', m.id);
   html += '<div style="height:30px"></div>';
   return html;
 }
@@ -1838,6 +1903,8 @@ function viewShow(){
   '</div>';
 
   if(s.overview) html += '<div class="overview clamp" onclick="this.classList.toggle(\'clamp\')">'+esc(s.overview)+'</div>';
+
+  html += blocPlateformes('tv', s.id);
 
   const toutVu = p.total > 0 && p.watched === p.total;
   html += '<div class="sectitle rowt">Épisodes'+
