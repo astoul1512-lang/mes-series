@@ -259,6 +259,19 @@
 
   /* ---------- Profil ---------- */
   .phead{display:flex;align-items:center;gap:14px;padding:18px 16px 4px}
+  .ro{display:inline-flex;align-items:center;gap:7px;justify-content:center}
+  .ro svg{width:15px;height:15px;flex:none}
+  .codebox{font-size:30px;font-weight:800;letter-spacing:.22em;text-align:center;
+    padding:14px 8px;margin-bottom:10px;border-radius:12px;background:var(--surface2);
+    border:1px dashed var(--accent);color:var(--accent);-webkit-user-select:all;user-select:all}
+  .aborow{display:flex;gap:14px;overflow-x:auto;padding:2px 16px 4px;scrollbar-width:none}
+  .aborow::-webkit-scrollbar{display:none}
+  .abomini{flex:none;width:66px;text-align:center;color:var(--text)}
+  .abomini .avatar{width:52px;height:52px;font-size:20px;margin:0 auto}
+  .abomini .avatar.plus{background:var(--surface2);border:1px dashed var(--line);color:var(--muted)}
+  .abomini .avatar.plus svg{width:20px;height:20px}
+  .abomini span{display:block;font-size:11.5px;font-weight:640;margin-top:6px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .avatar{width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#b3452f);
     display:grid;place-items:center;font-size:22px;font-weight:750;color:#fff;flex:none}
   .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:12px;padding:4px 16px;align-items:start}
@@ -311,6 +324,7 @@ const I = {
   eye:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
   bookmark:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21 12 16l-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>',
   frame:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.4"/><path d="m21 16-5-5-4.5 4.5L9 13l-6 6"/></svg>',
+  close:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
   user:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg>'
 };
 
@@ -325,7 +339,7 @@ let memoryOnly = false, storageMode = 'idb';
 const DEFAULT_SYNC = { url:'https://mqwryzopmtykjidabqfv.supabase.co',
                        key:'sb_publishable_ZnfMBfcEQOhdpg3g9u0eZg_Iaw_Fo7y' };
 let db = { apiKey:'', lang:'fr-FR', shows:{}, movies:{}, lastExport:null,
-           sync:Object.assign({}, DEFAULT_SYNC), auth:null,
+           sync:Object.assign({}, DEFAULT_SYNC), auth:null, pseudo:'',
            deleted:{shows:{},movies:{}}, syncedAt:null, v:1 };
 
 function idbOpen(){
@@ -523,7 +537,7 @@ function sbSignOut(){ db.auth = null; syncState='off'; saveDB(); render(); }
 
 /* --- Fusion : on ne perd jamais un épisode coché, et les suppressions se propagent --- */
 function payload(){
-  return { apiKey: db.apiKey, lang: db.lang, shows: db.shows, movies: db.movies,
+  return { apiKey: db.apiKey, lang: db.lang, pseudo: db.pseudo, shows: db.shows, movies: db.movies,
            deleted: db.deleted || {shows:{},movies:{}} };
 }
 function mergeRemote(rem){
@@ -565,6 +579,7 @@ function mergeRemote(rem){
     });
   });
   if(!db.apiKey && rem.apiKey){ db.apiKey = rem.apiKey; changed = true; }
+  if(!db.pseudo && rem.pseudo){ db.pseudo = rem.pseudo; changed = true; }
   return changed;
 }
 function markDeleted(kind, id){
@@ -598,6 +613,105 @@ function scheduleSync(){
   if(!syncReady() || !signedIn()) return;
   clearTimeout(syncTimer);
   syncTimer = setTimeout(()=> syncNow(true), 4000);
+}
+
+/* ============================ Partage par abonnement ============================ */
+/* On ne consulte jamais la bibliothèque de quelqu'un sans y être abonné, et on ne
+   s'abonne que par un code que la personne a elle-même généré. Tout est en lecture
+   seule : rien de ce qui suit n'écrit dans les données d'autrui. */
+
+let partage = { suivis:[], abonnes:[], charge:false, occupe:false, code:null };
+const biblios = {};                       // caches mémoire, jamais enregistrés localement
+
+async function majProfil(){
+  if(!signedIn()) return;
+  const pseudo = (db.pseudo || '').trim() || (db.auth.email||'').split('@')[0];
+  db.pseudo = pseudo;
+  try{
+    await sbFetch('/rest/v1/profils', { method:'POST',
+      headers:{ Prefer:'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ user_id: db.auth.uid, pseudo: pseudo, maj: new Date().toISOString() }) });
+  }catch(e){}
+}
+
+async function chargerPartage(){
+  if(!signedIn()) return;
+  partage.occupe = true; partage.erreur = null;
+  try{
+    const liens = await sbFetch('/rest/v1/abonnements?select=suiveur,suivi,depuis', {});
+    const moi = db.auth.uid;
+    const idsSuivis  = liens.filter(l=>l.suiveur===moi).map(l=>l.suivi);
+    const idsAbonnes = liens.filter(l=>l.suivi===moi).map(l=>l.suiveur);
+    const tous = [...new Set(idsSuivis.concat(idsAbonnes))];
+    let noms = {};
+    if(tous.length){
+      const ps = await sbFetch('/rest/v1/profils?select=user_id,pseudo&user_id=in.('+tous.join(',')+')', {});
+      ps.forEach(p=> noms[p.user_id] = p.pseudo);
+    }
+    partage.suivis  = idsSuivis.map(id=>({ id, pseudo: noms[id] || 'Sans nom' }));
+    partage.abonnes = idsAbonnes.map(id=>({ id, pseudo: noms[id] || 'Sans nom' }));
+    partage.charge = true;
+  }catch(e){ partage.erreur = e.message; }
+  partage.occupe = false;
+  if(view==='abos') render();
+}
+
+async function genererCode(){
+  if(!signedIn()) return;
+  const lettres = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   // sans I, O, 0, 1 pour éviter les confusions
+  let code = '';
+  const buf = new Uint32Array(6);
+  (self.crypto || window.crypto).getRandomValues(buf);
+  for(let i=0;i<6;i++) code += lettres[buf[i] % lettres.length];
+  try{
+    await majProfil();
+    await sbFetch('/rest/v1/codes_partage', { method:'POST',
+      headers:{ Prefer:'return=minimal' },
+      body: JSON.stringify({ code: code, proprio: db.auth.uid }) });
+    partage.code = code;
+    render();
+  }catch(e){ toast('Impossible de créer le code'); }
+}
+
+async function utiliserCode(saisi){
+  const code = (saisi||'').trim().toUpperCase();
+  if(code.length < 4) return toast('Code trop court');
+  try{
+    await majProfil();
+    const r = await sbFetch('/rest/v1/rpc/utiliser_code', { method:'POST',
+      body: JSON.stringify({ le_code: code }) });
+    const nom = (Array.isArray(r) && r[0] && r[0].pseudo) || 'cette personne';
+    toast('Tu suis maintenant '+nom);
+    await chargerPartage();
+    render();
+  }catch(e){
+    const m = String(e.message||'');
+    if(/CODE_INVALIDE/.test(m))   toast('Code inconnu, déjà utilisé ou expiré');
+    else if(/CODE_A_SOI/.test(m)) toast('Ce code est le tien');
+    else toast('Échec : '+m);
+  }
+}
+
+async function rompre(id, jeSuis){
+  const q = jeSuis === 'suiveur'
+    ? '?suiveur=eq.'+db.auth.uid+'&suivi=eq.'+id
+    : '?suiveur=eq.'+id+'&suivi=eq.'+db.auth.uid;
+  try{
+    await sbFetch('/rest/v1/abonnements'+q, { method:'DELETE', headers:{ Prefer:'return=minimal' } });
+    delete biblios[id];
+    await chargerPartage();
+    render();
+    toast(jeSuis === 'suiveur' ? 'Désabonné' : 'Abonné retiré');
+  }catch(e){ toast('Échec : '+e.message); }
+}
+
+/* Récupère la bibliothèque d'une personne suivie — lecture seule, gardée en mémoire */
+async function chargerBiblio(id){
+  try{
+    const r = await sbFetch('/rest/v1/'+TABLE+'?select=data&user_id=eq.'+encodeURIComponent(id), {});
+    biblios[id] = (Array.isArray(r) && r.length) ? (r[0].data || {}) : {};
+  }catch(e){ biblios[id] = { erreur: e.message }; }
+  if(view==='biblio') render();
 }
 
 /* ============================ Utilitaires ============================ */
@@ -745,7 +859,7 @@ let params = {};
 let ui = { profTab:'series', editServer:false, searchType:'tv', searchQ:'', searchRes:null, searching:false, searchErr:'',
            openSeasons:{}, busy:false };
 
-const DEPTH = { search:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, account:2 };
+const DEPTH = { search:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, account:2, biblio:2 };
 let navDir = 'none';
 function go(v, p, dir){
   if(view===v && JSON.stringify(params)===JSON.stringify(p||{})){ window.scrollTo(0,0); render(); return; }
@@ -761,6 +875,8 @@ function currentBack(){
   if(view==='preview') return 'search';
   if(view==='settings') return params.from || null;
   if(view==='account') return 'settings';
+  if(view==='abos') return params.from || 'profile';
+  if(view==='biblio') return 'abos';
   return null;
 }
 function goBack(){
@@ -796,6 +912,8 @@ function render(){
   else if(view==='preview') html = viewPreview();
   else if(view==='movie') html = viewMovie();
   else if(view==='account') html = viewAccount();
+  else if(view==='abos') html = viewAbos();
+  else if(view==='biblio') html = viewBiblio();
   app.innerHTML = html;
   app.classList.remove('enter','back');
   if(navDir==='enter' || navDir==='back'){ void app.offsetWidth; app.classList.add(navDir); }
@@ -813,7 +931,7 @@ function renderNav(){
     ['profile','Mon profil',I.user]
   ];
   const cur = (view==='preview') ? 'search'
-            : (view==='account') ? 'profile'
+            : (view==='account'||view==='abos'||view==='biblio') ? 'profile'
             : (view==='show'||view==='movie'||view==='settings') ? (params.from==='search'?'search':(params.from||'profile'))
             : view;
   document.getElementById('nav').style.gridTemplateColumns = '';
@@ -968,14 +1086,24 @@ function viewProfile(){
   });
 
   html += '<div class="stats">'+
-    '<div class="stat"><b>'+epCount+'</b><span>épisodes vus</span></div>'+
+    '<div class="stat"><b>'+epCount+'</b><span>épisode'+(epCount>1?'s':'')+' vu'+(epCount>1?'s':'')+'</span></div>'+
     '<div class="stat"><b>'+fmtDurShort(minutes)+'</b><span>de visionnage</span></div>'+
-    '<div class="stat"><b>'+doneShows+'</b><span>séries finies</span></div>'+
+    '<div class="stat"><b>'+doneShows+'</b><span>série'+(doneShows>1?'s':'')+' finie'+(doneShows>1?'s':'')+'</span></div>'+
   '</div>';
   html += '<div class="wrap" style="padding-top:0"><div class="card" style="padding:13px;text-align:center">'+
     '<span class="small muted">'+startedShows.length+' série'+(startedShows.length>1?'s':'')+' suivie'+(startedShows.length>1?'s':'')+
     ' · '+watchedMovies.length+' film'+(watchedMovies.length>1?'s':'')+' vu'+(watchedMovies.length>1?'s':'')+
     ' · soit '+fmtDur(minutes)+'</span></div></div>';
+
+  if(signedIn() && partage.suivis.length){
+    html += '<div class="sectitle">Mes abonnements<span class="cnt">'+partage.suivis.length+'</span></div>'+
+      '<div class="aborow">'+partage.suivis.slice(0,8).map(p=>
+        '<button class="abomini" onclick="ouvrirBiblio(\''+p.id+'\')">'+
+          '<div class="avatar">'+esc((p.pseudo||'?').charAt(0).toUpperCase())+'</div>'+
+          '<span>'+esc(p.pseudo)+'</span></button>').join('')+
+        '<button class="abomini" onclick="ouvrirAbos()"><div class="avatar plus">'+I.plus+'</div><span>Gérer</span></button>'+
+      '</div>';
+  }
 
   let cards = '';
   if(ui.profTab==='series'){
@@ -1027,8 +1155,13 @@ function movieCard(m){
   '</div>';
 }
 
+function ouvrirAbos(){
+  go('abos', {from:'profile'});
+  if(signedIn()) chargerPartage();
+}
 function profileMenu(){
   openSheet('<h3>Options</h3><p class="small muted" style="margin:0 0 8px">Réglages et sauvegardes</p>'+
+    '<button class="opt" onclick="closeSheet();ouvrirAbos()">Mes abonnements</button>'+
     '<button class="opt" onclick="closeSheet();go(\'account\',{from:\'profile\'})">Compte & synchro</button>'+
     '<button class="opt" onclick="closeSheet();go(\'settings\',{from:\'profile\'})">Réglages</button>'+
     '<button class="opt" onclick="closeSheet();exportData()">Exporter une sauvegarde</button>'+
@@ -1596,6 +1729,177 @@ function quickWatch(id, ev){
   toast(codeEp(nx.s,nx.e)+' vu ✓');
 }
 
+/* ---------- Vue : Mes abonnements ---------- */
+function viewAbos(){
+  let html = header('Mes abonnements', {back:"goBack()"});
+
+  if(!signedIn()){
+    return html + '<div class="empty">'+I.user+'<h3>Compte requis</h3>'+
+      '<p>Le partage passe par ton compte : il faut être connecté pour suivre quelqu\'un.</p>'+
+      '<button class="btn" onclick="go(\'account\',{from:\'profile\'})">Ouvrir Compte & synchro</button></div>';
+  }
+
+  /* --- rejoindre quelqu'un --- */
+  html += '<div class="wrap">'+
+    '<div class="card" style="padding:16px">'+
+      '<div style="font-weight:680;margin-bottom:6px">Suivre quelqu\'un</div>'+
+      '<div class="small muted" style="margin-bottom:12px">Demande-lui son code, puis saisis-le ici. '+
+      'Tu verras alors sa bibliothèque, en lecture seule.</div>'+
+      '<input type="text" id="codein" placeholder="ABC123" autocapitalize="characters" '+
+      'autocorrect="off" spellcheck="false" maxlength="8" style="text-transform:uppercase;letter-spacing:.12em;text-align:center;font-weight:700">'+
+      '<button class="btn block" style="margin-top:10px" onclick="utiliserCode(document.getElementById(\'codein\').value)">Valider le code</button>'+
+    '</div>'+
+  '</div>';
+
+  /* --- partager sa propre bibliothèque --- */
+  html += '<div class="wrap" style="padding-top:0">'+
+    '<div class="card" style="padding:16px">'+
+      '<div style="font-weight:680;margin-bottom:6px">Me faire suivre</div>'+
+      (partage.code
+        ? '<div class="codebox">'+esc(partage.code)+'</div>'+
+          '<div class="small muted" style="text-align:center">Valable 24 h, une seule utilisation. '+
+          'Transmets-le à la personne de ton choix.</div>'+
+          '<button class="btn ghost block" style="margin-top:12px" onclick="genererCode()">Générer un autre code</button>'
+        : '<div class="small muted" style="margin-bottom:12px">Génère un code et donne-le à qui tu veux. '+
+          'Tant que tu n\'en donnes pas, personne ne voit ta bibliothèque.</div>'+
+          '<button class="btn block" onclick="genererCode()">Générer mon code</button>')+
+    '</div>'+
+  '</div>';
+
+  /* --- le serveur n'est pas encore préparé --- */
+  if(partage.erreur && !partage.charge){
+    html += '<div class="wrap" style="padding-top:0"><div class="banner" style="margin:0">'+
+      '<b>Le partage n\'est pas encore activé sur ton serveur.</b><br>'+
+      'Il reste à exécuter le fichier <code>supabase-partage.sql</code> dans Supabase '+
+      '(SQL Editor → New query → Run). Le reste de l\'app fonctionne normalement.</div></div>';
+    return html + '<div style="height:26px"></div>';
+  }
+
+  /* --- listes --- */
+  if(partage.occupe && !partage.charge){
+    html += '<div class="empty"><span class="spin"></span><p style="margin-top:12px">Chargement…</p></div>';
+    return html + '<div style="height:26px"></div>';
+  }
+
+  html += '<div class="sectitle">Je suis'+(partage.suivis.length?'<span class="cnt">'+partage.suivis.length+'</span>':'')+'</div>';
+  html += partage.suivis.length
+    ? '<div class="list">'+partage.suivis.map(p=>ligneAbo(p,'suiveur')).join('')+'</div>'
+    : '<div class="wrap" style="padding-top:0"><div class="card" style="padding:15px;text-align:center">'+
+      '<span class="small muted">Tu ne suis personne pour l\'instant.</span></div></div>';
+
+  html += '<div class="sectitle">Me suivent'+(partage.abonnes.length?'<span class="cnt">'+partage.abonnes.length+'</span>':'')+'</div>';
+  html += partage.abonnes.length
+    ? '<div class="list">'+partage.abonnes.map(p=>ligneAbo(p,'suivi')).join('')+'</div>'
+    : '<div class="wrap" style="padding-top:0"><div class="card" style="padding:15px;text-align:center">'+
+      '<span class="small muted">Personne ne te suit.</span></div></div>';
+
+  return html + '<div style="height:26px"></div>';
+}
+
+function ligneAbo(p, role){
+  const ini = (p.pseudo||'?').trim().charAt(0).toUpperCase();
+  return '<div class="srow" style="align-items:center">'+
+    (role==='suiveur'
+      ? '<div style="display:flex;gap:12px;align-items:center;flex:1;min-width:0" onclick="ouvrirBiblio(\''+p.id+'\')">'
+      : '<div style="display:flex;gap:12px;align-items:center;flex:1;min-width:0">')+
+      '<div class="avatar" style="width:44px;height:44px;font-size:17px">'+esc(ini)+'</div>'+
+      '<div class="sinfo" style="justify-content:center">'+
+        '<div class="sname">'+esc(p.pseudo)+'</div>'+
+        '<div class="tiny muted">'+(role==='suiveur' ? 'Voir sa bibliothèque' : 'Voit ta bibliothèque')+'</div>'+
+      '</div>'+
+    '</div>'+
+    '<button class="iconbtn" title="'+(role==='suiveur'?'Se désabonner':'Retirer')+'" '+
+      'onclick="confirmerRupture(\''+p.id+'\',\''+role+'\',\''+esc(p.pseudo).replace(/'/g,"")+'\')">'+I.close+'</button>'+
+  '</div>';
+}
+
+function confirmerRupture(id, role, nom){
+  openSheet('<h3>'+esc(nom)+'</h3>'+
+    '<p class="small muted" style="margin:0 0 8px">'+
+      (role==='suiveur' ? 'Tu ne verras plus sa bibliothèque.' : 'Cette personne ne verra plus la tienne.')+'</p>'+
+    '<button class="opt danger" onclick="closeSheet();rompre(\''+id+'\',\''+role+'\')">'+
+      (role==='suiveur' ? 'Me désabonner' : 'Retirer cet abonné')+'</button>'+
+    '<button class="opt" onclick="closeSheet()">Annuler</button>');
+}
+
+function ouvrirBiblio(id){
+  go('biblio', {id:id});
+  chargerBiblio(id);            // toujours rafraîchir : l'autre a pu avancer entre-temps
+}
+
+/* ---------- Vue : bibliothèque d'une personne suivie (lecture seule) ---------- */
+function viewBiblio(){
+  const id = params.id;
+  const qui = partage.suivis.find(p=>p.id===id);
+  const nom = qui ? qui.pseudo : 'Bibliothèque';
+  let html = header(nom, {back:"goBack()"});
+
+  const d = biblios[id];
+  if(!d) return html + '<div class="empty"><span class="spin"></span><p style="margin-top:12px">Chargement…</p></div>';
+  if(d.erreur) return html + '<div class="empty"><h3>Lecture impossible</h3><p>'+esc(d.erreur)+'</p>'+
+    '<button class="btn ghost" onclick="chargerBiblio(\''+id+'\')">Réessayer</button></div>';
+
+  const shows  = Object.values(d.shows  || {});
+  const movies = Object.values(d.movies || {});
+  if(!shows.length && !movies.length)
+    return html + '<div class="empty">'+I.tv+'<h3>Bibliothèque vide</h3>'+
+      '<p>'+esc(nom)+' n\'a encore rien enregistré.</p></div>';
+
+  let eps = 0, minutes = 0, finies = 0;
+  shows.forEach(sh=>{
+    allEpisodes(sh,true).forEach(ep=>{
+      if(sh.watched && sh.watched[key(ep.s,ep.e)]){ eps++; minutes += epRuntime(sh,ep); }
+    });
+    if(isFinished(sh)) finies++;
+  });
+  movies.filter(m=>m.seen).forEach(m=> minutes += (m.runtime||100));
+
+  const enCours = shows.filter(sh=>statutSerie(sh)==='asuivre').sort((a,b)=>lastWatchedAt(b)-lastWatchedAt(a));
+  const vues    = shows.filter(sh=>statutSerie(sh)==='vu');
+  const aVoir   = shows.filter(sh=>statutSerie(sh)==='avoir');
+  const filmsVus= movies.filter(m=>m.seen).sort((a,b)=>(b.watchedAt||0)-(a.watchedAt||0));
+
+  html += '<div class="stats">'+
+    '<div class="stat"><b>'+eps+'</b><span>épisode'+(eps>1?'s':'')+' vu'+(eps>1?'s':'')+'</span></div>'+
+    '<div class="stat"><b>'+fmtDurShort(minutes)+'</b><span>de visionnage</span></div>'+
+    '<div class="stat"><b>'+finies+'</b><span>série'+(finies>1?'s':'')+' finie'+(finies>1?'s':'')+'</span></div>'+
+  '</div>';
+  html += '<div class="wrap" style="padding-top:0"><div class="card" style="padding:12px;text-align:center">'+
+    '<span class="small muted ro">'+I.eye+' Lecture seule — tu ne peux rien modifier ici</span></div></div>';
+
+  const bloc = (titre, liste, rendu)=> liste.length
+    ? '<div class="sectitle">'+titre+'<span class="cnt">'+liste.length+'</span></div>'+
+      '<div class="pgrid">'+liste.map(rendu).join('')+'</div>'
+    : '';
+
+  html += bloc('En cours', enCours, carteLecture);
+  html += bloc('Séries vues', vues, carteLecture);
+  html += bloc('Films vus', filmsVus, carteFilmLecture);
+  html += bloc('Sa liste à voir', aVoir, carteLecture);
+  return html + '<div style="height:26px"></div>';
+}
+
+function carteLecture(sh){
+  const p = progress(sh);
+  const full = p.total>0 && p.watched===p.total;
+  const st = statutSerie(sh);
+  return '<div class="pcard">'+
+    '<div class="wrapimg">'+posterEl(sh.poster,'w342','',sh.name)+
+      (st!=='avoir' && p.total ? '<div class="pbadge '+(full?'done':'')+'">'+p.watched+'/'+p.total+'</div>' : '')+
+      (st!=='avoir' ? '<div class="pbar"><i class="'+(full?'full':'')+'" style="width:'+p.pct+'%"></i></div>' : '')+
+    '</div>'+
+    '<div class="pname">'+esc(sh.name)+'</div>'+
+    '<div class="psub">'+(st==='avoir' ? 'Pas commencée' : full ? (isFinished(sh)?'Terminée':'À jour') : p.pct+'%')+'</div>'+
+  '</div>';
+}
+function carteFilmLecture(m){
+  return '<div class="pcard">'+
+    '<div class="wrapimg">'+posterEl(m.poster,'w342','',m.title)+'<div class="pbadge done">vu</div></div>'+
+    '<div class="pname">'+esc(m.title)+'</div>'+
+    '<div class="psub">'+esc(year(m.date))+'</div>'+
+  '</div>';
+}
+
 /* ---------- Vue : Compte & synchronisation ---------- */
 function viewAccount(){
   let html = header('Compte & synchro', {back:"goBack()"});
@@ -1677,6 +1981,7 @@ async function doSignIn(){
     await sbSignIn(email, pass);
     render(); toast('Connecté');
     await syncNow();
+    await majProfil(); await chargerPartage();
   }catch(e){ toast(/Invalid/i.test(e.message) ? 'E-mail ou mot de passe incorrect' : 'Échec : '+e.message); }
 }
 async function doSignUp(){
@@ -1826,7 +2131,7 @@ async function boot(){
   render();
   if(!db.apiKey) go('settings', {from:'follow'});
   if(memoryOnly) toast('Stockage indisponible : pense à exporter tes données');
-  if(syncReady() && signedIn()) syncNow(true);
+  if(syncReady() && signedIn()){ syncNow(true); majProfil(); chargerPartage(); }
 }
 boot();
 
