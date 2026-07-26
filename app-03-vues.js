@@ -134,7 +134,17 @@ function render(){
      que d'aller au bout des trois écrans. */
   document.body.classList.toggle('accueil', view === 'accueil');
   app.classList.remove('enter','back');
-  if(navDir==='enter' || navDir==='back'){ void app.offsetWidth; app.classList.add(navDir); }
+  if(navDir==='enter' || navDir==='back'){
+    void app.offsetWidth;
+    const sens = navDir;
+    app.classList.add(sens);
+    /* On retire la classe dès la fin de l'animation : la laisser en place
+       maintenait une couche graphique qui déréglait les barres fixes. */
+    app.addEventListener('animationend', function fini(){
+      app.classList.remove(sens);
+      app.removeEventListener('animationend', fini);
+    });
+  }
   navDir = 'none';
   renderNav();
   if(view==='discover'){
@@ -387,8 +397,23 @@ function viewProfile(){
     if(!enPause.length) cards = emptyProf('Aucune série en pause', 'Une série mise de côté se range ici, sans rien perdre.');
     else cards = '<div class="pgrid">'+enPause.map(showCard).join('')+'</div>';
   } else {
-    if(!toWatch.length) cards = emptyProf('Rien en attente', 'Les séries ajoutées mais pas commencées et les films « à voir » se rangent ici.');
-    else cards = '<div class="pgrid">'+toWatch.map(x=> x.type==='show' ? showCard(x.o) : movieCard(x.o)).join('')+'</div>';
+    /* « À voir » mélange séries et films : un petit filtre permet de ne garder
+       que l'un des deux. Il n'apparaît que s'il y a effectivement les deux. */
+    const nbS = toWatch.filter(x=>x.type==='show').length;
+    const nbF = toWatch.length - nbS;
+    const quoi = ui.avoirTri || 'tout';
+    const liste = toWatch.filter(x=> quoi==='tout' ? true
+                                   : quoi==='series' ? x.type==='show' : x.type==='movie');
+    if(nbS && nbF){
+      cards += '<div class="souschips">'+
+        [['tout','Tout',toWatch.length],['series','Séries',nbS],['films','Films',nbF]].map(([id,l,n])=>
+          '<button class="chip '+(quoi===id?'on':'')+'" onclick="ui.avoirTri=\''+id+'\';render()">'+
+          l+' <span style="opacity:.65">'+n+'</span></button>').join('')+'</div>';
+    }
+    if(!toWatch.length) cards += emptyProf('Rien en attente', 'Les séries ajoutées mais pas commencées et les films « à voir » se rangent ici.');
+    else if(!liste.length) cards += emptyProf(quoi==='series'?'Aucune série en attente':'Aucun film en attente',
+                                              'Change de filtre juste au-dessus.');
+    else cards += '<div class="pgrid">'+liste.map(x=> x.type==='show' ? showCard(x.o) : movieCard(x.o)).join('')+'</div>';
   }
   return html + cards + '<div style="height:26px"></div>';
 }

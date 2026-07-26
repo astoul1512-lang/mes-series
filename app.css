@@ -30,8 +30,8 @@
   /* Transition d'écran. Volontairement discrète : un glissement court et un voile
      léger. C'est le clignotement d'opacité qui rendait l'ancienne version brutale,
      pas la vitesse — on part donc de bien plus haut, et on finit en douceur. */
-  .app.enter{animation:slidein .34s cubic-bezier(.16,.72,.24,1);will-change:transform,opacity}
-  .app.back{animation:slideback .34s cubic-bezier(.16,.72,.24,1);will-change:transform,opacity}
+  .app.enter{animation:slidein .34s cubic-bezier(.16,.72,.24,1)}
+  .app.back{animation:slideback .34s cubic-bezier(.16,.72,.24,1)}
   @keyframes slidein{from{opacity:.62;transform:translate3d(11px,0,0)}to{opacity:1;transform:none}}
   @keyframes slideback{from{opacity:.62;transform:translate3d(-11px,0,0)}to{opacity:1;transform:none}}
   @media (prefers-reduced-motion:reduce){ .app.enter,.app.back{animation:none} }
@@ -63,10 +63,14 @@
     padding:13px 14px;margin:0}
   .card.enpause .btn{flex:none;padding:9px 14px}
   .gstat.pause,.pstat.pause{color:var(--warn)}
+  .souschips{display:flex;gap:8px;padding:2px 16px 10px;overflow-x:auto;scrollbar-width:none}
+  .souschips::-webkit-scrollbar{display:none}
+  .souschips .chip{font-size:12.5px;padding:6px 12px}
 
   /* ---------- Header ---------- */
   header{
-    position:sticky;top:0;z-index:30;background:rgba(15,17,21,.9);
+    position:sticky;top:0;z-index:30;background:rgba(15,17,21,.94);
+    transform:translateZ(0);                 /* couche stable : évite le décrochage sur iOS */
     backdrop-filter:blur(18px) saturate(160%);-webkit-backdrop-filter:blur(18px) saturate(160%);
     border-bottom:1px solid var(--line);padding-top:var(--safe-t);
     padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px);
@@ -246,7 +250,8 @@
   .cthumb{width:74px;height:42px;border-radius:7px;object-fit:cover;background:var(--surface2);flex:none}
 
   /* ---------- Nav ---------- */
-  nav{position:fixed;bottom:0;left:0;right:0;z-index:40;background:rgba(15,17,21,.94);
+  nav{position:fixed;bottom:0;left:0;right:0;z-index:40;background:rgba(15,17,21,.97);
+    transform:translateZ(0);                 /* idem : la barre reste collée au bas de l'écran */
     backdrop-filter:blur(18px) saturate(160%);-webkit-backdrop-filter:blur(18px) saturate(160%);
     border-top:1px solid var(--line);padding-bottom:var(--safe-b);
     padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
