@@ -194,17 +194,50 @@ function goBack(){
   if(t) go(t, {}, 'back');
 }
 /* Balayage depuis le bord gauche pour revenir en arrière */
+/* Le doigt entraîne l'écran pendant le geste : le retour n'arrive plus d'un coup.
+   Au relâchement, soit on part en arrière, soit la page reprend sa place en douceur. */
 (function swipeBack(){
-  let x0=null, y0=null, t0=0;
+  const SEUIL = 60, COURSE = 90;
+  let x0=null, y0=null, t0=0, actif=false;
+  const app = ()=> document.getElementById('app');
+
+  function suivre(dx){
+    const el = app(); if(!el) return;
+    const d = Math.max(0, Math.min(dx, COURSE));
+    el.style.transition = 'none';
+    el.style.transform = 'translate3d('+d+'px,0,0)';
+    el.style.opacity = String(1 - (d / COURSE) * 0.3);
+  }
+  function relacher(retour){
+    const el = app(); if(!el) return;
+    if(retour){ el.style.transition=''; el.style.transform=''; el.style.opacity=''; return; }
+    el.style.transition = 'transform .22s cubic-bezier(.16,.72,.24,1), opacity .22s';
+    el.style.transform = ''; el.style.opacity = '';
+    setTimeout(()=>{ const e2 = app(); if(e2) e2.style.transition=''; }, 240);
+  }
+
   document.addEventListener('touchstart', e=>{
     const t = e.touches[0];
+    actif = false;
     if(t.clientX <= 28 && currentBack()){ x0=t.clientX; y0=t.clientY; t0=Date.now(); } else x0=null;
   }, {passive:true});
-  document.addEventListener('touchend', e=>{
+
+  document.addEventListener('touchmove', e=>{
     if(x0===null) return;
+    const t = e.touches[0];
+    const dx = t.clientX-x0, dy = Math.abs(t.clientY-y0);
+    if(!actif && (dy > 20 || dx < 6)){ if(dy > 20) x0 = null; return; }  // c'est un défilement
+    actif = true;
+    suivre(dx);
+  }, {passive:true});
+
+  document.addEventListener('touchend', e=>{
+    if(x0===null){ if(actif) relacher(false); actif=false; return; }
     const t = e.changedTouches[0];
     const dx = t.clientX-x0, dy = Math.abs(t.clientY-y0);
-    if(dx > 60 && dy < 45 && Date.now()-t0 < 700) goBack();
-    x0=null;
+    const part = dx > SEUIL && dy < 45 && Date.now()-t0 < 700;
+    relacher(part);
+    if(part) goBack();
+    x0=null; actif=false;
   }, {passive:true});
 })();

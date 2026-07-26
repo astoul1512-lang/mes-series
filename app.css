@@ -27,11 +27,13 @@
   @supports (min-height:100dvh){ .app{min-height:100dvh} }
   /* le bandeau d'annulation flotte au-dessus de la barre : on réserve la place correspondante */
   body.undo .app{padding-bottom:calc(142px + var(--safe-b))}
-  /* transition d'écran, façon application */
-  .app.enter{animation:slidein .26s cubic-bezier(.22,.68,.32,1)}
-  .app.back{animation:slideback .26s cubic-bezier(.22,.68,.32,1)}
-  @keyframes slidein{from{opacity:.25;transform:translateX(16px)}to{opacity:1;transform:none}}
-  @keyframes slideback{from{opacity:.25;transform:translateX(-16px)}to{opacity:1;transform:none}}
+  /* Transition d'écran. Volontairement discrète : un glissement court et un voile
+     léger. C'est le clignotement d'opacité qui rendait l'ancienne version brutale,
+     pas la vitesse — on part donc de bien plus haut, et on finit en douceur. */
+  .app.enter{animation:slidein .34s cubic-bezier(.16,.72,.24,1);will-change:transform,opacity}
+  .app.back{animation:slideback .34s cubic-bezier(.16,.72,.24,1);will-change:transform,opacity}
+  @keyframes slidein{from{opacity:.62;transform:translate3d(11px,0,0)}to{opacity:1;transform:none}}
+  @keyframes slideback{from{opacity:.62;transform:translate3d(-11px,0,0)}to{opacity:1;transform:none}}
   @media (prefers-reduced-motion:reduce){ .app.enter,.app.back{animation:none} }
 
   /* ---------- Header ---------- */
@@ -133,13 +135,6 @@
   .fgrp{font-size:11px;font-weight:750;letter-spacing:.6px;text-transform:uppercase;
     color:var(--muted);margin:14px 0 8px}
   .fchips{display:flex;flex-wrap:wrap;gap:8px}
-  /* Puce de plateforme : le logo aide à reconnaître plus vite que le nom. */
-  .chip.chiplogo{display:inline-flex;align-items:center;gap:7px;padding:5px 12px 5px 5px}
-  .chip.chiplogo img{width:22px;height:22px;border-radius:6px;background:#000;flex:0 0 auto}
-  .chip.chiplogo.on img{box-shadow:0 0 0 1.5px rgba(255,255,255,.55)}
-  /* Lien discret sous une section de filtres (« voir les autres », « tout décocher ») */
-  .lienplus{margin-top:10px;font-size:12px;font-weight:650;color:var(--accent);
-    text-decoration:underline;text-underline-offset:2px}
   .plus{padding:16px;text-align:center}
   /* Rangée de Découvrir : la loupe vient s'ajouter aux quatre types,
      on resserre un peu pour que tout tienne sans défilement sur un iPhone. */
