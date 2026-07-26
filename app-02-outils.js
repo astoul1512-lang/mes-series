@@ -143,8 +143,10 @@ let view = 'follow';
 let params = {};
 let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searching:false, searchErr:'',
            openSeasons:{}, busy:false,
-           /* Découvrir : type affiché, genres cochés, tri, note minimale, page en cours */
-           disc:{ type:'tv', genres:[], perimetre:'recent', tri:'populaire', noteMin:0,
+           /* Découvrir : type affiché, genres cochés, plateformes cochées, tri,
+              note minimale, page en cours */
+           disc:{ type:'tv', genres:[], plates:[], toutesPlates:false,
+                  perimetre:'recent', tri:'populaire', noteMin:0,
                   page:1, pages:1, res:[], loading:false, err:'', charge:false } };
 
 const DEPTH = { discover:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, account:2, biblio:2 };

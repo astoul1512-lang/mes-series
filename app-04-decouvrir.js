@@ -198,6 +198,10 @@ const DISC_NOTES = [
 const DISC_FENETRE = 90;     // « sorti récemment » = les 90 derniers jours
 
 const genresTMDB = { tv:null, movie:null };
+const platesTMDB = { tv:null, movie:null };
+/* Nombre de plateformes montrées d'emblée dans les filtres ; le reste
+   se déplie à la demande. TMDB en recense plus de cent pour la France. */
+const PLATES_VEDETTE = 12;
 let discSeq = 0;
 
 /* Le média TMDB derrière chaque puce : mini-séries et animés restent des séries. */
@@ -217,6 +221,18 @@ function genresAffiches(){
   return ui.disc.type === 'anime' ? l.filter(g => (g.nom||'').toLowerCase() !== 'animation') : l;
 }
 
+/* Les plateformes proposées viennent de TMDB pour la France, classées par
+   l'ordre d'affichage que JustWatch donne au pays : Netflix et Disney+ avant
+   les catalogues confidentiels. La liste diffère entre séries et films. */
+function platesAffichees(){
+  const l = platesTMDB[discMedia()] || [];
+  return ui.disc.toutesPlates ? l : l.slice(0, PLATES_VEDETTE);
+}
+function platesCachees(){
+  const l = platesTMDB[discMedia()] || [];
+  return Math.max(0, l.length - PLATES_VEDETTE);
+}
+
 /* Traduit l'état des filtres en paramètres TMDB.
    Les genres sont retenus par leur nom : « Comédie » suit quand on passe
    des séries aux films, même si TMDB ne lui donne pas le même identifiant. */
@@ -232,6 +248,14 @@ function discParams(){
   }
   const ids = noms.map(n => genreParNom(media, n)).filter(x => x != null);
   if(ids.length) p.with_genres = ids.join(',');
+
+  /* Plateformes : « ou » entre elles (barre verticale), et uniquement ce qui est
+     inclus dans un abonnement. TMDB exige la région avec ce filtre. */
+  if(d.plates.length){
+    p.with_watch_providers = d.plates.map(x => x.id).join('|');
+    p.watch_region = REGION_PLATO;
+    p.with_watch_monetization_types = 'flatrate';
+  }
 
   if(d.tri === 'note'){ p.sort_by = 'vote_average.desc'; p['vote_count.gte'] = '300'; }
   else p.sort_by = 'popularity.desc';
@@ -256,6 +280,26 @@ async function chargerGenres(media){
   return genresTMDB[media];
 }
 
+/* Liste des plateformes disponibles en France. Un échec n'est pas bloquant :
+   la section reste simplement vide dans les filtres. */
+async function chargerPlates(media){
+  if(platesTMDB[media]) return platesTMDB[media];
+  try{
+    const d = await tmdb('/watch/providers/'+media, { watch_region: REGION_PLATO });
+    platesTMDB[media] = (d.results||[])
+      .filter(p => p && p.provider_id && p.provider_name)
+      .map(p=>{
+        /* TMDB donne un ordre d'affichage par pays, et un ordre général en secours. */
+        let rang = 9999;
+        if(p.display_priorities && p.display_priorities[REGION_PLATO] != null) rang = p.display_priorities[REGION_PLATO];
+        else if(p.display_priority != null) rang = p.display_priority;
+        return { id:p.provider_id, nom:String(p.provider_name), logo:p.logo_path||null, rang:rang };
+      })
+      .sort((a,b)=> (a.rang - b.rang) || a.nom.localeCompare(b.nom));
+  }catch(e){ platesTMDB[media] = []; }
+  return platesTMDB[media];
+}
+
 async function chargerDecouverte(suite){
   const d = ui.disc;
   if(!db.apiKey){ toast('Ajoute ta clé TMDB dans Réglages'); return go('settings', {from:'discover'}); }
@@ -267,6 +311,9 @@ async function chargerDecouverte(suite){
   try{
     const media = discMedia();
     await chargerGenres(media);
+    /* La liste des plateformes n'est pas bloquante : elle vient en arrière-plan
+       et la feuille de filtres se remet à jour toute seule si elle est ouverte. */
+    chargerPlates(media).then(()=>{ if(feuilleFiltresOuverte()) ouvrirFiltres(); });
     /* Un genre qui n'existe pas pour ce type est retiré, mais on le dit. */
     const perdus = d.genres.filter(n => genreParNom(media, n) == null);
     if(perdus.length){
@@ -329,9 +376,26 @@ function bascGenre(i){
   if(k < 0) sel.push(g.nom); else sel.splice(k,1);
   ouvrirFiltres(); chargerDecouverte();
 }
+/* Les plateformes sont retenues avec leur nom et leur logo : la ligne de résumé
+   et les puces restent lisibles même si la liste TMDB n'est pas encore revenue. */
+function bascPlate(i){
+  const p = platesAffichees()[i];
+  if(!p) return;
+  const sel = ui.disc.plates, k = sel.findIndex(x => x.id === p.id);
+  if(k < 0) sel.push({ id:p.id, nom:p.nom, logo:p.logo }); else sel.splice(k,1);
+  ouvrirFiltres(); chargerDecouverte();
+}
+function voirToutesPlates(){
+  ui.disc.toutesPlates = !ui.disc.toutesPlates;
+  ouvrirFiltres();
+}
+function viderPlates(){
+  ui.disc.plates = [];
+  ouvrirFiltres(); chargerDecouverte();
+}
 function resetFiltres(){
   const d = ui.disc;
-  d.genres = []; d.perimetre = 'recent'; d.tri = 'populaire'; d.noteMin = 0;
+  d.genres = []; d.plates = []; d.perimetre = 'recent'; d.tri = 'populaire'; d.noteMin = 0;
   ouvrirFiltres(); chargerDecouverte();
 }
 
@@ -341,11 +405,48 @@ function resumeFiltres(){
                   (DISC_TRIS.find(t=>t.id===d.tri)||{}).court ];
   if(d.noteMin) bouts.push('note '+d.noteMin+' et +');
   d.genres.forEach(n=> bouts.push(n.toLowerCase()));
+  /* Au-delà de deux plateformes on compte au lieu d'énumérer : la ligne tient. */
+  if(d.plates.length) bouts.push('sur '+(d.plates.length > 2
+    ? d.plates.length+' plateformes'
+    : d.plates.map(p=>p.nom).join(' ou ')));
   return bouts.filter(Boolean).join(' · ');
 }
 function filtresActifs(){
   const d = ui.disc;
-  return d.genres.length > 0 || d.noteMin > 0 || d.perimetre !== 'recent' || d.tri !== 'populaire';
+  return d.genres.length > 0 || d.plates.length > 0 || d.noteMin > 0 ||
+         d.perimetre !== 'recent' || d.tri !== 'populaire';
+}
+
+/* La feuille de filtres est-elle à l'écran ? Sert à la redessiner quand la liste
+   des plateformes arrive après coup, sans inventer un état de plus. */
+function feuilleFiltresOuverte(){
+  const s = document.getElementById('sheet');
+  return !!(s && s.classList.contains('show') && document.getElementById('fplates'));
+}
+
+/* Section « Plateformes » de la feuille de filtres. */
+function blocFiltrePlates(){
+  const d = ui.disc;
+  const liste = platesAffichees(), reste = platesCachees();
+  let h = '<div class="fgrp" id="fplates">Plateformes'+(d.plates.length?' ('+d.plates.length+')':'')+
+          ' · abonnement en France</div>';
+  if(!liste.length)
+    return h + '<div class="small muted">La liste des plateformes arrive avec les premiers résultats.</div>';
+  h += '<div class="fchips">'+liste.map((p,i)=>{
+    const on = d.plates.some(x => x.id === p.id);
+    const logo = p.logo ? '<img loading="lazy" src="'+IMG(p.logo,'w45')+'" alt="">' : '';
+    return '<button class="chip chiplogo '+(on?'on':'')+'" onclick="bascPlate('+i+')">'+
+             logo+'<span>'+esc(p.nom)+'</span></button>';
+  }).join('')+'</div>';
+  if(reste || d.toutesPlates)
+    h += '<button class="lienplus" onclick="voirToutesPlates()">'+
+         (d.toutesPlates ? 'Ne montrer que les principales' : 'Voir les '+reste+' autres plateformes')+
+         '</button>';
+  if(d.plates.length)
+    h += '<div class="small muted" style="margin-top:8px">'+
+         'Il suffit qu\'un titre soit sur <b>une</b> de ces plateformes. '+
+         '<button class="lienplus" style="margin:0" onclick="viderPlates()">Tout décocher</button></div>';
+  return h;
 }
 
 function ouvrirFiltres(){
@@ -367,6 +468,7 @@ function ouvrirFiltres(){
   h += '<div class="fgrp">Note minimale</div><div class="fchips">'+
     DISC_NOTES.map(n=>'<button class="chip '+(d.noteMin===n.v?'on':'')+'" onclick="setDiscNote('+n.v+')">'+
       n.label+'</button>').join('')+'</div>';
+  h += blocFiltrePlates();
   h += '<div class="fgrp">Genres'+(d.genres.length?' ('+d.genres.length+')':'')+
        (d.type==='anime'?' · animation déjà incluse':'')+'</div>';
   h += genres.length
@@ -443,7 +545,10 @@ function discBody(){
       '<button class="btn ghost" onclick="chargerDecouverte()">Réessayer</button></div>';
   if(!d.res.length)
     return '<div class="empty">'+I.boussole+'<h3>Rien avec ces filtres</h3>'+
-      '<p>Élargis la note minimale ou retire un genre.</p>'+
+      '<p>'+(d.plates.length
+        ? 'Rien de tel sur '+(d.plates.length>2 ? 'ces plateformes' : esc(d.plates.map(p=>p.nom).join(' ou ')))+
+          '. Ajoute une plateforme, ou élargis la note et les genres.'
+        : 'Élargis la note minimale ou retire un genre.')+'</p>'+
       '<button class="btn ghost" onclick="ouvrirFiltres()">Ouvrir les filtres</button></div>';
   return '<div class="grid">'+d.res.map(r=>carteTitre(r, discMedia())).join('')+'</div>'+
     (d.page < d.pages
