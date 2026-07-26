@@ -239,7 +239,6 @@
   .note svg{width:12px;height:12px}
   .actions{display:flex;gap:10px;padding:16px 16px 0}
   .actions .btn{flex:1}
-  .actions.stack{flex-direction:column}
   .cast{display:flex;gap:12px;overflow-x:auto;padding:2px 16px 4px;scrollbar-width:none}
   .cast::-webkit-scrollbar{display:none}
   .cperson{width:74px;flex:none;text-align:center}
@@ -1167,26 +1166,12 @@ function searchCard(r){
   '</button>';
 }
 
-/* Ajoute la série puis la marque intégralement vue, sans transiter par « À voir » */
-async function addEtVu(id){
-  if(db.shows[id]){ go('show',{id:id, from:'search'}); return marquerToutVu(id); }
-  if(ui.busy) return;
-  ui.busy = true;
-  const btn = document.getElementById('seenbtn');
-  const setBtn = t=>{ if(btn) btn.innerHTML = '<span class="spin"></span> '+t; };
-  if(btn) btn.setAttribute('disabled','');
-  setBtn('Chargement des épisodes…');
-  try{
-    const sh = await fetchShowFull(id, (a,b)=> setBtn('Saisons '+a+'/'+b+'…'));
-    sh.watched = {}; sh.addedAt = Date.now();
-    db.shows[id] = sh;
-    ui.busy = false;
-    go('show', {id:id, from:'search'});
-    marquerToutVu(id);
-  }catch(e){
-    ui.busy = false; render();
-    toast(e.message==='BADKEY' ? 'Clé TMDB invalide' : "Impossible de charger cette série");
-  }
+/* Amène l'écran sur la liste des saisons, là où se fait l'ajustement */
+function versLesSaisons(){
+  setTimeout(()=>{
+    const el = document.querySelector('.sectitle.rowt');
+    if(el) el.scrollIntoView({block:'start', behavior:'smooth'});
+  }, 60);
 }
 
 async function addOrOpenShow(id){
@@ -1202,7 +1187,8 @@ async function addOrOpenShow(id){
     s.watched = {}; s.addedAt = Date.now();
     db.shows[id] = s; saveDB();
     toast('« '+s.name+' » ajoutée');
-    ui.busy = false; go('show',{id:id});
+    ui.busy = false; go('show',{id:id, from:'search'});
+    versLesSaisons();
   }catch(e){
     ui.busy = false; render();
     toast(e.message==='BADKEY'?'Clé TMDB invalide':"Impossible d'ajouter cette série");
@@ -1290,14 +1276,10 @@ function viewPreview(){
 
   /* Boutons d'action */
   if(isTv){
-    html += '<div class="actions'+(inList?'':' stack')+'">'+ (inList
+    html += '<div class="actions">'+ (inList
       ? '<button class="btn" onclick="go(\'show\',{id:'+d.id+'})">'+I.eye+' Ouvrir ma fiche</button>'
-      : '<button class="btn" id="addbtn" onclick="addOrOpenShow('+d.id+')">'+I.plus+' Ajouter à ma liste</button>'+
-        '<button class="btn ghost" id="seenbtn" onclick="addEtVu('+d.id+')">'+I.check+" J'ai déjà vu</button>")
-      +'</div>'+
-      (inList ? '' : '<div class="tiny muted" style="padding:8px 16px 0;text-align:center">'+
-        '« J\'ai déjà vu » enregistre la série comme vue, sans passer par ta liste à voir. '+
-        'Tu pourras ensuite ajuster saison par saison.</div>');
+      : '<button class="btn" id="addbtn" onclick="addOrOpenShow('+d.id+')">'+I.plus+' Ajouter à ma liste</button>')
+      +'</div>';
   } else {
     const m = db.movies[d.id];
     html += '<div class="actions">'+
