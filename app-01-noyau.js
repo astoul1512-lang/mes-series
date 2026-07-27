@@ -32,7 +32,7 @@ let memoryOnly = false, storageMode = 'idb', storageKO = false;
    les données sont protégées par les règles RLS côté base). Modifiable dans l'écran Compte. */
 const DEFAULT_SYNC = { url:'https://mqwryzopmtykjidabqfv.supabase.co',
                        key:'sb_publishable_ZnfMBfcEQOhdpg3g9u0eZg_Iaw_Fo7y' };
-let db = { apiKey:'', lang:'fr-FR', shows:{}, movies:{}, lastExport:null, onboarde:false,
+let db = { lang:'fr-FR', shows:{}, movies:{}, lastExport:null, onboarde:false,
            sync:Object.assign({}, DEFAULT_SYNC), auth:null, pseudo:'',
            deleted:{shows:{},movies:{}}, syncedAt:null, v:1 };
 
@@ -81,6 +81,9 @@ async function loadDB(){
     }catch(e){}
   }
   if(loaded && typeof loaded === 'object') db = Object.assign(db, loaded);
+  /* Une clé enregistrée par une version précédente est effacée d'office :
+     personne ne doit pouvoir la lire, ni dans l'app, ni dans un export. */
+  if('apiKey' in db) delete db.apiKey;
   if(!db.sync || !db.sync.url || !db.sync.key) db.sync = Object.assign({}, DEFAULT_SYNC);
   if(!db.deleted) db.deleted = {shows:{},movies:{}};
 
@@ -128,27 +131,20 @@ window.addEventListener('blur', flushDB);
 
 /* ============================ TMDB ============================ */
 const IMG = (p,size)=> p ? 'https://image.tmdb.org/t/p/'+size+p : '';
-const isBearer = ()=> db.apiKey.startsWith('eyJ') || db.apiKey.length > 60;
 
-/* La clé commune ne voyage jamais jusqu'au navigateur : elle vit dans un secret
-   côté Supabase, et l'app passe par un relais qui l'ajoute au dernier moment.
-   Quiconque préfère sa propre clé la renseigne dans les réglages : on parle alors
-   à TMDB en direct, sans passer par le relais. */
+/* La clé TMDB n'existe nulle part côté navigateur — ni dans le code, ni dans les
+   réglages, ni dans les données enregistrées. Elle vit dans un secret côté
+   serveur, et toutes les requêtes passent par ce relais, qui l'ajoute au dernier
+   moment. Aucun utilisateur, quel qu'il soit, ne peut la lire depuis l'app. */
 const RELAIS_TMDB = () => (db.sync && db.sync.url ? db.sync.url : DEFAULT_SYNC.url) + '/functions/v1/tmdb';
-const cleePerso = () => !!(db.apiKey && db.apiKey.trim());
 
 async function tmdb(path, params, extra){
-  const perso = cleePerso();
-  const u = perso ? new URL('https://api.themoviedb.org/3'+path) : new URL(RELAIS_TMDB());
-  if(!perso) u.searchParams.set('path', path);
+  const u = new URL(RELAIS_TMDB());
+  u.searchParams.set('path', path);
   u.searchParams.set('language', db.lang || 'fr-FR');
   for(const k in (params||{})) u.searchParams.set(k, params[k]);
   const opt = {};
   if(extra && extra.signal) opt.signal = extra.signal;      // permet d'abandonner la requête
-  if(perso){
-    if(isBearer()) opt.headers = { Authorization:'Bearer '+db.apiKey };
-    else u.searchParams.set('api_key', db.apiKey);
-  }
   /* Sans délai maximal, un réseau qui ne répond plus laisse l'interface en
      « chargement » pour toujours. */
   let minuteur = null;

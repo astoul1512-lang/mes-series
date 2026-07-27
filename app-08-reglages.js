@@ -3,14 +3,14 @@
 function viewSettings(){
   let html = header('Réglages', {back: params.from ? "goBack()" : null});
 
+  /* Plus aucun champ de clé, pour personne : elle n'a rien à faire dans une
+     interface. Elle vit dans un secret côté serveur, et l'app passe par le
+     relais. Un champ, même masqué ou réservé, finirait par la faire descendre
+     jusqu'au navigateur. */
   html += '<div class="sectitle">Fiches et affiches</div>';
   html += '<div class="wrap" style="padding-top:0">'+
     '<div class="tiny muted" style="margin:0 0 12px">Les affiches, les résumés et les dates '+
       'de diffusion viennent de TMDB. Tu n\'as rien à configurer : l\'app s\'en occupe.</div>'+
-    '<label class="fld"><span>Clé TMDB personnelle <span class="tiny muted">(facultatif)</span></span>'+
-      '<input type="password" id="apikey" value="'+esc(db.apiKey)+'" placeholder="Laisse vide, sauf si tu as la tienne" autocomplete="off">'+
-      '<em>Si tu renseignes ta propre clé, l\'app interroge TMDB en direct avec. '+
-      'Sinon elle passe par le relais commun, et c\'est très bien comme ça.</em></label>'+
     '<label class="fld"><span>Langue des fiches</span>'+
       '<select id="lang">'+
         ['fr-FR','en-US','es-ES','de-DE','it-IT'].map(l=>'<option value="'+l+'" '+(db.lang===l?'selected':'')+'>'+l+'</option>').join('')+
@@ -50,14 +50,8 @@ function viewSettings(){
 }
 
 function saveSettings(){
-  db.apiKey = document.getElementById('apikey').value.trim();
   db.lang = document.getElementById('lang').value;
   saveDB(); toast('Réglages enregistrés');
-  if(db.apiKey) verifyKey();   // seulement quand quelqu'un a mis la sienne
-}
-async function verifyKey(){
-  try{ await tmdb('/configuration'); toast('Clé TMDB valide ✓'); }
-  catch(e){ toast(e.message==='BADKEY'?'Clé refusée par TMDB':'Impossible de vérifier la clé'); }
 }
 function exportData(){
   const blob = new Blob([JSON.stringify(db,null,2)],{type:'application/json'});
