@@ -1,7 +1,7 @@
 /* Service worker — démarrage instantané et fonctionnement hors-ligne.
    Stratégie : network-first sur les fichiers de l'app (pour recevoir les mises à jour),
    repli sur le cache quand le réseau est absent. Les appels TMDB ne sont jamais mis en cache. */
-const CACHE = 'mes-series-v29';
+const CACHE = 'mes-series-v30';
 const SHELL = ['./', './index.html', './app.css', './manifest.json',
                './icon-192.png', './icon-512.png', './apple-touch-icon.png',
                './app-01-noyau.js',
@@ -39,7 +39,10 @@ self.addEventListener('fetch', e => {
   // Ressources de l'app : réseau d'abord, cache en secours
   if (url.origin === location.origin) {
     e.respondWith(
-      fetch(req)
+      /* {cache:'reload'} : sans ça, ce fetch repassait par le cache HTTP du
+         navigateur, et GitHub Pages y pose un max-age. Une nouvelle version
+         pouvait mettre une dizaine de minutes à arriver, même en rechargeant. */
+      fetch(req, { cache: 'reload' })
         .then(res => {
           /* On ne met en cache qu'une vraie réponse : une page d'erreur 404 gardée
              en secours rendrait l'app inutilisable hors-ligne. */

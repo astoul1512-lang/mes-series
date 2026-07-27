@@ -1,7 +1,7 @@
 "use strict";
 /* ---------- Vue : Réglages ---------- */
 function viewSettings(){
-  let html = header('Réglages', {back: params.from ? "goBack()" : null});
+  let html = header('Réglages', {back:"goBack()"});
 
   /* Plus aucun champ de clé, pour personne : elle n'a rien à faire dans une
      interface. Elle vit dans un secret côté serveur, et l'app passe par le
@@ -20,7 +20,9 @@ function viewSettings(){
 
   html += '<div class="sectitle">Sauvegarde en ligne</div>';
   html += '<div class="wrap" style="padding-top:0">'+
-    '<button class="btn ghost block" onclick="go(\'account\',{from:\'profile\'})">'+
+    /* On retient d'où l'on vient : la flèche du compte doit ramener ici,
+       pas sauter au profil. */
+    '<button class="btn ghost block" onclick="go(\'account\',{from:\'settings\'})">'+
       (signedIn() ? 'Compte connecté · '+esc(db.auth.email||'') : 'Configurer la synchro entre appareils')+
     '</button>'+
     (signedIn() ? '' : '<div class="tiny muted" style="margin-top:8px">Recommandé : tes données sont alors sauvegardées en ligne et identiques sur iPhone et ordinateur.</div>')+

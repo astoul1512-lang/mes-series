@@ -202,8 +202,10 @@ function oublierDefil(v){ delete memDefil[cleDefil(v)]; }
 function currentBack(){
   if(view==='show' || view==='movie') return params.from || 'follow';
   if(view==='preview') return params.from || 'discover';
-  if(view==='settings') return params.from || null;
-  if(view==='account') return 'settings';
+  /* Ces deux écrans s'ouvrent depuis plusieurs endroits : sans cible par défaut,
+     la flèche disparaissait et on se retrouvait coincé. */
+  if(view==='settings') return params.from || 'profile';
+  if(view==='account') return params.from || 'settings';
   if(view==='abos') return params.from || 'profile';
   if(view==='biblio') return 'abos';
   return null;
