@@ -200,32 +200,64 @@ function goBack(){
   const t = currentBack();
   if(t) go(t, {}, 'back');
 }
-/* Balayage depuis le bord gauche pour revenir en arrière */
-/* Le doigt entraîne l'écran pendant le geste : le retour n'arrive plus d'un coup.
-   Au relâchement, soit on part en arrière, soit la page reprend sa place en douceur. */
+/* Balayage depuis le bord gauche pour revenir en arrière.
+   Le doigt entraîne l'écran pendant le geste, et — c'est là que ça se joue —
+   l'écran d'arrivée reprend EXACTEMENT à la position où le doigt a lâché.
+   Auparavant la page revenait d'un coup à zéro avant de rejouer une animation
+   partant de l'autre côté : trois mouvements contradictoires en un clin d'œil,
+   d'où la sensation de saccade. */
+let repriseGeste = null;      // { d, op } laissés par le doigt, lus par render()
+
 (function swipeBack(){
-  const SEUIL = 60, COURSE = 90;
-  let x0=null, y0=null, t0=0, actif=false;
+  const SEUIL = 60;
+  /* On suit le doigt sur une bonne partie de l'écran, avec une résistance
+     au-delà : c'est ce qui donne l'impression que la page « pèse ». */
+  const course = ()=> Math.min(150, Math.round(window.innerWidth * 0.4));
+  const OPACITE_MIN = 0.88;
+
+  let x0=null, y0=null, t0=0, actif=false, dEnCours=0, frame=0;
   const app = ()=> document.getElementById('app');
 
+  function distance(dx){
+    const c = course();
+    return dx <= c ? dx : c + (dx - c) * 0.3;      // amorti au-delà de la course
+  }
+  function opacite(d){ return 1 - Math.min(1, d / course()) * (1 - OPACITE_MIN); }
+
+  /* Une seule écriture de style par image : sur iOS, touchmove part plus vite
+     que l'écran ne se rafraîchit, et écrire à chaque événement fait sauter des images. */
+  function peindre(){
+    frame = 0;
+    const el = app(); if(!el) return;
+    el.style.transform = 'translate3d('+dEnCours+'px,0,0)';
+    el.style.opacity = String(opacite(dEnCours));
+  }
   function suivre(dx){
     const el = app(); if(!el) return;
-    const d = Math.max(0, Math.min(dx, COURSE));
-    el.style.transition = 'none';
-    el.style.transform = 'translate3d('+d+'px,0,0)';
-    el.style.opacity = String(1 - (d / COURSE) * 0.3);
+    if(!actif){ el.style.transition = 'none'; el.style.willChange = 'transform'; }
+    dEnCours = Math.max(0, distance(dx));
+    if(!frame) frame = requestAnimationFrame(peindre);
+  }
+  function nettoyer(el){
+    el.style.transition=''; el.style.transform=''; el.style.opacity=''; el.style.willChange='';
   }
   function relacher(retour){
     const el = app(); if(!el) return;
-    if(retour){ el.style.transition=''; el.style.transform=''; el.style.opacity=''; return; }
-    el.style.transition = 'transform .22s cubic-bezier(.16,.72,.24,1), opacity .22s';
-    el.style.transform = ''; el.style.opacity = '';
-    setTimeout(()=>{ const e2 = app(); if(e2) e2.style.transition=''; }, 240);
+    if(frame){ cancelAnimationFrame(frame); frame = 0; }
+    if(retour){
+      /* On laisse la page où elle est : render() va poser l'écran suivant
+         au même endroit et terminer le mouvement d'un seul trait. */
+      repriseGeste = { d: dEnCours, op: opacite(dEnCours) };
+      return;
+    }
+    el.style.transition = 'transform .22s cubic-bezier(.22,.61,.36,1), opacity .22s';
+    el.style.transform = 'translate3d(0,0,0)'; el.style.opacity = '1';
+    setTimeout(()=>{ const e2 = app(); if(e2) nettoyer(e2); }, 240);
   }
 
   document.addEventListener('touchstart', e=>{
     const t = e.touches[0];
-    actif = false;
+    actif = false; dEnCours = 0;
     if(t.clientX <= 28 && currentBack()){ x0=t.clientX; y0=t.clientY; t0=Date.now(); } else x0=null;
   }, {passive:true});
 
@@ -234,8 +266,8 @@ function goBack(){
     const t = e.touches[0];
     const dx = t.clientX-x0, dy = Math.abs(t.clientY-y0);
     if(!actif && (dy > 20 || dx < 6)){ if(dy > 20) x0 = null; return; }  // c'est un défilement
-    actif = true;
     suivre(dx);
+    actif = true;
   }, {passive:true});
 
   document.addEventListener('touchend', e=>{
@@ -244,7 +276,12 @@ function goBack(){
     const dx = t.clientX-x0, dy = Math.abs(t.clientY-y0);
     const part = dx > SEUIL && dy < 45 && Date.now()-t0 < 700;
     relacher(part);
-    if(part) goBack();
+    if(part){
+      goBack();
+      /* Si rien n'a bougé (une feuille était ouverte, par exemple), la page ne
+         doit pas rester décalée : on la remet en place. */
+      if(repriseGeste){ repriseGeste = null; relacher(false); }
+    }
     x0=null; actif=false;
   }, {passive:true});
 })();

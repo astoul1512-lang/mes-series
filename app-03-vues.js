@@ -134,6 +134,29 @@ function render(){
      que d'aller au bout des trois écrans. */
   document.body.classList.toggle('accueil', view === 'accueil');
   app.classList.remove('enter','back');
+  /* Retour au doigt : pas d'animation toute faite. L'écran d'arrivée est posé
+     là où le geste s'est arrêté, puis il finit sa course. Aucun saut, un seul
+     mouvement continu du début du geste jusqu'à l'arrivée. */
+  if(repriseGeste && navDir === 'back'){
+    const g = repriseGeste; repriseGeste = null;
+    navDir = 'none';
+    app.style.transition = 'none';
+    app.style.transform = 'translate3d('+g.d+'px,0,0)';
+    app.style.opacity = String(g.op);
+    app.style.willChange = 'transform';
+    requestAnimationFrame(()=>{
+      app.style.transition = 'transform .26s cubic-bezier(.22,.61,.36,1), opacity .26s';
+      app.style.transform = 'translate3d(0,0,0)';
+      app.style.opacity = '1';
+      /* Tout est remis à plat : une couche graphique laissée en place
+         déréglait les barres fixes sur iPhone. */
+      setTimeout(()=>{
+        app.style.transition=''; app.style.transform='';
+        app.style.opacity=''; app.style.willChange='';
+      }, 300);
+    });
+  }
+  repriseGeste = null;
   if(navDir==='enter' || navDir==='back'){
     void app.offsetWidth;
     const sens = navDir;
