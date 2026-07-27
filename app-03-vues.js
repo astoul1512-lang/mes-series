@@ -1,10 +1,11 @@
 "use strict";
 /* ============================ Rendu ============================ */
-/* ---------- Mise en route : les trois écrans du premier lancement ----------
-   Objectif : que quelqu'un qui n'a jamais entendu parler de TMDB arrive
-   au bout sans aide. Chaque écran ne demande qu'une seule chose. */
+/* ---------- Mise en route : le premier lancement ----------
+   Il n'y a plus rien à créer ni à configurer : les affiches et les dates
+   arrivent par un relais qui porte la clé commune. On demande donc juste
+   un prénom, et on laisse partir. */
 
-const ACCUEIL_PAS = 3;
+const ACCUEIL_PAS = 2;
 
 function demarrerAccueil(){ ui.pas = 0; ui.cleErr = ''; go('accueil'); }
 
@@ -26,30 +27,6 @@ function pasSuivant(){
   render();
 }
 function pasPrecedent(){ ui.pas = Math.max(0, (ui.pas || 0) - 1); ui.cleErr = ''; render(); }
-
-/* La clé est vérifiée auprès de TMDB avant de laisser passer : mieux vaut
-   une erreur ici qu'un écran de recherche vide sans explication. */
-async function validerCle(){
-  const el = document.getElementById('cle');
-  const v = el ? el.value.trim() : '';
-  if(!v){ ui.cleErr = 'Colle ta clé dans le champ ci-dessus.'; return render(); }
-  const btn = document.getElementById('btncle');
-  if(btn){ btn.setAttribute('disabled',''); btn.innerHTML = '<span class="spin"></span> Vérification…'; }
-  const avant = db.apiKey;
-  db.apiKey = v;
-  try{
-    await tmdb('/configuration');
-    saveDB();
-    ui.cleErr = '';
-    pasSuivant();
-  }catch(e){
-    db.apiKey = avant;
-    ui.cleErr = (e.message === 'BADKEY')
-      ? 'TMDB refuse cette clé. Vérifie que tu as bien copié la ligne « Clé de l\'API (v3) ».'
-      : 'Impossible de joindre TMDB. Vérifie ta connexion, puis réessaie.';
-    render();
-  }
-}
 
 function puces(n){
   let h = '<div class="puces">';
@@ -73,41 +50,21 @@ function viewAccueil(){
       '<button class="btn block" style="margin-top:20px" onclick="pasSuivant()">Commencer</button>';
   }
 
-  else if(n === 1){
-    h += '<h1>Une clé, une seule fois</h1>'+
-      '<p class="accsub">Les affiches, les résumés et les dates de diffusion viennent de '+
-      '<b>TMDB</b>, une base de données de films et séries. Elle est gratuite, mais demande '+
-      'une clé personnelle. Trois minutes, une fois pour toutes.</p>'+
-      '<ol class="etapes">'+
-        '<li>Crée un compte sur <a href="https://www.themoviedb.org/signup" target="_blank" rel="noopener">themoviedb.org</a>'+
-          ' <span class="tiny muted">(un e-mail suffit)</span></li>'+
-        '<li>Ouvre <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener">Paramètres → API</a>'+
-          ' et demande une clé pour un <i>usage personnel</i></li>'+
-        '<li>Copie la ligne <b>Clé de l\'API (v3)</b> et colle-la ici</li>'+
-      '</ol>'+
-      '<label class="fld"><span>Ta clé TMDB</span>'+
-        '<input type="text" id="cle" value="'+esc(db.apiKey||'')+'" placeholder="Colle ta clé ici" '+
-        'autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" '+
-        'onkeydown="if(event.key===\'Enter\'){this.blur();validerCle()}"></label>'+
-      (ui.cleErr ? '<div class="accerr">'+esc(ui.cleErr)+'</div>' : '')+
-      '<button class="btn block" id="btncle" style="margin-top:16px" onclick="validerCle()">Vérifier et continuer</button>'+
-      '<div class="accliens">'+
-        '<button onclick="pasPrecedent()">Retour</button>'+
-        '<button onclick="pasSuivant()">Plus tard</button>'+
-      '</div>';
-  }
-
   else {
     const qui = (db.pseudo||'').trim();
     h += '<div class="acclogo ok">'+I.check+'</div>'+
       '<h1>'+(qui ? 'Tout est prêt, '+esc(qui) : 'Tout est prêt')+'</h1>'+
-      '<p class="accsub">'+(db.apiKey
-        ? 'Ta clé fonctionne. Cherche une série que tu regardes en ce moment et coche les épisodes déjà vus.'
-        : 'Tu pourras ajouter ta clé plus tard dans Mon profil → Réglages. Sans elle, la recherche ne fonctionnera pas.')+
-      '</p>'+
-      '<button class="btn block" style="margin-top:22px" onclick="finirAccueil(\'discover\')">'+
+      '<p class="accsub">Cherche une série que tu regardes en ce moment et coche les épisodes '+
+      'déjà vus. L\'app se souviendra de tout, et te préviendra quand la suite arrive.</p>'+
+      '<ol class="etapes">'+
+        '<li>Trouve une série dans <b>Découvrir</b></li>'+
+        '<li>Coche ce que tu as déjà vu</li>'+
+        '<li><b>À suivre</b> te dit ce qu\'il te reste et ce qui sort bientôt</li>'+
+      '</ol>'+
+      '<button class="btn block" style="margin-top:6px" onclick="finirAccueil(\'discover\')">'+
         'Chercher ma première série</button>'+
       '<div class="accliens">'+
+        '<button onclick="pasPrecedent()">Retour</button>'+
         '<button onclick="finirAccueil(\'account\')">J\'ai déjà un compte</button>'+
       '</div>';
   }
@@ -167,7 +124,7 @@ function render(){
     const inp = document.getElementById('q');
     if(inp && ui.focusSearch){ inp.focus(); ui.focusSearch=false; }
     /* Premier passage sur Découvrir : on va chercher les suggestions */
-    if(!ui.disc.charge && !ui.disc.loading && db.apiKey) chargerDecouverte();
+    if(!ui.disc.charge && !ui.disc.loading) chargerDecouverte();
   }
 }
 function renderNav(){
@@ -197,11 +154,9 @@ function header(title, opts){
   '</div>'+(opts.sub||'')+'</header>';
 }
 
-function needKeyBanner(){
-  if(db.apiKey) return '';
-  return '<div class="banner">Pour chercher des séries, ajoute ta clé TMDB dans <b>Réglages</b>. '+
-         "C'est gratuit et ça prend 2 minutes.</div>";
-}
+/* Plus rien à réclamer à l'ouverture : la clé est fournie par le relais.
+   La fonction reste, elle est appelée par les vues. */
+function needKeyBanner(){ return ''; }
 
 /* ---------- Vue : À suivre (à rattraper + à venir) ---------- */
 function viewFollow(){

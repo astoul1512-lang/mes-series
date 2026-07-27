@@ -3,13 +3,14 @@
 function viewSettings(){
   let html = header('Réglages', {back: params.from ? "goBack()" : null});
 
-  html += '<div class="sectitle">Connexion TMDB</div>';
+  html += '<div class="sectitle">Fiches et affiches</div>';
   html += '<div class="wrap" style="padding-top:0">'+
-    '<label class="fld"><span>Clé API TMDB</span>'+
-      '<input type="password" id="apikey" value="'+esc(db.apiKey)+'" placeholder="Colle ta clé ici" autocomplete="off">'+
-      '<em>Clé API (v3) ou jeton d\'accès (v4). Créer un compte sur '+
-      '<a href="https://www.themoviedb.org/signup" target="_blank" rel="noopener">themoviedb.org</a>, '+
-      'puis Paramètres → API → demander une clé (usage personnel, gratuit).</em></label>'+
+    '<div class="tiny muted" style="margin:0 0 12px">Les affiches, les résumés et les dates '+
+      'de diffusion viennent de TMDB. Tu n\'as rien à configurer : l\'app s\'en occupe.</div>'+
+    '<label class="fld"><span>Clé TMDB personnelle <span class="tiny muted">(facultatif)</span></span>'+
+      '<input type="password" id="apikey" value="'+esc(db.apiKey)+'" placeholder="Laisse vide, sauf si tu as la tienne" autocomplete="off">'+
+      '<em>Si tu renseignes ta propre clé, l\'app interroge TMDB en direct avec. '+
+      'Sinon elle passe par le relais commun, et c\'est très bien comme ça.</em></label>'+
     '<label class="fld"><span>Langue des fiches</span>'+
       '<select id="lang">'+
         ['fr-FR','en-US','es-ES','de-DE','it-IT'].map(l=>'<option value="'+l+'" '+(db.lang===l?'selected':'')+'>'+l+'</option>').join('')+
@@ -52,7 +53,7 @@ function saveSettings(){
   db.apiKey = document.getElementById('apikey').value.trim();
   db.lang = document.getElementById('lang').value;
   saveDB(); toast('Réglages enregistrés');
-  if(db.apiKey) verifyKey();
+  if(db.apiKey) verifyKey();   // seulement quand quelqu'un a mis la sienne
 }
 async function verifyKey(){
   try{ await tmdb('/configuration'); toast('Clé TMDB valide ✓'); }
@@ -108,7 +109,6 @@ function appliquerImport(){
     });
   });
   db.shows = neufs.shows; db.movies = neufs.movies;
-  if(d.apiKey) db.apiKey = d.apiKey;
   if(d.lang) db.lang = d.lang;
   saveDB(); render(); toast('Données importées');
 }
@@ -165,8 +165,7 @@ async function boot(){
   render();
   /* Première ouverture : on déroule la mise en route plutôt que de lâcher
      l'arrivant devant des onglets vides et un mot inconnu. */
-  if(!db.apiKey && !db.onboarde) demarrerAccueil();
-  else if(!db.apiKey) go('settings', {from:'follow'});
+  if(!db.onboarde) demarrerAccueil();
   if(memoryOnly) toast('Stockage indisponible : pense à exporter tes données');
   if(syncReady() && signedIn()){ syncNow(true); majProfil(); chargerPartage(); }
 }

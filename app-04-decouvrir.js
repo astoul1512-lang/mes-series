@@ -72,11 +72,6 @@ function garderAnimes(res){
 }
 
 async function runSearch(q){
-  if(!db.apiKey){
-    ui.searching = false; peindreDisc();
-    toast('Ajoute ta clé TMDB dans Réglages');
-    return go('settings', {from:'discover'});
-  }
   const seq = ++searchSeq;
   const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
   searchAbort = ctrl;
@@ -93,7 +88,7 @@ async function runSearch(q){
   }catch(e){
     if((e && e.name === 'AbortError') || seq !== searchSeq) return;
     ui.searching = false;
-    ui.searchErr = (e.message === 'BADKEY') ? 'Clé TMDB refusée' : 'Pas de connexion';
+    ui.searchErr = (e.message === 'BADKEY') ? 'Service indisponible' : 'Pas de connexion';
     ui.searchRes = [];
     peindreDisc();
   }
@@ -151,7 +146,7 @@ async function addOrOpenShow(id){
     versLesSaisons();
   }catch(e){
     ui.busy = false; render();
-    toast(e.message==='BADKEY'?'Clé TMDB invalide':"Impossible d'ajouter cette série");
+    toast("Impossible d'ajouter cette série");
   }
 }
 
@@ -372,7 +367,6 @@ async function chargerPlates(media){
 
 async function chargerDecouverte(suite){
   const d = ui.disc;
-  if(!db.apiKey){ toast('Ajoute ta clé TMDB dans Réglages'); return go('settings', {from:'discover'}); }
   const seq = ++discSeq;
   d.page = suite ? d.page + 1 : 1;
   /* Une nouvelle liste (type ou filtre changé) repart du haut ;
@@ -411,7 +405,7 @@ async function chargerDecouverte(suite){
     if(seq !== discSeq) return;
     if(suite) d.page = Math.max(1, d.page - 1);
     d.loading = false; d.charge = true;
-    d.err = (e.message === 'BADKEY') ? 'Clé TMDB refusée' : 'Pas de connexion';
+    d.err = (e.message === 'BADKEY') ? 'Service indisponible' : 'Pas de connexion';
     peindreDisc();
   }
 }
@@ -615,10 +609,6 @@ function resumeRecherche(){
 
 function discBody(){
   const d = ui.disc;
-  if(!db.apiKey)
-    return '<div class="empty">'+I.boussole+'<h3>Clé TMDB manquante</h3>'+
-      '<p>Les suggestions viennent de TMDB : ajoute ta clé dans les réglages.</p>'+
-      '<button class="btn ghost" onclick="go(\'settings\',{from:\'discover\'})">Ouvrir les réglages</button></div>';
   if(d.loading && !d.res.length)
     return '<div class="empty"><span class="spin"></span><p style="margin-top:12px">Recherche de titres…</p></div>';
   if(d.err)

@@ -130,15 +130,25 @@ window.addEventListener('blur', flushDB);
 const IMG = (p,size)=> p ? 'https://image.tmdb.org/t/p/'+size+p : '';
 const isBearer = ()=> db.apiKey.startsWith('eyJ') || db.apiKey.length > 60;
 
+/* La clé commune ne voyage jamais jusqu'au navigateur : elle vit dans un secret
+   côté Supabase, et l'app passe par un relais qui l'ajoute au dernier moment.
+   Quiconque préfère sa propre clé la renseigne dans les réglages : on parle alors
+   à TMDB en direct, sans passer par le relais. */
+const RELAIS_TMDB = () => (db.sync && db.sync.url ? db.sync.url : DEFAULT_SYNC.url) + '/functions/v1/tmdb';
+const cleePerso = () => !!(db.apiKey && db.apiKey.trim());
+
 async function tmdb(path, params, extra){
-  if(!db.apiKey) throw new Error('NOKEY');
-  const u = new URL('https://api.themoviedb.org/3'+path);
+  const perso = cleePerso();
+  const u = perso ? new URL('https://api.themoviedb.org/3'+path) : new URL(RELAIS_TMDB());
+  if(!perso) u.searchParams.set('path', path);
   u.searchParams.set('language', db.lang || 'fr-FR');
   for(const k in (params||{})) u.searchParams.set(k, params[k]);
   const opt = {};
   if(extra && extra.signal) opt.signal = extra.signal;      // permet d'abandonner la requête
-  if(isBearer()) opt.headers = { Authorization:'Bearer '+db.apiKey };
-  else u.searchParams.set('api_key', db.apiKey);
+  if(perso){
+    if(isBearer()) opt.headers = { Authorization:'Bearer '+db.apiKey };
+    else u.searchParams.set('api_key', db.apiKey);
+  }
   /* Sans délai maximal, un réseau qui ne répond plus laisse l'interface en
      « chargement » pour toujours. */
   let minuteur = null;
@@ -271,7 +281,9 @@ function noterDecoches(sh, avant){
 
 /* --- Fusion : on ne perd jamais un épisode coché, et les suppressions se propagent --- */
 function payload(){
-  return { apiKey: db.apiKey, lang: db.lang, pseudo: db.pseudo, shows: db.shows, movies: db.movies,
+  /* La clé n'est plus synchronisée : elle vit côté serveur, et l'envoyer
+     exposait celle des gens qui en ont une à leurs abonnés. */
+  return { lang: db.lang, pseudo: db.pseudo, shows: db.shows, movies: db.movies,
            deleted: db.deleted || {shows:{},movies:{}} };
 }
 function mergeRemote(rem){
@@ -324,7 +336,6 @@ function mergeRemote(rem){
       if(it && del[k][id] > (it.addedAt||0)){ delete db[k][id]; changed = true; }
     });
   });
-  if(!db.apiKey && rem.apiKey){ db.apiKey = rem.apiKey; changed = true; }
   if(!db.pseudo && rem.pseudo){ db.pseudo = rem.pseudo; changed = true; }
   return changed;
 }
