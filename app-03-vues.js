@@ -115,57 +115,41 @@ function viewAccueil(){
   return h + puces(n) + '</div>';
 }
 
+/* Le HTML de l'écran courant. Isolé du reste pour pouvoir aussi fabriquer
+   l'écran d'arrivée pendant le geste de retour, sans toucher à l'état. */
+function corpsDeVue(){
+  if(view==='accueil') return viewAccueil();
+  if(view==='follow')   return viewFollow();
+  if(view==='discover') return viewDiscover();
+  if(view==='profile')  return viewProfile();
+  if(view==='settings') return viewSettings();
+  if(view==='show')     return viewShow();
+  if(view==='preview')  return viewPreview();
+  if(view==='movie')    return viewMovie();
+  if(view==='account')  return viewAccount();
+  if(view==='abos')     return viewAbos();
+  if(view==='biblio')   return viewBiblio();
+  return '';
+}
+/* Fabrique le HTML d'un autre écran que celui affiché, puis remet tout en place. */
+function htmlDeLaVue(v, p){
+  const vSauve = view, pSauve = params;
+  view = v; params = p || {};
+  let h = '';
+  try{ h = corpsDeVue(); } finally { view = vSauve; params = pSauve; }
+  return h;
+}
+
 function render(){
   const app = document.getElementById('app');
-  let html = '';
-  if(view==='accueil') html = viewAccueil();
-  else if(view==='follow') html = viewFollow();
-  else if(view==='discover') html = viewDiscover();
-  else if(view==='profile') html = viewProfile();
-  else if(view==='settings') html = viewSettings();
-  else if(view==='show') html = viewShow();
-  else if(view==='preview') html = viewPreview();
-  else if(view==='movie') html = viewMovie();
-  else if(view==='account') html = viewAccount();
-  else if(view==='abos') html = viewAbos();
-  else if(view==='biblio') html = viewBiblio();
+  const html = corpsDeVue();
   app.innerHTML = html;
   /* Pendant la mise en route, la barre du bas disparaît : rien d'autre à faire
      que d'aller au bout des trois écrans. */
   document.body.classList.toggle('accueil', view === 'accueil');
   app.classList.remove('enter','back');
-  /* Retour au doigt : pas d'animation toute faite. L'écran d'arrivée est posé
-     là où le geste s'est arrêté, puis il finit sa course. Aucun saut, un seul
-     mouvement continu du début du geste jusqu'à l'arrivée. */
-  if(repriseGeste && navDir === 'back'){
-    const g = repriseGeste; repriseGeste = null;
-    navDir = 'none';
-    app.style.transition = 'none';
-    app.style.transform = 'translate3d('+g.d+'px,0,0)';
-    app.style.opacity = String(g.op);
-    app.style.willChange = 'transform';
-    /* Le mouvement est lancé à l'image suivante, avec une minuterie de secours :
-       si l'app passe en arrière-plan juste à cet instant, les images sont
-       suspendues et l'écran resterait décalé pour de bon. */
-    let parti = false;
-    const finir = ()=>{
-      if(parti) return;
-      parti = true;
-      void app.offsetWidth;                       // le point de départ est bien pris en compte
-      app.style.transition = 'transform .26s cubic-bezier(.22,.61,.36,1), opacity .26s';
-      app.style.transform = 'translate3d(0,0,0)';
-      app.style.opacity = '1';
-      /* Tout est remis à plat : une couche graphique laissée en place
-         déréglait les barres fixes sur iPhone. */
-      setTimeout(()=>{
-        app.style.transition=''; app.style.transform='';
-        app.style.opacity=''; app.style.willChange='';
-      }, 320);
-    };
-    requestAnimationFrame(finir);
-    setTimeout(finir, 80);
-  }
-  repriseGeste = null;
+  /* Le retour à deux couches gère lui-même son mouvement : pas d'animation par-dessus. */
+  if(sansAnim){ sansAnim = false; navDir = 'none'; }
   if(navDir==='enter' || navDir==='back'){
     void app.offsetWidth;
     const sens = navDir;

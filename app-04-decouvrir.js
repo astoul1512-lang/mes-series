@@ -218,8 +218,10 @@ const PLATES_VEDETTE = 12;
    échantillon de séries généralistes. Ce qui a été appris ne se perd jamais :
    les plateformes s'accumulent d'un type à l'autre. */
 const PLATES_ECHANTILLON = 18, PLATES_PAQUET = 6, PLATES_MINI = 4;
-/* Formules avec publicité : doublons du même service, écartés de la liste. */
-const PLATES_PUB = /\bwith ads\b|\bavec (de la )?pub/i;
+/* Doublons du même service, écartés de la liste : les formules avec publicité,
+   et les revendeurs (« Paramount+ Amazon Channel » n'est qu'une façon de payer
+   Paramount+, le catalogue est le même). */
+const PLATES_PUB = /\bwith ads\b|\bavec (de la )?pub|\b(amazon|apple tv) channel\b/i;
 const platesAbo = { tv:{}, movie:{} };      // id → true (fait de l'abonnement en France)
 const platesAboFait = { tv:false, movie:false };
 const sondagesFaits = {};                   // « tv:anime » → true

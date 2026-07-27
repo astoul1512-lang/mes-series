@@ -36,6 +36,19 @@
   @keyframes slideback{from{opacity:.62;transform:translate3d(-11px,0,0)}to{opacity:1;transform:none}}
   @media (prefers-reduced-motion:reduce){ .app.enter,.app.back{animation:none} }
 
+  /* Retour arrière : l'écran quitté passe au-dessus, l'écran d'arrivée est
+     déjà en place dessous. Le fond opaque et l'ombre du bord évitent qu'ils
+     se mélangent pendant qu'ils se croisent. */
+  .app.glisse{position:relative;z-index:3;background:var(--bg);
+    box-shadow:-10px 0 26px rgba(0,0,0,.5)}
+  .souscran{position:fixed;inset:0;z-index:1;background:var(--bg);
+    overflow-y:auto;overflow-x:hidden;overscroll-behavior:none}
+  .souscran::-webkit-scrollbar{display:none}
+  .souscran > .app{min-height:auto}
+  .sousvoile{position:fixed;inset:0;z-index:2;background:#000;pointer-events:none}
+  /* La couche du dessous ne se touche pas : le doigt appartient au geste. */
+  .souscran{pointer-events:none}
+
   /* ---------- Mise en route ---------- */
   body.accueil nav{display:none}
   body.accueil .app{padding-bottom:24px}

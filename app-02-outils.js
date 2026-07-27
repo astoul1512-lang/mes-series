@@ -198,67 +198,169 @@ function currentBack(){
 function goBack(){
   if(document.getElementById('sheet').classList.contains('show')) return closeSheet();
   const t = currentBack();
-  if(t) go(t, {}, 'back');
-}
-/* Balayage depuis le bord gauche pour revenir en arrière.
-   Le doigt entraîne l'écran pendant le geste, et — c'est là que ça se joue —
-   l'écran d'arrivée reprend EXACTEMENT à la position où le doigt a lâché.
-   Auparavant la page revenait d'un coup à zéro avant de rejouer une animation
-   partant de l'autre côté : trois mouvements contradictoires en un clin d'œil,
-   d'où la sensation de saccade. */
-let repriseGeste = null;      // { d, op } laissés par le doigt, lus par render()
-
-(function swipeBack(){
-  const SEUIL = 60;
-  /* On suit le doigt sur une bonne partie de l'écran, avec une résistance
-     au-delà : c'est ce qui donne l'impression que la page « pèse ». */
-  const course = ()=> Math.min(150, Math.round(window.innerWidth * 0.4));
-  const OPACITE_MIN = 0.88;
-
-  let x0=null, y0=null, t0=0, actif=false, dEnCours=0, frame=0;
-  const app = ()=> document.getElementById('app');
-
-  function distance(dx){
-    const c = course();
-    return dx <= c ? dx : c + (dx - c) * 0.3;      // amorti au-delà de la course
+  if(!t) return;
+  /* Un deuxième appui pendant que l'écran glisse encore ne doit pas lancer
+     un second retour par-dessus le premier. */
+  if(typeof glisseRetour !== 'undefined'){
+    if(glisseRetour.enCours()) return;
+    /* La flèche joue exactement le même mouvement que le doigt : l'app garde
+       un seul langage pour revenir en arrière. */
+    if(glisseRetour.jouer()) return;
   }
-  function opacite(d){ return 1 - Math.min(1, d / course()) * (1 - OPACITE_MIN); }
+  go(t, {}, 'back');
+}
+/* ===================== Retour arrière : deux écrans à l'image =====================
+   Comme sur iOS. L'écran quitté glisse vers la droite ; l'écran d'arrivée est
+   déjà là, dessous, et remonte depuis la gauche à vitesse réduite (parallaxe),
+   sous un voile qui s'éclaircit. On voit les deux en même temps, du début à la
+   fin du geste — c'est ça qui fait la fluidité, pas la durée de l'animation.
 
-  /* Une seule écriture de style par image : sur iOS, touchmove part plus vite
-     que l'écran ne se rafraîchit, et écrire à chaque événement fait sauter des images. */
+   L'écran d'arrivée est fabriqué dans une couche à part, défilable, placée à la
+   position de lecture qu'on lui connaît : son en-tête colle donc normalement.
+   Au bout du geste, cette couche est remplacée par le vrai rendu, au même
+   endroit et à la même position : la substitution ne se voit pas. */
+let sansAnim = false;         // render() ne doit pas rejouer d'animation par-dessus
+
+const glisseRetour = (function(){
+  const PARALLAXE = 0.28;                    // part de la largeur dont l'arrivée est décalée
+  const VOILE = 0.3;                         // noir posé sur l'arrivée au repos
+  let couche = null, voile = null, cible = null, largeur = 0, frame = 0, d = 0, fini = false;
+
+  const app = ()=> document.getElementById('app');
+  const enCours = ()=> !!couche;
+
+  /* Prépare la couche du dessous avec l'écran d'arrivée. */
+  function preparer(){
+    const dest = currentBack();
+    if(!dest || couche) return false;
+    cible = dest;
+    largeur = window.innerWidth || 375;
+
+    couche = document.createElement('div');
+    couche.className = 'souscran';
+    /* Le même habillage que l'écran normal, sinon la mise en page ne suit pas. */
+    couche.innerHTML = '<div class="app">'+htmlDeLaVue(dest, {})+'</div>';
+    voile = document.createElement('div');
+    voile.className = 'sousvoile';
+
+    const el = app();
+    /* Après #app dans le document, pas avant : les identifiants sont en double
+       le temps du geste, et tout le code doit continuer à trouver l'écran réel.
+       L'empilement, lui, est donné par les z-index. */
+    el.insertAdjacentElement('afterend', couche);
+    couche.insertAdjacentElement('afterend', voile);
+    /* Même position de lecture que si on y était resté. */
+    const y = LISTES[dest] ? (memDefil[cleDefil(dest)] || 0) : 0;
+    couche.scrollTop = y;
+
+    el.classList.add('glisse');
+    el.style.transition = 'none';
+    el.style.willChange = 'transform';
+    d = 0; fini = false;
+    peindre();
+    return true;
+  }
+
+  /* Une seule écriture de style par image : iOS envoie les événements tactiles
+     plus vite que l'écran ne se rafraîchit, et écrire à chaque fois fait sauter
+     des images — c'est ce qui hachait le mouvement. */
   function peindre(){
     frame = 0;
-    const el = app(); if(!el) return;
-    el.style.transform = 'translate3d('+dEnCours+'px,0,0)';
-    el.style.opacity = String(opacite(dEnCours));
+    const el = app(); if(!el || !couche) return;
+    const part = Math.min(1, d / largeur);
+    el.style.transform = 'translate3d('+d+'px,0,0)';
+    couche.style.transform = 'translate3d('+(-(1 - part) * largeur * PARALLAXE)+'px,0,0)';
+    voile.style.opacity = String(VOILE * (1 - part));
   }
+
   function suivre(dx){
-    const el = app(); if(!el) return;
-    if(!actif){ el.style.transition = 'none'; el.style.willChange = 'transform'; }
-    dEnCours = Math.max(0, distance(dx));
+    if(!couche && !preparer()) return;
+    d = Math.max(0, Math.min(dx, largeur));
     if(!frame) frame = requestAnimationFrame(peindre);
   }
-  function nettoyer(el){
-    el.style.transition=''; el.style.transform=''; el.style.opacity=''; el.style.willChange='';
-  }
-  function relacher(retour){
-    const el = app(); if(!el) return;
+
+  /* Fin du mouvement : la couche cède la place au vrai rendu, d'un seul bloc,
+     donc sans clignotement. */
+  function poser(){
+    if(fini) return;
+    fini = true;
+    const el = app();
     if(frame){ cancelAnimationFrame(frame); frame = 0; }
-    if(retour){
-      /* On laisse la page où elle est : render() va poser l'écran suivant
-         au même endroit et terminer le mouvement d'un seul trait. */
-      repriseGeste = { d: dEnCours, op: opacite(dEnCours) };
-      return;
+    if(el) el.style.transition = 'none';
+    sansAnim = true;
+    go(cible, {}, 'back');
+    if(el){
+      el.style.transform=''; el.style.opacity=''; el.style.willChange=''; el.style.transition='';
+      el.classList.remove('glisse');
     }
-    el.style.transition = 'transform .22s cubic-bezier(.22,.61,.36,1), opacity .22s';
-    el.style.transform = 'translate3d(0,0,0)'; el.style.opacity = '1';
-    setTimeout(()=>{ const e2 = app(); if(e2) nettoyer(e2); }, 240);
+    if(couche) couche.remove();
+    if(voile) voile.remove();
+    couche = null; voile = null; cible = null; d = 0;
   }
+
+  function remettre(){
+    const el = app();
+    if(frame){ cancelAnimationFrame(frame); frame = 0; }
+    if(el){ el.style.transform=''; el.style.opacity=''; el.style.willChange=''; el.style.transition='';
+            el.classList.remove('glisse'); }
+    if(couche) couche.remove();
+    if(voile) voile.remove();
+    couche = null; voile = null; cible = null; d = 0; fini = false;
+  }
+
+  /* Anime jusqu'au bout (aboutir) ou jusqu'au retour en place (abandonner).
+     Une minuterie de secours double la fin de transition : si l'app passe en
+     arrière-plan pile à cet instant, l'écran ne doit pas rester de travers. */
+  function terminer(aboutir){
+    const el = app();
+    if(!couche || !el) return;
+    if(frame){ cancelAnimationFrame(frame); frame = 0; }
+    const reste = aboutir ? (largeur - d) : d;
+    const duree = Math.max(140, Math.min(320, Math.round(reste / largeur * 340) + 110));
+    const cb = 'cubic-bezier(.22,.61,.36,1)';
+    el.style.transition = 'transform '+duree+'ms '+cb;
+    couche.style.transition = 'transform '+duree+'ms '+cb;
+    voile.style.transition = 'opacity '+duree+'ms '+cb;
+    d = aboutir ? largeur : 0;
+    const part = aboutir ? 1 : 0;
+    el.style.transform = 'translate3d('+d+'px,0,0)';
+    couche.style.transform = 'translate3d('+(-(1 - part) * largeur * PARALLAXE)+'px,0,0)';
+    voile.style.opacity = String(VOILE * (1 - part));
+    const achever = ()=> aboutir ? poser() : remettre();
+    el.addEventListener('transitionend', function fin(ev){
+      if(ev.propertyName !== 'transform') return;
+      el.removeEventListener('transitionend', fin);
+      achever();
+    });
+    setTimeout(achever, duree + 120);
+  }
+
+  /* Retour sans geste (flèche, balayage impossible) : même mouvement, joué seul. */
+  function jouer(){
+    if(couche || !preparer()) return false;
+    d = 0; peindre();
+    let parti = false;
+    const lancer = ()=>{ if(parti) return; parti = true; void app().offsetWidth; terminer(true); };
+    requestAnimationFrame(lancer);
+    setTimeout(lancer, 80);
+    return true;
+  }
+
+  return { suivre, terminer, remettre, jouer, enCours };
+})();
+
+/* Balayage depuis le bord gauche pour revenir en arrière */
+(function swipeBack(){
+  const SEUIL = 60;
+  let x0=null, y0=null, t0=0, actif=false;
 
   document.addEventListener('touchstart', e=>{
     const t = e.touches[0];
-    actif = false; dEnCours = 0;
-    if(t.clientX <= 28 && currentBack()){ x0=t.clientX; y0=t.clientY; t0=Date.now(); } else x0=null;
+    actif = false;
+    if(t.clientX <= 28 && currentBack() &&
+       !document.getElementById('sheet').classList.contains('show')){
+      x0=t.clientX; y0=t.clientY; t0=Date.now();
+    } else x0=null;
   }, {passive:true});
 
   document.addEventListener('touchmove', e=>{
@@ -266,22 +368,18 @@ let repriseGeste = null;      // { d, op } laissés par le doigt, lus par render
     const t = e.touches[0];
     const dx = t.clientX-x0, dy = Math.abs(t.clientY-y0);
     if(!actif && (dy > 20 || dx < 6)){ if(dy > 20) x0 = null; return; }  // c'est un défilement
-    suivre(dx);
+    glisseRetour.suivre(dx);
     actif = true;
   }, {passive:true});
 
   document.addEventListener('touchend', e=>{
-    if(x0===null){ if(actif) relacher(false); actif=false; return; }
+    if(x0===null){ if(actif) glisseRetour.terminer(false); actif=false; return; }
     const t = e.changedTouches[0];
     const dx = t.clientX-x0, dy = Math.abs(t.clientY-y0);
-    const part = dx > SEUIL && dy < 45 && Date.now()-t0 < 700;
-    relacher(part);
-    if(part){
-      goBack();
-      /* Si rien n'a bougé (une feuille était ouverte, par exemple), la page ne
-         doit pas rester décalée : on la remet en place. */
-      if(repriseGeste){ repriseGeste = null; relacher(false); }
-    }
+    /* Un geste franc, ou un geste vif même court : on part. */
+    const vite = dx > 24 && (Date.now()-t0) < 260;
+    const part = (dx > SEUIL || vite) && dy < 45 && Date.now()-t0 < 900;
+    if(actif) glisseRetour.terminer(part);
     x0=null; actif=false;
   }, {passive:true});
 })();
