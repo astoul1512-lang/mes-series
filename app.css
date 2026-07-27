@@ -318,6 +318,35 @@
     background:var(--surface);padding:2px 0 6px}
   .sheet .opt{display:block;width:100%;text-align:left;padding:14px 4px;border-top:1px solid var(--line);font-weight:600}
   .sheet .opt.danger{color:#ff5a5a}
+  /* Menu à groupes : l'œil se pose sur des intitulés au lieu de balayer sept lignes. */
+  .optgrp{font-size:11px;font-weight:750;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--muted);margin:16px 0 2px}
+  .optgrp:first-of-type{margin-top:10px}
+  .sheet .opt:has(i){display:flex;align-items:center;gap:12px;border-top:0;padding:11px 4px}
+  .sheet .opt i{width:30px;height:30px;border-radius:9px;background:var(--surface2);
+    color:var(--muted);display:grid;place-items:center;flex:none}
+  .sheet .opt i svg{width:16px;height:16px}
+  .sheet .opt.annuler{margin-top:14px;text-align:center;color:var(--muted)}
+
+  /* ---------- Entête du profil ---------- */
+  .entete{display:flex;align-items:center;gap:14px;width:100%;text-align:left;
+    padding:14px 16px 4px;color:var(--text)}
+  .entete .etxt{flex:1;min-width:0}
+  .enom{font-size:19px;font-weight:730;letter-spacing:-.2px}
+  .ecaret{color:var(--muted);display:grid;place-items:center}
+  .avatar.gros{width:60px;height:60px;font-size:24px}
+  .avatar.geant{width:96px;height:96px;font-size:38px;margin:0 auto}
+  .avatar svg{width:52%;height:52%;display:block}
+  .apercu{text-align:center;padding:8px 0 22px}
+  /* Palette et emblèmes */
+  .pastilles{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:4px}
+  .past{width:42px;height:42px;border-radius:50%;border:2px solid transparent}
+  .past.on{border-color:var(--text);box-shadow:0 0 0 3px var(--bg) inset}
+  .emblemes{display:flex;gap:10px;flex-wrap:wrap}
+  .embl{width:52px;height:52px;border-radius:14px;background:var(--surface);
+    border:1px solid var(--line);color:var(--muted);display:grid;place-items:center;font-weight:750;font-size:18px}
+  .embl svg{width:22px;height:22px}
+  .embl.on{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
   .spin{width:18px;height:18px;border:2px solid var(--line);border-top-color:var(--accent);
     border-radius:50%;animation:sp .7s linear infinite;display:inline-block;vertical-align:-3px}
   @keyframes sp{to{transform:rotate(360deg)}}

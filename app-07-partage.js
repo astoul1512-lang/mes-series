@@ -252,7 +252,7 @@ function viewAccount(){
 
   html += '<div class="wrap">'+
     '<div class="carte-compte">'+
-      '<div class="avatar gros">'+esc(mail.charAt(0).toUpperCase())+'</div>'+
+      avatarMoi('gros')+
       '<div class="cmail">'+esc(mail)+'</div>'+
       '<div class="cetat" style="color:'+col+'">'+
         (syncState==='busy' ? '<span class="spin"></span> ' : '<i class="pastille" style="background:'+col+'"></i>')+

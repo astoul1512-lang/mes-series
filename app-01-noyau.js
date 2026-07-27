@@ -19,7 +19,13 @@ const I = {
   close:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
   user:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg>',
   boussole:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/></svg>',
-  filtre:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M7 12h10M10 17h4"/></svg>'
+  filtre:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M7 12h10M10 17h4"/></svg>',
+  /* Emblèmes de profil : de quoi se reconnaître d'un coup d'œil sans photo. */
+  coeur:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 20.6 3.9 12.9a5.1 5.1 0 0 1 7.2-7.2l.9.9.9-.9a5.1 5.1 0 0 1 7.2 7.2z"/></svg>',
+  eclair:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M13.5 2 4 13.4h6.1L9.6 22 20 10.2h-6.4z"/></svg>',
+  fusee:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5c3.4 2 5.4 5.6 5.4 9.6L19 15v3l-3.3-1.6h-7.4L5 18v-3l1.6-2.9c0-4 2-7.6 5.4-9.6Z"/><circle cx="12" cy="10" r="2"/><path d="M9.7 19.4c.7 1 1.5 1.8 2.3 2.4.8-.6 1.6-1.4 2.3-2.4"/></svg>',
+  lune:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.5 14.6A8.6 8.6 0 0 1 9.4 3.5a8.6 8.6 0 1 0 11.1 11.1z"/></svg>',
+  feu:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.6 2c.3 3-1.4 4.2-2.6 5.6-1.6 1.8-2.6 3.3-2.6 5.6a6.6 6.6 0 0 0 13.2 0c0-3.4-2-5.4-3.4-7.3-.3 1-.9 1.7-1.7 2.2C15.7 5.7 14.7 3.5 12.6 2z" opacity=".55"/><path d="M12 11c.3 2-1.9 2.6-1.9 4.7a3.4 3.4 0 0 0 6.8 0c0-2.4-2.4-3.1-4.9-4.7z"/></svg>'
 };
 
 /* ============================ Stockage ============================ */
@@ -34,6 +40,9 @@ const DEFAULT_SYNC = { url:'https://mqwryzopmtykjidabqfv.supabase.co',
                        key:'sb_publishable_ZnfMBfcEQOhdpg3g9u0eZg_Iaw_Fo7y' };
 let db = { lang:'fr-FR', shows:{}, movies:{}, lastExport:null, onboarde:false,
            sync:Object.assign({}, DEFAULT_SYNC), auth:null, pseudo:'',
+           /* Deux caractères et une couleur : de quoi se reconnaître sans photo,
+              et sans alourdir les sauvegardes ni la synchro. */
+           profil:{ embleme:'lettre', couleur:'corail' },
            deleted:{shows:{},movies:{}}, syncedAt:null, v:1 };
 
 function idbOpen(){
@@ -84,6 +93,7 @@ async function loadDB(){
   /* Une clé enregistrée par une version précédente est effacée d'office :
      personne ne doit pouvoir la lire, ni dans l'app, ni dans un export. */
   if('apiKey' in db) delete db.apiKey;
+  if(!db.profil || typeof db.profil !== 'object') db.profil = { embleme:'lettre', couleur:'corail' };
   if(!db.sync || !db.sync.url || !db.sync.key) db.sync = Object.assign({}, DEFAULT_SYNC);
   if(!db.deleted) db.deleted = {shows:{},movies:{}};
 

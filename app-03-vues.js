@@ -86,6 +86,7 @@ function corpsDeVue(){
   if(view==='account')  return viewAccount();
   if(view==='abos')     return viewAbos();
   if(view==='biblio')   return viewBiblio();
+  if(view==='moi')      return viewMoi();
   return '';
 }
 /* Fabrique le HTML d'un autre écran que celui affiché, puis remet tout en place. */
@@ -340,6 +341,20 @@ function viewProfile(){
       l+' <span style="opacity:.65">'+n+'</span></button>').join('')+'</div>'
   });
 
+  /* Une identité avant les chiffres : c'est ton profil, pas un tableau de bord. */
+  const qui = (db.pseudo||'').trim();
+  const depuis = plusAnciennementAjoute();
+  html += '<button class="entete" onclick="go(\'moi\',{from:\'profile\'})">'+
+    avatarMoi('gros')+
+    '<div class="etxt">'+
+      '<div class="enom">'+(qui ? esc(qui) : 'Ton profil')+'</div>'+
+      '<div class="tiny muted">'+(qui
+        ? (depuis ? 'Membre depuis '+depuis : 'Personnaliser mon profil')
+        : 'Ajoute ton prénom et choisis ton emblème')+'</div>'+
+    '</div>'+
+    '<span class="ecaret">'+I.caret+'</span>'+
+  '</button>';
+
   html += '<div class="stats">'+
     '<div class="stat"><b>'+epCount+'</b><span>épisode'+(epCount>1?'s':'')+' vu'+(epCount>1?'s':'')+'</span></div>'+
     '<div class="stat"><b>'+fmtDurShort(minutes)+'</b><span>de visionnage</span></div>'+
@@ -434,14 +449,97 @@ function ouvrirAbos(){
   go('abos', {from:'profile'});
   if(signedIn()) chargerPartage();
 }
+/* Sept entrées à plat, c'était une liste où l'œil ne se posait nulle part.
+   Trois groupes nommés : qui je suis, mes données, le reste. */
 function profileMenu(){
-  openSheet('<h3>Options</h3><p class="small muted" style="margin:0 0 8px">Réglages et sauvegardes</p>'+
-    '<button class="opt" onclick="closeSheet();ouvrirAbos()">Mes abonnements</button>'+
-    '<button class="opt" onclick="closeSheet();go(\'account\',{from:\'profile\'})">Compte & synchro</button>'+
-    '<button class="opt" onclick="closeSheet();go(\'settings\',{from:\'profile\'})">Réglages</button>'+
-    '<button class="opt" onclick="closeSheet();exportData()">Exporter une sauvegarde</button>'+
-    '<button class="opt" onclick="closeSheet();document.getElementById(\'impHidden\').click()">Importer une sauvegarde</button>'+
-    '<button class="opt" onclick="closeSheet();refreshAll()">Actualiser toutes les séries</button>'+
-    '<button class="opt" onclick="closeSheet()">Annuler</button>'+
+  const ligne = (txt, action, icone)=>
+    '<button class="opt" onclick="closeSheet();'+action+'">'+
+      '<i>'+icone+'</i><span>'+txt+'</span></button>';
+  openSheet('<h3>Options</h3>'+
+    '<div class="optgrp">Mon compte</div>'+
+      ligne('Modifier mon profil', "go('moi',{from:'profile'})", I.user)+
+      ligne('Compte &amp; synchro', "go('account',{from:'profile'})", I.refresh)+
+      ligne('Mes abonnements', "ouvrirAbos()", I.user)+
+    '<div class="optgrp">Mes données</div>'+
+      ligne('Exporter une sauvegarde', "exportData()", I.bookmark)+
+      ligne('Importer une sauvegarde', "document.getElementById('impHidden').click()", I.plus)+
+      ligne('Actualiser toutes les séries', "refreshAll()", I.refresh)+
+    '<div class="optgrp">Application</div>'+
+      ligne('Réglages', "go('settings',{from:'profile'})", I.cog)+
+    '<button class="opt annuler" onclick="closeSheet()">Annuler</button>'+
     '<input type="file" id="impHidden" accept="application/json,.json" style="display:none" onchange="importData(this)">');
+}
+
+/* Depuis quand cette bibliothèque existe : le plus ancien titre ajouté. */
+function plusAnciennementAjoute(){
+  let min = 0;
+  [].concat(Object.values(db.shows), Object.values(db.movies)).forEach(o=>{
+    const t = o && o.addedAt;
+    if(t && t > 1000000000000 && (!min || t < min)) min = t;
+  });
+  if(!min) return '';
+  const d = new Date(min);
+  return MOIS[d.getMonth()]+' '+d.getFullYear();
+}
+
+/* ---------- Vue : mon profil, en modification ---------- */
+function viewMoi(){
+  const p = db.profil || {};
+  let html = header('Mon profil', {back:"goBack()"});
+  html += '<div class="wrap">'+
+    '<div class="apercu">'+avatarMoi('geant')+
+      '<div class="enom" style="margin-top:12px">'+
+        ((db.pseudo||'').trim() ? esc(db.pseudo) : 'Sans prénom')+'</div>'+
+    '</div>'+
+    '<label class="fld"><span>Ton prénom</span>'+
+      '<input type="text" id="mpseudo" value="'+esc(db.pseudo||'')+'" placeholder="Adrien" '+
+      'autocomplete="given-name" oninput="apercuPseudo(this.value)">'+
+      '<em>C\'est ce que voient les personnes qui te suivent. Tu peux laisser vide.</em></label>'+
+
+    '<div class="fgrp">Couleur</div>'+
+    '<div class="pastilles">'+COULEURS_PROFIL.map(c=>
+      '<button class="past '+(profilCouleur(p.couleur).id===c.id?'on':'')+'" title="'+esc(c.nom)+'" '+
+        'aria-label="'+esc(c.nom)+'" onclick="choisirCouleur(\''+c.id+'\')" '+
+        'style="background:linear-gradient(135deg,'+c.a+','+c.b+')"></button>').join('')+'</div>'+
+
+    '<div class="fgrp">Emblème</div>'+
+    '<div class="emblemes">'+EMBLEMES.map(e=>{
+      const lettre = (db.pseudo||'?').trim().charAt(0).toUpperCase() || '?';
+      const dedans = e.id === 'lettre' ? '<b>'+esc(lettre)+'</b>' : (I[e.id]||'');
+      return '<button class="embl '+((p.embleme||'lettre')===e.id?'on':'')+'" title="'+esc(e.nom)+'" '+
+        'aria-label="'+esc(e.nom)+'" onclick="choisirEmbleme(\''+e.id+'\')">'+dedans+'</button>';
+    }).join('')+'</div>'+
+
+    '<button class="btn block" style="margin-top:22px" onclick="enregistrerProfil()">Enregistrer</button>'+
+  '</div>';
+  return html + '<div style="height:30px"></div>';
+}
+/* L'aperçu suit la frappe, mais on ne réécrit pas l'écran : le champ perdrait le focus. */
+function apercuPseudo(v){
+  const nom = document.querySelector('.apercu .enom');
+  if(nom) nom.textContent = v.trim() || 'Sans prénom';
+  if((db.profil||{}).embleme === 'lettre'){
+    const av = document.querySelector('.apercu .avatar');
+    if(av) av.textContent = (v.trim().charAt(0) || '?').toUpperCase();
+  }
+}
+function choisirCouleur(id){
+  db.profil = Object.assign({}, db.profil, { couleur:id });
+  gardePseudoSaisi(); render();
+}
+function choisirEmbleme(id){
+  db.profil = Object.assign({}, db.profil, { embleme:id });
+  gardePseudoSaisi(); render();
+}
+/* Choisir une couleur redessine l'écran : on n'y perd pas le prénom en cours de saisie. */
+function gardePseudoSaisi(){
+  const el = document.getElementById('mpseudo');
+  if(el) db.pseudo = el.value.trim();
+}
+function enregistrerProfil(){
+  gardePseudoSaisi();
+  saveDB();
+  if(typeof majProfil === 'function' && signedIn()) majProfil();
+  toast('Profil enregistré');
+  goBack();
 }

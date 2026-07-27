@@ -141,6 +141,41 @@ function posterFail(img){
   img.replaceWith(d);
 }
 
+/* ============================ Avatar ============================ */
+/* Un emblème et une couleur, rien de plus : c'est du texte, ça ne pèse rien
+   dans les sauvegardes et ça voyage sans effort dans la synchro. */
+const COULEURS_PROFIL = [
+  { id:'corail', nom:'Corail',   a:'#ff6b57', b:'#b3452f' },
+  { id:'ocean',  nom:'Océan',    a:'#3a9bdc', b:'#1f4f7a' },
+  { id:'violet', nom:'Violet',   a:'#9b6bdc', b:'#5b3a8f' },
+  { id:'menthe', nom:'Menthe',   a:'#3ecf8e', b:'#1f6f52' },
+  { id:'ambre',  nom:'Ambre',    a:'#ffb84d', b:'#a86f1a' },
+  { id:'rose',   nom:'Rose',     a:'#ff6b9d', b:'#a83a63' }
+];
+const EMBLEMES = [
+  { id:'lettre', nom:'Mon initiale' },
+  { id:'tv',     nom:'Télé' },
+  { id:'coeur',  nom:'Cœur' },
+  { id:'eclair', nom:'Éclair' },
+  { id:'fusee',  nom:'Fusée' },
+  { id:'lune',   nom:'Lune' },
+  { id:'feu',    nom:'Feu' },
+  { id:'star',   nom:'Étoile' }
+];
+function profilCouleur(id){
+  return COULEURS_PROFIL.find(c=>c.id===id) || COULEURS_PROFIL[0];
+}
+/* L'avatar de l'utilisateur. Les personnes suivies gardent leur initiale :
+   leur emblème leur appartient, on ne l'invente pas à leur place. */
+function avatarMoi(cls){
+  const p = db.profil || {};
+  const c = profilCouleur(p.couleur);
+  const lettre = (db.pseudo||'?').trim().charAt(0).toUpperCase() || '?';
+  const dedans = (p.embleme && p.embleme !== 'lettre' && I[p.embleme]) ? I[p.embleme] : esc(lettre);
+  return '<div class="avatar '+(cls||'')+'" style="background:linear-gradient(135deg,'+c.a+','+c.b+')">'+
+    dedans+'</div>';
+}
+
 /* ============================ UI helpers ============================ */
 let toastTimer;
 function toast(msg){
@@ -167,7 +202,7 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
                   perimetre:'recent', tri:'populaire', noteMin:0,
                   page:1, pages:1, res:[], loading:false, err:'', charge:false } };
 
-const DEPTH = { accueil:0, discover:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, account:2, biblio:2 };
+const DEPTH = { accueil:0, discover:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, account:2, biblio:2 };
 let navDir = 'none';
 /* Position de défilement mémorisée pour les écrans qui sont des listes.
    Quitter une liste puis y revenir doit rendre la page là où on l'avait laissée ;
@@ -207,6 +242,7 @@ function currentBack(){
   if(view==='settings') return params.from || 'profile';
   if(view==='account') return params.from || 'settings';
   if(view==='abos') return params.from || 'profile';
+  if(view==='moi') return params.from || 'profile';
   if(view==='biblio') return 'abos';
   return null;
 }
