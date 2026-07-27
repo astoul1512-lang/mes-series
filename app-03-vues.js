@@ -144,7 +144,14 @@ function render(){
     app.style.transform = 'translate3d('+g.d+'px,0,0)';
     app.style.opacity = String(g.op);
     app.style.willChange = 'transform';
-    requestAnimationFrame(()=>{
+    /* Le mouvement est lancé à l'image suivante, avec une minuterie de secours :
+       si l'app passe en arrière-plan juste à cet instant, les images sont
+       suspendues et l'écran resterait décalé pour de bon. */
+    let parti = false;
+    const finir = ()=>{
+      if(parti) return;
+      parti = true;
+      void app.offsetWidth;                       // le point de départ est bien pris en compte
       app.style.transition = 'transform .26s cubic-bezier(.22,.61,.36,1), opacity .26s';
       app.style.transform = 'translate3d(0,0,0)';
       app.style.opacity = '1';
@@ -153,8 +160,10 @@ function render(){
       setTimeout(()=>{
         app.style.transition=''; app.style.transform='';
         app.style.opacity=''; app.style.willChange='';
-      }, 300);
-    });
+      }, 320);
+    };
+    requestAnimationFrame(finir);
+    setTimeout(finir, 80);
   }
   repriseGeste = null;
   if(navDir==='enter' || navDir==='back'){
