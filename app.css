@@ -302,8 +302,20 @@
     align-items:flex-end;justify-content:center}
   .sheet.show{display:flex}
   .sheetin{background:var(--surface);border:1px solid var(--line);border-bottom:0;
-    border-radius:18px 18px 0 0;width:100%;max-width:720px;padding:18px 16px calc(24px + var(--safe-b))}
-  .sheetin h3{margin:0 0 4px;font-size:17px}
+    border-radius:18px 18px 0 0;width:100%;max-width:720px;padding:18px 16px calc(24px + var(--safe-b));
+    /* Une feuille chargée (filtres, plateformes, genres) dépasse la hauteur de
+       l'écran : sans ces trois lignes, le haut sortait par le dessus et devenait
+       inatteignable — et le geste pour le rattraper ouvrait le centre de
+       contrôle d'iOS au lieu de faire défiler. */
+    max-height:calc(100vh - 28px - var(--safe-t));
+    overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+  @supports (max-height:100dvh){
+    .sheetin{max-height:calc(100dvh - 28px - var(--safe-t))}
+  }
+  .sheetin::-webkit-scrollbar{display:none}
+  /* Le titre reste visible pendant qu'on parcourt une longue feuille. */
+  .sheetin h3{margin:0 0 4px;font-size:17px;position:sticky;top:-18px;z-index:1;
+    background:var(--surface);padding:2px 0 6px}
   .sheet .opt{display:block;width:100%;text-align:left;padding:14px 4px;border-top:1px solid var(--line);font-weight:600}
   .sheet .opt.danger{color:#ff5a5a}
   .spin{width:18px;height:18px;border:2px solid var(--line);border-top-color:var(--accent);

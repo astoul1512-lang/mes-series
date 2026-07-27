@@ -520,7 +520,9 @@ function blocFiltrePlates(){
   }).join('')+'</div>';
   if(reste || d.toutesPlates)
     h += '<button class="lienplus" onclick="voirToutesPlates()">'+
-         (d.toutesPlates ? 'Ne montrer que les principales' : 'Voir les '+reste+' autres plateformes')+
+         (d.toutesPlates ? 'Ne montrer que les principales'
+                         : (reste > 1 ? 'Voir les '+reste+' autres plateformes'
+                                      : 'Voir la dernière plateforme'))+
          '</button>';
   if(d.plates.length)
     h += '<div class="small muted" style="margin-top:8px">'+
