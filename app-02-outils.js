@@ -85,6 +85,19 @@ function fmtDate(iso){
   const d = new Date(iso+'T12:00:00');
   return d.getDate()+' '+MOIS[d.getMonth()]+' '+d.getFullYear();
 }
+/* « il y a 3 min », « hier », « le 12 juin » — plus parlant qu'une date brute
+   pour dire quand la dernière sauvegarde est partie. */
+function fmtQuand(ts){
+  if(!ts) return 'jamais';
+  const s = Math.max(0, Math.round((Date.now() - ts)/1000));
+  if(s < 60) return 'à l\'instant';
+  if(s < 3600){ const m = Math.round(s/60); return 'il y a '+m+' min'; }
+  if(s < 86400){ const h = Math.round(s/3600); return 'il y a '+h+' h'; }
+  const j = Math.round(s/86400);
+  if(j === 1) return 'hier';
+  if(j < 7) return 'il y a '+j+' jours';
+  return 'le '+fmtDate(new Date(ts).toISOString().slice(0,10));
+}
 function fmtDateShort(iso){
   if(!iso) return '';
   const d = new Date(iso+'T12:00:00');

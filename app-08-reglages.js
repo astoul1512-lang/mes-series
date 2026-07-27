@@ -28,7 +28,10 @@ function viewSettings(){
 
   html += '<div class="sectitle">Mes données</div>';
   const nbShows = Object.keys(db.shows).length;
-  const oldExport = !db.lastExport || (Date.now()-db.lastExport) > 30*86400000;
+  /* Le rappel d'export ne concerne que ceux dont c'est la seule copie : une fois
+     le compte connecté et la synchro passée, la sauvegarde est déjà faite. */
+  const oldExport = !signedIn() && !db.syncedAt &&
+                    (!db.lastExport || (Date.now()-db.lastExport) > 30*86400000);
   html += '<div class="wrap" style="padding-top:0">'+
     (memoryOnly ? '<div class="banner" style="margin:0 0 14px">Le stockage du navigateur est indisponible ici : '+
       '<b>tes données seront perdues à la fermeture</b>. Ouvre l\'app depuis une vraie adresse (https) pour la sauvegarde automatique, ou exporte régulièrement.</div>'

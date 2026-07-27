@@ -369,6 +369,40 @@
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .avatar{width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#b3452f);
     display:grid;place-items:center;font-size:22px;font-weight:750;color:#fff;flex:none}
+
+  /* ---------- Compte : on montre ce qu'on y gagne avant de demander quoi que ce soit ---------- */
+  /* « hero » est déjà pris par le bandeau d'image des fiches : autre nom, sinon
+     l'accroche du compte hérite d'une hauteur figée et d'un fond gris. */
+  .intro{text-align:center;padding:6px 4px 20px}
+  .intro .acclogo{margin:0 auto 16px}
+  .intro h2{font-size:23px;line-height:1.22;letter-spacing:-.3px;margin:0 0 8px}
+  .intro p{color:var(--muted);font-size:14.5px;line-height:1.5;margin:0 auto;max-width:330px}
+  .avantages{display:flex;flex-direction:column;gap:14px;margin:0 0 24px}
+  .avantages > div{display:flex;gap:12px;align-items:flex-start;font-size:13.8px;line-height:1.45;
+    color:var(--muted)}
+  .avantages b{color:var(--text);font-weight:660}
+  .avantages i{flex:none;width:30px;height:30px;border-radius:9px;background:var(--accent-dim);
+    color:var(--accent);display:grid;place-items:center}
+  .avantages i svg{width:15px;height:15px}
+  /* Bascule créer / se connecter : un seul chemin visible à la fois */
+  .bascule{display:flex;gap:4px;background:var(--surface);border:1px solid var(--line);
+    border-radius:12px;padding:4px;margin:0 0 18px}
+  .bascule button{flex:1;padding:9px 6px;border-radius:9px;font-size:13.5px;font-weight:680;
+    color:var(--muted);transition:background .16s,color .16s}
+  .bascule button.on{background:var(--accent);color:#fff}
+  /* Carte du compte connecté */
+  .carte-compte{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+    padding:22px 16px 6px;text-align:center;margin-bottom:18px}
+  .carte-compte .avatar.gros{width:64px;height:64px;font-size:25px;margin:0 auto 12px}
+  .cmail{font-weight:680;font-size:15.5px;word-break:break-all}
+  .cetat{font-size:13px;font-weight:640;margin-top:6px;display:flex;align-items:center;
+    justify-content:center;gap:7px}
+  .pastille{width:8px;height:8px;border-radius:50%;display:block}
+  .cchiffres{display:flex;margin-top:18px;border-top:1px solid var(--line)}
+  .cchiffres > div{flex:1;padding:12px 4px}
+  .cchiffres > div + div{border-left:1px solid var(--line)}
+  .cchiffres b{display:block;font-size:19px;font-weight:750}
+  .cchiffres span{display:block;font-size:11.5px;color:var(--muted);margin-top:2px}
   .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:12px;padding:4px 16px;align-items:start}
   .pcard{position:relative;text-align:left}
   .ptap{cursor:pointer}

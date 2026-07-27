@@ -198,43 +198,92 @@ function viewAccount(){
     return html + '<div style="height:30px"></div>';
   }
 
+  /* --- Pas encore de compte : on explique d'abord ce qu'on y gagne --- */
   if(!signedIn()){
+    const creer = ui.acMode !== 'connexion';
+    const nb = Object.keys(db.shows).length + Object.keys(db.movies).length;
     html += '<div class="wrap">'+
-      '<div class="card" style="padding:14px;margin-bottom:16px">'+
-        '<div style="font-weight:660;margin-bottom:4px">Sauvegarde en ligne prête</div>'+
-        '<div class="small muted">Crée ton compte la première fois. Sur tes autres appareils, connecte-toi avec les mêmes identifiants : tout se retrouve automatiquement.</div>'+
+      '<div class="intro">'+
+        '<div class="acclogo">'+I.user+'</div>'+
+        '<h2>Tes séries te suivent partout</h2>'+
+        '<p>'+(nb > 1
+          ? 'Tes '+nb+' titres n\'existent aujourd\'hui que sur cet appareil. Un compte les met à l\'abri.'
+          : nb === 1
+            ? 'Ton unique titre n\'existe aujourd\'hui que sur cet appareil. Un compte le met à l\'abri.'
+            : 'Un compte met ta bibliothèque à l\'abri et la rend identique sur tous tes appareils.')+
+        '</p>'+
+      '</div>'+
+      '<div class="avantages">'+
+        '<div><i>'+I.check+'</i><span><b>Rien ne se perd.</b> Chaque épisode coché part en sauvegarde '+
+          'dans la foulée. Téléphone changé, app réinstallée : tout revient.</span></div>'+
+        '<div><i>'+I.refresh+'</i><span><b>Le même partout.</b> iPhone, ordinateur, tablette : la même '+
+          'liste et la même progression.</span></div>'+
+        '<div><i>'+I.user+'</i><span><b>À partager, si tu veux.</b> Tu peux suivre la bibliothèque de tes '+
+          'proches — uniquement sur invitation.</span></div>'+
+      '</div>'+
+      '<div class="bascule">'+
+        '<button class="'+(creer?'on':'')+'" onclick="setAcMode(\'creer\')">Créer un compte</button>'+
+        '<button class="'+(creer?'':'on')+'" onclick="setAcMode(\'connexion\')">J\'ai déjà un compte</button>'+
       '</div>'+
       '<label class="fld"><span>Adresse e-mail</span>'+
         '<input type="text" id="acmail" inputmode="email" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="toi@exemple.fr" value="'+esc((db.auth&&db.auth.email)||'')+'"></label>'+
       '<label class="fld"><span>Mot de passe</span>'+
-        '<input type="password" id="acpass" placeholder="au moins 6 caractères">'+
-        '<em>Choisis un mot de passe dédié à cette app. Il n\'est jamais stocké sur l\'appareil.</em></label>'+
-      '<button class="btn block" style="margin-bottom:10px" onclick="doSignIn()">Se connecter</button>'+
-      '<button class="btn ghost block" style="margin-bottom:14px" onclick="doSignUp()">Créer un compte</button>'+
+        '<input type="password" id="acpass" placeholder="au moins 6 caractères" '+
+        'autocomplete="'+(creer?'new-password':'current-password')+'" '+
+        'onkeydown="if(event.key===\'Enter\'){this.blur();'+(creer?'doSignUp()':'doSignIn()')+'}">'+
+        '<em>'+(creer
+          ? 'Choisis un mot de passe dédié à cette app. Note-le quelque part : il n\'y a pas de récupération par e-mail.'
+          : 'Le même que sur ton autre appareil.')+'</em></label>'+
+      '<button class="btn block" style="margin-bottom:14px" onclick="'+(creer?'doSignUp()':'doSignIn()')+'">'+
+        (creer ? 'Créer mon compte' : 'Me connecter')+'</button>'+
       '<button class="tiny muted" style="display:block;width:100%;text-align:center;padding:8px" onclick="ui.editServer=true;render()">Modifier le serveur</button>'+
     '</div>';
     return html + '<div style="height:30px"></div>';
   }
 
+  /* --- Connecté : l'état d'abord, les actions ensuite --- */
   const etat = syncState==='busy' ? 'Synchronisation en cours…'
              : syncState==='err'  ? 'Dernière tentative en échec : '+esc(syncError)
-             : db.syncedAt ? 'Dernière synchro : '+fmtDate(new Date(db.syncedAt).toISOString().slice(0,10))
+             : db.syncedAt ? 'À jour · '+fmtQuand(db.syncedAt)
              : 'Jamais synchronisé';
   const col = syncState==='err' ? 'var(--warn)' : syncState==='ok' ? 'var(--ok)' : 'var(--muted)';
+  const mail = (db.auth.email||'—');
+  const nb = Object.keys(db.shows).length, nf = Object.keys(db.movies).length;
 
   html += '<div class="wrap">'+
-    '<div class="card" style="padding:16px;margin-bottom:16px">'+
-      '<div class="small muted">Connecté en tant que</div>'+
-      '<div style="font-weight:680;margin-top:2px">'+esc(db.auth.email||'—')+'</div>'+
-      '<div class="small" style="color:'+col+';margin-top:8px">'+
-        (syncState==='busy'?'<span class="spin"></span> ':'')+etat+'</div>'+
+    '<div class="carte-compte">'+
+      '<div class="avatar gros">'+esc(mail.charAt(0).toUpperCase())+'</div>'+
+      '<div class="cmail">'+esc(mail)+'</div>'+
+      '<div class="cetat" style="color:'+col+'">'+
+        (syncState==='busy' ? '<span class="spin"></span> ' : '<i class="pastille" style="background:'+col+'"></i>')+
+        etat+'</div>'+
+      '<div class="cchiffres">'+
+        '<div><b>'+nb+'</b><span>série'+(nb>1?'s':'')+'</span></div>'+
+        '<div><b>'+nf+'</b><span>film'+(nf>1?'s':'')+'</span></div>'+
+        '<div><b>'+((partage.suivis||[]).length + (partage.abonnes||[]).length)+'</b><span>partage'+
+          (((partage.suivis||[]).length + (partage.abonnes||[]).length)>1?'s':'')+'</span></div>'+
+      '</div>'+
     '</div>'+
     '<button class="btn block" style="margin-bottom:10px" onclick="syncNow()">Synchroniser maintenant</button>'+
-    '<button class="btn ghost block" style="margin-bottom:10px" onclick="ui.editServer=true;render()">Modifier le serveur</button>'+
-    '<button class="btn ghost block" style="color:#ff5a5a" onclick="sbSignOut()">Se déconnecter</button>'+
-    '<div class="tiny muted" style="margin-top:14px">La synchro part automatiquement quelques secondes après chaque changement, et à chaque ouverture de l\'app.</div>'+
+    '<button class="btn ghost block" style="margin-bottom:10px" onclick="go(\'abos\',{from:\'account\'})">'+
+      I.user+' Partage et abonnements</button>'+
+    '<div class="tiny muted" style="margin:14px 0 18px">La synchro part toute seule quelques secondes après '+
+      'chaque changement, et à chaque ouverture de l\'app. Tu n\'as normalement jamais besoin du bouton.</div>'+
+    '<button class="tiny muted" style="display:block;width:100%;text-align:center;padding:8px" onclick="ui.editServer=true;render()">Modifier le serveur</button>'+
+    '<button class="btn ghost block" style="color:#ff5a5a;margin-top:8px" onclick="confirmerDeconnexion()">Se déconnecter</button>'+
   '</div>';
   return html + '<div style="height:30px"></div>';
+}
+
+function setAcMode(m){ ui.acMode = m; render(); }
+
+/* Se déconnecter n'efface rien, mais mieux vaut le dire que le laisser deviner. */
+function confirmerDeconnexion(){
+  openSheet('<h3>Se déconnecter ?</h3>'+
+    '<p class="small muted" style="margin:0 0 8px">Ta bibliothèque reste sur cet appareil et sur le '+
+    'serveur. Il te faudra tes identifiants pour la retrouver ailleurs.</p>'+
+    '<button class="opt danger" onclick="closeSheet();sbSignOut()">Se déconnecter</button>'+
+    '<button class="opt" onclick="closeSheet()">Annuler</button>');
 }
 
 function saveSync(){
