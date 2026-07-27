@@ -58,15 +58,19 @@ function corpsPlateformes(k){
    suivi) : on va le chercher à l'ouverture, et on repeint la section. */
 const castings = {};                 // 'tv:1399' → tableau | 'attente'
 
-async function chargerCasting(type, id){
+/* Un seul aller-retour sert le casting et la bande-annonce : les deux zones de
+   la fiche appellent cette fonction, la seconde tombe sur le verrou et attend
+   le même résultat. */
+async function chargerFiche(type, id){
   const k = type+':'+id;
   if(castings[k] !== undefined) return;
   castings[k] = 'attente';
   try{
-    const d = await tmdb('/'+type+'/'+id, { append_to_response:'credits' });
+    const d = await tmdb('/'+type+'/'+id, { append_to_response:'credits,videos' });
     castings[k] = ((d.credits||{}).cast||[]).slice(0, 16);
-  }catch(e){ delete castings[k]; }   // on oublie l'échec pour pouvoir réessayer
-  peindreCasting(k);
+    peindreCasting(k);
+    await semerBande(type, id, d);
+  }catch(e){ delete castings[k]; peindreCasting(k); }  // un échec s'oublie, pour réessayer
 }
 function peindreCasting(k){
   const el = document.getElementById('cast-'+k);
@@ -75,7 +79,7 @@ function peindreCasting(k){
 /* Emplacement réservé dans une fiche : rempli dès que le casting arrive. */
 function zoneCasting(type, id){
   const k = type+':'+id;
-  setTimeout(()=> chargerCasting(type, id), 0);
+  setTimeout(()=> chargerFiche(type, id), 0);
   return '<div id="cast-'+k+'">'+castStrip(castings[k])+'</div>';
 }
 
@@ -88,6 +92,127 @@ function castStrip(cast){
       '<div class="cname">'+esc(p.name)+'</div>'+
       '<div class="crole">'+esc(p.character||'')+'</div>'+
     '</button>').join('')+'</div>';
+}
+
+/* ---------- Bande-annonce ----------
+   TMDB range les vidéos d'un titre sous `videos`, obtenues en même temps que la
+   fiche par `append_to_response`. Deux pièges :
+   — la liste est filtrée sur la langue demandée, et en français elle est très
+     souvent vide : on retente une fois en anglais avant de conclure qu'il n'y a
+     pas de bande-annonce ;
+   — tout n'est pas une bande-annonce (coulisses, extraits, featurettes) et tout
+     n'est pas sur YouTube. On ne garde que Trailer et Teaser hébergés là. */
+const bandes = {};                   // 'tv:1399' → {key, nom} | null (aucune) | 'attente'
+
+function choisirBande(videos){
+  const rang = v => v.type === 'Trailer' ? 0 : v.type === 'Teaser' ? 1 : 9;
+  const bons = (videos||[])
+    .filter(v => v && v.site === 'YouTube' && v.key && rang(v) < 9)
+    .sort((a,b) => rang(a) - rang(b) || (b.official?1:0) - (a.official?1:0));
+  return bons.length ? { key: bons[0].key, nom: bons[0].name || 'Bande-annonce' } : null;
+}
+
+/* Reçoit la fiche déjà chargée : on lit d'abord les vidéos qu'elle porte, et on
+   ne repart chercher en anglais que si le français n'a rien donné. */
+async function semerBande(type, id, d){
+  const k = type+':'+id;
+  if(bandes[k] !== undefined) return;
+  bandes[k] = 'attente';
+  try{
+    let b = choisirBande(((d && d.videos || {}).results) || []);
+    if(!b){
+      const e = await tmdb('/'+type+'/'+id, { append_to_response:'videos', language:'en-US' });
+      b = choisirBande(((e.videos||{}).results)||[]);
+    }
+    bandes[k] = b || null;           // null = cherché, rien trouvé : on ne recommence pas
+  }catch(err){ delete bandes[k]; }   // un échec s'oublie, pour pouvoir réessayer
+  peindreBande(k);
+}
+function boutonBande(k){
+  const b = bandes[k];
+  if(!b || b === 'attente') return '';
+  return '<button class="btn ghost mini" onclick="ouvrirBande(\''+k+'\')">'+I.play+' Bande-annonce</button>';
+}
+function peindreBande(k){
+  const el = document.getElementById('ba-'+k);
+  if(el) el.innerHTML = boutonBande(k);
+}
+/* Emplacement réservé : le bouton n'apparaît que si une bande-annonce existe. */
+function zoneBande(type, id){
+  const k = type+':'+id;
+  setTimeout(()=> chargerFiche(type, id), 0);
+  return '<div id="ba-'+k+'" class="zba">'+boutonBande(k)+'</div>';
+}
+/* ---------- Lecteur ----------
+   Le lecteur prend tout l'écran, sur fond noir : la vidéo occupe la plus grande
+   surface possible dans les proportions 16:9, en portrait comme en paysage.
+   La couche est créée à la volée plutôt que posée dans index.html : le service
+   worker garde la page en cache, et une page en retard d'une version se
+   retrouverait sans l'emplacement attendu par le script. */
+function coucheLecteur(){
+  let el = document.getElementById('lecteur');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'lecteur'; el.className = 'lecteur';
+    el.addEventListener('click', e=>{ if(e.target === el) fermerBande(); });
+    document.body.appendChild(el);
+  }
+  return el;
+}
+function lecteurOuvert(){
+  const el = document.getElementById('lecteur');
+  return !!(el && el.classList.contains('show'));
+}
+/* Le plein écran commandé par le site n'existe pas sur iPhone : Safari ne
+   l'accorde qu'aux vidéos, jamais à un cadre. Là où il manque, c'est le bouton
+   du lecteur YouTube lui-même qui fait le travail — on le dit au lieu d'afficher
+   une commande qui ne ferait rien. */
+function pleinEcranPossible(){
+  return !!(document.fullscreenEnabled &&
+            typeof Element !== 'undefined' && Element.prototype.requestFullscreen);
+}
+function pleinEcran(){
+  const e = document.getElementById('ytwrap');
+  if(!e) return;
+  try{
+    if(document.fullscreenElement) document.exitFullscreen();
+    else e.requestFullscreen();
+  }catch(err){}
+}
+function ouvrirBande(k){
+  const b = bandes[k];
+  if(!b || b === 'attente') return;
+  const id = encodeURIComponent(b.key);
+  const el = coucheLecteur();
+  el.innerHTML =
+    '<div class="lecteurbar">'+
+      '<b>'+esc(b.nom)+'</b>'+
+      (pleinEcranPossible()
+        ? '<button onclick="pleinEcran()" aria-label="Plein écran">'+I.plein+'</button>' : '')+
+      '<button onclick="fermerBande()" aria-label="Fermer">'+I.close+'</button>'+
+    '</div>'+
+    '<div class="ytbox" id="ytwrap"><iframe src="https://www.youtube-nocookie.com/embed/'+id+
+      '?autoplay=1&rel=0&playsinline=1" title="Bande-annonce" allowfullscreen '+
+      'allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen">'+
+    '</iframe></div>'+
+    '<div class="lecteurbas">'+
+      (pleinEcranPossible() ? ''
+        : '<span class="tiny">Plein écran : le bouton en bas à droite du lecteur.</span>')+
+      /* Certaines vidéos interdisent la lecture embarquée : le lecteur affiche
+         alors une erreur, et ce lien reste la porte de sortie. */
+      '<a href="https://www.youtube.com/watch?v='+id+'" target="_blank" rel="noopener">'+
+        'Ouvrir dans YouTube</a>'+
+    '</div>';
+  el.classList.add('show');
+  document.body.classList.add('fige');       // la fiche ne défile plus derrière
+}
+function fermerBande(){
+  const el = document.getElementById('lecteur');
+  if(!el) return;
+  try{ if(document.fullscreenElement) document.exitFullscreen(); }catch(e){}
+  el.classList.remove('show');
+  el.innerHTML = '';                          // sans ça, le son continuerait
+  document.body.classList.remove('fige');
 }
 
 function viewPreview(){
@@ -119,6 +244,7 @@ function viewPreview(){
       (note ? '<div style="margin-top:6px"><span class="note">'+I.star+note+'</span>'+
         '<span class="tiny muted" style="margin-left:6px">'+(d.vote_count||0)+' votes</span></div>' : '')+
       '<div class="small muted" style="margin-top:6px">'+esc((d.genres||[]).map(g=>g.name).slice(0,3).join(' · '))+'</div>'+
+      zoneBande(isTv?'tv':'movie', d.id)+
     '</div></div>';
 
   /* Boutons d'action */
@@ -320,6 +446,7 @@ function viewMovie(){
       '<div class="small muted">'+esc(year(m.date))+(m.runtime?' · '+m.runtime+' min':'')+'</div>'+
       (m.note?'<div style="margin-top:6px"><span class="note">'+I.star+(Math.round(m.note*10)/10)+'</span></div>':'')+
       '<div class="small muted" style="margin-top:6px">'+esc((m.genres||[]).slice(0,3).join(' · '))+'</div>'+
+      zoneBande('movie', m.id)+
     '</div></div>';
   html += '<div class="actions"><button class="btn block" style="'+(m.seen?'background:var(--ok);color:#08130d':'')+
     '" onclick="toggleMovie('+m.id+')">'+I.check+(m.seen?' Vu le '+fmtDate(new Date(m.watchedAt).toISOString().slice(0,10)):' Marquer comme vu')+'</button></div>';

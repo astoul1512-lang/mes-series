@@ -115,6 +115,40 @@
   .btn:active{filter:brightness(.9)}
   .btn.ghost{background:var(--surface2);color:var(--text)}
   .btn.block{display:flex;width:100%}
+  /* Bouton discret glissé sous le titre d'une fiche. */
+  .btn.mini{padding:7px 12px;border-radius:9px;font-size:12.5px;font-weight:640}
+  .btn.mini svg{width:14px;height:14px}
+  .zba:empty{display:none}
+  .zba{margin-top:10px}
+  /* Lecteur vidéo : toute la surface disponible, fond noir.
+     La vidéo garde ses proportions 16:9 et grandit jusqu'à ce que la largeur ou
+     la hauteur de l'écran l'arrête — donc plein cadre en paysage. */
+  .lecteur{position:fixed;inset:0;z-index:90;background:#000;display:none;
+    align-items:center;justify-content:center}
+  .lecteur.show{display:flex}
+  body.fige{overflow:hidden}
+  .ytbox{position:relative;width:100%;padding-top:56.25%;background:#000}
+  .ytbox iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+  @supports (aspect-ratio:16/9){
+    .ytbox{padding-top:0;aspect-ratio:16/9;max-width:calc(100vh * 16 / 9);max-height:100vh}
+  }
+  @supports (aspect-ratio:16/9) and (max-height:100dvh){
+    .ytbox{max-width:calc(100dvh * 16 / 9);max-height:100dvh}
+  }
+  .lecteurbar{position:absolute;top:0;left:0;right:0;z-index:2;display:flex;align-items:center;gap:10px;
+    padding:calc(10px + var(--safe-t)) 14px 22px;
+    background:linear-gradient(rgba(0,0,0,.75),rgba(0,0,0,0))}
+  .lecteurbar b{flex:1;min-width:0;color:#fff;font-size:14px;font-weight:650;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lecteurbar button{flex:none;display:grid;place-items:center;padding:9px;border-radius:10px;
+    background:rgba(255,255,255,.14);color:#fff}
+  .lecteurbar button svg{width:18px;height:18px}
+  .lecteurbas{position:absolute;left:0;right:0;bottom:0;z-index:2;display:flex;
+    align-items:center;justify-content:space-between;gap:12px;
+    padding:22px 16px calc(14px + var(--safe-b));
+    background:linear-gradient(rgba(0,0,0,0),rgba(0,0,0,.75))}
+  .lecteurbas .tiny{color:rgba(255,255,255,.6)}
+  .lecteurbas a{color:#fff;font-weight:650;font-size:13px;margin-left:auto}
   .btn[disabled]{opacity:.45;pointer-events:none}
   input[type=text],input[type=search],input[type=password],select{
     width:100%;background:var(--surface);border:1px solid var(--line);border-radius:11px;

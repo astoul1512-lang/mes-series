@@ -71,6 +71,16 @@ function garderAnimes(res){
   return res.filter(r => r.original_language === 'ja' && r.genre_ids.indexOf(anim) >= 0);
 }
 
+/* Écarte des suggestions ce qui n'est pas occidental. Même prudence que pour
+   les animés : si les résultats ne portent pas la langue, on ne filtre pas à
+   l'aveugle plutôt que de vider l'écran. */
+function garderOccident(res){
+  if(ui.disc.type === 'anime') return res;
+  const exploitables = res.every(r => r && typeof r.original_language === 'string');
+  if(!exploitables) return res;
+  return res.filter(r => LANGUES_OCCIDENT.indexOf(r.original_language) >= 0);
+}
+
 async function runSearch(q){
   const seq = ++searchSeq;
   const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
@@ -195,6 +205,20 @@ const DISC_NOTES = [
   { v:0, label:'Toutes' }, { v:6, label:'6 et +' }, { v:7, label:'7 et +' }, { v:8, label:'8 et +' }
 ];
 const DISC_FENETRE = 90;     // « sorti récemment » = les 90 derniers jours
+
+/* Origine des titres proposés dans Découvrir.
+   Classé par popularité, TMDB fait remonter énormément de production indienne,
+   coréenne, japonaise et chinoise, qui noyait le reste. Les suggestions se
+   limitent donc à l'anglophone et à l'Europe de l'Ouest.
+   Deux exceptions volontaires :
+   — la puce Animés, japonaise par construction, n'est pas concernée ;
+   — la recherche par titre n'est jamais filtrée : chercher « Parasite » doit
+     le trouver. C'est déjà le cas, les filtres ne s'appliquent pas à /search.
+   Le tri se fait sur `original_language` renvoyé par TMDB, pas sur un paramètre
+   de requête : c'est le seul champ dont on soit certain du comportement. */
+const LANGUES_OCCIDENT = ['en','fr','es','it','de','pt','nl','sv','da','no','nb','fi','is'];
+const DISC_MINI_PAGE = 12;   // en dessous, on va chercher la page suivante
+const DISC_PAGES_MAX = 3;    // jamais plus de 3 requêtes pour remplir un écran
 
 const genresTMDB = { tv:null, movie:null };
 const platesTMDB = { tv:null, movie:null };
@@ -395,11 +419,28 @@ async function chargerDecouverte(suite){
         ? 'Genres sans équivalent ici : '+perdus.join(', ')
         : '« '+perdus[0]+' » n\'existe pas pour ce type');
     }
-    const data = await tmdb('/discover/'+media, discParams());
-    if(seq !== discSeq) return;
-    const trouves = (data.results||[]).filter(r => r.poster_path);
+    /* Écarter les titres non occidentaux creuse la page : on en redemande une
+       ou deux de plus jusqu'à avoir de quoi remplir l'écran, sans jamais
+       enchaîner plus de DISC_PAGES_MAX requêtes pour un seul chargement. */
+    let trouves = [], pagesTotal = 1, pageLue = d.page;
+    for(let tour = 0; tour < DISC_PAGES_MAX; tour++){
+      const p = discParams();
+      p.page = String(pageLue);
+      const data = await tmdb('/discover/'+media, p);
+      if(seq !== discSeq) return;
+      pagesTotal = data.total_pages || 1;
+      const bruts = (data.results||[]).filter(r => r.poster_path);
+      const gardes = garderOccident(bruts);
+      trouves = trouves.concat(gardes);
+      /* On ne redemande une page que si le filtre a réellement mordu. Une page
+         naturellement courte (catalogue étroit, filtres serrés) est une réponse
+         complète, pas un trou à combler. */
+      if(gardes.length === bruts.length || trouves.length >= DISC_MINI_PAGE || pageLue >= pagesTotal) break;
+      pageLue++;
+    }
+    d.page = pageLue;
     d.res = suite ? d.res.concat(trouves) : trouves;
-    d.pages = data.total_pages || 1;
+    d.pages = pagesTotal;
     d.loading = false; d.err = ''; d.charge = true;
     peindreDisc();
   }catch(e){
@@ -468,7 +509,7 @@ function viderPlates(){
 }
 function resetFiltres(){
   const d = ui.disc;
-  d.genres = []; d.plates = []; d.perimetre = 'recent'; d.tri = 'populaire'; d.noteMin = 0;
+  d.genres = []; d.plates = []; d.perimetre = 'tout'; d.tri = 'populaire'; d.noteMin = 0;
   ouvrirFiltres(); chargerDecouverte();
 }
 
@@ -487,7 +528,7 @@ function resumeFiltres(){
 function filtresActifs(){
   const d = ui.disc;
   return d.genres.length > 0 || d.plates.length > 0 || d.noteMin > 0 ||
-         d.perimetre !== 'recent' || d.tri !== 'populaire';
+         d.perimetre !== 'tout' || d.tri !== 'populaire';
 }
 
 /* La feuille de filtres est-elle à l'écran ? Sert à la redessiner quand la liste
@@ -641,8 +682,12 @@ function openPreview(id, type, from){
 async function loadPreview(){
   const id = params.id, type = params.type;
   try{
-    const d = await tmdb('/'+type+'/'+id, { append_to_response:'credits' });
+    const d = await tmdb('/'+type+'/'+id, { append_to_response:'credits,videos' });
     if(ui.preview.id===id) ui.preview = { id:id, type:type, loading:false, data:d };
+    /* La fiche porte déjà casting et vidéos : on remplit les caches communs
+       pour que la zone bande-annonce n'aille pas redemander la même chose. */
+    castings[type+':'+id] = ((d.credits||{}).cast||[]).slice(0, 16);
+    semerBande(type, id, d);
   }catch(e){
     if(ui.preview.id===id) ui.preview = { id:id, type:type, loading:false, error:
       (e.message==='BADKEY' ? 'Clé TMDB invalide' : 'Impossible de charger la fiche') };

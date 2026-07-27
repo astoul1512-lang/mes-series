@@ -187,7 +187,14 @@ function openSheet(html){
   document.getElementById('sheetin').innerHTML = html;
   document.getElementById('sheet').classList.add('show');
 }
-function closeSheet(){ document.getElementById('sheet').classList.remove('show'); }
+function closeSheet(){
+  const s = document.getElementById('sheet');
+  s.classList.remove('show');
+  /* Un lecteur vidéo laissé dans le panneau continuerait de jouer, sans image
+     et sans moyen de l'arrêter. On le retire à la fermeture. */
+  const f = s.querySelector('iframe');
+  if(f) f.remove();
+}
 document.getElementById('sheet').addEventListener('click', e=>{ if(e.target.id==='sheet') closeSheet(); });
 
 /* ============================ État de navigation ============================ */
@@ -198,8 +205,11 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
            /* Découvrir : type affiché, genres cochés, tri, note minimale, page en cours */
            /* Découvrir : type affiché, genres cochés, plateformes cochées, tri,
               note minimale, page en cours */
+           /* « Quoi » démarre sur tout le catalogue : les sorties des 90 derniers
+              jours sont un sous-ensemble étroit, mauvais point de départ pour
+              découvrir quelque chose. */
            disc:{ type:'tv', genres:[], plates:[], toutesPlates:false,
-                  perimetre:'recent', tri:'populaire', noteMin:0,
+                  perimetre:'tout', tri:'populaire', noteMin:0,
                   page:1, pages:1, res:[], loading:false, err:'', charge:false } };
 
 const DEPTH = { accueil:0, discover:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, acteur:2, account:2, biblio:2 };
@@ -255,6 +265,9 @@ function currentBack(){
   return null;
 }
 function goBack(){
+  /* Le lecteur vidéo passe avant tout le reste : le geste de retour le ferme
+     au lieu de quitter la fiche qui est dessous. */
+  if(typeof lecteurOuvert === 'function' && lecteurOuvert()) return fermerBande();
   if(document.getElementById('sheet').classList.contains('show')) return closeSheet();
   const t = currentBack();
   if(!t) return;
