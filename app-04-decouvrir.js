@@ -218,6 +218,8 @@ const PLATES_VEDETTE = 12;
    échantillon de séries généralistes. Ce qui a été appris ne se perd jamais :
    les plateformes s'accumulent d'un type à l'autre. */
 const PLATES_ECHANTILLON = 18, PLATES_PAQUET = 6, PLATES_MINI = 4;
+/* Formules avec publicité : doublons du même service, écartés de la liste. */
+const PLATES_PUB = /\bwith ads\b|\bavec (de la )?pub/i;
 const platesAbo = { tv:{}, movie:{} };      // id → true (fait de l'abonnement en France)
 const platesAboFait = { tv:false, movie:false };
 const sondagesFaits = {};                   // « tv:anime » → true
@@ -350,6 +352,10 @@ async function chargerPlates(media){
     const d = await tmdb('/watch/providers/'+media, { watch_region: REGION_PLATO });
     platesTMDB[media] = (d.results||[])
       .filter(p => p && p.provider_id && p.provider_name)
+      /* TMDB compte les formules avec publicité comme des plateformes à part
+         (« Netflix Standard with Ads »). C'est le même service, la même
+         bibliothèque : on ne garde que l'entrée principale. */
+      .filter(p => !PLATES_PUB.test(p.provider_name))
       .map(p=>{
         /* TMDB donne un ordre d'affichage par pays, et un ordre général en secours. */
         let rang = 9999;
