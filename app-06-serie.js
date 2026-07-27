@@ -81,7 +81,9 @@ function viewShow(){
     }
     html += '</div>';
   });
-  html += '</div><div style="height:28px"></div>';
+  html += '</div>';
+  html += zoneCasting('tv', s.id);
+  html += '<div style="height:28px"></div>';
   return html;
 }
 function toggleSeason(id,n){ const k=id+'.'+n; ui.openSeasons[k]=!ui.openSeasons[k]; render(); }

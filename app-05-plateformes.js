@@ -52,16 +52,42 @@ function corpsPlateformes(k){
     }).join('')+'</div>'+credit;
 }
 
-function castStrip(credits){
-  const cast = ((credits||{}).cast||[]).slice(0,12);
-  if(!cast.length) return '';
-  return '<div class="sectitle">Casting</div><div class="cast">'+cast.map(p=>
-    '<div class="cperson">'+
+/* ---------- Casting ----------
+   Chaque visage mène à la filmographie de la personne. Les fiches déjà en
+   bibliothèque n'embarquent pas leur casting (on ne stocke que ce qui sert au
+   suivi) : on va le chercher à l'ouverture, et on repeint la section. */
+const castings = {};                 // 'tv:1399' → tableau | 'attente'
+
+async function chargerCasting(type, id){
+  const k = type+':'+id;
+  if(castings[k] !== undefined) return;
+  castings[k] = 'attente';
+  try{
+    const d = await tmdb('/'+type+'/'+id, { append_to_response:'credits' });
+    castings[k] = ((d.credits||{}).cast||[]).slice(0, 16);
+  }catch(e){ delete castings[k]; }   // on oublie l'échec pour pouvoir réessayer
+  peindreCasting(k);
+}
+function peindreCasting(k){
+  const el = document.getElementById('cast-'+k);
+  if(el) el.innerHTML = castStrip(castings[k]);
+}
+/* Emplacement réservé dans une fiche : rempli dès que le casting arrive. */
+function zoneCasting(type, id){
+  const k = type+':'+id;
+  setTimeout(()=> chargerCasting(type, id), 0);
+  return '<div id="cast-'+k+'">'+castStrip(castings[k])+'</div>';
+}
+
+function castStrip(cast){
+  if(!cast || cast === 'attente' || !cast.length) return '';
+  return '<div class="sectitle">Casting</div><div class="cast">'+cast.slice(0,16).map(p=>
+    '<button class="cperson" onclick="ouvrirActeur('+p.id+')">'+
       (p.profile_path ? '<img loading="lazy" src="'+IMG(p.profile_path,'w185')+'" alt="">'
                       : '<div class="ph2">'+esc((p.name||'?')[0])+'</div>')+
       '<div class="cname">'+esc(p.name)+'</div>'+
       '<div class="crole">'+esc(p.character||'')+'</div>'+
-    '</div>').join('')+'</div>';
+    '</button>').join('')+'</div>';
 }
 
 function viewPreview(){
@@ -143,9 +169,142 @@ function viewPreview(){
         '<span>'+esc(year(s.air_date)||'')+'</span></div>').join('')+'</div>';
   }
 
-  html += castStrip(d.credits);
+  html += castStrip(((d.credits||{}).cast||[]));
   html += '<div style="height:30px"></div>';
   return html;
+}
+
+/* ---------- Vue : une personne et tout ce qu'elle a tourné ---------- */
+const gens = {};                     // id → { info, roles } | 'attente' | { erreur }
+
+function ouvrirActeur(id){
+  /* La cible du retour ne transporte pas de paramètres : on retient le dernier
+     acteur ouvert pour pouvoir y revenir depuis une fiche. */
+  ui.acteurId = id;
+  go('acteur', { id:id, from: view }, 'enter');
+  chargerActeur(id);
+}
+
+async function chargerActeur(id){
+  if(gens[id] && gens[id] !== 'attente' && !gens[id].erreur) return render();
+  gens[id] = 'attente';
+  render();
+  try{
+    const [info, credits] = await Promise.all([
+      tmdb('/person/'+id),
+      tmdb('/person/'+id+'/combined_credits')
+    ]);
+    gens[id] = { info: info, roles: rangerFilmographie(credits) };
+  }catch(e){
+    gens[id] = { erreur: 'Impossible de charger cette fiche' };
+  }
+  if(view === 'acteur') render();
+}
+
+/* TMDB répète une même série autant de fois que la personne y a de rôles, et
+   mélange les passages en plateau où elle joue son propre rôle. On regroupe, on
+   écarte ces derniers, et on classe du plus récent au plus ancien. */
+const SOI_MEME = /\b(self|himself|herself|themselves|lui-m[êe]me|elle-m[êe]me)\b/i;
+function rangerFilmographie(credits){
+  const vus = {};
+  ((credits||{}).cast || []).forEach(r=>{
+    if(!r || !r.id) return;
+    const media = r.media_type === 'movie' ? 'movie' : 'tv';
+    if(SOI_MEME.test(r.character||'')) return;
+    const k = media+':'+r.id;
+    const date = (media === 'movie' ? r.release_date : r.first_air_date) || '';
+    if(!vus[k] || (r.vote_count||0) > (vus[k].vote_count||0)){
+      vus[k] = Object.assign({}, r, { media:media, date:date });
+    }
+  });
+  return Object.values(vus).sort((a,b)=>{
+    if(!a.date) return 1;
+    if(!b.date) return -1;
+    return b.date.localeCompare(a.date);
+  });
+}
+
+function ageDe(info){
+  if(!info || !info.birthday) return '';
+  const n = new Date(info.birthday+'T12:00:00');
+  const fin = info.deathday ? new Date(info.deathday+'T12:00:00') : new Date();
+  let a = fin.getFullYear() - n.getFullYear();
+  const m = fin.getMonth() - n.getMonth();
+  if(m < 0 || (m === 0 && fin.getDate() < n.getDate())) a--;
+  if(a < 0 || a > 130) return '';
+  return info.deathday ? 'mort à '+a+' ans' : a+' ans';
+}
+
+function basculerBio(){ ui.bioOuverte = !ui.bioOuverte; render(); }
+function setActeurTri(t){ ui.acteurTri = t; render(); }
+
+function viewActeur(){
+  const id = params.id || ui.acteurId;
+  const d = gens[id];
+  const back = "goBack()";
+
+  if(!d || d === 'attente')
+    return header('Chargement…', {back:back})+
+      '<div class="empty"><span class="spin"></span><p style="margin-top:12px">Chargement de la fiche…</p></div>';
+  if(d.erreur)
+    return header('Oups', {back:back})+
+      '<div class="empty"><h3>'+esc(d.erreur)+'</h3><p>Vérifie ta connexion, puis réessaie.</p>'+
+      '<button class="btn ghost" onclick="chargerActeur('+id+')">Réessayer</button></div>';
+
+  const info = d.info || {}, roles = d.roles || [];
+  const series = roles.filter(r=>r.media === 'tv');
+  const films  = roles.filter(r=>r.media === 'movie');
+  const tri = ui.acteurTri || 'tout';
+  const liste = tri === 'tv' ? series : tri === 'movie' ? films : roles;
+
+  let html = header(info.name || 'Fiche', {back:back});
+
+  /* Identité */
+  const meta = [ info.known_for_department === 'Directing' ? 'Réalisation'
+               : info.known_for_department === 'Writing' ? 'Écriture' : 'Interprétation',
+                 ageDe(info), (info.place_of_birth||'').split(',').pop().trim() ]
+               .filter(Boolean).join(' · ');
+  html += '<div class="pers">'+
+    (info.profile_path
+      ? '<img class="persimg" src="'+IMG(info.profile_path,'w342')+'" alt="">'
+      : '<div class="persimg ph2">'+esc((info.name||'?')[0])+'</div>')+
+    '<div class="persnom">'+esc(info.name||'')+'</div>'+
+    (meta ? '<div class="small muted">'+esc(meta)+'</div>' : '')+
+  '</div>';
+
+  /* Biographie, repliée par défaut : trois lignes suffisent à situer quelqu'un. */
+  if((info.biography||'').trim()){
+    const ouverte = !!ui.bioOuverte;
+    html += '<div class="wrap" style="padding-top:0">'+
+      '<div class="bio'+(ouverte?' ouverte':'')+'">'+esc(info.biography)+'</div>'+
+      '<button class="lienplus" onclick="basculerBio()">'+
+        (ouverte ? 'Réduire' : 'Lire la biographie')+'</button>'+
+    '</div>';
+  }
+
+  /* Filmographie */
+  const dejaVus = liste.filter(r=>{
+    const it = r.media === 'tv' ? db.shows[r.id] : db.movies[r.id];
+    return !!it;
+  }).length;
+
+  html += '<div class="sectitle">Filmographie<span class="cnt">'+roles.length+'</span></div>';
+  if(series.length && films.length){
+    html += '<div class="souschips">'+
+      [['tout','Tout',roles.length],['tv','Séries',series.length],['movie','Films',films.length]]
+      .map(([k,l,n])=>'<button class="chip '+(tri===k?'on':'')+'" onclick="setActeurTri(\''+k+'\')">'+
+        l+' <span style="opacity:.65">'+n+'</span></button>').join('')+'</div>';
+  }
+  if(dejaVus)
+    html += '<div class="wrap" style="padding:0 16px 10px"><span class="tiny muted">'+
+      dejaVus+' titre'+(dejaVus>1?'s':'')+' de cette liste '+(dejaVus>1?'sont':'est')+
+      ' déjà dans ta bibliothèque</span></div>';
+
+  html += liste.length
+    ? '<div class="grid">'+liste.map(r=>carteTitre(r, r.media, 'acteur')).join('')+'</div>'
+    : '<div class="empty"><p>Rien à afficher pour ce filtre.</p></div>';
+
+  return html + '<div style="height:30px"></div>';
 }
 
 /* ---------- Vue : fiche film de ma liste ---------- */
@@ -166,6 +325,7 @@ function viewMovie(){
     '" onclick="toggleMovie('+m.id+')">'+I.check+(m.seen?' Vu le '+fmtDate(new Date(m.watchedAt).toISOString().slice(0,10)):' Marquer comme vu')+'</button></div>';
   if(m.overview) html += '<div class="sectitle">Synopsis</div><div class="overview" style="margin-top:0">'+esc(m.overview)+'</div>';
   html += blocPlateformes('movie', m.id);
+  html += zoneCasting('movie', m.id);
   html += '<div style="height:30px"></div>';
   return html;
 }

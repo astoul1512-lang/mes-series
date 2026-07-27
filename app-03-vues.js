@@ -87,6 +87,7 @@ function corpsDeVue(){
   if(view==='abos')     return viewAbos();
   if(view==='biblio')   return viewBiblio();
   if(view==='moi')      return viewMoi();
+  if(view==='acteur')   return viewActeur();
   return '';
 }
 /* Fabrique le HTML d'un autre écran que celui affiché, puis remet tout en place. */

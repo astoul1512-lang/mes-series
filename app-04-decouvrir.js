@@ -95,7 +95,7 @@ async function runSearch(q){
 }
 
 /* Vignette commune aux suggestions et aux résultats de recherche. */
-function carteTitre(r, media){
+function carteTitre(r, media, from){
   const isTv = media === 'tv';
   const name = isTv ? r.name : r.title;
   const date = isTv ? r.first_air_date : r.release_date;
@@ -112,7 +112,8 @@ function carteTitre(r, media){
     coin = '<div class="tick suivi">'+p.watched+'/'+p.total+'</div>';
   }
 
-  return '<button class="gcard" onclick="openPreview('+r.id+',\''+media+'\',\'discover\')">'+
+  const prov = from || 'discover';
+  return '<button class="gcard" onclick="openPreview('+r.id+',\''+media+'\',\''+prov+'\')">'+
     posterEl(r.poster_path,'w342','',name)+ coin +
     (note ? '<div class="gnote">'+I.star+note.toFixed(1)+'</div>' : '')+
     '<div class="gname">'+esc(name)+'</div>'+
@@ -632,7 +633,9 @@ function discBody(){
 /* ---------- Vue : aperçu avant ajout (série ou film) ---------- */
 function openPreview(id, type, from){
   ui.preview = { id:id, type:type, loading:true, data:null };
-  go('preview', {id:id, type:type, from:from||'discover'});
+  /* Toujours un mouvement vers l'avant : depuis une fiche d'acteur aussi, où la
+     profondeur nominale de l'écran d'arrivée est pourtant plus faible. */
+  go('preview', {id:id, type:type, from:from||'discover'}, 'enter');
   loadPreview();
 }
 async function loadPreview(){

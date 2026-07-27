@@ -202,13 +202,19 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
                   perimetre:'recent', tri:'populaire', noteMin:0,
                   page:1, pages:1, res:[], loading:false, err:'', charge:false } };
 
-const DEPTH = { accueil:0, discover:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, account:2, biblio:2 };
+const DEPTH = { accueil:0, discover:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, acteur:2, account:2, biblio:2 };
 let navDir = 'none';
 /* Position de défilement mémorisée pour les écrans qui sont des listes.
    Quitter une liste puis y revenir doit rendre la page là où on l'avait laissée ;
    une fiche, elle, s'ouvre toujours en haut. */
 const LISTES = { discover:1, follow:1, profile:1, abos:1, biblio:1 };
 const memDefil = {};
+/* Paramètres du dernier passage sur chaque écran. En revenant en arrière on
+   remet l'écran d'arrivée exactement dans l'état où on l'avait quitté : sans
+   ça, revenir d'un film vers la fiche d'un acteur retombait sur un écran vide
+   qui ne savait plus de quel acteur ni d'où il venait. */
+const memParams = {};
+function paramsRetour(dest){ return memParams[dest] || {}; }
 
 function cleDefil(v, p){
   return v === 'biblio' ? 'biblio:'+((p||params||{}).id||'') : v;
@@ -222,6 +228,7 @@ function go(v, p, dir){
   if(v === 'discover' && !(ui.searchQ||'').trim()) ui.champOuvert = false;
   const a = DEPTH[view]||0, b = DEPTH[v]||0;
   navDir = dir || (b > a ? 'enter' : b < a ? 'back' : 'none');
+  if(navDir === 'enter') memParams[view] = params;
   view = v; params = p||{};
   if(typeof hideUndo === 'function') hideUndo();
   render();
@@ -243,6 +250,7 @@ function currentBack(){
   if(view==='account') return params.from || 'settings';
   if(view==='abos') return params.from || 'profile';
   if(view==='moi') return params.from || 'profile';
+  if(view==='acteur') return params.from || 'discover';
   if(view==='biblio') return 'abos';
   return null;
 }
@@ -258,7 +266,7 @@ function goBack(){
        un seul langage pour revenir en arrière. */
     if(glisseRetour.jouer()) return;
   }
-  go(t, {}, 'back');
+  go(t, paramsRetour(t), 'back');
 }
 /* ===================== Retour arrière : deux écrans à l'image =====================
    Comme sur iOS. L'écran quitté glisse vers la droite ; l'écran d'arrivée est
@@ -290,7 +298,7 @@ const glisseRetour = (function(){
     couche = document.createElement('div');
     couche.className = 'souscran';
     /* Le même habillage que l'écran normal, sinon la mise en page ne suit pas. */
-    couche.innerHTML = '<div class="app">'+htmlDeLaVue(dest, {})+'</div>';
+    couche.innerHTML = '<div class="app">'+htmlDeLaVue(dest, paramsRetour(dest))+'</div>';
     voile = document.createElement('div');
     voile.className = 'sousvoile';
 
@@ -339,7 +347,7 @@ const glisseRetour = (function(){
     if(frame){ cancelAnimationFrame(frame); frame = 0; }
     if(el) el.style.transition = 'none';
     sansAnim = true;
-    go(cible, {}, 'back');
+    go(cible, paramsRetour(cible), 'back');
     if(el){
       el.style.transform=''; el.style.opacity=''; el.style.willChange=''; el.style.transition='';
       el.classList.remove('glisse');
