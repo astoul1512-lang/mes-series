@@ -63,7 +63,14 @@ const castings = {};                 // 'tv:1399' → tableau | 'attente'
    le même résultat. */
 async function chargerFiche(type, id){
   const k = type+':'+id;
-  if(castings[k] !== undefined) return;
+  if(castings[k] !== undefined){
+    /* Le casting est là mais la bande-annonce a pu échouer seule (le repli
+       anglais tombé en panne) : sans ce rattrapage, le verrou commun la
+       condamnait jusqu'au prochain démarrage. Pas pendant qu'un chargement
+       est en cours, lui remplira les deux. */
+    if(castings[k] !== 'attente' && bandes[k] === undefined) semerBande(type, id);
+    return;
+  }
   castings[k] = 'attente';
   try{
     const d = await tmdb('/'+type+'/'+id, { append_to_response:'credits,videos' });
@@ -112,13 +119,15 @@ function choisirBande(videos){
   return bons.length ? { key: bons[0].key, nom: bons[0].name || 'Bande-annonce' } : null;
 }
 
-/* Reçoit la fiche déjà chargée : on lit d'abord les vidéos qu'elle porte, et on
-   ne repart chercher en anglais que si le français n'a rien donné. */
+/* Reçoit la fiche déjà chargée (ou va la rechercher si on ne la lui donne pas) :
+   on lit d'abord les vidéos françaises, et on ne repart chercher en anglais que
+   si le français n'a rien donné. */
 async function semerBande(type, id, d){
   const k = type+':'+id;
   if(bandes[k] !== undefined) return;
   bandes[k] = 'attente';
   try{
+    if(!d) d = await tmdb('/'+type+'/'+id, { append_to_response:'videos' });
     let b = choisirBande(((d && d.videos || {}).results) || []);
     if(!b){
       const e = await tmdb('/'+type+'/'+id, { append_to_response:'videos', language:'en-US' });
@@ -156,6 +165,10 @@ function coucheLecteur(){
     el.id = 'lecteur'; el.className = 'lecteur';
     el.addEventListener('click', e=>{ if(e.target === el) fermerBande(); });
     document.body.appendChild(el);
+    /* Au clavier (ordinateur), Échap ferme la vidéo comme partout ailleurs. */
+    document.addEventListener('keydown', e=>{
+      if(e.key === 'Escape' && lecteurOuvert()) fermerBande();
+    });
   }
   return el;
 }
@@ -174,9 +187,11 @@ function pleinEcranPossible(){
 function pleinEcran(){
   const e = document.getElementById('ytwrap');
   if(!e) return;
+  /* Ces appels rendent des promesses : un refus du navigateur doit rester
+     silencieux, pas remonter en erreur non rattrapée. */
   try{
-    if(document.fullscreenElement) document.exitFullscreen();
-    else e.requestFullscreen();
+    const p = document.fullscreenElement ? document.exitFullscreen() : e.requestFullscreen();
+    if(p && p.catch) p.catch(()=>{});
   }catch(err){}
 }
 function ouvrirBande(k){

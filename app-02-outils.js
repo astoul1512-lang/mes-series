@@ -426,10 +426,13 @@ const glisseRetour = (function(){
   const SEUIL = 60;
   let x0=null, y0=null, t0=0, actif=false;
 
+  let surVideo = false;   // le geste a commencé pendant qu'une vidéo jouait
+
   document.addEventListener('touchstart', e=>{
     const t = e.touches[0];
     actif = false;
-    if(t.clientX <= 28 && currentBack() &&
+    surVideo = typeof lecteurOuvert === 'function' && lecteurOuvert();
+    if(t.clientX <= 28 && (surVideo || currentBack()) &&
        !document.getElementById('sheet').classList.contains('show')){
       x0=t.clientX; y0=t.clientY; t0=Date.now();
     } else x0=null;
@@ -440,18 +443,23 @@ const glisseRetour = (function(){
     const t = e.touches[0];
     const dx = t.clientX-x0, dy = Math.abs(t.clientY-y0);
     if(!actif && (dy > 20 || dx < 6)){ if(dy > 20) x0 = null; return; }  // c'est un défilement
-    glisseRetour.suivre(dx);
+    /* Pendant une vidéo, l'écran ne doit pas glisser dessous : le geste ne fera
+       que fermer le lecteur, au relâchement. */
+    if(!surVideo) glisseRetour.suivre(dx);
     actif = true;
   }, {passive:true});
 
   document.addEventListener('touchend', e=>{
-    if(x0===null){ if(actif) glisseRetour.terminer(false); actif=false; return; }
+    if(x0===null){ if(actif && !surVideo) glisseRetour.terminer(false); actif=false; return; }
     const t = e.changedTouches[0];
     const dx = t.clientX-x0, dy = Math.abs(t.clientY-y0);
     /* Un geste franc, ou un geste vif même court : on part. */
     const vite = dx > 24 && (Date.now()-t0) < 260;
     const part = (dx > SEUIL || vite) && dy < 45 && Date.now()-t0 < 900;
-    if(actif) glisseRetour.terminer(part);
-    x0=null; actif=false;
+    /* Le même geste que pour revenir en arrière, mais appliqué à la vidéo :
+       il la ferme et on retrouve la fiche exactement où on l'avait laissée. */
+    if(surVideo){ if(actif && part) fermerBande(); }
+    else if(actif) glisseRetour.terminer(part);
+    x0=null; actif=false; surVideo=false;
   }, {passive:true});
 })();

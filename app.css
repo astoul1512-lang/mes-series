@@ -135,9 +135,12 @@
   @supports (aspect-ratio:16/9) and (max-height:100dvh){
     .ytbox{max-width:calc(100dvh * 16 / 9);max-height:100dvh}
   }
+  /* La barre laisse passer les appuis (les commandes hautes du lecteur YouTube
+     restent accessibles en paysage) ; seuls ses boutons les attrapent. */
   .lecteurbar{position:absolute;top:0;left:0;right:0;z-index:2;display:flex;align-items:center;gap:10px;
-    padding:calc(10px + var(--safe-t)) 14px 22px;
+    padding:calc(10px + var(--safe-t)) 14px 22px;pointer-events:none;
     background:linear-gradient(rgba(0,0,0,.75),rgba(0,0,0,0))}
+  .lecteurbar button{pointer-events:auto}
   .lecteurbar b{flex:1;min-width:0;color:#fff;font-size:14px;font-weight:650;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .lecteurbar button{flex:none;display:grid;place-items:center;padding:9px;border-radius:10px;
