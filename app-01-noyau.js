@@ -255,6 +255,32 @@ async function sbSignIn(email, password){
     body: JSON.stringify({email, password})});
   return applySession(d);
 }
+/* --- Mot de passe oublié ---
+   Le serveur envoie un lien qui ramène sur l'app avec un jeton de courte durée.
+   `redirect_to` doit figurer dans la liste blanche du projet, sinon le serveur
+   retombe silencieusement sur l'adresse par défaut — c'est ce qui renvoyait
+   vers localhost tant que le réglage n'avait pas été corrigé. */
+function adresseRetour(){ return location.origin + location.pathname; }
+
+async function sbDemanderReinit(email){
+  return sbFetch('/auth/v1/recover?redirect_to=' + encodeURIComponent(adresseRetour()),
+    { method:'POST', noAuth:true, body: JSON.stringify({ email }) });
+}
+/* Le jeton de récupération vaut session le temps de poser le nouveau mot de
+   passe : on s'en sert une fois, puis on l'oublie. */
+async function sbPoserMotDePasse(jeton, mdp){
+  const r = await fetch(sbBase()+'/auth/v1/user', {
+    method:'PUT',
+    headers:{ apikey: db.sync.key, 'Content-Type':'application/json',
+              Authorization:'Bearer '+jeton },
+    body: JSON.stringify({ password: mdp })
+  });
+  const txt = await r.text();
+  let b = null; try{ b = txt ? JSON.parse(txt) : null; }catch(e){}
+  if(!r.ok) throw new Error((b && (b.msg || b.message || b.error_description)) || ('erreur '+r.status));
+  return b;
+}
+
 async function sbRefresh(){
   try{
     const d = await sbFetch('/auth/v1/token?grant_type=refresh_token', {method:'POST', noAuth:true,

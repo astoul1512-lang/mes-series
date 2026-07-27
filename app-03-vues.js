@@ -88,6 +88,7 @@ function corpsDeVue(){
   if(view==='biblio')   return viewBiblio();
   if(view==='moi')      return viewMoi();
   if(view==='acteur')   return viewActeur();
+  if(view==='motdepasse') return viewMotDePasse();
   return '';
 }
 /* Fabrique le HTML d'un autre écran que celui affiché, puis remet tout en place. */
@@ -105,7 +106,9 @@ function render(){
   app.innerHTML = html;
   /* Pendant la mise en route, la barre du bas disparaît : rien d'autre à faire
      que d'aller au bout des trois écrans. */
-  document.body.classList.toggle('accueil', view === 'accueil');
+  /* Mise en route et réinitialisation de mot de passe occupent tout l'écran :
+     la barre du bas n'a rien à y faire, il n'y a qu'une chose à faire. */
+  document.body.classList.toggle('accueil', view === 'accueil' || view === 'motdepasse');
   app.classList.remove('enter','back');
   /* Le retour à deux couches gère lui-même son mouvement : pas d'animation par-dessus. */
   if(sansAnim){ sansAnim = false; navDir = 'none'; }

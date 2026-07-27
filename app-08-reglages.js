@@ -162,6 +162,9 @@ async function boot(){
   askPersist();
   document.body.classList.remove('booting');
   render();
+  /* Arrivée par un lien de réinitialisation : elle passe avant tout le reste,
+     y compris la mise en route — le lien ne dure qu'une heure. */
+  if(typeof lireLienReinit === 'function' && lireLienReinit()) return go('motdepasse');
   /* Première ouverture : on déroule la mise en route plutôt que de lâcher
      l'arrivant devant des onglets vides et un mot inconnu. */
   if(!db.onboarde) demarrerAccueil();

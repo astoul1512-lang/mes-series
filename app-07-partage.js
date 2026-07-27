@@ -252,8 +252,11 @@ function viewAccount(){
           'autocomplete="new-password" '+
           'onkeydown="if(event.key===\'Enter\'){this.blur();doSignUp()}"></label>'
         : '')+
-      '<button class="btn block" style="margin-bottom:14px" onclick="'+(creer?'doSignUp()':'doSignIn()')+'">'+
+      '<button class="btn block" style="margin-bottom:'+(creer?'14px':'4px')+'" onclick="'+(creer?'doSignUp()':'doSignIn()')+'">'+
         (creer ? 'Créer mon compte' : 'Me connecter')+'</button>'+
+      (creer ? ''
+        : '<button class="tiny muted" style="display:block;width:100%;text-align:center;padding:10px 8px 14px" '+
+          'onclick="demanderReinit()">Mot de passe oublié ?</button>')+
       '<button class="tiny muted" style="display:block;width:100%;text-align:center;padding:8px" onclick="ui.editServer=true;render()">Modifier le serveur</button>'+
     '</div>';
     return html + '<div style="height:30px"></div>';
@@ -296,6 +299,135 @@ function viewAccount(){
 }
 
 function setAcMode(m){ ui.acMode = m; render(); }
+
+/* ===================== Mot de passe oublié =====================
+   Trois moments : demander l'envoi, revenir par le lien reçu, choisir le
+   nouveau mot de passe. Le jeton arrive dans le fragment de l'URL — la partie
+   que le navigateur n'envoie jamais au serveur qui héberge la page. */
+let reinit = { jeton:null, erreur:'', occupe:false };
+
+function lireLienReinit(){
+  const brut = (location.hash || '').replace(/^#/, '');
+  if(!brut) return false;
+  const p = new URLSearchParams(brut);
+  const jeton = p.get('access_token'), type = p.get('type');
+  const err = p.get('error_description') || p.get('error');
+  if(!(type === 'recovery' && jeton) && !err) return false;   // pas pour nous
+  reinit.jeton = (type === 'recovery') ? jeton : null;
+  reinit.erreur = err ? err.replace(/\+/g, ' ') : '';
+  /* On nettoie la barre d'adresse : un jeton n'a pas à rester dans l'historique
+     ni à repartir dans un partage de lien. */
+  try{ history.replaceState(null, '', location.pathname + location.search); }catch(e){}
+  return true;
+}
+
+/* Le lien peut aussi tomber sur une app déjà ouverte : le navigateur change
+   alors le fragment sans recharger la page, et le démarrage n'a plus lieu. */
+window.addEventListener('hashchange', ()=>{
+  if(lireLienReinit()) go('motdepasse');
+});
+
+function demanderReinit(){
+  const saisi = (document.getElementById('acmail')||{value:''}).value.trim();
+  openSheet('<h3>Mot de passe oublié</h3>'+
+    '<p class="small muted" style="margin:0 0 10px">On t\'envoie un lien pour en choisir '+
+      'un nouveau. Il est valable une heure et ne sert qu\'une fois.</p>'+
+    '<label class="fld"><span>Ton adresse e-mail</span>'+
+      '<input type="text" id="rzmail" inputmode="email" autocapitalize="off" autocorrect="off" '+
+      'spellcheck="false" placeholder="toi@exemple.fr" value="'+esc(saisi)+'" '+
+      'onkeydown="if(event.key===\'Enter\'){this.blur();envoyerReinit()}"></label>'+
+    '<button class="btn block" onclick="envoyerReinit()">Envoyer le lien</button>'+
+    '<button class="opt" onclick="closeSheet()">Annuler</button>');
+}
+
+async function envoyerReinit(){
+  const email = (document.getElementById('rzmail')||{value:''}).value.trim();
+  if(!FORME_MAIL.test(email)) return toast('Cette adresse e-mail n\'a pas l\'air valide');
+  toast('Envoi…');
+  try{
+    await sbDemanderReinit(email);
+    closeSheet();
+    /* On ne dit jamais si l'adresse existe : ce serait donner la liste des
+       comptes à qui la demande. Le message vaut dans les deux cas. */
+    openSheet('<h3>C\'est envoyé</h3>'+
+      '<p class="small muted" style="margin:0 0 10px">Si un compte existe avec '+
+        '<b>'+esc(email)+'</b>, un lien vient de partir. Regarde aussi tes courriers '+
+        'indésirables — l\'expéditeur est une adresse technique.</p>'+
+      '<p class="small muted" style="margin:0 0 10px">Le lien s\'ouvre dans ton navigateur, '+
+        'pas dans l\'app. Tu y choisis ton nouveau mot de passe, puis tu reviens ici pour '+
+        'te connecter.</p>'+
+      '<button class="opt" onclick="closeSheet()">J\'ai compris</button>');
+  }catch(e){
+    toast(/rate|limit|seconds/i.test(e.message)
+      ? 'Trop de demandes d\'affilée. Réessaie dans quelques minutes.'
+      : 'Échec de l\'envoi : '+e.message);
+  }
+}
+
+function viewMotDePasse(){
+  if(reinit.erreur){
+    return header('Lien expiré')+
+      '<div class="wrap"><div class="intro">'+
+        '<div class="acclogo">'+I.refresh+'</div>'+
+        '<h2>Ce lien n\'est plus valable</h2>'+
+        '<p>Les liens de réinitialisation ne durent qu\'une heure et ne servent qu\'une '+
+          'fois. Demandes-en un nouveau, il arrivera tout de suite.</p>'+
+      '</div>'+
+      '<button class="btn block" style="margin-bottom:10px" onclick="quitterReinit(true)">'+
+        'Demander un nouveau lien</button>'+
+      '<button class="btn ghost block" onclick="quitterReinit(false)">Revenir à l\'app</button>'+
+      '</div><div style="height:30px"></div>';
+  }
+  return header('Nouveau mot de passe')+
+    '<div class="wrap">'+
+      '<div class="intro">'+
+        '<div class="acclogo">'+I.user+'</div>'+
+        '<h2>Choisis ton nouveau mot de passe</h2>'+
+        '<p>Il remplacera l\'ancien sur tous tes appareils. Tu devras te reconnecter '+
+          'avec, là où tu es déjà connecté rien ne change.</p>'+
+      '</div>'+
+      '<label class="fld"><span>Nouveau mot de passe</span>'+
+        '<input type="password" id="rzp1" autocomplete="new-password" '+
+        'placeholder="au moins 6 caractères"></label>'+
+      '<label class="fld"><span>Confirme-le</span>'+
+        '<input type="password" id="rzp2" autocomplete="new-password" '+
+        'placeholder="le même, pour être sûr" '+
+        'onkeydown="if(event.key===\'Enter\'){this.blur();validerNouveauMdp()}"></label>'+
+      '<button class="btn block" '+(reinit.occupe?'disabled ':'')+'onclick="validerNouveauMdp()">'+
+        (reinit.occupe ? 'Enregistrement…' : 'Enregistrer')+'</button>'+
+      '<button class="tiny muted" style="display:block;width:100%;text-align:center;padding:14px 8px" '+
+        'onclick="quitterReinit(false)">Annuler</button>'+
+    '</div><div style="height:30px"></div>';
+}
+
+function quitterReinit(redemander){
+  reinit = { jeton:null, erreur:'', occupe:false };
+  if(redemander){ go('account', {from:'profile'}); ui.acMode = 'connexion'; render(); demanderReinit(); }
+  else go(db.onboarde ? 'follow' : 'accueil');
+}
+
+async function validerNouveauMdp(){
+  const a = (document.getElementById('rzp1')||{value:''}).value;
+  const b = (document.getElementById('rzp2')||{value:''}).value;
+  if(a.length < 6) return toast('Mot de passe de 6 caractères minimum');
+  if(a !== b)      return toast('Les deux mots de passe ne sont pas identiques');
+  if(!reinit.jeton) return toast('Lien invalide, demande-en un nouveau');
+  reinit.occupe = true; render();
+  try{
+    await sbPoserMotDePasse(reinit.jeton, a);
+    reinit = { jeton:null, erreur:'', occupe:false };
+    /* On ne connecte pas d'office : le mot de passe qu'on vient de choisir doit
+       servir au moins une fois, sinon on ne saura jamais s'il a bien été retenu. */
+    ui.acMode = 'connexion';
+    go('account', {from:'profile'});
+    toast('Mot de passe changé. Connecte-toi avec.');
+  }catch(e){
+    reinit.occupe = false; render();
+    toast(/expired|invalid/i.test(e.message)
+      ? 'Ce lien a expiré, demande-en un nouveau'
+      : 'Échec : '+e.message);
+  }
+}
 
 /* Se déconnecter n'efface rien, mais mieux vaut le dire que le laisser deviner. */
 function confirmerDeconnexion(){
