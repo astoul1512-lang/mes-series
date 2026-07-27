@@ -172,6 +172,13 @@
   .fgrp{font-size:11px;font-weight:750;letter-spacing:.6px;text-transform:uppercase;
     color:var(--muted);margin:14px 0 8px}
   .fchips{display:flex;flex-wrap:wrap;gap:8px}
+  /* Puce de plateforme : le logo aide à reconnaître plus vite que le nom. */
+  .chip.chiplogo{display:inline-flex;align-items:center;gap:7px;padding:5px 12px 5px 5px}
+  .chip.chiplogo img{width:22px;height:22px;border-radius:6px;background:#000;flex:0 0 auto}
+  .chip.chiplogo.on img{box-shadow:0 0 0 1.5px rgba(255,255,255,.55)}
+  /* Lien discret sous une section de filtres (« voir les autres », « tout décocher ») */
+  .lienplus{margin-top:10px;font-size:12px;font-weight:650;color:var(--accent);
+    text-decoration:underline;text-underline-offset:2px}
   .plus{padding:16px;text-align:center}
   /* Rangée de Découvrir : la loupe vient s'ajouter aux quatre types,
      on resserre un peu pour que tout tienne sans défilement sur un iPhone. */
