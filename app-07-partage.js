@@ -225,15 +225,33 @@ function viewAccount(){
         '<button class="'+(creer?'on':'')+'" onclick="setAcMode(\'creer\')">Créer un compte</button>'+
         '<button class="'+(creer?'':'on')+'" onclick="setAcMode(\'connexion\')">J\'ai déjà un compte</button>'+
       '</div>'+
+      /* Le prénom n'était demandé qu'à l'écran d'accueil : celui qui l'avait
+         sauté se retrouvait affiché aux gens qui le suivent sous le début de
+         son adresse e-mail. On le demande donc ici aussi. */
+      (creer
+        ? '<label class="fld"><span>Ton prénom</span>'+
+          '<input type="text" id="acnom" autocomplete="given-name" placeholder="Adrien" '+
+          'value="'+esc(db.pseudo||'')+'">'+
+          '<em>C\'est ce que verront les proches à qui tu partages ta bibliothèque.</em></label>'
+        : '')+
       '<label class="fld"><span>Adresse e-mail</span>'+
-        '<input type="text" id="acmail" inputmode="email" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="toi@exemple.fr" value="'+esc((db.auth&&db.auth.email)||'')+'"></label>'+
+        '<input type="text" id="acmail" inputmode="email" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="toi@exemple.fr" value="'+esc((db.auth&&db.auth.email)||'')+'"'+
+        (creer ? '' : ' onkeydown="if(event.key===\'Enter\'){this.blur();doSignIn()}"')+'></label>'+
       '<label class="fld"><span>Mot de passe</span>'+
         '<input type="password" id="acpass" placeholder="au moins 6 caractères" '+
         'autocomplete="'+(creer?'new-password':'current-password')+'" '+
         'onkeydown="if(event.key===\'Enter\'){this.blur();'+(creer?'doSignUp()':'doSignIn()')+'}">'+
         '<em>'+(creer
-          ? 'Choisis un mot de passe dédié à cette app. Note-le quelque part : il n\'y a pas de récupération par e-mail.'
+          ? 'Choisis un mot de passe dédié à cette app.'
           : 'Le même que sur ton autre appareil.')+'</em></label>'+
+      /* Saisi deux fois : une faute de frappe sur un mot de passe qu'on ne
+         relit jamais bloquerait l'accès au compte dès le prochain appareil. */
+      (creer
+        ? '<label class="fld"><span>Confirme le mot de passe</span>'+
+          '<input type="password" id="acpass2" placeholder="le même, pour être sûr" '+
+          'autocomplete="new-password" '+
+          'onkeydown="if(event.key===\'Enter\'){this.blur();doSignUp()}"></label>'
+        : '')+
       '<button class="btn block" style="margin-bottom:14px" onclick="'+(creer?'doSignUp()':'doSignIn()')+'">'+
         (creer ? 'Créer mon compte' : 'Me connecter')+'</button>'+
       '<button class="tiny muted" style="display:block;width:100%;text-align:center;padding:8px" onclick="ui.editServer=true;render()">Modifier le serveur</button>'+
@@ -271,6 +289,8 @@ function viewAccount(){
       'chaque changement, et à chaque ouverture de l\'app. Tu n\'as normalement jamais besoin du bouton.</div>'+
     '<button class="tiny muted" style="display:block;width:100%;text-align:center;padding:8px" onclick="ui.editServer=true;render()">Modifier le serveur</button>'+
     '<button class="btn ghost block" style="color:#ff5a5a;margin-top:8px" onclick="confirmerDeconnexion()">Se déconnecter</button>'+
+    '<button class="tiny" style="display:block;width:100%;text-align:center;padding:14px 8px 4px;color:#ff5a5a" '+
+      'onclick="confirmerSuppression()">Supprimer mon compte</button>'+
   '</div>';
   return html + '<div style="height:30px"></div>';
 }
@@ -284,6 +304,54 @@ function confirmerDeconnexion(){
     'serveur. Il te faudra tes identifiants pour la retrouver ailleurs.</p>'+
     '<button class="opt danger" onclick="closeSheet();sbSignOut()">Se déconnecter</button>'+
     '<button class="opt" onclick="closeSheet()">Annuler</button>');
+}
+
+/* Supprimer son compte est sans retour : on dit exactement ce qui part, ce qui
+   reste, et on demande de recopier son adresse. Un bouton rouge de plus ne
+   protège de rien ; recopier son adresse oblige à lire. */
+function confirmerSuppression(){
+  const mail = (db.auth && db.auth.email) || '';
+  const nb = Object.keys(db.shows).length, nf = Object.keys(db.movies).length;
+  const liens = (partage.suivis||[]).length + (partage.abonnes||[]).length;
+  openSheet('<h3>Supprimer ton compte ?</h3>'+
+    '<p class="small muted" style="margin:0 0 10px">Sont effacés du serveur, définitivement : '+
+      '<b>'+nb+' série'+(nb>1?'s':'')+'</b>, <b>'+nf+' film'+(nf>1?'s':'')+'</b>, '+
+      'ton profil, tes '+liens+' lien'+(liens>1?'s':'')+' de partage, et ton identifiant de '+
+      'connexion. Personne ne peut les récupérer, moi non plus.</p>'+
+    '<p class="small muted" style="margin:0 0 10px">Ta bibliothèque <b>reste sur cet appareil</b> : '+
+      'l\'app continue de fonctionner hors ligne. Pense à faire un export si tu veux la garder ailleurs.</p>'+
+    '<label class="fld"><span>Recopie ton adresse pour confirmer</span>'+
+      '<input type="text" id="supmail" inputmode="email" autocapitalize="off" autocorrect="off" '+
+      'spellcheck="false" placeholder="'+esc(mail)+'" oninput="majBoutonSuppression()"></label>'+
+    '<button class="opt danger" id="supbtn" disabled style="opacity:.4" onclick="doSupprimerCompte()">'+
+      'Supprimer définitivement</button>'+
+    '<button class="opt" onclick="closeSheet()">Annuler</button>');
+}
+function majBoutonSuppression(){
+  const el = document.getElementById('supmail'), b = document.getElementById('supbtn');
+  if(!el || !b) return;
+  const ok = el.value.trim().toLowerCase() === ((db.auth && db.auth.email)||'').toLowerCase();
+  b.disabled = !ok;
+  b.style.opacity = ok ? '1' : '.4';
+}
+async function doSupprimerCompte(){
+  /* Le panneau fermé laisse ses champs dans la page : sans ce garde-fou, un
+     appel tardif partirait sans session et échouerait de façon obscure. */
+  if(!signedIn()) return closeSheet();
+  const b = document.getElementById('supbtn');
+  if(b){ b.disabled = true; b.textContent = 'Suppression…'; }
+  try{
+    await sbSupprimerCompte();
+    /* Le compte n'existe plus : on oublie la session et tout ce qui décrivait
+       les échanges avec les autres. Les titres, eux, restent sur l'appareil. */
+    db.auth = null; db.syncedAt = null; syncState = 'off';
+    partage.suivis = []; partage.abonnes = []; partage.code = null;
+    saveDB(); closeSheet(); go('profile');
+    toast('Compte supprimé. Ta bibliothèque reste sur cet appareil.');
+  }catch(e){
+    if(b){ b.disabled = false; b.textContent = 'Supprimer définitivement'; }
+    toast('Échec : '+e.message);
+  }
 }
 
 function saveSync(){
@@ -300,6 +368,7 @@ async function doSignIn(){
   const email = document.getElementById('acmail').value.trim();
   const pass  = document.getElementById('acpass').value;
   if(!email || !pass) return toast('Renseigne e-mail et mot de passe');
+  if(!FORME_MAIL.test(email)) return toast('Cette adresse e-mail n\'a pas l\'air valide');
   toast('Connexion…');
   try{
     await sbSignIn(email, pass);
@@ -308,17 +377,32 @@ async function doSignIn(){
     await majProfil(); await chargerPartage();
   }catch(e){ toast(/Invalid/i.test(e.message) ? 'E-mail ou mot de passe incorrect' : 'Échec : '+e.message); }
 }
+/* Contrôle minimal de forme : une adresse sans arobase ou sans point après
+   n'est pas une adresse. On ne cherche pas à valider plus loin — seul un envoi
+   réel prouverait qu'elle existe, et l'inscription reste instantanée. */
+const FORME_MAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
 async function doSignUp(){
+  const nom   = (document.getElementById('acnom')||{value:''}).value.trim();
   const email = document.getElementById('acmail').value.trim();
   const pass  = document.getElementById('acpass').value;
-  if(!email || pass.length < 6) return toast('E-mail requis, mot de passe de 6 caractères minimum');
+  const pass2 = (document.getElementById('acpass2')||{value:''}).value;
+  if(!nom)                    return toast('Indique ton prénom');
+  if(!FORME_MAIL.test(email)) return toast('Cette adresse e-mail n\'a pas l\'air valide');
+  if(pass.length < 6)         return toast('Mot de passe de 6 caractères minimum');
+  if(pass !== pass2)          return toast('Les deux mots de passe ne sont pas identiques');
   toast('Création du compte…');
   try{
     await sbSignUp(email, pass);
+    /* Le prénom est enregistré avant la synchro : sans ça, le profil partait
+       avec le début de l'adresse e-mail en guise de nom. */
+    db.pseudo = nom; saveDB();
     render(); toast('Compte créé');
     await syncNow();
+    await majProfil(); await chargerPartage();
   }catch(e){
     if(e.message === 'CONFIRM') toast('Compte créé : confirme l\'e-mail reçu, puis connecte-toi');
-    else toast('Échec : '+e.message);
+    else toast('Échec : '+(/already regist|User already/i.test(e.message)
+      ? 'un compte existe déjà avec cette adresse' : e.message));
   }
 }

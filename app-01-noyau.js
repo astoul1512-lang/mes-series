@@ -271,6 +271,21 @@ function applySession(d){
 }
 function sbSignOut(){ db.auth = null; syncState='off'; saveDB(); render(); }
 
+/* Suppression définitive du compte, côté serveur. L'app ne peut pas le faire
+   seule : effacer un compte demande des droits d'administration qui n'ont rien
+   à faire dans un navigateur. Une fonction serveur s'en charge, et ne supprime
+   que le porteur du jeton présenté — impossible de viser quelqu'un d'autre. */
+async function sbSupprimerCompte(){
+  const base = (db.sync && db.sync.url ? db.sync.url : DEFAULT_SYNC.url);
+  const r = await fetch(base + '/functions/v1/supprimer-compte', {
+    method: 'POST',
+    headers: { apikey: db.sync.key, Authorization: 'Bearer ' + db.auth.token }
+  });
+  let d = null; try{ d = await r.json(); }catch(e){}
+  if(!r.ok || !d || !d.ok) throw new Error((d && d.erreur) || ('erreur '+r.status));
+  return true;
+}
+
 /* --- Décochage : on garde une trace horodatée, sinon la synchro suivante remettrait
    l'épisode coché (l'autre appareil, lui, le croit toujours vu). Ces traces s'effacent
    d'elles-mêmes au bout de trois mois. --- */
