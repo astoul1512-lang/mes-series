@@ -339,7 +339,10 @@ function viewProfile(){
   if(!tabs.some(t=>t[0]===ui.profTab)) ui.profTab = 'series';
 
   let html = header('Mon profil', {
-    right:'<button class="iconbtn" onclick="profileMenu()">'+I.dots+'</button>',
+    /* Un engrenage plutôt que trois points : il mène à un écran, pas à un menu
+       flottant, et son sens est immédiat. */
+    right:'<button class="iconbtn" onclick="go(\'settings\',{from:\'profile\'})" '+
+      'aria-label="Réglages">'+I.cog+'</button>',
     sub:'<div class="chips">'+tabs.map(([id,l,n])=>
       '<button class="chip '+(ui.profTab===id?'on':'')+'" onclick="ui.profTab=\''+id+'\';render()">'+
       l+' <span style="opacity:.65">'+n+'</span></button>').join('')+'</div>'
@@ -348,13 +351,16 @@ function viewProfile(){
   /* Une identité avant les chiffres : c'est ton profil, pas un tableau de bord. */
   const qui = (db.pseudo||'').trim();
   const depuis = plusAnciennementAjoute();
-  html += '<button class="entete" onclick="go(\'moi\',{from:\'profile\'})">'+
+  /* Le bandeau menait à la personnalisation de l'avatar — le moins important de
+     l'écran, pour la plus grosse cible. Il ouvre maintenant les réglages, où
+     tout se trouve, et la personnalisation n'y est qu'une ligne parmi d'autres. */
+  html += '<button class="entete" onclick="go(\'settings\',{from:\'profile\'})">'+
     avatarMoi('gros')+
     '<div class="etxt">'+
       '<div class="enom">'+(qui ? esc(qui) : 'Ton profil')+'</div>'+
       '<div class="tiny muted">'+(qui
-        ? (depuis ? 'Membre depuis '+depuis : 'Personnaliser mon profil')
-        : 'Ajoute ton prénom et choisis ton emblème')+'</div>'+
+        ? 'Mon compte et réglages'
+        : 'Ton prénom, ton emblème, et tes séries à l\'abri')+'</div>'+
     '</div>'+
     '<span class="ecaret">'+I.caret+'</span>'+
   '</button>';
@@ -453,26 +459,10 @@ function ouvrirAbos(){
   go('abos', {from:'profile'});
   if(signedIn()) chargerPartage();
 }
-/* Sept entrées à plat, c'était une liste où l'œil ne se posait nulle part.
-   Trois groupes nommés : qui je suis, mes données, le reste. */
-function profileMenu(){
-  const ligne = (txt, action, icone)=>
-    '<button class="opt" onclick="closeSheet();'+action+'">'+
-      '<i>'+icone+'</i><span>'+txt+'</span></button>';
-  openSheet('<h3>Options</h3>'+
-    '<div class="optgrp">Mon compte</div>'+
-      ligne('Modifier mon profil', "go('moi',{from:'profile'})", I.user)+
-      ligne('Compte &amp; synchro', "go('account',{from:'profile'})", I.refresh)+
-      ligne('Mes abonnements', "ouvrirAbos()", I.user)+
-    '<div class="optgrp">Mes données</div>'+
-      ligne('Exporter une sauvegarde', "exportData()", I.bookmark)+
-      ligne('Importer une sauvegarde', "document.getElementById('impHidden').click()", I.plus)+
-      ligne('Actualiser toutes les séries', "refreshAll()", I.refresh)+
-    '<div class="optgrp">Application</div>'+
-      ligne('Réglages', "go('settings',{from:'profile'})", I.cog)+
-    '<button class="opt annuler" onclick="closeSheet()">Annuler</button>'+
-    '<input type="file" id="impHidden" accept="application/json,.json" style="display:none" onchange="importData(this)">');
-}
+/* L'ancien menu ⋮ a été supprimé le 28/07 : il doublait l'écran Réglages
+   (mêmes actions, noms différents) et, en tant que panneau flottant, ne laissait
+   nulle part où revenir après en avoir ouvert une entrée. Tout est passé dans
+   `viewSettings`, atteignable par le bandeau du profil et par l'engrenage. */
 
 /* Depuis quand cette bibliothèque existe : le plus ancien titre ajouté. */
 function plusAnciennementAjoute(){

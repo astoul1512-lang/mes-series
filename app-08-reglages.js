@@ -1,52 +1,73 @@
 "use strict";
 /* ---------- Vue : Réglages ---------- */
 function viewSettings(){
-  let html = header('Réglages', {back:"goBack()"});
+  /* Cet écran a absorbé l'ancien menu ⋮ du profil : les deux contenaient les
+     mêmes actions sous des noms différents (« Exporter une sauvegarde » ici,
+     « Exporter mes données » là), et personne ne savait plus où aller.
+     Un seul endroit, des groupes nommés, et revenir d'une sous-page ramène ici
+     puisque c'est un écran et non un panneau flottant. */
+  const ligne = (txt, sous, action, icone, danger)=>
+    '<button class="reg'+(danger?' danger':'')+'" onclick="'+action+'">'+
+      '<i>'+icone+'</i>'+
+      '<span class="rtxt"><b>'+txt+'</b>'+(sous?'<em>'+sous+'</em>':'')+'</span>'+
+      '<span class="ecaret">'+I.caret+'</span>'+
+    '</button>';
 
-  /* Plus aucun champ de clé, pour personne : elle n'a rien à faire dans une
-     interface. Elle vit dans un secret côté serveur, et l'app passe par le
-     relais. Un champ, même masqué ou réservé, finirait par la faire descendre
-     jusqu'au navigateur. */
-  html += '<div class="sectitle">Fiches et affiches</div>';
-  html += '<div class="wrap" style="padding-top:0">'+
-    '<div class="tiny muted" style="margin:0 0 12px">Les affiches, les résumés et les dates '+
-      'de diffusion viennent de TMDB. Tu n\'as rien à configurer : l\'app s\'en occupe.</div>'+
-    '<label class="fld"><span>Langue des fiches</span>'+
-      '<select id="lang">'+
-        ['fr-FR','en-US','es-ES','de-DE','it-IT'].map(l=>'<option value="'+l+'" '+(db.lang===l?'selected':'')+'>'+l+'</option>').join('')+
-      '</select></label>'+
-    '<button class="btn block" onclick="saveSettings()">Enregistrer</button>'+
+  let html = header('Mon compte et réglages', {back:"goBack()"});
+
+  /* Une carte d'identité, pas un bouton : ce qu'on peut faire est listé juste
+     en dessous, nommé. Le gros bloc cliquable qui menait à l'avatar était
+     précisément ce qui trompait tout le monde. */
+  const qui = (db.pseudo||'').trim();
+  const depuis = plusAnciennementAjoute();
+  html += '<div class="wrap"><div class="entete">'+
+    avatarMoi('gros')+
+    '<div class="etxt">'+
+      '<div class="enom">'+(qui ? esc(qui) : 'Ton profil')+'</div>'+
+      '<div class="tiny muted">'+(depuis ? 'Membre depuis '+depuis : 'Bienvenue')+'</div>'+
+    '</div></div></div>';
+
+  html += '<div class="sectitle">Mon compte</div><div class="wrap" style="padding-top:0">'+
+    ligne('Modifier mon profil', 'Prénom, couleur et emblème',
+          "go('moi',{from:'settings'})", I.user)+
+    ligne(signedIn() ? 'Compte et synchronisation' : 'Sauvegarder en ligne',
+          signedIn() ? esc(db.auth.email||'') : 'Tes séries à l\'abri, sur tous tes appareils',
+          "go('account',{from:'settings'})", I.refresh)+
+    ligne('Mes abonnements',
+          signedIn() ? 'La bibliothèque de tes proches' : 'Nécessite un compte',
+          "ouvrirAbosDepuisReglages()", I.user)+
   '</div>';
 
-  html += '<div class="sectitle">Sauvegarde en ligne</div>';
-  html += '<div class="wrap" style="padding-top:0">'+
-    /* On retient d'où l'on vient : la flèche du compte doit ramener ici,
-       pas sauter au profil. */
-    '<button class="btn ghost block" onclick="go(\'account\',{from:\'settings\'})">'+
-      (signedIn() ? 'Compte connecté · '+esc(db.auth.email||'') : 'Configurer la synchro entre appareils')+
-    '</button>'+
-    (signedIn() ? '' : '<div class="tiny muted" style="margin-top:8px">Recommandé : tes données sont alors sauvegardées en ligne et identiques sur iPhone et ordinateur.</div>')+
-  '</div>';
-
-  html += '<div class="sectitle">Mes données</div>';
   const nbShows = Object.keys(db.shows).length;
   /* Le rappel d'export ne concerne que ceux dont c'est la seule copie : une fois
      le compte connecté et la synchro passée, la sauvegarde est déjà faite. */
   const oldExport = !signedIn() && !db.syncedAt &&
                     (!db.lastExport || (Date.now()-db.lastExport) > 30*86400000);
-  html += '<div class="wrap" style="padding-top:0">'+
+  html += '<div class="sectitle">Mes données</div><div class="wrap" style="padding-top:0">'+
     (memoryOnly ? '<div class="banner" style="margin:0 0 14px">Le stockage du navigateur est indisponible ici : '+
       '<b>tes données seront perdues à la fermeture</b>. Ouvre l\'app depuis une vraie adresse (https) pour la sauvegarde automatique, ou exporte régulièrement.</div>'
      : (nbShows && oldExport ? '<div class="banner" style="margin:0 0 14px">'+
         (db.lastExport ? 'Dernière sauvegarde il y a plus d\'un mois.' : 'Tu n\'as jamais fait de sauvegarde.')+
         ' <b>Exporte ton fichier de temps en temps</b> : c\'est ta seule copie de secours si tu changes de téléphone.</div>' : ''))+
-    (db.lastExport ? '<div class="tiny muted" style="margin:0 0 10px">Dernière sauvegarde : '+
-        fmtDate(new Date(db.lastExport).toISOString().slice(0,10))+'</div>' : '')+
-    '<button class="btn ghost block" style="margin-bottom:10px" onclick="exportData()">Exporter mes données (JSON)</button>'+
-    '<button class="btn ghost block" style="margin-bottom:10px" onclick="document.getElementById(\'imp\').click()">Importer un fichier</button>'+
+    ligne('Exporter une sauvegarde',
+          db.lastExport ? 'Dernière : '+fmtDate(new Date(db.lastExport).toISOString().slice(0,10))
+                        : 'Un fichier à garder de côté',
+          "exportData()", I.bookmark)+
+    ligne('Importer une sauvegarde', 'Remplace la bibliothèque',
+          "document.getElementById('imp').click()", I.plus)+
     '<input type="file" id="imp" accept="application/json,.json" style="display:none" onchange="importData(this)">'+
-    '<button class="btn ghost block" style="margin-bottom:10px" onclick="refreshAll()">Actualiser toutes les séries</button>'+
-    '<button class="btn ghost block" style="color:#ff5a5a" onclick="wipe()">Tout effacer</button>'+
+    ligne('Actualiser toutes les séries', 'Nouveaux épisodes et affiches',
+          "refreshAll()", I.refresh)+
+    ligne('Tout effacer', 'Vide la bibliothèque de cet appareil', "wipe()", I.close, true)+
+  '</div>';
+
+  html += '<div class="sectitle">Application</div><div class="wrap" style="padding-top:0">'+
+    '<div class="tiny muted" style="margin:0 0 12px">Les affiches, les résumés et les dates '+
+      'de diffusion viennent de TMDB. Tu n\'as rien d\'autre à configurer.</div>'+
+    '<label class="fld"><span>Langue des fiches</span>'+
+      '<select id="lang" onchange="saveSettings()">'+
+        ['fr-FR','en-US','es-ES','de-DE','it-IT'].map(l=>'<option value="'+l+'" '+(db.lang===l?'selected':'')+'>'+l+'</option>').join('')+
+      '</select></label>'+
   '</div>';
 
   html += '<div class="wrap tiny muted center" style="padding-top:6px;padding-bottom:30px">'+
@@ -54,9 +75,18 @@ function viewSettings(){
   return html;
 }
 
+/* Les abonnements gardent leur provenance : on revient sur les réglages, pas
+   sur le profil. */
+function ouvrirAbosDepuisReglages(){
+  go('abos', {from:'settings'});
+  if(signedIn()) chargerPartage();
+}
+
 function saveSettings(){
-  db.lang = document.getElementById('lang').value;
-  saveDB(); toast('Réglages enregistrés');
+  const el = document.getElementById('lang');
+  if(!el || el.value === db.lang) return;
+  db.lang = el.value;
+  saveDB(); toast('Langue des fiches enregistrée');
 }
 function exportData(){
   const blob = new Blob([JSON.stringify(db,null,2)],{type:'application/json'});
