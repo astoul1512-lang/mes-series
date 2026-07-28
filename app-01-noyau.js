@@ -45,6 +45,9 @@ let db = { lang:'fr-FR', shows:{}, movies:{}, lastExport:null, onboarde:false,
            /* Deux caractères et une couleur : de quoi se reconnaître sans photo,
               et sans alourdir les sauvegardes ni la synchro. */
            profil:{ embleme:'lettre', couleur:'corail' },
+           /* Le compte à qui appartient cette bibliothèque : sert à ne pas mélanger
+              deux personnes qui se connecteraient sur le même appareil. */
+           proprio:null,
            deleted:{shows:{},movies:{}}, syncedAt:null, v:1 };
 
 function idbOpen(){
@@ -98,6 +101,11 @@ async function loadDB(){
   if(!db.profil || typeof db.profil !== 'object') db.profil = { embleme:'lettre', couleur:'corail' };
   if(!db.sync || !db.sync.url || !db.sync.key) db.sync = Object.assign({}, DEFAULT_SYNC);
   if(!db.deleted) db.deleted = {shows:{},movies:{}};
+  /* Bases d'avant le compte obligatoire : la bibliothèque existante appartient
+     à la session en cours s'il y en a une, sinon au premier compte qui se
+     connectera ici. Dans les deux cas, rien n'est perdu. */
+  if(db.proprio === undefined) db.proprio = null;
+  if(!db.proprio && db.auth && db.auth.uid) db.proprio = db.auth.uid;
 
   /* Vérifie qu'au moins un canal d'écriture fonctionne */
   try{ await writeNow(); }
@@ -292,10 +300,36 @@ function applySession(d){
   if(!d || !d.access_token) throw new Error('réponse inattendue du serveur');
   db.auth = { token:d.access_token, refresh:d.refresh_token,
               uid:(d.user&&d.user.id)||(db.auth&&db.auth.uid), email:(d.user&&d.user.email)||(db.auth&&db.auth.email) };
+  adopterCompte(db.auth.uid);
   saveDB();
   return db.auth;
 }
-function sbSignOut(){ db.auth = null; syncState='off'; saveDB(); render(); }
+
+/* À qui appartient la bibliothèque posée sur cet appareil.
+   Se déconnecter ne l'efface pas — elle redevient simplement invisible, et
+   revient telle quelle à la reconnexion. Mais si quelqu'un d'autre se connecte
+   ici, elle n'a rien à faire dans son compte : on repart de zéro.
+   Les suppressions ne sont surtout PAS tracées dans ce cas — elles se
+   propageraient au nouveau compte et lui effaceraient ses propres titres. */
+function adopterCompte(uid){
+  if(!uid) return;
+  if(db.proprio && db.proprio !== uid){
+    db.shows = {}; db.movies = {};
+    db.deleted = { shows:{}, movies:{} };
+    db.syncedAt = null;
+  }
+  db.proprio = uid;
+}
+
+/* Se déconnecter ne touche pas aux données : elles restent sur l'appareil,
+   hors d'atteinte tant que personne n'est connecté. */
+function sbSignOut(){
+  db.auth = null; syncState='off'; saveDB();
+  /* `go` plutôt que `render` : il remet les paramètres d'écran à zéro. Sans ça,
+     une provenance laissée par l'écran précédent survivait à la déconnexion et
+     la reconnexion retombait sur la fiche du compte au lieu d'ouvrir l'app. */
+  go('account');
+}
 
 /* Suppression définitive du compte, côté serveur. L'app ne peut pas le faire
    seule : effacer un compte demande des droits d'administration qui n'ont rien

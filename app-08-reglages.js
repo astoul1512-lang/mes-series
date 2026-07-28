@@ -41,7 +41,10 @@ function viewSettings(){
   const nbShows = Object.keys(db.shows).length;
   /* Le rappel d'export ne concerne que ceux dont c'est la seule copie : une fois
      le compte connecté et la synchro passée, la sauvegarde est déjà faite. */
-  const oldExport = !signedIn() && !db.syncedAt &&
+  /* Le compte étant obligatoire, plus personne n'est « sans compte ». Le rappel
+     ne vise donc que celui dont la première synchro n'a jamais abouti : là, le
+     fichier d'export est bien sa seule copie. */
+  const oldExport = !db.syncedAt &&
                     (!db.lastExport || (Date.now()-db.lastExport) > 30*86400000);
   html += '<div class="sectitle">Mes données</div><div class="wrap" style="padding-top:0">'+
     (memoryOnly ? '<div class="banner" style="margin:0 0 14px">Le stockage du navigateur est indisponible ici : '+

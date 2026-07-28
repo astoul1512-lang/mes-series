@@ -184,8 +184,15 @@ function toast(msg){
   clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove('show'), 2200);
 }
 function openSheet(html){
-  document.getElementById('sheetin').innerHTML = html;
+  const el = document.getElementById('sheetin');
+  /* Une poignée en haut : elle dit que le panneau se tire, et donne une prise
+     franche là où le contenu ne défile pas. */
+  el.innerHTML = '<div class="poignee"></div>' + html;
+  el.style.transition = ''; el.style.transform = '';
   document.getElementById('sheet').classList.add('show');
+  /* Après l'affichage, pas avant : tant que le panneau est masqué il n'a pas de
+     hauteur, et remettre le défilement à zéro n'a aucun effet. */
+  el.scrollTop = 0;
 }
 function closeSheet(){
   const s = document.getElementById('sheet');
@@ -194,6 +201,10 @@ function closeSheet(){
      et sans moyen de l'arrêter. On le retire à la fermeture. */
   const f = s.querySelector('iframe');
   if(f) f.remove();
+  /* Le panneau peut avoir été laissé décalé par un geste : on le remet d'aplomb
+     pour la prochaine ouverture. */
+  const el = document.getElementById('sheetin');
+  if(el){ el.style.transition = ''; el.style.transform = ''; }
 }
 document.getElementById('sheet').addEventListener('click', e=>{ if(e.target.id==='sheet') closeSheet(); });
 
@@ -261,7 +272,7 @@ function currentBack(){
   if(view==='abos') return params.from || 'profile';
   if(view==='moi') return params.from || 'profile';
   if(view==='acteur') return params.from || 'discover';
-  if(view==='biblio') return 'abos';
+  if(view==='biblio') return params.from || 'abos';
   return null;
 }
 function goBack(){
@@ -461,5 +472,72 @@ const glisseRetour = (function(){
     if(surVideo){ if(actif && part) fermerBande(); }
     else if(actif) glisseRetour.terminer(part);
     x0=null; actif=false; surVideo=false;
+  }, {passive:true});
+})();
+
+
+/* ===================== Fermer un panneau en le tirant vers le bas =====================
+   Le panneau des filtres occupe presque tout l'écran : il n'y a pas de zone à
+   côté où appuyer, et le bouton du bas était la seule sortie.
+
+   Deux règles, celles d'iOS, pour ne pas se battre avec le défilement :
+   — sur la poignée ou le titre, le geste tire toujours le panneau ;
+   — dans le contenu, il ne le tire que si l'on est déjà en haut de la liste.
+   Partout ailleurs, le doigt fait défiler, comme avant. */
+(function glisseFeuille(){
+  const SEUIL = 110;                    // distance au-delà de laquelle on ferme
+  const VITE = 0.55;                    // ou vitesse suffisante, même sur peu de distance
+  const el = ()=> document.getElementById('sheetin');
+  let y0 = 0, t0 = 0, dy = 0, actif = false, arme = false;
+
+  function surLaPoignee(cible){
+    const in_ = el(); if(!in_ || !cible) return false;
+    if(cible.classList && cible.classList.contains('poignee')) return true;
+    /* Le titre collant en haut du panneau fait aussi office de prise. */
+    return !!(cible.closest && cible.closest('#sheetin > h3'));
+  }
+
+  document.addEventListener('touchstart', e=>{
+    actif = false; arme = false; dy = 0;
+    const in_ = el();
+    if(!in_ || !document.getElementById('sheet').classList.contains('show')) return;
+    const t = e.touches[0];
+    if(!in_.contains(e.target)) return;          // le fond gère déjà la fermeture
+    /* Un champ de saisie garde le doigt pour lui. */
+    if(e.target.closest && e.target.closest('input,select,textarea')) return;
+    arme = surLaPoignee(e.target) || in_.scrollTop <= 0;
+    y0 = t.clientY; t0 = Date.now();
+  }, {passive:true});
+
+  document.addEventListener('touchmove', e=>{
+    if(!arme) return;
+    const in_ = el(); if(!in_) return;
+    const d = e.touches[0].clientY - y0;
+    if(!actif){
+      if(d < 6) return;                          // vers le haut ou immobile : on laisse défiler
+      actif = true;
+      in_.style.transition = 'none';
+    }
+    dy = Math.max(0, d);
+    /* Passé le seuil, le panneau résiste : on sent qu'on est allé assez loin. */
+    const suivi = dy > SEUIL ? SEUIL + (dy - SEUIL) * 0.4 : dy;
+    in_.style.transform = 'translate3d(0,'+suivi+'px,0)';
+    if(e.cancelable) e.preventDefault();          // sinon le contenu défile en même temps
+  }, {passive:false});
+
+  document.addEventListener('touchend', ()=>{
+    const in_ = el();
+    if(!actif || !in_){ arme = false; return; }
+    const vitesse = dy / Math.max(1, Date.now() - t0);
+    in_.style.transition = 'transform .26s cubic-bezier(.22,.61,.36,1)';
+    if(dy > SEUIL || vitesse > VITE){
+      /* On accompagne le geste jusqu'en bas avant de refermer : le panneau ne
+         disparaît pas sous le doigt. */
+      in_.style.transform = 'translate3d(0,'+(in_.offsetHeight + 40)+'px,0)';
+      setTimeout(closeSheet, 200);
+    } else {
+      in_.style.transform = '';
+    }
+    actif = false; arme = false; dy = 0;
   }, {passive:true});
 })();

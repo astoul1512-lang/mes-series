@@ -350,6 +350,11 @@
     .sheetin{max-height:calc(100dvh - 28px - var(--safe-t))}
   }
   .sheetin::-webkit-scrollbar{display:none}
+  /* Poignée : dit que le panneau se tire, et offre une prise là où le contenu
+     ne défile pas. */
+  .poignee{width:38px;height:4px;border-radius:3px;background:var(--line);
+    margin:-8px auto 12px;flex:none}
+  .poignee::after{content:'';display:block;height:22px;margin-top:-9px}
   /* Le titre reste visible pendant qu'on parcourt une longue feuille. */
   .sheetin h3{margin:0 0 4px;font-size:17px;position:sticky;top:-18px;z-index:1;
     background:var(--surface);padding:2px 0 6px}

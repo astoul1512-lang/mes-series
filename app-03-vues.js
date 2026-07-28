@@ -9,11 +9,13 @@ const ACCUEIL_PAS = 2;
 
 function demarrerAccueil(){ ui.pas = 0; ui.cleErr = ''; go('accueil'); }
 
-function finirAccueil(destination){
+/* On sort de la mise en route vers la porte d'entrée, en choisissant l'onglet
+   qui convient : créer un compte, ou se connecter. */
+function finirAccueil(mode){
   db.onboarde = true;
   saveDB();
-  document.body.classList.remove('accueil');
-  go(destination || 'discover');
+  ui.acMode = (mode === 'connexion') ? 'connexion' : 'creer';
+  go('account');
 }
 
 function pasSuivant(){
@@ -51,21 +53,24 @@ function viewAccueil(){
   }
 
   else {
+    /* Le compte est obligatoire depuis le 28/07 : cet écran ne promet plus que
+       tout est prêt, il annonce la dernière étape. Le prénom saisi juste avant
+       est repris tel quel dans le formulaire, on ne le redemande pas. */
     const qui = (db.pseudo||'').trim();
     h += '<div class="acclogo ok">'+I.check+'</div>'+
-      '<h1>'+(qui ? 'Tout est prêt, '+esc(qui) : 'Tout est prêt')+'</h1>'+
-      '<p class="accsub">Cherche une série que tu regardes en ce moment et coche les épisodes '+
-      'déjà vus. L\'app se souviendra de tout, et te préviendra quand la suite arrive.</p>'+
+      '<h1>'+(qui ? 'Une dernière chose, '+esc(qui) : 'Une dernière chose')+'</h1>'+
+      '<p class="accsub">Ton compte garde ta bibliothèque à l\'abri : téléphone changé, app '+
+      'réinstallée, tout revient. C\'est gratuit et ça prend trente secondes.</p>'+
       '<ol class="etapes">'+
         '<li>Trouve une série dans <b>Découvrir</b></li>'+
         '<li>Coche ce que tu as déjà vu</li>'+
         '<li><b>À suivre</b> te dit ce qu\'il te reste et ce qui sort bientôt</li>'+
       '</ol>'+
-      '<button class="btn block" style="margin-top:6px" onclick="finirAccueil(\'discover\')">'+
-        'Chercher ma première série</button>'+
+      '<button class="btn block" style="margin-top:6px" onclick="finirAccueil(\'creer\')">'+
+        'Créer mon compte</button>'+
       '<div class="accliens">'+
         '<button onclick="pasPrecedent()">Retour</button>'+
-        '<button onclick="finirAccueil(\'account\')">J\'ai déjà un compte</button>'+
+        '<button onclick="finirAccueil(\'connexion\')">J\'ai déjà un compte</button>'+
       '</div>';
   }
 
@@ -100,15 +105,24 @@ function htmlDeLaVue(v, p){
   return h;
 }
 
+/* Le compte est obligatoire. Sans session, l'app ne montre que la mise en route,
+   l'écran de connexion et la réinitialisation de mot de passe — rien d'autre.
+   Le contrôle est posé ici, dans le seul passage obligé du rendu : un `go()`
+   oublié quelque part ne peut pas ouvrir une porte dérobée. */
+const VUES_SANS_COMPTE = { accueil:1, account:1, motdepasse:1 };
+function porteFermee(){
+  return db.onboarde && !signedIn() && !VUES_SANS_COMPTE[view];
+}
+
 function render(){
   const app = document.getElementById('app');
+  if(porteFermee()){ view = 'account'; params = {}; navDir = 'none'; }
   const html = corpsDeVue();
   app.innerHTML = html;
-  /* Pendant la mise en route, la barre du bas disparaît : rien d'autre à faire
-     que d'aller au bout des trois écrans. */
-  /* Mise en route et réinitialisation de mot de passe occupent tout l'écran :
+  /* Mise en route, réinitialisation et porte d'entrée occupent tout l'écran :
      la barre du bas n'a rien à y faire, il n'y a qu'une chose à faire. */
-  document.body.classList.toggle('accueil', view === 'accueil' || view === 'motdepasse');
+  document.body.classList.toggle('accueil',
+    view === 'accueil' || view === 'motdepasse' || (view === 'account' && !signedIn()));
   app.classList.remove('enter','back');
   /* Le retour à deux couches gère lui-même son mouvement : pas d'animation par-dessus. */
   if(sansAnim){ sansAnim = false; navDir = 'none'; }

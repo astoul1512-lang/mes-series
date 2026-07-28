@@ -97,8 +97,10 @@ function confirmerRupture(id, role){
     '<button class="opt" onclick="closeSheet()">Annuler</button>');
 }
 
+/* On retient d'où l'on ouvre : depuis le profil, la flèche doit ramener au
+   profil, pas faire un détour par « Mes abonnements » où l'on n'était pas. */
 function ouvrirBiblio(id){
-  go('biblio', {id:id});
+  go('biblio', {id:id, from: (view === 'biblio' ? params.from : view) || 'abos'});
   chargerBiblio(id);            // toujours rafraîchir : l'autre a pu avancer entre-temps
 }
 
@@ -177,7 +179,11 @@ function carteFilmLecture(m){
 
 /* ---------- Vue : Compte & synchronisation ---------- */
 function viewAccount(){
-  let html = header('Compte & synchro', {back:"goBack()"});
+  /* Porte d'entrée : sans session, il n'y a nulle part où revenir en arrière.
+     Pas de flèche, pas de barre du bas — une seule chose à faire. */
+  const porte = !signedIn();
+  let html = header(porte ? 'Bienvenue' : 'Compte & synchro',
+                    porte ? {} : {back:"goBack()"});
 
   if(!syncReady() || ui.editServer){
     html += '<div class="wrap">'+
@@ -205,12 +211,14 @@ function viewAccount(){
     html += '<div class="wrap">'+
       '<div class="intro">'+
         '<div class="acclogo">'+I.user+'</div>'+
-        '<h2>Tes séries te suivent partout</h2>'+
+        '<h2>'+(nb ? 'Retrouve tes séries' : 'Tes séries te suivent partout')+'</h2>'+
         '<p>'+(nb > 1
-          ? 'Tes '+nb+' titres n\'existent aujourd\'hui que sur cet appareil. Un compte les met à l\'abri.'
+          ? 'Les '+nb+' titres posés sur cet appareil t\'attendent. Connecte-toi pour les retrouver, '+
+            'ou crée ton compte : ils seront rattachés et mis à l\'abri.'
           : nb === 1
-            ? 'Ton unique titre n\'existe aujourd\'hui que sur cet appareil. Un compte le met à l\'abri.'
-            : 'Un compte met ta bibliothèque à l\'abri et la rend identique sur tous tes appareils.')+
+            ? 'Le titre posé sur cet appareil t\'attend. Connecte-toi pour le retrouver, ou crée ton '+
+              'compte : il sera rattaché et mis à l\'abri.'
+            : 'Ton compte garde ta bibliothèque à l\'abri et la rend identique sur tous tes appareils.')+
         '</p>'+
       '</div>'+
       '<div class="avantages">'+
@@ -432,8 +440,9 @@ async function validerNouveauMdp(){
 /* Se déconnecter n'efface rien, mais mieux vaut le dire que le laisser deviner. */
 function confirmerDeconnexion(){
   openSheet('<h3>Se déconnecter ?</h3>'+
-    '<p class="small muted" style="margin:0 0 8px">Ta bibliothèque reste sur cet appareil et sur le '+
-    'serveur. Il te faudra tes identifiants pour la retrouver ailleurs.</p>'+
+    '<p class="small muted" style="margin:0 0 8px">L\'app se refermera sur l\'écran de connexion : '+
+    'tes séries ne seront plus accessibles tant que tu ne t\'es pas reconnecté. Rien n\'est effacé — '+
+    'avec le même compte, tout revient tel quel, et tout de suite.</p>'+
     '<button class="opt danger" onclick="closeSheet();sbSignOut()">Se déconnecter</button>'+
     '<button class="opt" onclick="closeSheet()">Annuler</button>');
 }
@@ -450,8 +459,9 @@ function confirmerSuppression(){
       '<b>'+nb+' série'+(nb>1?'s':'')+'</b>, <b>'+nf+' film'+(nf>1?'s':'')+'</b>, '+
       'ton profil, tes '+liens+' lien'+(liens>1?'s':'')+' de partage, et ton identifiant de '+
       'connexion. Personne ne peut les récupérer, moi non plus.</p>'+
-    '<p class="small muted" style="margin:0 0 10px">Ta bibliothèque <b>reste sur cet appareil</b> : '+
-      'l\'app continue de fonctionner hors ligne. Pense à faire un export si tu veux la garder ailleurs.</p>'+
+    '<p class="small muted" style="margin:0 0 10px">Sans compte, l\'app ne s\'ouvre plus : tu reviendras '+
+      'à l\'écran de création. <b>Fais un export d\'abord</b> si tu veux garder une copie de ta '+
+      'bibliothèque quelque part.</p>'+
     '<label class="fld"><span>Recopie ton adresse pour confirmer</span>'+
       '<input type="text" id="supmail" inputmode="email" autocapitalize="off" autocorrect="off" '+
       'spellcheck="false" placeholder="'+esc(mail)+'" oninput="majBoutonSuppression()"></label>'+
@@ -479,7 +489,7 @@ async function doSupprimerCompte(){
     db.auth = null; db.syncedAt = null; syncState = 'off';
     partage.suivis = []; partage.abonnes = []; partage.code = null;
     saveDB(); closeSheet(); go('profile');
-    toast('Compte supprimé. Ta bibliothèque reste sur cet appareil.');
+    toast('Compte supprimé.');
   }catch(e){
     if(b){ b.disabled = false; b.textContent = 'Supprimer définitivement'; }
     toast('Échec : '+e.message);
@@ -504,7 +514,10 @@ async function doSignIn(){
   toast('Connexion…');
   try{
     await sbSignIn(email, pass);
-    render(); toast('Connecté');
+    /* Venu de la porte d'entrée : on ouvre l'app plutôt que de laisser la
+       personne sur l'écran de compte qu'elle vient de remplir. */
+    if(!params.from) go('follow'); else render();
+    toast('Connecté');
     await syncNow();
     await majProfil(); await chargerPartage();
   }catch(e){ toast(/Invalid/i.test(e.message) ? 'E-mail ou mot de passe incorrect' : 'Échec : '+e.message); }
@@ -529,7 +542,8 @@ async function doSignUp(){
     /* Le prénom est enregistré avant la synchro : sans ça, le profil partait
        avec le début de l'adresse e-mail en guise de nom. */
     db.pseudo = nom; saveDB();
-    render(); toast('Compte créé');
+    if(!params.from) go('follow'); else render();
+    toast('Compte créé');
     await syncNow();
     await majProfil(); await chargerPartage();
   }catch(e){
