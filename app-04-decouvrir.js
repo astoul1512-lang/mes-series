@@ -217,7 +217,11 @@ const DISC_FENETRE = 90;     // « sorti récemment » = les 90 derniers jours
    Le tri se fait sur `original_language` renvoyé par TMDB, pas sur un paramètre
    de requête : c'est le seul champ dont on soit certain du comportement. */
 const LANGUES_OCCIDENT = ['en','fr','es','it','de','pt','nl','sv','da','no','nb','fi','is'];
-const DISC_MINI_PAGE = 12;   // en dessous, on va chercher la page suivante
+/* Une fournée vise une cinquantaine de titres : une seule page TMDB (20 films
+   au mieux) faisait un écran trop court, et « Voir plus » n'apportait presque
+   rien — le reproche exact d'Adrien. Trois requêtes par fournée, pas plus :
+   au-delà, c'est le quota qu'on brûle pour du défilement. */
+const DISC_CIBLE = 40;       // en dessous, on va chercher la page suivante
 const DISC_PAGES_MAX = 3;    // jamais plus de 3 requêtes pour remplir un écran
 
 const genresTMDB = { tv:null, movie:null };
@@ -419,9 +423,9 @@ async function chargerDecouverte(suite){
         ? 'Genres sans équivalent ici : '+perdus.join(', ')
         : '« '+perdus[0]+' » n\'existe pas pour ce type');
     }
-    /* Écarter les titres non occidentaux creuse la page : on en redemande une
-       ou deux de plus jusqu'à avoir de quoi remplir l'écran, sans jamais
-       enchaîner plus de DISC_PAGES_MAX requêtes pour un seul chargement. */
+    /* On enchaîne les pages TMDB jusqu'à la cible — la même mécanique comble
+       au passage les trous creusés par le filtre des titres non occidentaux.
+       Un catalogue épuisé (pageLue >= pagesTotal) est une réponse complète. */
     let trouves = [], pagesTotal = 1, pageLue = d.page;
     for(let tour = 0; tour < DISC_PAGES_MAX; tour++){
       const p = discParams();
@@ -430,15 +434,16 @@ async function chargerDecouverte(suite){
       if(seq !== discSeq) return;
       pagesTotal = data.total_pages || 1;
       const bruts = (data.results||[]).filter(r => r.poster_path);
-      const gardes = garderOccident(bruts);
-      trouves = trouves.concat(gardes);
-      /* On ne redemande une page que si le filtre a réellement mordu. Une page
-         naturellement courte (catalogue étroit, filtres serrés) est une réponse
-         complète, pas un trou à combler. */
-      if(gardes.length === bruts.length || trouves.length >= DISC_MINI_PAGE || pageLue >= pagesTotal) break;
+      trouves = trouves.concat(garderOccident(bruts));
+      if(trouves.length >= DISC_CIBLE || pageLue >= pagesTotal) break;
       pageLue++;
     }
     d.page = pageLue;
+    /* Le classement TMDB bouge entre deux requêtes : un même film peut figurer
+       sur deux pages voisines. Sans ce tri, il apparaîtrait deux fois. */
+    const vus = {};
+    (suite ? d.res : []).forEach(r => { vus[r.id] = 1; });
+    trouves = trouves.filter(r => vus[r.id] ? false : (vus[r.id] = 1));
     d.res = suite ? d.res.concat(trouves) : trouves;
     d.pages = pagesTotal;
     d.loading = false; d.err = ''; d.charge = true;
