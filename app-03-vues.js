@@ -22,6 +22,7 @@ function premiereFois(){
 function corpsDeVue(){
   if(view==='follow')   return viewFollow();
   if(view==='discover') return viewDiscover();
+  if(view==='sorties')  return viewSorties();
   if(view==='profile')  return viewProfile();
   if(view==='settings') return viewSettings();
   if(view==='show')     return viewShow();
@@ -98,11 +99,12 @@ function render(){
 function renderNav(){
   const tabs = [
     ['discover','Découvrir',I.boussole],
+    ['sorties','Sorties',I.clap],
     ['follow','À suivre',I.cal],
     ['profile','Mon profil',I.user]
   ];
   const depuis = params.from;
-  const cur = (view==='preview') ? 'discover'
+  const cur = (view==='preview') ? (depuis==='sorties' ? 'sorties' : 'discover')
             : (view==='account'||view==='abos'||view==='biblio') ? 'profile'
             : (view==='show'||view==='movie'||view==='settings')
               ? (depuis==='discover' ? 'discover' : (depuis||'profile'))
@@ -157,7 +159,10 @@ function viewFollow(){
   let html = header('À suivre', {right:'<button class="iconbtn" onclick="go(\'discover\')">'+I.plus+'</button>'});
   html += needKeyBanner();
 
-  if(!shows.length){
+  /* L'écran vide n'a de sens que si rien n'est suivi du tout : quelqu'un qui
+     n'a que des films doit quand même voir sa section « Bientôt ». */
+  const desFilms = (typeof filmsSuivisIds === 'function') && filmsSuivisIds().length;
+  if(!shows.length && !desFilms){
     return html + '<div class="empty">'+I.tv+'<h3>Rien à suivre pour l\'instant</h3>'+
       '<p>Ajoute une série ou un film depuis la recherche : tu retrouveras ici tes prochains épisodes et les dates de diffusion.</p>'+
       '<button class="btn" onclick="go(\'discover\')">Chercher une série</button></div>';
@@ -179,6 +184,10 @@ function viewFollow(){
   } else {
     html += '<div class="list">'+todo.map(x=>catchupRow(x.s,x.ep)).join('')+'</div>';
   }
+
+  /* Entre le retard et le calendrier des épisodes : tes films qui arrivent.
+     La section n'existe que si un film suivi a une date française confirmée. */
+  html += (typeof blocBientotPerso === 'function') ? blocBientotPerso() : '';
 
   /* Section 2 */
   html += '<div class="sectitle">À venir</div>';
@@ -328,24 +337,26 @@ function viewProfile(){
     '<span class="ecaret">'+I.caret+'</span>'+
   '</button>';
 
+  /* Un seul bloc de chiffres. L'ancienne carte « X séries · Y films · soit Z »
+     répétait deux des trois tuiles avec d'autres mots : les puces du haut
+     donnent déjà les décomptes, la tuile du milieu donne déjà la durée. */
   html += '<div class="stats">'+
     '<div class="stat"><b>'+epCount+'</b><span>épisode'+(epCount>1?'s':'')+' vu'+(epCount>1?'s':'')+'</span></div>'+
     '<div class="stat"><b>'+fmtDurShort(minutes)+'</b><span>de visionnage</span></div>'+
     '<div class="stat"><b>'+doneShows+'</b><span>série'+(doneShows>1?'s':'')+' finie'+(doneShows>1?'s':'')+'</span></div>'+
   '</div>';
-  html += '<div class="wrap" style="padding-top:0"><div class="card" style="padding:13px;text-align:center">'+
-    '<span class="small muted">'+startedShows.length+' série'+(startedShows.length>1?'s':'')+' suivie'+(startedShows.length>1?'s':'')+
-    ' · '+watchedMovies.length+' film'+(watchedMovies.length>1?'s':'')+' vu'+(watchedMovies.length>1?'s':'')+
-    ' · soit '+fmtDur(minutes)+'</span></div></div>';
 
+  /* Les abonnements tenaient une rangée d'avatars en plein milieu de l'écran :
+     une ligne suffit, leur vrai foyer est l'écran qu'elle ouvre. */
   if(signedIn() && partage.suivis.length){
-    html += '<div class="sectitle">Mes abonnements<span class="cnt">'+partage.suivis.length+'</span></div>'+
-      '<div class="aborow">'+partage.suivis.slice(0,8).map(p=>
-        '<button class="abomini" onclick="ouvrirBiblio(\''+p.id+'\')">'+
-          avatarDe(p)+
-          '<span>'+esc(p.pseudo)+'</span></button>').join('')+
-        '<button class="abomini" onclick="ouvrirAbos()"><div class="avatar plus">'+I.plus+'</div><span>Gérer</span></button>'+
-      '</div>';
+    const noms = partage.suivis.map(p=>p.pseudo).filter(Boolean);
+    const resume = noms.length <= 2 ? noms.join(' et ')
+                 : noms.slice(0,2).join(', ')+' et '+(noms.length-2)+' autre'+(noms.length>3?'s':'');
+    html += '<div class="wrap" style="padding-top:0">'+
+      '<button class="reg" style="width:100%" onclick="ouvrirAbos()">'+
+        '<i>'+I.user+'</i>'+
+        '<span class="rtxt"><b>Mes abonnements</b><em>'+esc(resume)+'</em></span>'+
+        '<span class="ecaret">'+I.caret+'</span></button></div>';
   }
 
   let cards = '';
