@@ -22,7 +22,6 @@ function premiereFois(){
 function corpsDeVue(){
   if(view==='follow')   return viewFollow();
   if(view==='discover') return viewDiscover();
-  if(view==='sorties')  return viewSorties();
   if(view==='profile')  return viewProfile();
   if(view==='settings') return viewSettings();
   if(view==='show')     return viewShow();
@@ -97,14 +96,16 @@ function render(){
   }
 }
 function renderNav(){
+  /* L'onglet Sorties a vécu quelques heures ici, puis Adrien l'a retiré :
+     « pas terrible ». Son code dort dans app-10 — seule la section « Bientôt »
+     d'À suivre en est restée, elle avait fait ses preuves. */
   const tabs = [
     ['discover','Découvrir',I.boussole],
-    ['sorties','Sorties',I.clap],
     ['follow','À suivre',I.cal],
     ['profile','Mon profil',I.user]
   ];
   const depuis = params.from;
-  const cur = (view==='preview') ? (depuis==='sorties' ? 'sorties' : 'discover')
+  const cur = (view==='preview') ? 'discover'
             : (view==='account'||view==='abos'||view==='biblio') ? 'profile'
             : (view==='show'||view==='movie'||view==='settings')
               ? (depuis==='discover' ? 'discover' : (depuis||'profile'))
@@ -125,6 +126,7 @@ function renderNav(){
   const pip = document.getElementById('navpip');
   const idx = tabs.findIndex(([id])=> id === cur);
   pip.classList.toggle('cache', idx < 0);
+  pip.style.width = (100 / tabs.length) + '%';
   if(idx >= 0) pip.style.left = (idx * (100 / tabs.length)) + '%';
 }
 

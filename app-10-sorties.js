@@ -1,4 +1,11 @@
 "use strict";
+/* ONGLET RETIRÉ le 28/07 à la demande d'Adrien (« pas terrible »). L'écran
+   n'est plus atteignable — plus d'entrée dans la barre ni dans corpsDeVue —
+   mais tout le savoir-faire de ce fichier reste en service : la section
+   « Bientôt » d'À suivre s'appuie sur dateFRDe, dansFenetre, plateformesDe et
+   les constantes SORTIES_*. Si l'onglet doit renaître un jour sous une autre
+   forme, tout est là. */
+
 /* ---------- Vue : Sorties — l'actualité du cinéma et du streaming ----------
 
    Découvrir répond à « qu'est-ce que je pourrais regarder ? » ; cet écran
