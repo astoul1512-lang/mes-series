@@ -24,11 +24,39 @@ const SORTIES_TYPES = { cine: [2, 3], stream: [4] };
 /* Les salles françaises programment aussi des rétrospectives : Matrix, Alien
    et 2001 étaient réellement « à l'affiche » le jour où l'écran a été construit.
    Vrai, mais pas ce qu'on attend d'une page de sorties : on ne garde que les
-   films récents, les reprises restent trouvables par la recherche. */
+   films récents, les reprises restent trouvables par la recherche.
+
+   Deux lignes de défense, parce qu'une seule ne suffit pas :
+   1. la date de la fiche (gratuite, écarte Matrix et ses semblables) ;
+   2. la première projection au monde, lue dans les dates de sortie du film.
+   La seconde attrape ce que la première laisse passer : « Kill Bill : The
+   Whole Bloody Affair » a une fiche datée 2026 — le montage intégral ressorti
+   cet été — mais sa première mondiale est à Cannes en 2004. Nouveau montage,
+   vieux film. */
 const SORTIES_RECENT_JOURS = 365;
+function sortiesLimite(){
+  return new Date(Date.now() - SORTIES_RECENT_JOURS * 86400000).toISOString().slice(0, 10);
+}
 function sortieRecente(f){
-  const lim = new Date(Date.now() - SORTIES_RECENT_JOURS * 86400000).toISOString().slice(0, 10);
-  return (f.release_date || '') >= lim;
+  return (f.release_date || '') >= sortiesLimite();
+}
+async function pasUneReprise(id){
+  const d = await dateFRDe(id);
+  return !d.premiere || d.premiere >= sortiesLimite();
+}
+
+/* Filtre une liste sur la première mondiale, par petits paquets, en gardant
+   l'ordre d'origine (la popularité TMDB). */
+async function sansReprises(films, max){
+  const out = [];
+  for(let i = 0; i < films.length && out.length < max; i += 5){
+    const paquet = await Promise.all(films.slice(i, i + 5).map(async f => {
+      try{ return (await pasUneReprise(f.id)) ? f : null; }
+      catch(e){ return null; }        // sans réponse, on préfère écarter
+    }));
+    paquet.forEach(f => { if(f && out.length < max) out.push(f); });
+  }
+  return out;
 }
 
 let sorties = { salle: null, cine: null, stream: null,
@@ -45,7 +73,13 @@ async function dateFRDe(id){
   const fr = ((rep.results || []).find(r => r.iso_3166_1 === 'FR') || {}).release_dates || [];
   const prendre = types => fr.filter(d => types.includes(d.type) && d.release_date)
                              .map(d => d.release_date.slice(0, 10)).sort();
-  return (datesFR[id] = { cine: prendre(SORTIES_TYPES.cine), stream: prendre(SORTIES_TYPES.stream) });
+  /* La première projection au monde, tous pays et tous types confondus :
+     c'est elle qui dit si un film est neuf ou ressorti. */
+  const toutes = (rep.results || [])
+    .flatMap(r => (r.release_dates || []).map(d => (d.release_date || '').slice(0, 10)))
+    .filter(Boolean).sort();
+  return (datesFR[id] = { cine: prendre(SORTIES_TYPES.cine), stream: prendre(SORTIES_TYPES.stream),
+                          premiere: toutes[0] || null });
 }
 
 /* La première date du genre dans [de, a], ou null. */
@@ -62,7 +96,11 @@ async function avecDatesFR(films, genre, de, a){
   for(let i = 0; i < src.length && out.length < SORTIES_MONTRES; i += 5){
     const paquet = await Promise.all(src.slice(i, i + 5).map(async f => {
       try{
-        const d = dansFenetre((await dateFRDe(f.id))[genre], de, a);
+        const dates = await dateFRDe(f.id);
+        /* Une reprise a une date française toute neuve — c'est justement le
+           piège : la première mondiale tranche. */
+        if(dates.premiere && dates.premiere < sortiesLimite()) return null;
+        const d = dansFenetre(dates[genre], de, a);
         return d ? Object.assign({ dfr: d }, f) : null;
       }catch(e){ return null; }
     }));
@@ -104,8 +142,10 @@ async function chargerSorties(force){
         sort_by: 'popularity.desc', 'release_date.gte': debut, 'release_date.lte': auj })
     ]);
     const net = l => (l.results || []).filter(f => f && f.id && (f.title || '').trim() && sortieRecente(f));
-    /* À l'affiche : la liste TMDB fait foi, aucune date n'est montrée. */
-    sorties.salle = { total: salle.total_results || 0, films: net(salle).slice(0, 12) };
+    /* À l'affiche : la liste TMDB fait foi pour « qui est en salle », mais
+       chaque film passe le contrôle de première mondiale. */
+    sorties.salle = { total: salle.total_results || 0,
+                      films: await sansReprises(net(salle), 12) };
     const cine = await avecDatesFR(net(prochains), 'cine', auj, fin);
 
     /* Le streaming : films arrivés récemment, gardés seulement si au moins un
