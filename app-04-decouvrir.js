@@ -692,6 +692,7 @@ async function loadPreview(){
     /* La fiche porte déjà casting et vidéos : on remplit les caches communs
        pour que la zone bande-annonce n'aille pas redemander la même chose. */
     castings[type+':'+id] = ((d.credits||{}).cast||[]).slice(0, 16);
+    if(d.original_language) langueDe[type+':'+id] = d.original_language;
     semerBande(type, id, d);
   }catch(e){
     if(ui.preview.id===id) ui.preview = { id:id, type:type, loading:false, error:

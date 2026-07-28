@@ -75,6 +75,9 @@ async function chargerFiche(type, id){
   try{
     const d = await tmdb('/'+type+'/'+id, { append_to_response:'credits,videos' });
     castings[k] = ((d.credits||{}).cast||[]).slice(0, 16);
+    /* La langue d'origine sert aux suggestions : sur un titre japonais, les
+       recommandations japonaises ont le droit de rester. */
+    if(d.original_language) langueDe[k] = d.original_language;
     peindreCasting(k);
     await semerBande(type, id, d);
   }catch(e){ delete castings[k]; peindreCasting(k); }  // un échec s'oublie, pour réessayer
@@ -99,6 +102,52 @@ function castStrip(cast){
       '<div class="cname">'+esc(p.name)+'</div>'+
       '<div class="crole">'+esc(p.character||'')+'</div>'+
     '</button>').join('')+'</div>';
+}
+
+/* ---------- « Dans le même esprit » ----------
+   Les recommandations TMDB du titre : ce que les gens qui l'ont aimé ont
+   aussi aimé. En bas de chaque fiche — découverte comme bibliothèque — pour
+   rebondir une fois la fiche lue. Même règle d'origine que Découvrir, avec
+   la même nuance : les titres de la langue du titre regardé restent, sinon
+   la rangée d'un animé japonais serait toujours vide. */
+const recos = {};                    // 'tv:1399' → 'attente' | tableau | null (rien)
+const langueDe = {};                 // 'tv:1399' → 'ja' — remplie par les fiches
+
+async function chargerRecos(type, id){
+  const k = type+':'+id;
+  if(recos[k] !== undefined) return;
+  recos[k] = 'attente';
+  try{
+    const d = await tmdb('/'+type+'/'+id+'/recommendations');
+    const langue = langueDe[k] || null;
+    const gardes = (d.results||[])
+      .filter(r => r && r.poster_path && (r.title || r.name))
+      .filter(r => typeof r.original_language !== 'string' ||
+                   LANGUES_OCCIDENT.indexOf(r.original_language) >= 0 ||
+                   r.original_language === langue)
+      .slice(0, 12);
+    recos[k] = gardes.length ? gardes : null;
+  }catch(e){ delete recos[k]; }      // un échec s'oublie, pour réessayer
+  peindreRecos(k, type);
+}
+function peindreRecos(k, type){
+  const el = document.getElementById('reco-'+k);
+  if(el) el.innerHTML = recoStrip(recos[k], type);
+}
+/* Emplacement réservé dans une fiche : rempli dès que les suggestions arrivent. */
+function zoneRecos(type, id){
+  const k = type+':'+id;
+  setTimeout(()=> chargerRecos(type, id), 0);
+  return '<div id="reco-'+k+'">'+recoStrip(recos[k], type)+'</div>';
+}
+function recoStrip(l, type){
+  if(!l || l === 'attente' || !l.length) return '';
+  return '<div class="sectitle">Dans le même esprit</div><div class="filmrow">'+
+    l.map(r=>'<div class="pcard sortiecarte" onclick="openPreview('+r.id+',\''+type+'\', view)">'+
+      '<div class="wrapimg">'+posterEl(r.poster_path,'w342','',r.title||r.name)+'</div>'+
+      '<div class="pname">'+esc(r.title||r.name)+'</div>'+
+      (r.vote_average ? '<div class="psub">'+I.star+' '+(Math.round(r.vote_average*10)/10)+'</div>' : '')+
+    '</div>').join('')+'</div>';
 }
 
 /* ---------- Bande-annonce ----------
@@ -307,6 +356,7 @@ function viewPreview(){
   if(isTv) html += blocSaisonsApercu(d);
 
   html += castStrip(((d.credits||{}).cast||[]));
+  html += zoneRecos(isTv ? 'tv' : 'movie', d.id);
   html += '<div style="height:30px"></div>';
   return html;
 }
@@ -465,6 +515,7 @@ function viewMovie(){
   if(m.overview) html += '<div class="sectitle">Synopsis</div><div class="overview" style="margin-top:0">'+esc(m.overview)+'</div>';
   html += blocPlateformes('movie', m.id);
   html += zoneCasting('movie', m.id);
+  html += zoneRecos('movie', m.id);
   html += '<div style="height:30px"></div>';
   return html;
 }

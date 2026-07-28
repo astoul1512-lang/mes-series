@@ -86,6 +86,7 @@ function viewShow(){
   });
   html += '</div>';
   html += zoneCasting('tv', s.id);
+  html += zoneRecos('tv', s.id);
   html += '<div style="height:28px"></div>';
   return html;
 }
