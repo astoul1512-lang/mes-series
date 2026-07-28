@@ -28,7 +28,7 @@ function viewSettings(){
     '</div></div></div>';
 
   html += '<div class="sectitle">Mon compte</div><div class="wrap" style="padding-top:0">'+
-    ligne('Modifier mon profil', 'Prénom, couleur et emblème',
+    ligne('Modifier mon profil', 'Prénom, avatar ou photo',
           "go('moi',{from:'settings'})", I.user)+
     ligne(signedIn() ? 'Compte et synchronisation' : 'Sauvegarder en ligne',
           signedIn() ? esc(db.auth.email||'') : 'Tes séries à l\'abri, sur tous tes appareils',
@@ -204,9 +204,9 @@ async function boot(){
   /* Arrivée par un lien de réinitialisation : elle passe avant tout le reste,
      y compris la mise en route — le lien ne dure qu'une heure. */
   if(typeof lireLienReinit === 'function' && lireLienReinit()) return go('motdepasse');
-  /* Première ouverture : on déroule la mise en route plutôt que de lâcher
-     l'arrivant devant des onglets vides et un mot inconnu. */
-  if(!db.onboarde) demarrerAccueil();
+  /* Sans session, l'app s'ouvre sur la porte d'entrée, avec l'onglet le plus
+     probable selon que l'appareil a déjà connu un compte ou non. */
+  if(!signedIn()) demarrerAccueil();
   if(memoryOnly) toast('Stockage indisponible : pense à exporter tes données');
   if(syncReady() && signedIn()){ syncNow(true); majProfil(); chargerPartage(); }
 }

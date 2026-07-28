@@ -565,3 +565,10 @@
   .inter.on i{left:20px}
   .srow.clic{align-items:center;gap:12px}
   .srow.clic .poster{width:56px;height:84px}
+
+  /* ---------- Avatar photo ---------- */
+  /* La photo remplace la couleur et l'emblème : même rond, même taille, mais
+     une image recadrée. `object-fit` évite qu'un portrait soit écrasé. */
+  img.avatar{object-fit:cover;padding:0;background:var(--surface2)}
+  .avatar.moyen{width:44px;height:44px;font-size:17px}
+  .btn.ghost.danger{color:#ff5a5a;border-color:#ff5a5a44}

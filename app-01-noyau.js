@@ -472,10 +472,19 @@ async function majProfil(){
   if(!signedIn()) return;
   const pseudo = (db.pseudo || '').trim() || (db.auth.email||'').split('@')[0];
   db.pseudo = pseudo;
+  const p = db.profil || {};
   try{
     await sbFetch('/rest/v1/profils', { method:'POST',
       headers:{ Prefer:'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify({ user_id: db.auth.uid, pseudo: pseudo, maj: new Date().toISOString() }) });
+      body: JSON.stringify({ user_id: db.auth.uid, pseudo: pseudo,
+        /* L'avatar voyage avec le pseudo : sans ça les proches ne voyaient
+           qu'une initiale grise, alors que l'app leur promettait le contraire.
+           La table n'est lisible que par le cercle — voir la règle
+           « profils lisibles par mon cercle » côté base. */
+        couleur: p.couleur || null,
+        embleme: p.embleme || null,
+        photo:   p.photo   || null,
+        maj: new Date().toISOString() }) });
   }catch(e){}
 }
 
@@ -488,13 +497,21 @@ async function chargerPartage(){
     const idsSuivis  = liens.filter(l=>l.suiveur===moi).map(l=>l.suivi);
     const idsAbonnes = liens.filter(l=>l.suivi===moi).map(l=>l.suiveur);
     const tous = [...new Set(idsSuivis.concat(idsAbonnes))];
-    let noms = {};
+    let profs = {};
     if(tous.length){
-      const ps = await sbFetch('/rest/v1/profils?select=user_id,pseudo&user_id=in.('+tous.join(',')+')', {});
-      ps.forEach(p=> noms[p.user_id] = p.pseudo);
+      const ps = await sbFetch('/rest/v1/profils?select=user_id,pseudo,couleur,embleme,photo'+
+        '&user_id=in.('+tous.join(',')+')', {});
+      ps.forEach(p=> profs[p.user_id] = p);
     }
-    partage.suivis  = idsSuivis.map(id=>({ id, pseudo: noms[id] || 'Sans nom' }));
-    partage.abonnes = idsAbonnes.map(id=>({ id, pseudo: noms[id] || 'Sans nom' }));
+    /* On reprend l'avatar tel que la personne l'a choisi. Rien n'est inventé :
+       sans profil enregistré, on retombe sur l'initiale. */
+    const fiche = (id)=>{
+      const p = profs[id] || {};
+      return { id, pseudo: p.pseudo || 'Sans nom',
+               couleur: p.couleur || null, embleme: p.embleme || null, photo: p.photo || null };
+    };
+    partage.suivis  = idsSuivis.map(fiche);
+    partage.abonnes = idsAbonnes.map(fiche);
     partage.charge = true;
   }catch(e){ partage.erreur = e.message; }
   partage.occupe = false;

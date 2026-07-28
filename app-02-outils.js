@@ -165,15 +165,58 @@ const EMBLEMES = [
 function profilCouleur(id){
   return COULEURS_PROFIL.find(c=>c.id===id) || COULEURS_PROFIL[0];
 }
-/* L'avatar de l'utilisateur. Les personnes suivies gardent leur initiale :
-   leur emblème leur appartient, on ne l'invente pas à leur place. */
-function avatarMoi(cls){
-  const p = db.profil || {};
+/* L'avatar de n'importe qui : le sien, ou celui d'une personne du cercle.
+   Une photo remplace la couleur et l'emblème — on ne superpose pas les deux.
+   `profil` attend { pseudo, couleur, embleme, photo } ; tout est facultatif. */
+function avatarDe(profil, cls){
+  const p = profil || {};
+  const nom = (p.pseudo || '').trim();
+  if(p.photo){
+    return '<img class="avatar photo '+(cls||'')+'" src="'+esc(p.photo)+'" '+
+           'alt="'+esc(nom || 'Avatar')+'">';
+  }
   const c = profilCouleur(p.couleur);
-  const lettre = (db.pseudo||'?').trim().charAt(0).toUpperCase() || '?';
+  const lettre = (nom || '?').charAt(0).toUpperCase() || '?';
   const dedans = (p.embleme && p.embleme !== 'lettre' && I[p.embleme]) ? I[p.embleme] : esc(lettre);
   return '<div class="avatar '+(cls||'')+'" style="background:linear-gradient(135deg,'+c.a+','+c.b+')">'+
     dedans+'</div>';
+}
+function avatarMoi(cls){
+  const p = db.profil || {};
+  return avatarDe({ pseudo:db.pseudo, couleur:p.couleur, embleme:p.embleme, photo:p.photo }, cls);
+}
+
+/* ---------- La photo d'avatar ----------
+   Réduite et recadrée au carré avant d'être gardée : une photo d'iPhone pèse
+   plusieurs mégaoctets, elle passerait dans chaque synchro et dans chaque
+   export. À 256 pixels, c'est quelques kilo-octets et c'est bien assez pour
+   un rond de 96 pixels à l'écran. */
+const AVATAR_PX = 256;
+function photoVersAvatar(fichier){
+  return new Promise((res, rej)=>{
+    if(!fichier || !/^image\//.test(fichier.type || '')) return rej(new Error('pas une image'));
+    const url = URL.createObjectURL(fichier);
+    const img = new Image();
+    img.onload = ()=>{
+      try{
+        /* Recadrage centré : on garde le carré du milieu, comme le fait
+           n'importe quelle app de messagerie. */
+        const cote = Math.min(img.naturalWidth, img.naturalHeight);
+        const sx = (img.naturalWidth  - cote) / 2;
+        const sy = (img.naturalHeight - cote) / 2;
+        const cv = document.createElement('canvas');
+        cv.width = cv.height = AVATAR_PX;
+        const ctx = cv.getContext('2d');
+        ctx.drawImage(img, sx, sy, cote, cote, 0, 0, AVATAR_PX, AVATAR_PX);
+        const donnee = cv.toDataURL('image/jpeg', 0.82);
+        URL.revokeObjectURL(url);
+        if(!donnee || donnee.length < 100) return rej(new Error('image illisible'));
+        res(donnee);
+      }catch(e){ URL.revokeObjectURL(url); rej(e); }
+    };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); rej(new Error('image illisible')); };
+    img.src = url;
+  });
 }
 
 /* ============================ UI helpers ============================ */
@@ -213,6 +256,9 @@ let view = 'follow';
 let params = {};
 let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searching:false, searchErr:'',
            openSeasons:{}, busy:false,
+           /* Quel onglet d'avatar est ouvert : 'embleme', 'photo', ou rien —
+              auquel cas on montre celui qui correspond à l'avatar actuel. */
+           avatarOnglet:null,
            /* Découvrir : type affiché, genres cochés, tri, note minimale, page en cours */
            /* Découvrir : type affiché, genres cochés, plateformes cochées, tri,
               note minimale, page en cours */
@@ -223,7 +269,7 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
                   perimetre:'tout', tri:'populaire', noteMin:0,
                   page:1, pages:1, res:[], loading:false, err:'', charge:false } };
 
-const DEPTH = { accueil:0, motdepasse:0, discover:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, acteur:2, account:2, biblio:2, notifs:2, clochettes:3 };
+const DEPTH = { motdepasse:0, avatar:0, discover:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, acteur:2, account:2, biblio:2, notifs:2, clochettes:3 };
 let navDir = 'none';
 /* Position de défilement mémorisée pour les écrans qui sont des listes.
    Quitter une liste puis y revenir doit rendre la page là où on l'avait laissée ;

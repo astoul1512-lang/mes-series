@@ -67,12 +67,11 @@ function viewAbos(){
 }
 
 function ligneAbo(p, role){
-  const ini = (p.pseudo||'?').trim().charAt(0).toUpperCase();
   return '<div class="srow" style="align-items:center">'+
     (role==='suiveur'
       ? '<div style="display:flex;gap:12px;align-items:center;flex:1;min-width:0" onclick="ouvrirBiblio(\''+p.id+'\')">'
       : '<div style="display:flex;gap:12px;align-items:center;flex:1;min-width:0">')+
-      '<div class="avatar" style="width:44px;height:44px;font-size:17px">'+esc(ini)+'</div>'+
+      avatarDe(p, 'moyen')+
       '<div class="sinfo" style="justify-content:center">'+
         '<div class="sname">'+esc(p.pseudo)+'</div>'+
         '<div class="tiny muted">'+(role==='suiveur' ? 'Voir sa bibliothèque' : 'Voit ta bibliothèque')+'</div>'+
@@ -204,30 +203,24 @@ function viewAccount(){
     return html + '<div style="height:30px"></div>';
   }
 
-  /* --- Pas encore de compte : on explique d'abord ce qu'on y gagne --- */
+  /* --- Pas encore de compte : la porte d'entrée --- */
   if(!signedIn()){
+    /* Les trois arguments de vente et les deux écrans de mise en route ont
+       disparu : soit on a un compte, soit on n'en a pas. Il n'y a rien à
+       expliquer avant, et le prénom est déjà demandé juste en dessous. */
     const creer = ui.acMode !== 'connexion';
     const nb = Object.keys(db.shows).length + Object.keys(db.movies).length;
-    html += '<div class="wrap">'+
-      '<div class="intro">'+
-        '<div class="acclogo">'+I.user+'</div>'+
-        '<h2>'+(nb ? 'Retrouve tes séries' : 'Tes séries te suivent partout')+'</h2>'+
-        '<p>'+(nb > 1
-          ? 'Les '+nb+' titres posés sur cet appareil t\'attendent. Connecte-toi pour les retrouver, '+
-            'ou crée ton compte : ils seront rattachés et mis à l\'abri.'
-          : nb === 1
-            ? 'Le titre posé sur cet appareil t\'attend. Connecte-toi pour le retrouver, ou crée ton '+
-              'compte : il sera rattaché et mis à l\'abri.'
-            : 'Ton compte garde ta bibliothèque à l\'abri et la rend identique sur tous tes appareils.')+
+    html += '<div class="wrap" style="padding-top:34px">'+
+      '<div class="intro" style="margin-bottom:22px">'+
+        '<div class="acclogo" onclick="reglerServeur()">'+I.tv+'</div>'+
+        '<h2>Mes Séries</h2>'+
+        /* Le décompte rassure celui qui a déjà des titres sur cet appareil :
+           sans lui, la porte donne l'impression d'avoir tout effacé. */
+        '<p>'+(nb
+          ? (nb > 1 ? 'Les '+nb+' titres posés ici t\'attendent. ' : 'Le titre posé ici t\'attend. ')+
+            'Connecte-toi pour les retrouver, ou crée ton compte : tout sera rattaché.'
+          : 'Ta bibliothèque, à l\'abri et identique sur tous tes appareils.')+
         '</p>'+
-      '</div>'+
-      '<div class="avantages">'+
-        '<div><i>'+I.check+'</i><span><b>Rien ne se perd.</b> Chaque épisode coché part en sauvegarde '+
-          'dans la foulée. Téléphone changé, app réinstallée : tout revient.</span></div>'+
-        '<div><i>'+I.refresh+'</i><span><b>Le même partout.</b> iPhone, ordinateur, tablette : la même '+
-          'liste et la même progression.</span></div>'+
-        '<div><i>'+I.user+'</i><span><b>À partager, si tu veux.</b> Tu peux suivre la bibliothèque de tes '+
-          'proches — uniquement sur invitation.</span></div>'+
       '</div>'+
       '<div class="bascule">'+
         '<button class="'+(creer?'on':'')+'" onclick="setAcMode(\'creer\')">Créer un compte</button>'+
@@ -265,8 +258,10 @@ function viewAccount(){
       (creer ? ''
         : '<button class="tiny muted" style="display:block;width:100%;text-align:center;padding:10px 8px 14px" '+
           'onclick="demanderReinit()">Mot de passe oublié ?</button>')+
-      '<button class="tiny muted" style="display:block;width:100%;text-align:center;padding:8px" onclick="ui.editServer=true;render()">Modifier le serveur</button>'+
-    '</div>';
+      /* « Modifier le serveur » n'a rien à faire sur un écran de connexion :
+         il ne sert qu'une fois dans la vie du projet. Il reste accessible en
+         appuyant longuement sur le logo, pour ne rien perdre. */
+      '</div>';
     return html + '<div style="height:30px"></div>';
   }
 
@@ -307,6 +302,17 @@ function viewAccount(){
 }
 
 function setAcMode(m){ ui.acMode = m; render(); }
+
+/* Sept appuis sur le logo : le réglage du serveur, rangé hors de vue mais
+   jamais perdu. Un tap accidentel ne déclenche rien. */
+let tapsLogo = 0, tapsLogoT = null;
+function reglerServeur(){
+  clearTimeout(tapsLogoT);
+  tapsLogo++;
+  tapsLogoT = setTimeout(()=>{ tapsLogo = 0; }, 1200);
+  if(tapsLogo < 7) return;
+  tapsLogo = 0; ui.editServer = true; render();
+}
 
 /* ===================== Mot de passe oublié =====================
    Trois moments : demander l'envoi, revenir par le lien reçu, choisir le
@@ -411,7 +417,7 @@ function viewMotDePasse(){
 function quitterReinit(redemander){
   reinit = { jeton:null, erreur:'', occupe:false };
   if(redemander){ go('account', {from:'profile'}); ui.acMode = 'connexion'; render(); demanderReinit(); }
-  else go(db.onboarde ? 'follow' : 'accueil');
+  else go(signedIn() ? 'follow' : 'account');
 }
 
 async function validerNouveauMdp(){
@@ -542,7 +548,11 @@ async function doSignUp(){
     /* Le prénom est enregistré avant la synchro : sans ça, le profil partait
        avec le début de l'adresse e-mail en guise de nom. */
     db.pseudo = nom; saveDB();
-    if(!params.from) go('follow'); else render();
+    /* Le compte est fait : on propose l'avatar dans la foulée, sur son propre
+       écran. C'est le bon moment — dans le formulaire, il aurait allongé une
+       page déjà longue. Depuis les réglages, on ne déroute pas la personne. */
+    if(!params.from){ ui.avatarOnglet = null; go('avatar'); }
+    else render();
     toast('Compte créé');
     await syncNow();
     await majProfil(); await chargerPartage();

@@ -1,86 +1,25 @@
 "use strict";
 /* ============================ Rendu ============================ */
-/* ---------- Mise en route : le premier lancement ----------
-   Il n'y a plus rien à créer ni à configurer : les affiches et les dates
-   arrivent par un relais qui porte la clé commune. On demande donc juste
-   un prénom, et on laisse partir. */
-
-const ACCUEIL_PAS = 2;
-
-function demarrerAccueil(){ ui.pas = 0; ui.cleErr = ''; go('accueil'); }
-
-/* On sort de la mise en route vers la porte d'entrée, en choisissant l'onglet
-   qui convient : créer un compte, ou se connecter. */
-function finirAccueil(mode){
-  db.onboarde = true;
-  saveDB();
-  ui.acMode = (mode === 'connexion') ? 'connexion' : 'creer';
+/* ---------- Plus de mise en route ----------
+   Les deux écrans d'accueil demandaient un prénom déjà redemandé au compte,
+   puis vendaient des arguments répétés sur l'écran suivant. Soit on a un
+   compte, soit on n'en a pas : l'app ouvre directement sur la porte d'entrée.
+   `demarrerAccueil` reste, appelée par le démarrage, et se contente d'y aller
+   en choisissant l'onglet le plus probable. */
+function demarrerAccueil(){
+  ui.acMode = premiereFois() ? 'creer' : 'connexion';
   go('account');
 }
-
-function pasSuivant(){
-  if(ui.pas === 0){
-    const el = document.getElementById('prenom');
-    const v = el ? el.value.trim() : '';
-    if(v){ db.pseudo = v; saveDB(); }
-  }
-  ui.pas = Math.min(ACCUEIL_PAS - 1, (ui.pas || 0) + 1);
-  ui.cleErr = '';
-  render();
-}
-function pasPrecedent(){ ui.pas = Math.max(0, (ui.pas || 0) - 1); ui.cleErr = ''; render(); }
-
-function puces(n){
-  let h = '<div class="puces">';
-  for(let i = 0; i < ACCUEIL_PAS; i++) h += '<i class="'+(i === n ? 'on' : '')+'"></i>';
-  return h + '</div>';
-}
-
-function viewAccueil(){
-  const n = ui.pas || 0;
-  let h = '<div class="acc">';
-
-  if(n === 0){
-    h += '<div class="acclogo">'+I.tv+'</div>'+
-      '<h1>Mes Séries</h1>'+
-      '<p class="accsub">Tu coches les épisodes que tu as vus, l\'app retient où tu en es '+
-      'et te dit quand la suite arrive.</p>'+
-      '<label class="fld" style="margin-top:26px"><span>Comment tu t\'appelles ?</span>'+
-        '<input type="text" id="prenom" value="'+esc(db.pseudo||'')+'" placeholder="Ton prénom" '+
-        'autocomplete="given-name" onkeydown="if(event.key===\'Enter\'){this.blur();pasSuivant()}">'+
-        '<em>Utilisé seulement si tu partages ta liste avec quelqu\'un. Tu peux laisser vide.</em></label>'+
-      '<button class="btn block" style="margin-top:20px" onclick="pasSuivant()">Commencer</button>';
-  }
-
-  else {
-    /* Le compte est obligatoire depuis le 28/07 : cet écran ne promet plus que
-       tout est prêt, il annonce la dernière étape. Le prénom saisi juste avant
-       est repris tel quel dans le formulaire, on ne le redemande pas. */
-    const qui = (db.pseudo||'').trim();
-    h += '<div class="acclogo ok">'+I.check+'</div>'+
-      '<h1>'+(qui ? 'Une dernière chose, '+esc(qui) : 'Une dernière chose')+'</h1>'+
-      '<p class="accsub">Ton compte garde ta bibliothèque à l\'abri : téléphone changé, app '+
-      'réinstallée, tout revient. C\'est gratuit et ça prend trente secondes.</p>'+
-      '<ol class="etapes">'+
-        '<li>Trouve une série dans <b>Découvrir</b></li>'+
-        '<li>Coche ce que tu as déjà vu</li>'+
-        '<li><b>À suivre</b> te dit ce qu\'il te reste et ce qui sort bientôt</li>'+
-      '</ol>'+
-      '<button class="btn block" style="margin-top:6px" onclick="finirAccueil(\'creer\')">'+
-        'Créer mon compte</button>'+
-      '<div class="accliens">'+
-        '<button onclick="pasPrecedent()">Retour</button>'+
-        '<button onclick="finirAccueil(\'connexion\')">J\'ai déjà un compte</button>'+
-      '</div>';
-  }
-
-  return h + puces(n) + '</div>';
+/* Cet appareil n'a jamais vu de session : on propose la création plutôt que
+   la connexion. Ailleurs, c'est l'inverse — on se connecte bien plus souvent
+   qu'on ne crée un compte. */
+function premiereFois(){
+  return !db.proprio && !(db.auth && db.auth.email);
 }
 
 /* Le HTML de l'écran courant. Isolé du reste pour pouvoir aussi fabriquer
    l'écran d'arrivée pendant le geste de retour, sans toucher à l'état. */
 function corpsDeVue(){
-  if(view==='accueil') return viewAccueil();
   if(view==='follow')   return viewFollow();
   if(view==='discover') return viewDiscover();
   if(view==='profile')  return viewProfile();
@@ -96,6 +35,7 @@ function corpsDeVue(){
   if(view==='motdepasse') return viewMotDePasse();
   if(view==='notifs')   return viewNotifications();
   if(view==='clochettes') return viewClochettes();
+  if(view==='avatar')   return viewAvatar();
   return '';
 }
 /* Fabrique le HTML d'un autre écran que celui affiché, puis remet tout en place. */
@@ -107,13 +47,17 @@ function htmlDeLaVue(v, p){
   return h;
 }
 
-/* Le compte est obligatoire. Sans session, l'app ne montre que la mise en route,
-   l'écran de connexion et la réinitialisation de mot de passe — rien d'autre.
+/* Le compte est obligatoire. Sans session, l'app ne montre que l'écran de
+   connexion et la réinitialisation de mot de passe — rien d'autre.
    Le contrôle est posé ici, dans le seul passage obligé du rendu : un `go()`
    oublié quelque part ne peut pas ouvrir une porte dérobée. */
-const VUES_SANS_COMPTE = { accueil:1, account:1, motdepasse:1 };
+const VUES_SANS_COMPTE = { account:1, motdepasse:1, avatar:1 };
+/* `db.onboarde` ne veut plus rien dire depuis que la mise en route a disparu :
+   la seule question est d'avoir une session ou non. Le champ reste dans la base
+   pour ne pas casser la lecture d'une vieille sauvegarde, mais plus personne
+   ne le lit. */
 function porteFermee(){
-  return db.onboarde && !signedIn() && !VUES_SANS_COMPTE[view];
+  return !signedIn() && !VUES_SANS_COMPTE[view];
 }
 
 function render(){
@@ -121,10 +65,10 @@ function render(){
   if(porteFermee()){ view = 'account'; params = {}; navDir = 'none'; }
   const html = corpsDeVue();
   app.innerHTML = html;
-  /* Mise en route, réinitialisation et porte d'entrée occupent tout l'écran :
+  /* Porte d'entrée, mot de passe et choix de l'avatar occupent tout l'écran :
      la barre du bas n'a rien à y faire, il n'y a qu'une chose à faire. */
   document.body.classList.toggle('accueil',
-    view === 'accueil' || view === 'motdepasse' || (view === 'account' && !signedIn()));
+    view === 'motdepasse' || view === 'avatar' || (view === 'account' && !signedIn()));
   app.classList.remove('enter','back');
   /* Le retour à deux couches gère lui-même son mouvement : pas d'animation par-dessus. */
   if(sansAnim){ sansAnim = false; navDir = 'none'; }
@@ -398,7 +342,7 @@ function viewProfile(){
     html += '<div class="sectitle">Mes abonnements<span class="cnt">'+partage.suivis.length+'</span></div>'+
       '<div class="aborow">'+partage.suivis.slice(0,8).map(p=>
         '<button class="abomini" onclick="ouvrirBiblio(\''+p.id+'\')">'+
-          '<div class="avatar">'+esc((p.pseudo||'?').charAt(0).toUpperCase())+'</div>'+
+          avatarDe(p)+
           '<span>'+esc(p.pseudo)+'</span></button>').join('')+
         '<button class="abomini" onclick="ouvrirAbos()"><div class="avatar plus">'+I.plus+'</div><span>Gérer</span></button>'+
       '</div>';
@@ -496,8 +440,90 @@ function plusAnciennementAjoute(){
 }
 
 /* ---------- Vue : mon profil, en modification ---------- */
-function viewMoi(){
+/* ---------- L'avatar ----------
+   Une photo OU une couleur et un emblème : jamais les deux superposés.
+   Le même bloc sert dans « Mon profil » et dans l'étape qui suit la création
+   du compte, pour que les deux ne divergent jamais. */
+function ongletsAvatar(){
+  const photo = !!(db.profil && db.profil.photo);
+  return '<div class="fchips" style="justify-content:center;margin-bottom:20px">'+
+    '<button class="chip'+(photo?'':' on')+'" onclick="modeAvatar(\'embleme\')">Couleur et emblème</button>'+
+    '<button class="chip'+(photo?' on':'')+'" onclick="modeAvatar(\'photo\')">Une photo</button>'+
+  '</div>';
+}
+function blocAvatar(){
   const p = db.profil || {};
+  if(ui.avatarOnglet === 'photo' || (ui.avatarOnglet !== 'embleme' && p.photo)){
+    return '<input type="file" id="avfic" accept="image/*" style="display:none" '+
+             'onchange="choisirPhoto(this)">'+
+           '<button class="btn ghost block" style="margin-bottom:10px" '+
+             'onclick="document.getElementById(\'avfic\').click()">'+
+             (p.photo ? 'Changer de photo' : 'Choisir une photo')+'</button>'+
+           (p.photo
+             ? '<button class="btn ghost block danger" onclick="retirerPhoto()">Retirer la photo</button>'
+             : '')+
+           '<div class="tiny muted center" style="padding:14px 6px 0">La photo est réduite à '+
+           AVATAR_PX+' pixels et recadrée en carré avant d\'être enregistrée : elle pèse quelques '+
+           'kilo-octets et part avec ta sauvegarde.</div>';
+  }
+  return '<div class="fgrp">Couleur</div>'+
+    '<div class="pastilles">'+COULEURS_PROFIL.map(c=>
+      '<button class="past '+(profilCouleur(p.couleur).id===c.id?'on':'')+'" title="'+esc(c.nom)+'" '+
+        'aria-label="'+esc(c.nom)+'" onclick="choisirCouleur(\''+c.id+'\')" '+
+        'style="background:linear-gradient(135deg,'+c.a+','+c.b+')"></button>').join('')+'</div>'+
+    '<div class="fgrp">Emblème</div>'+
+    '<div class="emblemes">'+EMBLEMES.map(e=>{
+      const lettre = (db.pseudo||'?').trim().charAt(0).toUpperCase() || '?';
+      const dedans = e.id === 'lettre' ? '<b>'+esc(lettre)+'</b>' : (I[e.id]||'');
+      return '<button class="embl '+((p.embleme||'lettre')===e.id?'on':'')+'" title="'+esc(e.nom)+'" '+
+        'aria-label="'+esc(e.nom)+'" onclick="choisirEmbleme(\''+e.id+'\')">'+dedans+'</button>';
+    }).join('')+'</div>';
+}
+function modeAvatar(m){ ui.avatarOnglet = m; render(); }
+
+async function choisirPhoto(input){
+  const f = input && input.files && input.files[0];
+  input.value = '';                       // pour pouvoir reprendre la même photo
+  if(!f) return;
+  try{
+    const donnee = await photoVersAvatar(f);
+    db.profil = Object.assign({}, db.profil, { photo: donnee });
+    ui.avatarOnglet = 'photo';
+    saveDB(); render();
+    if(signedIn()) majProfil();
+  }catch(e){ toast('Cette image n\'a pas pu être lue'); }
+}
+function retirerPhoto(){
+  db.profil = Object.assign({}, db.profil, { photo: null });
+  ui.avatarOnglet = 'embleme';
+  saveDB(); render();
+  if(signedIn()) majProfil();
+}
+
+/* L'étape qui suit la création d'un compte. On peut la passer : un avatar
+   n'est pas une condition pour se servir de l'app. */
+function viewAvatar(){
+  return '<div class="wrap" style="padding-top:46px">'+
+    '<div class="intro" style="margin-bottom:22px">'+
+      '<div class="apercu">'+avatarMoi('geant')+'</div>'+
+      '<h2 style="margin-top:14px">Ton avatar</h2>'+
+      '<p>C\'est ce que verront les proches à qui tu partages ta bibliothèque. '+
+      'Tu pourras le changer quand tu veux.</p>'+
+    '</div>'+
+    ongletsAvatar()+
+    blocAvatar()+
+    '<button class="btn block" style="margin-top:24px" onclick="finirAvatar()">Continuer</button>'+
+    '<button class="tiny muted" style="display:block;width:100%;text-align:center;padding:14px 8px" '+
+      'onclick="finirAvatar()">Passer cette étape</button>'+
+  '</div>';
+}
+function finirAvatar(){
+  saveDB();
+  if(signedIn()) majProfil();
+  go('follow');
+}
+
+function viewMoi(){
   let html = header('Mon profil', {back:"goBack()"});
   html += '<div class="wrap">'+
     '<div class="apercu">'+avatarMoi('geant')+
@@ -508,21 +534,8 @@ function viewMoi(){
       '<input type="text" id="mpseudo" value="'+esc(db.pseudo||'')+'" placeholder="Adrien" '+
       'autocomplete="given-name" oninput="apercuPseudo(this.value)">'+
       '<em>C\'est ce que voient les personnes qui te suivent. Tu peux laisser vide.</em></label>'+
-
-    '<div class="fgrp">Couleur</div>'+
-    '<div class="pastilles">'+COULEURS_PROFIL.map(c=>
-      '<button class="past '+(profilCouleur(p.couleur).id===c.id?'on':'')+'" title="'+esc(c.nom)+'" '+
-        'aria-label="'+esc(c.nom)+'" onclick="choisirCouleur(\''+c.id+'\')" '+
-        'style="background:linear-gradient(135deg,'+c.a+','+c.b+')"></button>').join('')+'</div>'+
-
-    '<div class="fgrp">Emblème</div>'+
-    '<div class="emblemes">'+EMBLEMES.map(e=>{
-      const lettre = (db.pseudo||'?').trim().charAt(0).toUpperCase() || '?';
-      const dedans = e.id === 'lettre' ? '<b>'+esc(lettre)+'</b>' : (I[e.id]||'');
-      return '<button class="embl '+((p.embleme||'lettre')===e.id?'on':'')+'" title="'+esc(e.nom)+'" '+
-        'aria-label="'+esc(e.nom)+'" onclick="choisirEmbleme(\''+e.id+'\')">'+dedans+'</button>';
-    }).join('')+'</div>'+
-
+    ongletsAvatar()+
+    blocAvatar()+
     '<button class="btn block" style="margin-top:22px" onclick="enregistrerProfil()">Enregistrer</button>'+
   '</div>';
   return html + '<div style="height:30px"></div>';
@@ -531,7 +544,9 @@ function viewMoi(){
 function apercuPseudo(v){
   const nom = document.querySelector('.apercu .enom');
   if(nom) nom.textContent = v.trim() || 'Sans prénom';
-  if((db.profil||{}).embleme === 'lettre'){
+  const p = db.profil || {};
+  /* Une photo ne suit pas le prénom : seule l'initiale change en direct. */
+  if(!p.photo && (p.embleme || 'lettre') === 'lettre'){
     const av = document.querySelector('.apercu .avatar');
     if(av) av.textContent = (v.trim().charAt(0) || '?').toUpperCase();
   }
