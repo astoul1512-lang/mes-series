@@ -251,13 +251,22 @@ function viewNotifications(){
   '</div>';
 
   /* Un vrai essai vaut mieux qu'une promesse : la notification qui s'affiche ici
-     est exactement celle que tu recevras, au mot près. */
+     est exactement celle que tu recevras, au mot près, avec tes propres titres.
+     On ne propose que les essais qui ont de quoi se remplir : rien n'est
+     inventé, tout sort de la bibliothèque. */
   if(notifAutorisees()){
-    html += '<div class="sectitle">Vérifier</div><div class="wrap" style="padding-top:0">'+
-      '<button class="btn ghost block" onclick="testerNotif()">Envoyer une notification d\'essai</button>'+
-      '<div class="tiny muted center" style="margin-top:10px">Verrouille l\'écran juste après '+
-      'pour la voir comme elle arrivera vraiment.</div>'+
-    '</div>';
+    const essais = essaisPossibles();
+    html += '<div class="sectitle">Vérifier</div><div class="wrap" style="padding-top:0">';
+    if(essais.length){
+      html += '<div class="fchips">'+
+        essais.map(e=>'<button class="chip" onclick="testerNotif(\''+e.v+'\')">'+e.t+'</button>').join('')+
+      '</div>'+
+      '<div class="tiny muted" style="margin-top:12px">Verrouille l\'écran juste après : '+
+      'la notification est exactement celle que tu recevras, avec tes titres.</div>';
+    }else{
+      html += '<div class="small muted">Ajoute une série ou un film pour pouvoir faire un essai.</div>';
+    }
+    html += '</div>';
   }
 
   html += '<div class="wrap tiny muted" style="padding-top:18px;padding-bottom:30px">'+
@@ -325,14 +334,39 @@ function viewClochettes(){
 /* Passe par le service worker plutôt que par `new Notification(...)` : c'est la
    seule voie qui fonctionne sur iOS, et c'est aussi celle qu'empruntera plus
    tard la vraie notification envoyée par le serveur. */
-async function testerNotif(){
+/* Un titre à mettre dans l'essai : d'abord un de ceux dont la cloche est
+   allumée, sinon n'importe lequel de la bibliothèque. Jamais un titre inventé —
+   un essai qui parle d'une série qu'on ne suit pas ne prouve rien. */
+function serieEssai(){
+  const l = Object.values(db.shows);
+  return l.find(s=>clocheAllumee('tv', s.id)) || l[0] || null;
+}
+function filmEssai(){
+  const l = Object.values(db.movies);
+  return l.find(m=>clocheAllumee('movie', m.id)) || l[0] || null;
+}
+
+function essaisPossibles(){
+  const e = [];
+  if(serieEssai()) e.push({ v:'episode', t:'Un nouvel épisode' });
+  if(filmEssai())  e.push({ v:'film',    t:'Un film qui sort' });
+  if(serieEssai() || filmEssai()) e.push({ v:'resume', t:'Le résumé du soir' });
+  return e;
+}
+
+async function testerNotif(genre){
   if(!notifAutorisees()){ toast('Autorise d\'abord les notifications'); return; }
+  const t = texteEssai(genre || 'resume');
+  if(!t){ toast('Rien à mettre dans l\'essai'); return; }
   try{
     const reg = await navigator.serviceWorker.ready;
-    await reg.showNotification(texteEssai().titre, {
-      body: texteEssai().corps,
-      tag: 'essai',
-      data: { url: './', essai:true }
+    await reg.showNotification(t.titre, {
+      body: t.corps,
+      /* Un tag différent par essai : sans ça le deuxième remplace le premier
+         en silence et on croit que rien n'est parti. */
+      tag: 'essai-' + (genre || 'resume'),
+      renotify: true,
+      data: { url: t.url || './', essai:true }
     });
     toast('Envoyée — verrouille l\'écran pour la voir');
   }catch(err){
@@ -340,15 +374,48 @@ async function testerNotif(){
   }
 }
 
-/* Le texte exact de l'essai dépend du réglage choisi, pour que l'essai ne
-   mente pas sur ce que l'on recevra vraiment. */
-function texteEssai(){
-  const s = Object.values(db.shows).find(x=>clocheAllumee('tv', x.id));
-  const nom = s ? s.name : 'Ta série';
-  const ep  = s && s.next ? codeEp(s.next.s, s.next.e) : 'S1E1';
-  if(db.notif.quand === 'sortie')
-    return { titre: nom + ' · ' + ep + ' est sorti', corps: '' };
+/* Le texte exact de l'essai, construit comme le fera le serveur. */
+function texteEssai(genre){
+  const s = serieEssai(), m = filmEssai();
+
+  if(genre === 'episode'){
+    if(!s) return null;
+    const ep = s.next ? codeEp(s.next.s, s.next.e) : prochainCodeEp(s);
+    const nom = s.next && s.next.n ? s.next.n : '';
+    return { titre: s.name + ' · ' + ep + ' est sorti',
+             corps: nom ? '« ' + nom + ' »' : '',
+             url: './#show-' + s.id };
+  }
+
+  if(genre === 'film'){
+    if(!m) return null;
+    /* Le mot dépend de l'événement choisi : on ne dit pas « au cinéma » à
+       quelqu'un qui n'a coché que le streaming. */
+    const quoi = db.notif.films.cine   ? 'Sort au cinéma aujourd\'hui'
+               : db.notif.films.stream ? 'Disponible en streaming'
+               :                         'Disponible en VOD';
+    return { titre: m.title, corps: quoi, url: './#movie-' + m.id };
+  }
+
+  /* Le résumé : ce qu'on recevrait si tout sortait le même soir. */
+  const bouts = [];
+  if(s) bouts.push(s.name + ' ' + (s.next ? codeEp(s.next.s, s.next.e) : prochainCodeEp(s)));
+  if(m) bouts.push(m.title);
+  if(!bouts.length) return null;
   if(db.notif.quand === 'samedi')
-    return { titre: 'Ta semaine', corps: 'Voilà ce qui t\'attend ce week-end.' };
-  return { titre: '1 nouveauté ce soir', corps: nom + ' · ' + ep + ' est sorti' };
+    return { titre:'Ta semaine',
+             corps: bouts.length + ' nouveauté' + (bouts.length>1?'s':'') + ' t\'attendent ce week-end.' };
+  return { titre: bouts.length + ' nouveauté' + (bouts.length>1?'s':'') + ' ce soir',
+           corps: bouts.join(', ') + '.' };
+}
+
+/* Une série sans épisode annoncé : on prend le premier non vu plutôt que
+   d'écrire un code d'épisode au hasard. */
+function prochainCodeEp(s){
+  const nx = (typeof nextToWatch === 'function') ? nextToWatch(s) : null;
+  if(nx) return codeEp(nx.s, nx.e);
+  const sn = (typeof seasonNums === 'function') ? seasonNums(s, false) : [];
+  const der = sn.length ? sn[sn.length-1] : 1;
+  const eps = s.seasons && s.seasons[der] ? s.seasons[der] : [];
+  return codeEp(der, eps.length ? eps[eps.length-1].e : 1);
 }
