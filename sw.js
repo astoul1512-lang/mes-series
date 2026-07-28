@@ -1,7 +1,7 @@
 /* Service worker — démarrage instantané et fonctionnement hors-ligne.
    Stratégie : network-first sur les fichiers de l'app (pour recevoir les mises à jour),
    repli sur le cache quand le réseau est absent. Les appels TMDB ne sont jamais mis en cache. */
-const CACHE = 'mes-series-v40';
+const CACHE = 'mes-series-v41';
 const SHELL = ['./', './index.html', './app.css', './manifest.json',
                './icon-192.png', './icon-512.png', './apple-touch-icon.png',
                './app-01-noyau.js',
@@ -70,8 +70,10 @@ self.addEventListener('message', e => { if (e.data === 'skipWaiting') self.skipW
    tout passe donc par `waitUntil` et se termine toujours par une notification,
    même si le message reçu est illisible.
 
-   Aucune image n'est demandée ici : iOS reprend l'icône du manifeste et ignore
-   `icon` comme `image`. Le texte est le seul levier.
+   L'affiche est transmise quand le serveur en envoie une. iOS l'ignore et
+   remet l'icône du manifeste ; Android l'afficherait. On la joint quand même :
+   ça ne coûte rien, et le jour où Apple l'acceptera, elle apparaîtra sans
+   qu'on ait une ligne à changer.
 --------------------------------------------------------------------------- */
 self.addEventListener('push', e => {
   e.waitUntil((async () => {
@@ -86,6 +88,8 @@ self.addEventListener('push', e => {
       renotify: true,
       data: { url: d.url || './' }
     };
+    if (d.affiche) opts.icon = d.affiche;
+    if (d.bandeau) opts.image = d.bandeau;
     await self.registration.showNotification(titre, opts);
   })());
 });

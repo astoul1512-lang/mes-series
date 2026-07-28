@@ -262,7 +262,9 @@ function viewNotifications(){
         essais.map(e=>'<button class="chip" onclick="testerNotif(\''+e.v+'\')">'+e.t+'</button>').join('')+
       '</div>'+
       '<div class="tiny muted" style="margin-top:12px">Verrouille l\'écran juste après : '+
-      'la notification est exactement celle que tu recevras, avec tes titres.</div>';
+      'la notification est exactement celle que tu recevras, avec tes titres.<br><br>'+
+      'L\'affiche est bien jointe à l\'envoi. Si elle n\'apparaît pas, c\'est iOS qui '+
+      'la refuse aux apps web — et non l\'app qui ne l\'envoie pas.</div>';
     }else{
       html += '<div class="small muted">Ajoute une série ou un film pour pouvoir faire un essai.</div>';
     }
@@ -360,14 +362,21 @@ async function testerNotif(genre){
   if(!t){ toast('Rien à mettre dans l\'essai'); return; }
   try{
     const reg = await navigator.serviceWorker.ready;
-    await reg.showNotification(t.titre, {
+    const opts = {
       body: t.corps,
       /* Un tag différent par essai : sans ça le deuxième remplace le premier
          en silence et on croit que rien n'est parti. */
       tag: 'essai-' + (genre || 'resume'),
       renotify: true,
       data: { url: t.url || './', essai:true }
-    });
+    };
+    /* L'affiche est envoyée pour de bon. iOS l'ignore et remet l'icône du
+       manifeste ; Android l'afficherait. On la joint quand même plutôt que de
+       demander de nous croire sur parole — et le jour où Apple changera d'avis,
+       elle apparaîtra sans qu'on ait une ligne à écrire. */
+    if(t.affiche) opts.icon  = t.affiche;
+    if(t.bandeau) opts.image = t.bandeau;
+    await reg.showNotification(t.titre, opts);
     toast('Envoyée — verrouille l\'écran pour la voir');
   }catch(err){
     toast('L\'essai n\'a pas pu partir');
@@ -384,6 +393,7 @@ function texteEssai(genre){
     const nom = s.next && s.next.n ? s.next.n : '';
     return { titre: s.name + ' · ' + ep + ' est sorti',
              corps: nom ? '« ' + nom + ' »' : '',
+             affiche: IMG(s.poster,'w185'), bandeau: IMG(s.backdrop,'w780'),
              url: './#show-' + s.id };
   }
 
@@ -394,7 +404,9 @@ function texteEssai(genre){
     const quoi = db.notif.films.cine   ? 'Sort au cinéma aujourd\'hui'
                : db.notif.films.stream ? 'Disponible en streaming'
                :                         'Disponible en VOD';
-    return { titre: m.title, corps: quoi, url: './#movie-' + m.id };
+    return { titre: m.title, corps: quoi,
+             affiche: IMG(m.poster,'w185'), bandeau: IMG(m.backdrop,'w780'),
+             url: './#movie-' + m.id };
   }
 
   /* Le résumé : ce qu'on recevrait si tout sortait le même soir. */
