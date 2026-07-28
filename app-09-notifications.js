@@ -2,10 +2,9 @@
 /* ---------------------------------------------------------------------------
    Notifications — étape 1 : tout ce qui se passe sur le téléphone.
 
-   Ce fichier ne sait pas envoyer une notification depuis un serveur ; il sait
-   demander l'autorisation, retenir les titres que l'on veut suivre, et afficher
-   une notification de test pour vérifier que la chaîne fonctionne côté iPhone.
-   L'envoi automatique viendra ensuite, et s'appuiera sur ces mêmes préférences.
+   Ce fichier ne sait pas envoyer une notification ; il sait demander
+   l'autorisation à iOS et retenir les titres que l'on veut suivre.
+   L'envoi viendra du serveur, et s'appuiera sur ces mêmes préférences.
 
    Rappel de contrainte, pour que personne ne se demande plus tard pourquoi il
    n'y a pas d'affiche : iOS n'affiche ni image ni icône personnalisée pour une
@@ -250,27 +249,6 @@ function viewNotifications(){
     'depuis la fiche d\'une série ou d\'un film.</div>'+
   '</div>';
 
-  /* Un vrai essai vaut mieux qu'une promesse : la notification qui s'affiche ici
-     est exactement celle que tu recevras, au mot près, avec tes propres titres.
-     On ne propose que les essais qui ont de quoi se remplir : rien n'est
-     inventé, tout sort de la bibliothèque. */
-  if(notifAutorisees()){
-    const essais = essaisPossibles();
-    html += '<div class="sectitle">Vérifier</div><div class="wrap" style="padding-top:0">';
-    if(essais.length){
-      html += '<div class="fchips">'+
-        essais.map(e=>'<button class="chip" onclick="testerNotif(\''+e.v+'\')">'+e.t+'</button>').join('')+
-      '</div>'+
-      '<div class="tiny muted" style="margin-top:12px">Verrouille l\'écran juste après : '+
-      'la notification est exactement celle que tu recevras, avec tes titres.<br><br>'+
-      'L\'affiche est bien jointe à l\'envoi. Si elle n\'apparaît pas, c\'est iOS qui '+
-      'la refuse aux apps web — et non l\'app qui ne l\'envoie pas.</div>';
-    }else{
-      html += '<div class="small muted">Ajoute une série ou un film pour pouvoir faire un essai.</div>';
-    }
-    html += '</div>';
-  }
-
   html += '<div class="wrap tiny muted" style="padding-top:18px;padding-bottom:30px">'+
     'Sur iPhone, la vignette d\'une notification est toujours l\'icône de l\'app : '+
     'Apple n\'autorise pas les affiches pour une app web.</div>';
@@ -329,105 +307,4 @@ function viewClochettes(){
   }
   html += '<div style="height:26px"></div>';
   return html;
-}
-
-/* ---------- L'essai ---------- */
-
-/* Passe par le service worker plutôt que par `new Notification(...)` : c'est la
-   seule voie qui fonctionne sur iOS, et c'est aussi celle qu'empruntera plus
-   tard la vraie notification envoyée par le serveur. */
-/* Un titre à mettre dans l'essai : d'abord un de ceux dont la cloche est
-   allumée, sinon n'importe lequel de la bibliothèque. Jamais un titre inventé —
-   un essai qui parle d'une série qu'on ne suit pas ne prouve rien. */
-function serieEssai(){
-  const l = Object.values(db.shows);
-  return l.find(s=>clocheAllumee('tv', s.id)) || l[0] || null;
-}
-function filmEssai(){
-  const l = Object.values(db.movies);
-  return l.find(m=>clocheAllumee('movie', m.id)) || l[0] || null;
-}
-
-function essaisPossibles(){
-  const e = [];
-  if(serieEssai()) e.push({ v:'episode', t:'Un nouvel épisode' });
-  if(filmEssai())  e.push({ v:'film',    t:'Un film qui sort' });
-  if(serieEssai() || filmEssai()) e.push({ v:'resume', t:'Le résumé du soir' });
-  return e;
-}
-
-async function testerNotif(genre){
-  if(!notifAutorisees()){ toast('Autorise d\'abord les notifications'); return; }
-  const t = texteEssai(genre || 'resume');
-  if(!t){ toast('Rien à mettre dans l\'essai'); return; }
-  try{
-    const reg = await navigator.serviceWorker.ready;
-    const opts = {
-      body: t.corps,
-      /* Un tag différent par essai : sans ça le deuxième remplace le premier
-         en silence et on croit que rien n'est parti. */
-      tag: 'essai-' + (genre || 'resume'),
-      renotify: true,
-      data: { url: t.url || './', essai:true }
-    };
-    /* L'affiche est envoyée pour de bon. iOS l'ignore et remet l'icône du
-       manifeste ; Android l'afficherait. On la joint quand même plutôt que de
-       demander de nous croire sur parole — et le jour où Apple changera d'avis,
-       elle apparaîtra sans qu'on ait une ligne à écrire. */
-    if(t.affiche) opts.icon  = t.affiche;
-    if(t.bandeau) opts.image = t.bandeau;
-    await reg.showNotification(t.titre, opts);
-    toast('Envoyée — verrouille l\'écran pour la voir');
-  }catch(err){
-    toast('L\'essai n\'a pas pu partir');
-  }
-}
-
-/* Le texte exact de l'essai, construit comme le fera le serveur. */
-function texteEssai(genre){
-  const s = serieEssai(), m = filmEssai();
-
-  if(genre === 'episode'){
-    if(!s) return null;
-    const ep = s.next ? codeEp(s.next.s, s.next.e) : prochainCodeEp(s);
-    const nom = s.next && s.next.n ? s.next.n : '';
-    return { titre: s.name + ' · ' + ep + ' est sorti',
-             corps: nom ? '« ' + nom + ' »' : '',
-             affiche: IMG(s.poster,'w185'), bandeau: IMG(s.backdrop,'w780'),
-             url: './#show-' + s.id };
-  }
-
-  if(genre === 'film'){
-    if(!m) return null;
-    /* Le mot dépend de l'événement choisi : on ne dit pas « au cinéma » à
-       quelqu'un qui n'a coché que le streaming. */
-    const quoi = db.notif.films.cine   ? 'Sort au cinéma aujourd\'hui'
-               : db.notif.films.stream ? 'Disponible en streaming'
-               :                         'Disponible en VOD';
-    return { titre: m.title, corps: quoi,
-             affiche: IMG(m.poster,'w185'), bandeau: IMG(m.backdrop,'w780'),
-             url: './#movie-' + m.id };
-  }
-
-  /* Le résumé : ce qu'on recevrait si tout sortait le même soir. */
-  const bouts = [];
-  if(s) bouts.push(s.name + ' ' + (s.next ? codeEp(s.next.s, s.next.e) : prochainCodeEp(s)));
-  if(m) bouts.push(m.title);
-  if(!bouts.length) return null;
-  if(db.notif.quand === 'samedi')
-    return { titre:'Ta semaine',
-             corps: bouts.length + ' nouveauté' + (bouts.length>1?'s':'') + ' t\'attendent ce week-end.' };
-  return { titre: bouts.length + ' nouveauté' + (bouts.length>1?'s':'') + ' ce soir',
-           corps: bouts.join(', ') + '.' };
-}
-
-/* Une série sans épisode annoncé : on prend le premier non vu plutôt que
-   d'écrire un code d'épisode au hasard. */
-function prochainCodeEp(s){
-  const nx = (typeof nextToWatch === 'function') ? nextToWatch(s) : null;
-  if(nx) return codeEp(nx.s, nx.e);
-  const sn = (typeof seasonNums === 'function') ? seasonNums(s, false) : [];
-  const der = sn.length ? sn[sn.length-1] : 1;
-  const eps = s.seasons && s.seasons[der] ? s.seasons[der] : [];
-  return codeEp(der, eps.length ? eps[eps.length-1].e : 1);
 }
