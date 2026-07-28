@@ -259,6 +259,8 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
            /* Quel onglet d'avatar est ouvert : 'embleme', 'photo', ou rien —
               auquel cas on montre celui qui correspond à l'avatar actuel. */
            avatarOnglet:null,
+           /* Sorties : la section affichée — l'affiche par défaut. */
+           sortiesOnglet:'salle',
            /* Découvrir : type affiché, genres cochés, tri, note minimale, page en cours */
            /* Découvrir : type affiché, genres cochés, plateformes cochées, tri,
               note minimale, page en cours */

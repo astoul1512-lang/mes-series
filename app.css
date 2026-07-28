@@ -512,7 +512,7 @@
   .filmrow::-webkit-scrollbar{display:none}
   .filmrow .pcard{flex:0 0 104px}
   .filmrow .poster{width:104px;height:156px;border-radius:9px;object-fit:cover}
-  .filmrow .psub svg{width:10px;height:10px;vertical-align:-1px;color:var(--accent)}
+  .sortiecarte .psub svg{width:10px;height:10px;vertical-align:-1px;color:var(--accent)}
   .pcard{position:relative;text-align:left}
   .ptap{cursor:pointer}
   .pcard .poster{width:100%;height:auto;aspect-ratio:2/3}

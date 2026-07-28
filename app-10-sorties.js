@@ -203,14 +203,20 @@ function sectionVide(texte){
     '<div class="small muted">' + esc(texte) + '</div></div></div>';
 }
 
+/* Trois sections empilées faisaient un écran interminable, et les puces du
+   haut ressemblaient à des filtres sans en être : le retour d'Adrien, capture
+   à l'appui. Désormais les puces sont de vrais onglets — une seule section
+   affichée à la fois, comme dans Découvrir. L'écran s'ouvre sur l'affiche. */
 function viewSorties(){
+  if(!ui.sortiesOnglet) ui.sortiesOnglet = 'salle';
   if(sorties.etat === 'froid' || (sorties.etat === 'ok' && Date.now() - sorties.quand > SORTIES_TTL))
     setTimeout(() => chargerSorties(false), 0);
 
   let html = header('Sorties', {
     sub: '<div class="chips" style="padding:0 16px 10px">' +
       [['salle', 'Au cinéma'], ['cine', 'Bientôt au cinéma'], ['stream', 'Nouveau en streaming']]
-        .map(([id, l]) => '<button class="chip" onclick="allerSection(\'sor-' + id + '\')">' + l + '</button>').join('') +
+        .map(([id, l]) => '<button class="chip' + (ui.sortiesOnglet === id ? ' on' : '') + '" ' +
+          'onclick="choisirSorties(\'' + id + '\')">' + l + '</button>').join('') +
     '</div>'
   });
 
@@ -221,30 +227,32 @@ function viewSorties(){
     return html + '<div class="empty"><h3>Oups</h3><p>Impossible de charger les sorties.</p>' +
       '<button class="btn ghost" onclick="chargerSorties(true)">Réessayer</button></div>';
 
-  html += '<div class="sectitle" id="sor-salle">Au cinéma en ce moment</div>';
-  html += sorties.salle.films.length
-    ? '<div class="filmrow">' + sorties.salle.films.map(carteSortie).join('') + '</div>'
-    : sectionVide('Rien à l\'affiche — ce serait étonnant, réessaie plus tard.');
+  if(ui.sortiesOnglet === 'salle'){
+    /* Une vraie grille pleine page : les douze films d'un coup d'œil, au lieu
+       d'une rangée à faire défiler du pouce. */
+    html += sorties.salle.films.length
+      ? '<div class="pgrid" style="margin-top:6px">' + sorties.salle.films.map(carteSortie).join('') + '</div>'
+      : sectionVide('Rien à l\'affiche — ce serait étonnant, réessaie plus tard.');
+  } else if(ui.sortiesOnglet === 'cine'){
+    html += sorties.cine.length
+      ? lignesSorties(sorties.cine, 'Sortie salle')
+      : sectionVide('Aucune sortie salle datée pour la France dans les ' + SORTIES_FENETRE + ' prochains jours.');
+  } else {
+    html += sorties.stream.length
+      ? lignesSorties(sorties.stream, '')
+      : sectionVide('Aucune arrivée sur un abonnement ces ' + SORTIES_RECUL + ' derniers jours.');
+    html += '<div class="wrap tiny muted" style="padding-top:14px">' +
+      'Plateformes pour la France, fournies par TMDB et JustWatch. Elles ne sont connues ' +
+      'qu\'une fois le film en ligne — personne ne les annonce à l\'avance de façon fiable.</div>';
+  }
 
-  html += '<div class="sectitle" id="sor-cine">Bientôt au cinéma</div>';
-  html += sorties.cine.length
-    ? lignesSorties(sorties.cine, 'Sortie salle')
-    : sectionVide('Aucune sortie salle datée pour la France dans les ' + SORTIES_FENETRE + ' prochains jours.');
-
-  html += '<div class="sectitle" id="sor-stream">Nouveau en streaming</div>';
-  html += sorties.stream.length
-    ? lignesSorties(sorties.stream, '')
-    : sectionVide('Aucune arrivée sur un abonnement ces ' + SORTIES_RECUL + ' derniers jours.');
-
-  html += '<div class="wrap tiny muted" style="padding-top:14px;padding-bottom:26px">' +
-    'Dates et plateformes pour la France, fournies par TMDB et JustWatch. Les plateformes ne sont ' +
-    'connues qu\'une fois le film en ligne — personne ne les annonce à l\'avance de façon fiable.</div>';
-  return html;
+  return html + '<div style="height:26px"></div>';
 }
 
-function allerSection(id){
-  const el = document.getElementById(id);
-  if(el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+function choisirSorties(id){
+  ui.sortiesOnglet = id;
+  render();
+  window.scrollTo(0, 0);
 }
 
 /* ---------- « Bientôt » dans À suivre : la version personnelle ----------
