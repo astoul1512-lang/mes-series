@@ -91,6 +91,114 @@ function viewShow(){
 }
 function toggleSeason(id,n){ const k=id+'.'+n; ui.openSeasons[k]=!ui.openSeasons[k]; render(); }
 
+/* ---------------------------------------------------------------------------
+   Les épisodes sur la fiche d'une série qu'on n'a pas ajoutée
+
+   Avant, il fallait ajouter la série pour voir ce qu'il y avait dedans — un
+   engagement demandé avant l'information qui permet de le prendre. La liste
+   est donc la même ici, à ceci près que les épisodes ne sont chargés qu'à
+   l'ouverture d'une saison : charger les vingt saisons d'une série qu'on ne
+   fait que regarder en passant coûterait cher pour rien.
+
+   Le même « id.n » sert de clé qu'ailleurs : la saison ouverte ici l'est
+   encore sur la vraie fiche après l'ajout.
+--------------------------------------------------------------------------- */
+const apercuSaisons = {};                 // 'id.n' → 'attente' | [épisodes] | {erreur:1}
+
+function toggleSaisonApercu(id, n){
+  const k = id + '.' + n;
+  ui.openSeasons[k] = !ui.openSeasons[k];
+  render();
+  if(ui.openSeasons[k]) chargerSaisonApercu(id, n);
+}
+
+async function chargerSaisonApercu(id, n){
+  const k = id + '.' + n;
+  const d = apercuSaisons[k];
+  if(Array.isArray(d) || d === 'attente') return;
+  apercuSaisons[k] = 'attente'; render();
+  try{
+    const s = await tmdb('/tv/' + id + '/season/' + n);
+    apercuSaisons[k] = (s.episodes || []).map(ep=>({
+      e: ep.episode_number, n: ep.name || ('Épisode ' + ep.episode_number),
+      d: ep.air_date || null, r: ep.runtime || null, st: ep.still_path || null
+    }));
+  }catch(e){ apercuSaisons[k] = { erreur:1 }; }
+  if(view === 'preview') render();
+}
+
+function blocSaisonsApercu(d){
+  const saisons = (d.seasons || []).filter(s=>s.episode_count > 0)
+                    .sort((a,b)=>a.season_number - b.season_number);
+  if(!saisons.length) return '';
+  let html = '<div class="sectitle">Épisodes</div>'+
+    '<div class="card" style="margin:0 16px;overflow:hidden">';
+  saisons.forEach(s=>{
+    const n    = s.season_number;
+    const k    = d.id + '.' + n;
+    const open = !!ui.openSeasons[k];
+    const etat = apercuSaisons[k];
+    html += '<div class="season">'+
+      '<button class="shead '+(open?'open':'')+'" onclick="toggleSaisonApercu('+d.id+','+n+')">'+
+        '<span class="caret">'+I.caret+'</span>'+
+        '<b>'+(n===0?'Hors-série':'Saison '+n)+'</b>'+
+        '<span class="spacer"></span>'+
+        '<span class="tiny muted">'+s.episode_count+' ép.'+
+          (year(s.air_date) ? ' · '+esc(year(s.air_date)) : '')+'</span>'+
+      '</button>';
+    if(open){
+      if(etat && etat.erreur){
+        html += '<div class="eprow" onclick="chargerSaisonApercu('+d.id+','+n+')">'+
+          '<div class="epinfo"><div class="epsub">Chargement impossible — toucher pour réessayer'+
+          '</div></div></div>';
+      } else if(!Array.isArray(etat)){
+        html += '<div class="eprow"><span class="spin"></span>'+
+          '<div class="epinfo"><div class="epsub">Chargement des épisodes…</div></div></div>';
+      } else {
+        html += etat.map(ep=>
+          '<div class="eprow '+(aired(ep)?'':'future')+'" '+
+               'onclick="cocherDepuisApercu('+d.id+','+n+','+ep.e+')">'+
+            '<span class="ck">'+I.check+'</span>'+
+            epThumb(ep)+
+            '<div class="epinfo">'+
+              '<div class="epname">'+codeEp(n, ep.e)+' · '+esc(ep.n)+'</div>'+
+              '<div class="epsub">'+(ep.d?fmtDate(ep.d):'Date inconnue')+
+                (ep.r?' · '+ep.r+' min':'')+'</div>'+
+            '</div></div>').join('');
+      }
+    }
+    html += '</div>';
+  });
+  return html + '</div>'+
+    '<div class="wrap tiny muted" style="padding-top:10px">Cocher un épisode ajoute la série '+
+    'à ta liste et t\'y emmène.</div>';
+}
+
+/* Cocher ici vaut « je suis cette série » : sans l'ajout, la coche n'aurait
+   nulle part où être retenue. On ne coche que l'épisode touché — supposer que
+   tout ce qui précède a été vu serait deviner à sa place. */
+async function cocherDepuisApercu(id, n, e){
+  const ou = { id:id, from: params.from || 'discover' };
+  if(db.shows[id]){ toggleEp(id, n, e); return go('show', ou); }
+  if(ui.busy) return;
+  ui.busy = true;
+  toast('Ajout de la série…');
+  try{
+    const s = await fetchShowFull(id);
+    s.watched = {}; s.addedAt = Date.now();
+    s.watched[key(n, e)] = Date.now();
+    s.updated = Date.now();
+    db.shows[id] = s; saveDB();
+    ui.busy = false;
+    go('show', ou);
+    versLesSaisons();
+    toast('« '+s.name+' » ajoutée · '+codeEp(n,e)+' vu');
+  }catch(err){
+    ui.busy = false; render();
+    toast('Impossible d\'ajouter cette série');
+  }
+}
+
 function showMenu(id){
   const s = db.shows[id];
   openSheet('<h3>'+esc(s.name)+'</h3><p class="small muted" style="margin:0 0 6px">Mise à jour : '+

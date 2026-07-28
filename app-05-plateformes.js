@@ -302,13 +302,9 @@ function viewPreview(){
 
   html += blocPlateformes(isTv ? 'tv' : 'movie', d.id);
 
-  /* Détail des saisons */
-  if(isTv && d.seasons && d.seasons.length){
-    html += '<div class="sectitle">Saisons</div><div class="seasonpill">'+
-      d.seasons.filter(s=>s.season_number>0).map(s=>
-        '<div class="spill"><b>S'+s.season_number+'</b><span>'+s.episode_count+' ép.</span>'+
-        '<span>'+esc(year(s.air_date)||'')+'</span></div>').join('')+'</div>';
-  }
+  /* Détail des saisons, épisode par épisode : voir ce qu'il y a dedans ne
+     demande plus d'ajouter la série d'abord. */
+  if(isTv) html += blocSaisonsApercu(d);
 
   html += castStrip(((d.credits||{}).cast||[]));
   html += '<div style="height:30px"></div>';
