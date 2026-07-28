@@ -454,7 +454,8 @@ function viewMovie(){
   const back = "goBack()";
   if(!m) return header('Introuvable',{back:"go('profile')"});
   let html = header(m.title,{back:back,
-    right:'<button class="iconbtn" onclick="movieMenu('+m.id+')">'+I.dots+'</button>'});
+    right: boutonCloche('movie', m.id) +
+           '<button class="iconbtn" onclick="movieMenu('+m.id+')">'+I.dots+'</button>'});
   html += '<div class="hero">'+(m.backdrop?'<img src="'+IMG(m.backdrop,'w780')+'" alt="">':'')+'</div>';
   html += '<div class="dhead">'+posterEl(m.poster,'w342','',m.title)+
     '<div class="dmeta"><h2>'+esc(m.title)+'</h2>'+

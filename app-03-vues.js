@@ -94,6 +94,8 @@ function corpsDeVue(){
   if(view==='moi')      return viewMoi();
   if(view==='acteur')   return viewActeur();
   if(view==='motdepasse') return viewMotDePasse();
+  if(view==='notifs')   return viewNotifications();
+  if(view==='clochettes') return viewClochettes();
   return '';
 }
 /* Fabrique le HTML d'un autre écran que celui affiché, puis remet tout en place. */
@@ -139,6 +141,9 @@ function render(){
   }
   navDir = 'none';
   renderNav();
+  /* Une seule fois : l'étiquette qui apprend à quoi sert la cloche. */
+  if((view==='show' || view==='movie') && typeof montrerAstuceCloche === 'function')
+    montrerAstuceCloche();
   if(view==='discover'){
     const inp = document.getElementById('q');
     if(inp && ui.focusSearch){ inp.focus(); ui.focusSearch=false; }

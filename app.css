@@ -527,3 +527,41 @@
   .minibtn svg{width:12px;height:12px}
   .minibtn.on{background:var(--surface2);color:var(--muted);border-color:var(--line)}
   .minibtn:active{filter:brightness(1.2)}
+
+  /* ---------- Notifications ---------- */
+  /* La cloche de la barre du haut. Éteinte elle se fait oublier, allumée elle
+     prend la couleur d'accent : c'est le seul état à lire d'un coup d'œil. */
+  .iconbtn.cloche.on{color:var(--accent)}
+  .iconbtn.cloche.on svg{fill:currentColor}
+  .iconbtn.cloche.on svg path:last-child{fill:none}
+
+  /* L'étiquette qui n'apparaît qu'une fois, pour apprendre le geste. */
+  .astuce{position:fixed;z-index:60;pointer-events:none;background:var(--accent);
+    color:#fff;font-size:13.5px;font-weight:640;padding:8px 14px;border-radius:12px;
+    box-shadow:0 8px 24px rgba(0,0,0,.5);white-space:nowrap;
+    animation:astuceEntre .28s cubic-bezier(.2,.9,.3,1.4) both}
+  .astuce i{position:absolute;top:-5px;right:var(--fx);width:12px;height:12px;
+    background:var(--accent);transform:rotate(45deg);border-radius:2px}
+  .astuce.part{animation:astuceSort .4s ease forwards}
+  @keyframes astuceEntre{from{opacity:0;transform:translateY(-6px) scale(.9)}
+                         to{opacity:1;transform:none}}
+  @keyframes astuceSort{to{opacity:0;transform:translateY(-6px)}}
+
+  /* L'état, en haut de l'écran Notifications. */
+  .etatnotif{padding:14px 15px;display:flex;gap:12px;align-items:center}
+  .etatnotif .pastille{flex:none;margin-top:1px}
+  .etatnotif .etitre{font-weight:660;font-size:15px}
+  .etatnotif.ok .pastille{background:var(--ok)}
+  .etatnotif.attente .pastille{background:var(--warn)}
+  .etatnotif.refus .pastille{background:#ff5a5a}
+
+  /* L'interrupteur de la liste des titres suivis. */
+  .inter{width:47px;height:29px;border-radius:999px;flex:none;align-self:center;
+    background:var(--surface2);border:1px solid var(--line);position:relative;
+    display:block;transition:background .18s,border-color .18s}
+  .inter i{position:absolute;top:2px;left:2px;width:23px;height:23px;border-radius:50%;
+    background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.35);transition:left .18s}
+  .inter.on{background:var(--accent);border-color:var(--accent)}
+  .inter.on i{left:20px}
+  .srow.clic{align-items:center;gap:12px}
+  .srow.clic .poster{width:56px;height:84px}

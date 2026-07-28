@@ -9,7 +9,9 @@ function viewShow(){
   const total = allEpisodes(s,false).filter(ep=>s.watched[key(ep.s,ep.e)])
                  .reduce((a,ep)=>a+epRuntime(s,ep),0);
 
-  let html = header(s.name,{back:back, right:'<button class="iconbtn" onclick="showMenu('+s.id+')">'+I.dots+'</button>'});
+  let html = header(s.name,{back:back,
+    right: boutonCloche('tv', s.id) +
+           '<button class="iconbtn" onclick="showMenu('+s.id+')">'+I.dots+'</button>'});
   html += '<div class="hero">'+(s.backdrop?'<img src="'+IMG(s.backdrop,'w780')+'" alt="">':'')+'</div>';
   html += '<div class="dhead">'+posterEl(s.poster,'w342','',s.name)+
     '<div class="dmeta">'+

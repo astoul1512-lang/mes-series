@@ -1,7 +1,7 @@
 /* Service worker — démarrage instantané et fonctionnement hors-ligne.
    Stratégie : network-first sur les fichiers de l'app (pour recevoir les mises à jour),
    repli sur le cache quand le réseau est absent. Les appels TMDB ne sont jamais mis en cache. */
-const CACHE = 'mes-series-v38';
+const CACHE = 'mes-series-v39';
 const SHELL = ['./', './index.html', './app.css', './manifest.json',
                './icon-192.png', './icon-512.png', './apple-touch-icon.png',
                './app-01-noyau.js',
@@ -11,7 +11,8 @@ const SHELL = ['./', './index.html', './app.css', './manifest.json',
                './app-05-plateformes.js',
                './app-06-serie.js',
                './app-07-partage.js',
-               './app-08-reglages.js'];
+               './app-08-reglages.js',
+               './app-09-notifications.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil(
@@ -61,3 +62,48 @@ self.addEventListener('fetch', e => {
 });
 
 self.addEventListener('message', e => { if (e.data === 'skipWaiting') self.skipWaiting(); });
+
+/* ---------------------------------------------------------------------------
+   Notifications
+
+   iOS coupe l'abonnement d'une app qui reçoit un push sans rien afficher :
+   tout passe donc par `waitUntil` et se termine toujours par une notification,
+   même si le message reçu est illisible.
+
+   Aucune image n'est demandée ici : iOS reprend l'icône du manifeste et ignore
+   `icon` comme `image`. Le texte est le seul levier.
+--------------------------------------------------------------------------- */
+self.addEventListener('push', e => {
+  e.waitUntil((async () => {
+    let d = {};
+    try { d = e.data ? e.data.json() : {}; } catch (err) { d = {}; }
+    const titre = d.titre || 'Mes séries';
+    const opts = {
+      body: d.corps || '',
+      tag: d.tag || 'mes-series',
+      /* Sans ça, deux notifications portant le même tag se remplacent en
+         silence : on veut que la seconde se signale quand même. */
+      renotify: true,
+      data: { url: d.url || './' }
+    };
+    await self.registration.showNotification(titre, opts);
+  })());
+});
+
+/* Un appui ouvre l'app sur l'écran concerné, ou remet au premier plan
+   l'onglet déjà ouvert plutôt que d'en empiler un deuxième. */
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const cible = (e.notification.data && e.notification.data.url) || './';
+  e.waitUntil((async () => {
+    const dest = new URL(cible, self.location.href).href;
+    const liste = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of liste) {
+      if (c.url.indexOf(self.registration.scope) === 0 && 'focus' in c) {
+        if ('navigate' in c && c.url !== dest) { try { await c.navigate(dest); } catch (err) {} }
+        return c.focus();
+      }
+    }
+    if (self.clients.openWindow) return self.clients.openWindow(dest);
+  })());
+});
