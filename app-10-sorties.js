@@ -288,8 +288,15 @@ async function chargerBientotPerso(){
           /* Les deux peuvent tomber dans la fenêtre (salle puis numérique) :
              ce sont deux nouvelles distinctes, on annonce les deux. */
           const ds = dansFenetre(d.stream, auj, fin);
-          if(ds) out.push({ id: id, titre: titre, dfr: ds, mot: 'Arrive en streaming',
-                            image: m.backdrop || m.poster });
+          if(ds){
+            /* La plateforme, si elle est déjà connue — c'est-à-dire le jour J
+               ou après. Avant, personne ne la connaît, et on ne devine pas. */
+            let noms = [];
+            try{ noms = await plateformesDe(id); }catch(e){}
+            out.push({ id: id, titre: titre, dfr: ds,
+                       mot: noms.length ? 'Arrive sur ' + noms.join(', ') : 'Arrive en streaming',
+                       image: m.backdrop || m.poster });
+          }
         }catch(e){ /* film sans réponse : on ne montre rien plutôt que faux */ }
       }));
     }
