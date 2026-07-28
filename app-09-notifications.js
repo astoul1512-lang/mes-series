@@ -1,10 +1,10 @@
 "use strict";
 /* ---------------------------------------------------------------------------
-   Notifications — étape 1 : tout ce qui se passe sur le téléphone.
+   Notifications — côté téléphone.
 
-   Ce fichier ne sait pas envoyer une notification ; il sait demander
-   l'autorisation à iOS et retenir les titres que l'on veut suivre.
-   L'envoi viendra du serveur, et s'appuiera sur ces mêmes préférences.
+   Ici : demander l'autorisation à iOS, retenir les titres à surveiller, et
+   dire au serveur où envoyer. L'envoi lui-même est le travail de la fonction
+   `notifier`, côté Supabase, qui tourne plusieurs fois par jour.
 
    Rappel de contrainte, pour que personne ne se demande plus tard pourquoi il
    n'y a pas d'affiche : iOS n'affiche ni image ni icône personnalisée pour une
@@ -108,6 +108,97 @@ async function demanderPermissionNotif(){
   return true;
 }
 
+/* ---------------------------------------------------------------------------
+   Dire au serveur où envoyer, et quoi surveiller
+
+   Trois choses à téléverser, jamais mélangées à la bibliothèque : l'abonnement
+   de cet appareil, la liste des cloches, et le réglage. Tout est refait à
+   l'identique à chaque changement — c'est court, et ça évite de tenir un
+   journal de différences qui finirait par se désynchroniser.
+
+   La moitié publique de la clé VAPID vit ici, dans le code envoyé au
+   navigateur : c'est fait pour. Sa moitié privée ne quitte jamais Supabase.
+--------------------------------------------------------------------------- */
+const VAPID_PUBLIQUE =
+  'BBpSgSNcQugozdir_hxAIXaDlWvZfNofUFbJzQPeAPHt_24mVWFGcEv4wNWk9x-CIU8JcAfIYvCgaYc1OyRZySI';
+
+/* Le navigateur veut la clé en octets, pas en texte. */
+function cleEnOctets(b64){
+  const p = (b64 + '='.repeat((4 - b64.length % 4) % 4)).replace(/-/g,'+').replace(/_/g,'/');
+  const bin = atob(p);
+  const out = new Uint8Array(bin.length);
+  for(let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/* L'abonnement de CET appareil. Le même compte sur deux téléphones donne deux
+   abonnements distincts : c'est voulu, chacun doit sonner. */
+async function abonnerAppareil(){
+  if(!notifPossibles() || !notifAutorisees() || !signedIn()) return false;
+  try{
+    const reg = await navigator.serviceWorker.ready;
+    let ab = await reg.pushManager.getSubscription();
+    if(!ab){
+      ab = await reg.pushManager.subscribe({
+        /* Obligatoire : on s'engage à toujours afficher quelque chose. iOS
+           coupe l'abonnement d'une app qui reçoit sans rien montrer. */
+        userVisibleOnly: true,
+        applicationServerKey: cleEnOctets(VAPID_PUBLIQUE)
+      });
+    }
+    const j = ab.toJSON();
+    if(!j || !j.endpoint || !j.keys) return false;
+    await sbFetch('/rest/v1/push_appareils', {
+      method:'POST',
+      headers:{ Prefer:'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ user_id: db.auth.uid, endpoint: j.endpoint,
+                             p256dh: j.keys.p256dh, auth: j.keys.auth,
+                             vu: new Date().toISOString(), echecs: 0 })
+    });
+    db.notif.abo = j.endpoint; saveDB();
+    return true;
+  }catch(e){ return false; }
+}
+
+/* Les cloches et le réglage. On efface puis on réécrit : la liste fait
+   quelques lignes, et un titre éteint doit vraiment disparaître. */
+async function pousserCloches(){
+  if(!signedIn() || !syncReady()) return;
+  const cles = Object.keys(db.notif.titres);
+  try{
+    await sbFetch('/rest/v1/push_reglages', {
+      method:'POST',
+      headers:{ Prefer:'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ user_id: db.auth.uid, quand: db.notif.quand,
+                             films: db.notif.films, maj: new Date().toISOString() })
+    });
+    await sbFetch('/rest/v1/push_cloches?user_id=eq.'+encodeURIComponent(db.auth.uid),
+                  { method:'DELETE', headers:{ Prefer:'return=minimal' } });
+    if(cles.length){
+      await sbFetch('/rest/v1/push_cloches', {
+        method:'POST', headers:{ Prefer:'return=minimal' },
+        body: JSON.stringify(cles.map(k=>({
+          user_id: db.auth.uid,
+          type: k.slice(0, k.indexOf(':')),
+          tmdb_id: Number(k.slice(k.indexOf(':')+1))
+        })))
+      });
+    }
+  }catch(e){ /* on retentera au prochain changement */ }
+}
+
+/* Un seul point d'entrée : à appeler après tout changement de cloche ou de
+   réglage. Sans abonnement d'appareil, envoyer des cloches ne servirait à rien. */
+let pousseTimer;
+function poussserPlusTard(){
+  clearTimeout(pousseTimer);
+  pousseTimer = setTimeout(async ()=>{
+    if(!signedIn()) return;
+    if(Object.keys(db.notif.titres).length) await abonnerAppareil();
+    await pousserCloches();
+  }, 1200);
+}
+
 /* ---------- La cloche d'une fiche ---------- */
 
 /* Le bouton de la barre du haut, sur une série comme sur un film. */
@@ -150,7 +241,7 @@ async function basculerCloche(type, id){
   if(on){
     delete db.notif.titres[k];
     if(!Object.keys(db.notif.titres).length) db.notif.actif = false;
-    saveDB(); render();
+    saveDB(); render(); poussserPlusTard();
     toast('Tu ne seras plus prévenu pour ' + titreDe(type,id));
     return;
   }
@@ -162,7 +253,7 @@ async function basculerCloche(type, id){
   }
   db.notif.titres[k] = 1;
   db.notif.actif = true;
-  saveDB(); render();
+  saveDB(); render(); poussserPlusTard();
   toast(type === 'tv'
     ? 'Tu seras prévenu des nouveaux épisodes de ' + titreDe(type,id)
     : 'Tu seras prévenu à la sortie de ' + titreDe(type,id));
@@ -265,14 +356,14 @@ function viewNotifications(){
 
 function choisirQuand(v){
   if(db.notif.quand === v) return;
-  db.notif.quand = v; db.notif.quandChoisi = true; saveDB(); render();
+  db.notif.quand = v; db.notif.quandChoisi = true; saveDB(); render(); poussserPlusTard();
 }
 function basculerEvenementFilm(v){
   db.notif.films[v] = !db.notif.films[v];
   /* Tout éteindre reviendrait à laisser des cloches allumées sans qu'aucun
      événement ne les déclenche : on garde au moins la sortie en salle. */
   if(!EVENEMENTS_FILM.some(f=>db.notif.films[f.v])) db.notif.films.cine = true;
-  saveDB(); render();
+  saveDB(); render(); poussserPlusTard();
 }
 
 /* ---------- La liste des titres où la cloche est allumée ---------- */
