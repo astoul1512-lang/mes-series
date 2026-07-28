@@ -183,6 +183,47 @@ async function abonnerAppareil(){
   }
 }
 
+/* Appelée à chaque ouverture de l'app, et après une connexion.
+
+   Un abonnement push ne dure pas éternellement : iOS peut le remplacer, une
+   réinstallation le perd, un deuxième téléphone n'en a jamais eu. Or l'app ne
+   tentait de s'inscrire qu'au moment où l'on allume une cloche — un moment qui
+   ne revient jamais quand les cloches sont déjà allumées. D'où le silence.
+
+   Ici, on rattrape sans rien demander : l'inscription n'a besoin d'aucun geste,
+   seulement d'une autorisation déjà accordée. La question d'iOS, elle, reste
+   posée à la première cloche et nulle part ailleurs — elle ne se pose qu'une
+   fois dans la vie de l'app, autant que ce soit quand la raison est évidente. */
+async function inscrireSiBesoin(){
+  if(!notifPossibles() || !notifAutorisees() || !signedIn() || !syncReady()) return false;
+  try{
+    const reg = await navigator.serviceWorker.ready;
+    const ab  = await reg.pushManager.getSubscription();
+    /* Déjà inscrit, et c'est bien le même abonnement : rien à refaire. */
+    if(ab && db.notif.abo === ab.endpoint) return true;
+  }catch(e){ /* on tente l'inscription complète ci-dessous */ }
+  const ok = await abonnerAppareil();
+  /* Un appareil neuf n'a encore rien dit de ses cloches ni de son réglage. */
+  if(ok) await pousserCloches();
+  return ok;
+}
+
+/* À la déconnexion. Deux raisons, et la première est sérieuse : sans ça, le
+   compte qu'on vient de quitter continuerait d'envoyer ses notifications sur ce
+   téléphone. La seconde : tant que l'app croit l'appareil inscrit, le compte
+   suivant ne s'inscrirait jamais, puisque l'abonnement du navigateur, lui, n'a
+   pas changé. On efface donc pendant qu'on a encore le jeton en main. */
+function oublierAppareil(){
+  if(!db.notif) return;
+  const ep = db.notif.abo;
+  db.notif.abo = null; db.notif.erreur = null; saveDB();
+  if(!ep || !signedIn() || !syncReady()) return;
+  /* RLS oblige : cette requête ne peut toucher que les lignes de la personne
+     connectée, le filtre sur l'adresse suffit. */
+  sbFetch('/rest/v1/push_appareils?endpoint=eq.' + encodeURIComponent(ep),
+          { method:'DELETE', headers:{ Prefer:'return=minimal' } }).catch(()=>{});
+}
+
 /* Le bouton de rattrapage de l'écran Notifications. */
 async function reinscrire(){
   const ok = await abonnerAppareil();

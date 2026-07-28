@@ -208,7 +208,7 @@ async function boot(){
      probable selon que l'appareil a déjà connu un compte ou non. */
   if(!signedIn()) demarrerAccueil();
   if(memoryOnly) toast('Stockage indisponible : pense à exporter tes données');
-  if(syncReady() && signedIn()){ syncNow(true); majProfil(); chargerPartage(); }
+  if(syncReady() && signedIn()){ syncNow(true); majProfil(); chargerPartage(); inscrireSiBesoin(); }
 }
 boot();
 

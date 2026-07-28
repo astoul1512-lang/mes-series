@@ -329,6 +329,9 @@ function adopterCompte(uid){
 /* Se déconnecter ne touche pas aux données : elles restent sur l'appareil,
    hors d'atteinte tant que personne n'est connecté. */
 function sbSignOut(){
+  /* Avant d'effacer la session : cet appareil ne doit plus recevoir les
+     notifications du compte que l'on quitte. */
+  if(typeof oublierAppareil === 'function') oublierAppareil();
   db.auth = null; syncState='off'; saveDB();
   /* `go` plutôt que `render` : il remet les paramètres d'écran à zéro. Sans ça,
      une provenance laissée par l'écran précédent survivait à la déconnexion et

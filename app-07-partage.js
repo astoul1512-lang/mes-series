@@ -492,6 +492,7 @@ async function doSupprimerCompte(){
     await sbSupprimerCompte();
     /* Le compte n'existe plus : on oublie la session et tout ce qui décrivait
        les échanges avec les autres. Les titres, eux, restent sur l'appareil. */
+    if(typeof oublierAppareil === 'function') oublierAppareil();
     db.auth = null; db.syncedAt = null; syncState = 'off';
     partage.suivis = []; partage.abonnes = []; partage.code = null;
     saveDB(); closeSheet(); go('profile');
@@ -526,6 +527,9 @@ async function doSignIn(){
     toast('Connecté');
     await syncNow();
     await majProfil(); await chargerPartage();
+    /* Nouveau téléphone, ou retour après une déconnexion : si iOS a déjà donné
+       son accord, l'appareil se réinscrit sans qu'on ait à le demander. */
+    inscrireSiBesoin();
   }catch(e){ toast(/Invalid/i.test(e.message) ? 'E-mail ou mot de passe incorrect' : 'Échec : '+e.message); }
 }
 /* Contrôle minimal de forme : une adresse sans arobase ou sans point après
@@ -556,6 +560,9 @@ async function doSignUp(){
     toast('Compte créé');
     await syncNow();
     await majProfil(); await chargerPartage();
+    /* Rare mais réel : un téléphone où iOS avait déjà accordé l'autorisation
+       pour un compte précédent. Autant inscrire tout de suite. */
+    inscrireSiBesoin();
   }catch(e){
     if(e.message === 'CONFIRM') toast('Compte créé : confirme l\'e-mail reçu, puis connecte-toi');
     else toast('Échec : '+(/already regist|User already/i.test(e.message)
