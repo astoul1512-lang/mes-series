@@ -46,7 +46,13 @@ function migrerNotif(){
   if(!db.notif || typeof db.notif !== 'object') db.notif = {};
   const n = db.notif;
   if(typeof n.actif !== 'boolean') n.actif = false;
-  if(n.quand !== 'sortie' && n.quand !== 'soir' && n.quand !== 'samedi') n.quand = 'soir';
+  if(n.quand !== 'sortie' && n.quand !== 'soir' && n.quand !== 'samedi') n.quand = 'sortie';
+  /* Le résumé du soir était le défaut d'une version précédente. Personne ne
+     l'avait choisi, et il ne fait que répéter ce que « À rattraper » montre
+     déjà : on repasse à l'événement, une notification par sortie. Un choix
+     fait à la main, lui, est respecté pour toujours. */
+  if(typeof n.quandChoisi !== 'boolean') n.quandChoisi = false;
+  if(!n.quandChoisi && n.quand === 'soir') n.quand = 'sortie';
   if(!n.films || typeof n.films !== 'object') n.films = { cine:true, stream:true, vod:false };
   ['cine','stream','vod'].forEach(k=>{ if(typeof n.films[k] !== 'boolean') n.films[k] = (k !== 'vod'); });
   if(!n.titres || typeof n.titres !== 'object') n.titres = {};
@@ -197,9 +203,11 @@ function resumeNotif(){
 
 const QUANDS = [
   { v:'sortie', t:'Dès la sortie',
-    d:'Une notification par épisode, au moment où il sort.' },
+    d:'Une notification à chaque épisode qui sort et à chaque film qui sort. '+
+      'C\'est le réglage par défaut.' },
   { v:'soir',   t:'Un résumé le soir · 19 h',
-    d:'Une seule notification par jour, en une ligne. Tu ouvres l\'app si ça t\'intéresse.' },
+    d:'Tout regroupé en une seule notification par jour, à 19 h. À choisir si '+
+      'les alertes à l\'unité deviennent trop nombreuses.' },
   { v:'samedi', t:'Un résumé le samedi',
     d:'Une seule notification par semaine, le samedi matin.' }
 ];
@@ -257,7 +265,7 @@ function viewNotifications(){
 
 function choisirQuand(v){
   if(db.notif.quand === v) return;
-  db.notif.quand = v; saveDB(); render();
+  db.notif.quand = v; db.notif.quandChoisi = true; saveDB(); render();
 }
 function basculerEvenementFilm(v){
   db.notif.films[v] = !db.notif.films[v];
