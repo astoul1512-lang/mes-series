@@ -109,10 +109,23 @@ function renderNav(){
             : (view==='show'||view==='movie'||view==='settings')
               ? (depuis==='discover' ? 'discover' : (depuis||'profile'))
             : view;
-  document.getElementById('nav').style.gridTemplateColumns = 'repeat('+tabs.length+',1fr)';
-  document.getElementById('nav').innerHTML = tabs.map(([id,label,icon])=>
-    '<button class="tab '+(cur===id?'on':'')+'" onclick="go(\''+id+'\')">'+icon+'<span>'+label+'</span></button>'
-  ).join('');
+
+  /* La barre n'est construite qu'une fois, puis seul son état change : c'est
+     ce qui permet à la pastille de GLISSER d'un onglet à l'autre. Reconstruire
+     le HTML à chaque rendu la téléportait au lieu de la faire voyager. */
+  const nav = document.getElementById('nav');
+  if(nav.childElementCount !== tabs.length + 1){
+    nav.style.gridTemplateColumns = 'repeat('+tabs.length+',1fr)';
+    nav.innerHTML = '<i id="navpip" class="cache"></i>' + tabs.map(([id,label,icon])=>
+      '<button class="tab" onclick="go(\''+id+'\')">'+icon+'<span>'+label+'</span></button>'
+    ).join('');
+  }
+  const boutons = nav.querySelectorAll('.tab');
+  tabs.forEach(([id], i)=> boutons[i].classList.toggle('on', id === cur));
+  const pip = document.getElementById('navpip');
+  const idx = tabs.findIndex(([id])=> id === cur);
+  pip.classList.toggle('cache', idx < 0);
+  if(idx >= 0) pip.style.left = (idx * (100 / tabs.length)) + '%';
 }
 
 function header(title, opts){
