@@ -12,7 +12,8 @@
    la vraie date française, redemandée film par film — jamais celle de la
    liste. Un film sans date française dans la fenêtre est écarté. */
 
-const SORTIES_FENETRE = 60;          // jours d'avance pour les deux « bientôt »
+const SORTIES_FENETRE = 60;          // jours d'avance pour « bientôt au cinéma »
+const SORTIES_RECUL = 14;            // jours en arrière pour « nouveau en streaming »
 const SORTIES_MONTRES = 10;          // lignes par liste : au-delà, c'est du bruit
 const SORTIES_TTL = 30 * 60000;      // on ne redemande pas tout à chaque visite
 
@@ -20,42 +21,70 @@ const SORTIES_TTL = 30 * 60000;      // on ne redemande pas tout à chaque visit
    nous intéresse pas ici. */
 const SORTIES_TYPES = { cine: [2, 3], stream: [4] };
 
+/* Les salles françaises programment aussi des rétrospectives : Matrix, Alien
+   et 2001 étaient réellement « à l'affiche » le jour où l'écran a été construit.
+   Vrai, mais pas ce qu'on attend d'une page de sorties : on ne garde que les
+   films récents, les reprises restent trouvables par la recherche. */
+const SORTIES_RECENT_JOURS = 365;
+function sortieRecente(f){
+  const lim = new Date(Date.now() - SORTIES_RECENT_JOURS * 86400000).toISOString().slice(0, 10);
+  return (f.release_date || '') >= lim;
+}
+
 let sorties = { salle: null, cine: null, stream: null,
                 etat: 'froid' /* froid | attente | ok | erreur */, quand: 0 };
 
-/* Les vraies dates françaises, film par film. Rempli une fois, gardé. */
-const datesFR = {};                  // id → { cine:'2026-07-29'|null, stream:...|null }
+/* Les vraies dates françaises, film par film. Rempli une fois, gardé.
+   Chaque genre garde TOUTES ses dates, triées : un film ressorti en salle a
+   deux dates ciné, et c'est à l'appelant de choisir celle qui l'intéresse. */
+const datesFR = {};                  // id → { cine:[...], stream:[...] }
 
 async function dateFRDe(id){
   if(datesFR[id]) return datesFR[id];
   const rep = await tmdb('/movie/' + id + '/release_dates');
   const fr = ((rep.results || []).find(r => r.iso_3166_1 === 'FR') || {}).release_dates || [];
-  const prendre = types => {
-    const bonnes = fr.filter(d => types.includes(d.type) && d.release_date)
-                     .map(d => d.release_date.slice(0, 10)).sort();
-    return bonnes[0] || null;
-  };
+  const prendre = types => fr.filter(d => types.includes(d.type) && d.release_date)
+                             .map(d => d.release_date.slice(0, 10)).sort();
   return (datesFR[id] = { cine: prendre(SORTIES_TYPES.cine), stream: prendre(SORTIES_TYPES.stream) });
 }
 
-/* Garde les films dont la date française du bon genre tombe dans la fenêtre,
+/* La première date du genre dans [de, a], ou null. */
+function dansFenetre(dates, de, a){
+  return (dates || []).find(x => x >= de && x <= a) || null;
+}
+
+/* Garde les films dont une date française du bon genre tombe dans la fenêtre,
    triés par date. Les dates sont demandées par petits paquets : une liste de
    dix films ne justifie pas dix requêtes simultanées sur un téléphone. */
-async function avecDatesFR(films, genre){
-  const auj = todayISO();
-  const fin = new Date(Date.now() + SORTIES_FENETRE * 86400000).toISOString().slice(0, 10);
+async function avecDatesFR(films, genre, de, a){
   const out = [];
   const src = films.slice(0, SORTIES_MONTRES * 2);       // marge : certains seront écartés
   for(let i = 0; i < src.length && out.length < SORTIES_MONTRES; i += 5){
     const paquet = await Promise.all(src.slice(i, i + 5).map(async f => {
       try{
-        const d = (await dateFRDe(f.id))[genre];
-        return (d && d >= auj && d <= fin) ? Object.assign({ dfr: d }, f) : null;
+        const d = dansFenetre((await dateFRDe(f.id))[genre], de, a);
+        return d ? Object.assign({ dfr: d }, f) : null;
       }catch(e){ return null; }
     }));
     paquet.forEach(f => { if(f && out.length < SORTIES_MONTRES) out.push(f); });
   }
-  return out.sort((a, b) => a.dfr.localeCompare(b.dfr));
+  return out.sort((a2, b) => a2.dfr.localeCompare(b.dfr));
+}
+
+/* Sur quel abonnement le film vient-il d'arriver ? Connu seulement une fois le
+   film en ligne — les plateformes n'annoncent rien à l'avance à TMDB, c'est
+   vérifié. D'où le sens de la section : ce qui vient d'arriver, pas ce qui
+   arrivera. Les offres à la pub et les revendeurs sont repliés sur la
+   plateforme mère, comme partout dans l'app (PLATES_PUB). */
+async function plateformesDe(id){
+  const rep = await tmdb('/movie/' + id + '/watch/providers');
+  const fr = ((rep.results || {}).FR || {});
+  const noms = [];
+  (fr.flatrate || []).forEach(p => {
+    const nom = (p.provider_name || '').trim();
+    if(nom && !PLATES_PUB.test(nom) && noms.indexOf(nom) < 0) noms.push(nom);
+  });
+  return noms;
 }
 
 async function chargerSorties(force){
@@ -64,21 +93,35 @@ async function chargerSorties(force){
   sorties.etat = 'attente'; render();
   try{
     const auj = todayISO();
-    const fin = new Date(Date.now() + SORTIES_FENETRE * 86400000).toISOString().slice(0, 10);
+    const fin   = new Date(Date.now() + SORTIES_FENETRE * 86400000).toISOString().slice(0, 10);
+    const debut = new Date(Date.now() - SORTIES_RECUL   * 86400000).toISOString().slice(0, 10);
     const [salle, prochains, numerique] = await Promise.all([
       tmdb('/movie/now_playing', { region: 'FR', page: '1' }),
       tmdb('/movie/upcoming',    { region: 'FR', page: '1' }),
+      /* Arrivées numériques des deux dernières semaines : c'est là que la
+         plateforme est connue. */
       tmdb('/discover/movie', { region: 'FR', watch_region: 'FR', with_release_type: '4',
-        sort_by: 'popularity.desc', 'release_date.gte': auj, 'release_date.lte': fin })
+        sort_by: 'popularity.desc', 'release_date.gte': debut, 'release_date.lte': auj })
     ]);
-    const net = l => (l.results || []).filter(f => f && f.id && (f.title || '').trim());
+    const net = l => (l.results || []).filter(f => f && f.id && (f.title || '').trim() && sortieRecente(f));
     /* À l'affiche : la liste TMDB fait foi, aucune date n'est montrée. */
     sorties.salle = { total: salle.total_results || 0, films: net(salle).slice(0, 12) };
-    /* Les deux « bientôt » : chaque date est revérifiée à la source. */
-    const [cine, stream] = await Promise.all([
-      avecDatesFR(net(prochains), 'cine'),
-      avecDatesFR(net(numerique), 'stream')
-    ]);
+    const cine = await avecDatesFR(net(prochains), 'cine', auj, fin);
+
+    /* Le streaming : films arrivés récemment, gardés seulement si au moins un
+       abonnement les propose — sans plateforme, la ligne ne dirait rien. */
+    const candidats = await avecDatesFR(net(numerique), 'stream', debut, auj);
+    const stream = [];
+    for(let i = 0; i < candidats.length; i += 5){
+      await Promise.all(candidats.slice(i, i + 5).map(async f => {
+        try{
+          const noms = await plateformesDe(f.id);
+          if(noms.length) stream.push(Object.assign({ plates: noms }, f));
+        }catch(e){ /* sans réponse, pas de ligne */ }
+      }));
+    }
+    stream.sort((a, b) => b.dfr.localeCompare(a.dfr));   // le plus frais d'abord
+
     sorties.cine = cine; sorties.stream = stream;
     sorties.etat = 'ok'; sorties.quand = Date.now();
   }catch(e){
@@ -108,7 +151,7 @@ function lignesSorties(films, mot){
         : '<div class="cthumb"></div>') +
       '<div class="epinfo">' +
         '<div class="epname">' + esc(f.title) + '</div>' +
-        '<div class="epsub">' + mot + '</div>' +
+        '<div class="epsub">' + (f.plates ? 'Sur ' + esc(f.plates.join(', ')) : mot) + '</div>' +
       '</div></div>';
   });
   return html + '</div>';
@@ -125,7 +168,7 @@ function viewSorties(){
 
   let html = header('Sorties', {
     sub: '<div class="chips" style="padding:0 16px 10px">' +
-      [['salle', 'Au cinéma'], ['cine', 'Bientôt au cinéma'], ['stream', 'Bientôt en streaming']]
+      [['salle', 'Au cinéma'], ['cine', 'Bientôt au cinéma'], ['stream', 'Nouveau en streaming']]
         .map(([id, l]) => '<button class="chip" onclick="allerSection(\'sor-' + id + '\')">' + l + '</button>').join('') +
     '</div>'
   });
@@ -148,13 +191,14 @@ function viewSorties(){
     ? lignesSorties(sorties.cine, 'Sortie salle')
     : sectionVide('Aucune sortie salle datée pour la France dans les ' + SORTIES_FENETRE + ' prochains jours.');
 
-  html += '<div class="sectitle" id="sor-stream">Bientôt en streaming</div>';
+  html += '<div class="sectitle" id="sor-stream">Nouveau en streaming</div>';
   html += sorties.stream.length
-    ? lignesSorties(sorties.stream, 'Disponible en numérique')
-    : sectionVide('Aucune arrivée numérique datée pour la France dans les ' + SORTIES_FENETRE + ' prochains jours.');
+    ? lignesSorties(sorties.stream, '')
+    : sectionVide('Aucune arrivée sur un abonnement ces ' + SORTIES_RECUL + ' derniers jours.');
 
   html += '<div class="wrap tiny muted" style="padding-top:14px;padding-bottom:26px">' +
-    'Dates de sortie pour la France, fournies par TMDB. Un film sans date française confirmée n\'apparaît pas.</div>';
+    'Dates et plateformes pour la France, fournies par TMDB et JustWatch. Les plateformes ne sont ' +
+    'connues qu\'une fois le film en ligne — personne ne les annonce à l\'avance de façon fiable.</div>';
   return html;
 }
 
@@ -198,14 +242,14 @@ async function chargerBientotPerso(){
           const m = db.movies[id];
           const titre = m ? m.title : '';
           if(!titre) return;
-          if(d.cine && d.cine >= auj && d.cine <= fin)
-            out.push({ id: id, titre: titre, dfr: d.cine, mot: 'Sort au cinéma',
-                       image: m.backdrop || m.poster });
+          const dc = dansFenetre(d.cine, auj, fin);
+          if(dc) out.push({ id: id, titre: titre, dfr: dc, mot: 'Sort au cinéma',
+                            image: m.backdrop || m.poster });
           /* Les deux peuvent tomber dans la fenêtre (salle puis numérique) :
              ce sont deux nouvelles distinctes, on annonce les deux. */
-          if(d.stream && d.stream >= auj && d.stream <= fin)
-            out.push({ id: id, titre: titre, dfr: d.stream, mot: 'Arrive en streaming',
-                       image: m.backdrop || m.poster });
+          const ds = dansFenetre(d.stream, auj, fin);
+          if(ds) out.push({ id: id, titre: titre, dfr: ds, mot: 'Arrive en streaming',
+                            image: m.backdrop || m.poster });
         }catch(e){ /* film sans réponse : on ne montre rien plutôt que faux */ }
       }));
     }
