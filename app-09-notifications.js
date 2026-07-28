@@ -56,6 +56,18 @@ function migrerNotif(){
   if(!n.films || typeof n.films !== 'object') n.films = { cine:true, stream:true, vod:false };
   ['cine','stream','vod'].forEach(k=>{ if(typeof n.films[k] !== 'boolean') n.films[k] = (k !== 'vod'); });
   if(!n.titres || typeof n.titres !== 'object') n.titres = {};
+  /* Une cloche était un simple marqueur, vrai ou faux. Pour qu'elle puisse
+     voyager d'un téléphone à l'autre, chacune retient désormais l'instant où
+     on l'a allumée : c'est ce qui permet de trancher entre deux appareils qui
+     ne disent pas la même chose. Les anciennes valeurs sont datées d'ici. */
+  Object.keys(n.titres).forEach(k=>{
+    if(typeof n.titres[k] !== 'number' || n.titres[k] < 1000) n.titres[k] = Date.now();
+  });
+  /* Les cloches éteintes, avec leur date. Sans cette trace, une extinction
+     serait effacée au premier échange avec un appareil resté en arrière. */
+  if(!n.titresOff || typeof n.titresOff !== 'object') n.titresOff = {};
+  /* La date du dernier changement de réglage — « quand » et « mes films ». */
+  if(typeof n.maj !== 'number') n.maj = 0;
   /* L'étiquette « Me prévenir » n'apparaît qu'une fois dans la vie de l'app. */
   if(typeof n.clocheVue !== 'boolean') n.clocheVue = false;
   /* L'abonnement push renvoyé par le navigateur — rempli à l'étape suivante. */
@@ -78,7 +90,13 @@ function nettoyerCloches(){
     const type = k.slice(0, k.indexOf(':'));
     const id   = k.slice(k.indexOf(':')+1);
     const vit  = (type === 'tv') ? !!db.shows[id] : !!db.movies[id];
-    if(!vit){ delete db.notif.titres[k]; change = true; }
+    if(vit) return;
+    delete db.notif.titres[k];
+    /* Une extinction datée, pas un simple oubli : le titre a quitté la
+       bibliothèque, et cette sortie se synchronise elle aussi. Sans la date,
+       l'autre appareil rallumerait la cloche au prochain échange. */
+    if(db.notif.titresOff) db.notif.titresOff[k] = Date.now();
+    change = true;
   });
   return change;
 }
@@ -271,6 +289,67 @@ function poussserPlusTard(){
   }, 1200);
 }
 
+/* ---------------------------------------------------------------------------
+   Les cloches voyagent d'un appareil à l'autre
+
+   Elles vivaient sur un seul téléphone : changer d'iPhone les perdait toutes,
+   alors même que le serveur, lui, les connaissait. Elles partent donc avec la
+   bibliothèque, dans la même synchro.
+
+   Ce qui ne part pas : l'abonnement push, qui ne veut rien dire ailleurs que
+   sur cet appareil ; la dernière erreur d'inscription, pour la même raison ;
+   et l'étiquette « Me prévenir », qui s'adresse à un écran, pas à quelqu'un.
+--------------------------------------------------------------------------- */
+function notifPourSynchro(){
+  if(!db.notif) return null;
+  const n = db.notif;
+  return { quand:n.quand, quandChoisi:!!n.quandChoisi, films:n.films,
+           titres:n.titres, titresOff:n.titresOff, maj:n.maj || 0 };
+}
+
+/* Pour chaque titre, le geste le plus récent l'emporte — allumer comme
+   éteindre. Sans les dates d'extinction, un appareil resté en arrière
+   rallumerait des cloches qu'on vient de couper ailleurs. */
+function fusionnerNotif(rem){
+  if(!rem || typeof rem !== 'object' || !db.notif) return false;
+  const n = db.notif;
+  let change = false;
+
+  Object.keys(rem.titresOff || {}).forEach(k=>{
+    const t = rem.titresOff[k];
+    if(!n.titresOff[k] || t > n.titresOff[k]) n.titresOff[k] = t;
+  });
+  Object.keys(rem.titres || {}).forEach(k=>{
+    const t = rem.titres[k];
+    if(n.titres[k] && n.titres[k] >= t) return;
+    if(n.titresOff[k] && n.titresOff[k] >= t) return;   // éteinte ici après coup
+    n.titres[k] = t; change = true;
+  });
+  Object.keys(n.titresOff).forEach(k=>{
+    if(n.titres[k] && n.titresOff[k] >= n.titres[k]){ delete n.titres[k]; change = true; }
+  });
+  /* Une extinction vieille de trois mois n'a plus rien à arbitrer. */
+  const t0 = Date.now();
+  Object.keys(n.titresOff).forEach(k=>{
+    if(t0 - n.titresOff[k] > RETENTION_DECOCHE) delete n.titresOff[k];
+  });
+
+  /* Le réglage est un tout : on prend celui de l'appareil qui a tranché en
+     dernier, plutôt que de mélanger deux choix contradictoires. */
+  if((rem.maj || 0) > (n.maj || 0)){
+    if(rem.quand === 'sortie' || rem.quand === 'soir' || rem.quand === 'samedi') n.quand = rem.quand;
+    if(typeof rem.quandChoisi === 'boolean') n.quandChoisi = rem.quandChoisi;
+    if(rem.films && typeof rem.films === 'object'){
+      ['cine','stream','vod'].forEach(k=>{
+        if(typeof rem.films[k] === 'boolean') n.films[k] = rem.films[k];
+      });
+    }
+    n.maj = rem.maj; change = true;
+  }
+  n.actif = Object.keys(n.titres).length > 0;
+  return change;
+}
+
 /* ---------- La cloche d'une fiche ---------- */
 
 /* Le bouton de la barre du haut, sur une série comme sur un film. */
@@ -312,8 +391,9 @@ async function basculerCloche(type, id){
 
   if(on){
     delete db.notif.titres[k];
+    db.notif.titresOff[k] = Date.now();
     if(!Object.keys(db.notif.titres).length) db.notif.actif = false;
-    saveDB(); render(); poussserPlusTard();
+    saveDB(); render(); poussserPlusTard(); scheduleSync();
     toast('Tu ne seras plus prévenu pour ' + titreDe(type,id));
     return;
   }
@@ -323,9 +403,10 @@ async function basculerCloche(type, id){
     const ok = await demanderPermissionNotif();
     if(!ok){ render(); return; }
   }
-  db.notif.titres[k] = 1;
+  db.notif.titres[k] = Date.now();
+  delete db.notif.titresOff[k];
   db.notif.actif = true;
-  saveDB(); render(); poussserPlusTard();
+  saveDB(); render(); poussserPlusTard(); scheduleSync();
   toast(type === 'tv'
     ? 'Tu seras prévenu des nouveaux épisodes de ' + titreDe(type,id)
     : 'Tu seras prévenu à la sortie de ' + titreDe(type,id));
@@ -441,14 +522,16 @@ function viewNotifications(){
 
 function choisirQuand(v){
   if(db.notif.quand === v) return;
-  db.notif.quand = v; db.notif.quandChoisi = true; saveDB(); render(); poussserPlusTard();
+  db.notif.quand = v; db.notif.quandChoisi = true; db.notif.maj = Date.now();
+  saveDB(); render(); poussserPlusTard(); scheduleSync();
 }
 function basculerEvenementFilm(v){
   db.notif.films[v] = !db.notif.films[v];
   /* Tout éteindre reviendrait à laisser des cloches allumées sans qu'aucun
      événement ne les déclenche : on garde au moins la sortie en salle. */
   if(!EVENEMENTS_FILM.some(f=>db.notif.films[f.v])) db.notif.films.cine = true;
-  saveDB(); render(); poussserPlusTard();
+  db.notif.maj = Date.now();
+  saveDB(); render(); poussserPlusTard(); scheduleSync();
 }
 
 /* ---------- La liste des titres où la cloche est allumée ---------- */

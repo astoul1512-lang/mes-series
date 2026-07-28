@@ -375,7 +375,10 @@ function payload(){
   /* La clé n'est plus synchronisée : elle vit côté serveur, et l'envoyer
      exposait celle des gens qui en ont une à leurs abonnés. */
   return { lang: db.lang, pseudo: db.pseudo, shows: db.shows, movies: db.movies,
-           deleted: db.deleted || {shows:{},movies:{}} };
+           deleted: db.deleted || {shows:{},movies:{}},
+           /* Les cloches suivent la bibliothèque : changer de téléphone ne
+              doit pas obliger à les rallumer une par une. */
+           notif: (typeof notifPourSynchro === 'function') ? notifPourSynchro() : null };
 }
 function mergeRemote(rem){
   if(!rem || typeof rem !== 'object') return false;
@@ -428,6 +431,15 @@ function mergeRemote(rem){
     });
   });
   if(!db.pseudo && rem.pseudo){ db.pseudo = rem.pseudo; changed = true; }
+  /* Les cloches arrivées d'un autre appareil : la liste côté serveur a été
+     écrite par lui, elle ignore donc les nôtres. On la refait au complet. */
+  if(typeof fusionnerNotif === 'function' && fusionnerNotif(rem.notif)){
+    changed = true;
+    /* La bibliothèque vient d'être fusionnée : une cloche arrivée pour un
+       titre retiré entre-temps n'a plus lieu d'être. */
+    if(typeof nettoyerCloches === 'function') nettoyerCloches();
+    if(typeof poussserPlusTard === 'function') poussserPlusTard();
+  }
   return changed;
 }
 function markDeleted(kind, id){
