@@ -60,6 +60,9 @@ function migrerNotif(){
   if(typeof n.clocheVue !== 'boolean') n.clocheVue = false;
   /* L'abonnement push renvoyé par le navigateur — rempli à l'étape suivante. */
   if(n.abo === undefined) n.abo = null;
+  /* Pourquoi la dernière inscription a échoué. Sans cette trace, un appareil
+     qui n'arrive pas à s'abonner reste muet et l'app prétend le contraire. */
+  if(n.erreur === undefined) n.erreur = null;
 }
 
 function clocheAllumee(type, id){ return !!db.notif.titres[cleTitre(type,id)]; }
@@ -133,10 +136,27 @@ function cleEnOctets(b64){
 
 /* L'abonnement de CET appareil. Le même compte sur deux téléphones donne deux
    abonnements distincts : c'est voulu, chacun doit sonner. */
+/* Chaque échec laisse une phrase lisible dans db.notif.erreur : l'écran
+   Notifications l'affiche. Une inscription qui rate en silence est pire
+   qu'une inscription qui rate, parce qu'on continue à attendre. */
+function echecAbo(raison){
+  db.notif.abo = null; db.notif.erreur = raison; saveDB();
+  return false;
+}
+
 async function abonnerAppareil(){
-  if(!notifPossibles() || !notifAutorisees() || !signedIn()) return false;
+  if(!notifPossibles())
+    return echecAbo(estIOS() && !surEcranAccueil()
+      ? 'App ouverte dans Safari, pas depuis l\'icône de l\'écran d\'accueil'
+      : 'Ce navigateur ne gère pas le push');
+  if(!notifAutorisees())  return echecAbo('Autorisation iOS absente (' + permissionNotif() + ')');
+  if(!signedIn())         return echecAbo('Pas connecté');
+  if(!syncReady())        return echecAbo('Serveur non configuré');
+
+  let etape = 'service worker';
   try{
     const reg = await navigator.serviceWorker.ready;
+    etape = 'abonnement du navigateur';
     let ab = await reg.pushManager.getSubscription();
     if(!ab){
       ab = await reg.pushManager.subscribe({
@@ -147,7 +167,8 @@ async function abonnerAppareil(){
       });
     }
     const j = ab.toJSON();
-    if(!j || !j.endpoint || !j.keys) return false;
+    if(!j || !j.endpoint || !j.keys) return echecAbo('Abonnement incomplet renvoyé par iOS');
+    etape = 'envoi au serveur';
     await sbFetch('/rest/v1/push_appareils', {
       method:'POST',
       headers:{ Prefer:'resolution=merge-duplicates,return=minimal' },
@@ -155,9 +176,19 @@ async function abonnerAppareil(){
                              p256dh: j.keys.p256dh, auth: j.keys.auth,
                              vu: new Date().toISOString(), echecs: 0 })
     });
-    db.notif.abo = j.endpoint; saveDB();
+    db.notif.abo = j.endpoint; db.notif.erreur = null; saveDB();
     return true;
-  }catch(e){ return false; }
+  }catch(e){
+    return echecAbo(etape + ' — ' + ((e && (e.message || e.name)) || 'erreur inconnue'));
+  }
+}
+
+/* Le bouton de rattrapage de l'écran Notifications. */
+async function reinscrire(){
+  const ok = await abonnerAppareil();
+  if(ok) await pousserCloches();
+  render();
+  toast(ok ? 'Cet appareil est inscrit' : 'Échec — ' + (db.notif.erreur || 'raison inconnue'));
 }
 
 /* Les cloches et le réglage. On efface puis on réécrit : la liste fait
@@ -276,10 +307,16 @@ function etatNotif(){
     return { ton:'attente', titre:'Pas encore autorisées',
              sous:'Allume la cloche sur une série : iOS te demandera confirmation.' };
   const nb = compterCloches('tv') + compterCloches('movie');
-  return nb
-    ? { ton:'ok', titre:'Notifications autorisées', sous:'Sur cet appareil' }
-    : { ton:'attente', titre:'Autorisées, mais aucun titre suivi',
-        sous:'Allume la cloche sur une série ou un film.' };
+  if(!nb) return { ton:'attente', titre:'Autorisées, mais aucun titre suivi',
+                   sous:'Allume la cloche sur une série ou un film.' };
+  /* Autorisé et des cloches allumées, mais le serveur ne sait pas où envoyer :
+     c'est le cas qu'il ne faut surtout pas taire. */
+  if(!db.notif.abo)
+    return { ton:'refus', titre:'Cet appareil n\'est pas inscrit',
+             sous: db.notif.erreur
+               ? ('Dernière tentative : ' + db.notif.erreur)
+               : 'Touche « Inscrire cet appareil » ci-dessous.' };
+  return { ton:'ok', titre:'Notifications autorisées', sous:'Sur cet appareil' };
 }
 
 /* Le sous-titre de la ligne des réglages : l'état tient en quelques mots. */
@@ -318,6 +355,13 @@ function viewNotifications(){
       '<div><div class="etitre">'+esc(e.titre)+'</div>'+
       '<div class="small muted">'+esc(e.sous)+'</div></div>'+
     '</div></div>';
+
+  if(notifPossibles() && notifAutorisees() && !db.notif.abo){
+    html += '<div class="wrap" style="padding-top:0">'+
+      '<button class="btn block" onclick="reinscrire()">Inscrire cet appareil</button>'+
+      '<div class="tiny muted" style="margin-top:8px">Nécessaire une seule fois par '+
+      'téléphone : c\'est ce qui dit au serveur où envoyer.</div></div>';
+  }
 
   const quand = QUANDS.find(q=>q.v === db.notif.quand) || QUANDS[1];
   html += '<div class="sectitle">Quand</div><div class="wrap" style="padding-top:0">'+
