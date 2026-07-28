@@ -289,6 +289,10 @@ function cleDefil(v, p){
   return v === 'biblio' ? 'biblio:'+((p||params||{}).id||'') : v;
 }
 
+/* L'ordre des onglets du bas — il donne le sens du glissement quand on passe
+   de l'un à l'autre : vers Mon profil, le contenu arrive de la droite. */
+const ONGLETS_BARRE = ['discover', 'follow', 'profile'];
+
 function go(v, p, dir){
   if(view===v && JSON.stringify(params)===JSON.stringify(p||{})){ window.scrollTo(0,0); render(); return; }
   if(LISTES[view]) memDefil[cleDefil(view)] = window.scrollY || 0;
@@ -298,9 +302,19 @@ function go(v, p, dir){
   const a = DEPTH[view]||0, b = DEPTH[v]||0;
   navDir = dir || (b > a ? 'enter' : b < a ? 'back' : 'none');
   if(navDir === 'enter') memParams[view] = params;
+  /* Un changement d'onglet n'avait aucun mouvement : l'écran claquait d'un
+     état à l'autre, à contre-courant de la pastille qui glisse. Le contenu
+     arrive maintenant du côté d'où l'on vient. */
+  const deTab = ONGLETS_BARRE.indexOf(view), versTab = ONGLETS_BARRE.indexOf(v);
   view = v; params = p||{};
   if(typeof hideUndo === 'function') hideUndo();
   render();
+  const app = document.getElementById('app');
+  app.classList.remove('tabg-d', 'tabg-g');
+  if(navDir === 'none' && deTab >= 0 && versTab >= 0 && deTab !== versTab){
+    void app.offsetWidth;                    // repart de zéro si on enchaîne vite
+    app.classList.add(versTab > deTab ? 'tabg-d' : 'tabg-g');
+  }
   const y = LISTES[v] ? (memDefil[cleDefil(v, p)] || 0) : 0;
   window.scrollTo(0, y);
   /* La grille se peuple parfois juste après le rendu : on repositionne une fois de plus. */

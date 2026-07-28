@@ -327,6 +327,12 @@
   #navpip::before{content:'';position:absolute;left:50%;top:5px;transform:translateX(-50%);
     width:56px;height:32px;border-radius:16px;background:rgba(255,107,87,.14)}
   #navpip.cache{opacity:0}
+  /* Le contenu glisse dans le sens du changement d'onglet — même tempo que la
+     pastille, pour que la barre et l'écran racontent le même mouvement. */
+  @keyframes tabgD{from{opacity:.3;transform:translateX(30px)}to{opacity:1;transform:none}}
+  @keyframes tabgG{from{opacity:.3;transform:translateX(-30px)}to{opacity:1;transform:none}}
+  .app.tabg-d{animation:tabgD .3s cubic-bezier(.3,.72,.3,1)}
+  .app.tabg-g{animation:tabgG .3s cubic-bezier(.3,.72,.3,1)}
 
   /* ---------- Misc ---------- */
   .toast{position:fixed;left:50%;transform:translateX(-50%);width:max-content;bottom:calc(84px + var(--safe-b));
