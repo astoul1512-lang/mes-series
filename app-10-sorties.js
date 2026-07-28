@@ -143,9 +143,10 @@ async function chargerSorties(force){
     ]);
     const net = l => (l.results || []).filter(f => f && f.id && (f.title || '').trim() && sortieRecente(f));
     /* À l'affiche : la liste TMDB fait foi pour « qui est en salle », mais
-       chaque film passe le contrôle de première mondiale. */
-    sorties.salle = { total: salle.total_results || 0,
-                      films: await sansReprises(net(salle), 12) };
+       chaque film passe le contrôle de première mondiale. Pas de compteur :
+       le total TMDB inclut les reprises et tout le fond de catalogue, il ne
+       correspondrait jamais à la rangée affichée. */
+    sorties.salle = { films: await sansReprises(net(salle), 12) };
     const cine = await avecDatesFR(net(prochains), 'cine', auj, fin);
 
     /* Le streaming : films arrivés récemment, gardés seulement si au moins un
@@ -220,8 +221,7 @@ function viewSorties(){
     return html + '<div class="empty"><h3>Oups</h3><p>Impossible de charger les sorties.</p>' +
       '<button class="btn ghost" onclick="chargerSorties(true)">Réessayer</button></div>';
 
-  html += '<div class="sectitle" id="sor-salle">Au cinéma en ce moment' +
-    (sorties.salle.total ? '<span class="cnt">' + sorties.salle.total + '</span>' : '') + '</div>';
+  html += '<div class="sectitle" id="sor-salle">Au cinéma en ce moment</div>';
   html += sorties.salle.films.length
     ? '<div class="filmrow">' + sorties.salle.films.map(carteSortie).join('') + '</div>'
     : sectionVide('Rien à l\'affiche — ce serait étonnant, réessaie plus tard.');
