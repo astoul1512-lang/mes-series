@@ -2,6 +2,13 @@
 /* ============================ Utilitaires ============================ */
 const todayISO = ()=> new Date().toISOString().slice(0,10);
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+/* Une chaîne glissée dans un `onclick="f('…')"` traverse DEUX analyseurs : le
+   parseur HTML décode d'abord les entités, puis JavaScript lit le littéral.
+   `esc` seul ne suffit donc pas — il transforme l'apostrophe en `&#39;`, que le
+   parseur HTML rend telle quelle à JavaScript, qui y voit la fin de sa chaîne
+   (« Avec N'Golo » cassait le gestionnaire). On échappe pour JavaScript AVANT
+   d'échapper pour HTML : la barre oblique, elle, survit au décodage. */
+const escJs = s => esc(String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"));
 const key = (s,e)=> s+'x'+e;
 const aired = ep => !!ep.d && ep.d <= todayISO();
 
@@ -275,7 +282,7 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
                   perimetre:'tout', tri:'populaire', noteMin:0,
                   page:1, pages:1, res:[], loading:false, err:'', charge:false } };
 
-const DEPTH = { motdepasse:0, avatar:0, discover:0, sorties:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, acteur:2, account:2, biblio:2, notifs:2, gouts:2, clochettes:3 };
+const DEPTH = { motdepasse:0, avatar:0, discover:0, sorties:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, rangee:1, acteur:2, account:2, biblio:2, notifs:2, gouts:2, clochettes:3 };
 let navDir = 'none';
 /* Position de défilement mémorisée pour les écrans qui sont des listes.
    Quitter une liste puis y revenir doit rendre la page là où on l'avait laissée ;
@@ -283,7 +290,7 @@ let navDir = 'none';
 /* La filmographie d'un acteur en fait partie : elle compte parfois deux cents
    titres, et revenir d'une fiche pour retomber tout en haut est le reproche
    exact d'Adrien. */
-const LISTES = { discover:1, follow:1, profile:1, abos:1, biblio:1, acteur:1 };
+const LISTES = { discover:1, follow:1, profile:1, abos:1, biblio:1, acteur:1, rangee:1 };
 const memDefil = {};
 /* Paramètres du dernier passage sur chaque écran. En revenant en arrière on
    remet l'écran d'arrivée exactement dans l'état où on l'avait quitté : sans
@@ -300,6 +307,10 @@ function cleDefil(v, p){
   const q = p || params || {};
   if(v === 'biblio') return 'biblio:'+(q.id||'');
   if(v === 'acteur') return 'acteur:'+(q.id || ui.acteurId || '');
+  /* Deux rangées dépliées ne partagent pas leur position : revenir des « films
+     pour toi » ne doit pas rendre la grille des animés là où on avait laissé
+     l'autre. */
+  if(v === 'rangee') return 'rangee:'+(q.cle||'');
   return v;
 }
 
@@ -348,6 +359,7 @@ function currentBack(){
   if(view==='abos') return params.from || 'profile';
   if(view==='moi') return params.from || 'profile';
   if(view==='acteur') return params.from || 'discover';
+  if(view==='rangee') return params.from || 'discover';
   if(view==='biblio') return params.from || 'abos';
   if(view==='notifs') return params.from || 'settings';
   if(view==='clochettes') return params.from || 'notifs';

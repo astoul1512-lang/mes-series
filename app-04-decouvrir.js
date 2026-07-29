@@ -718,9 +718,13 @@ function ajouterDepuisVitrine(id, media){
 
 /* Une vignette de rangée, à partir d'un titre normalisé par le moteur de
    goûts — films et séries mêlés, donc le média voyage avec chaque titre. */
-function vignetteSugg(x){
+/* `depuis` dit à quel écran la fiche devra revenir. Sans lui, ouvrir un titre
+   depuis une rangée dépliée puis revenir en arrière retombait sur Découvrir :
+   on perdait la grille qu'on était en train de parcourir. Ce paramètre se passe
+   toujours explicitement — `l.map(vignetteSugg)` lui glisserait l'index. */
+function vignetteSugg(x, depuis){
   const item = x.media === 'tv' ? db.shows[x.id] : db.movies[x.id];
-  return '<button class="vgn" onclick="openPreview('+x.id+',\''+x.media+'\',\'discover\')">'+
+  return '<button class="vgn" onclick="openPreview('+x.id+',\''+x.media+'\',\''+(depuis||'discover')+'\')">'+
     '<div class="vgimg">'+posterEl(x.affiche,'w342','',x.nom)+
       (item ? '<span class="vgdeja">'+I.check+'</span>' : '')+'</div>'+
     '<div class="vgnom">'+esc(x.nom)+'</div>'+
@@ -748,9 +752,55 @@ function vitrineBody(){
   let html = carrouselVedettes(suggestions.vedettes);
   rangees.forEach(r=>{
     html += '<div class="sectitle">'+esc(r.titre)+'</div>'+
-      '<div class="rangee">'+r.l.map(vignetteSugg).join('')+'</div>';
+      '<div class="rangee">'+r.l.map(x=>vignetteSugg(x,'discover')).join('')+
+        finRangee(r)+'</div>';
   });
   return html + '<div style="height:6px"></div>';
+}
+
+/* La dernière tuile de la rangée : « Tout voir ». Elle est au BOUT du rail,
+   pas en haut à droite — choix d'Adrien. C'est le geste naturel : on pousse les
+   affiches jusqu'à ce qu'il n'y en ait plus, et on tombe dessus sans lever le
+   pouce ni remonter chercher un bouton.
+
+   Une rangée tient environ trois vignettes dans la largeur d'un iPhone : en
+   dessous de RANGEE_SEUIL titres, le rail se parcourt d'un geste et la tuile
+   ne cacherait rien. */
+const RANGEE_SEUIL = 6;
+function finRangee(r){
+  if(!r.cle || r.l.length <= RANGEE_SEUIL) return '';
+  /* Pas de classe `vgn` : ce n'est pas une vignette de titre, et tout ce qui
+     parcourt `.rangee .vgn` (les tests de mise en page, notamment) y chercherait
+     un nom et une note qu'elle n'a pas. */
+  return '<button class="vgtout" onclick="ouvrirRangee(\''+escJs(r.cle)+'\')">'+
+    '<div class="vgimg vgtoutbox">'+
+      '<span class="vgtrond">'+I.caret+'</span>'+
+      '<b>Tout voir</b>'+
+      '<i>'+r.l.length+' titres</i>'+
+    '</div></button>';
+}
+
+/* ---------------------------------------------------------------------------
+   Une rangée dépliée en grille
+
+   Les rangées gardent déjà jusqu'à quarante titres en mémoire et n'en montrent
+   que trois : « Tout voir » ne va rien rechercher, il déplie ce qui est là.
+   Aucun appel réseau, donc aucun écran de chargement — et rien à changer au
+   relais TMDB.
+--------------------------------------------------------------------------- */
+function ouvrirRangee(cle){
+  go('rangee', { cle:cle, from:'discover' }, 'enter');
+}
+
+function viewRangee(){
+  const r = rangeeParCle(params.cle);
+  const corps = r
+    ? '<div class="vgrid">'+r.l.map(x=>vignetteSugg(x,'rangee')).join('')+'</div><div style="height:20px"></div>'
+    : '<div class="empty">'+I.boussole+'<h3>Cette liste a été recalculée</h3>'+
+      '<p>Les suggestions se rafraîchissent toutes les 24 heures. Reviens à Découvrir '+
+      'pour voir la nouvelle sélection.</p>'+
+      '<button class="btn ghost" onclick="go(\'discover\')">Retour à Découvrir</button></div>';
+  return header(r ? r.titre : 'Suggestions', { back:'goBack()' }) + corps;
 }
 
 /* Le nom de ce qu'on regarde, pour les messages : « dans les animés ». */

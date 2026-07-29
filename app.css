@@ -277,6 +277,31 @@
   .vgn{flex:0 0 108px;min-width:0;text-align:left;color:var(--text)}
   .vgimg{position:relative;border-radius:10px;overflow:hidden}
   .vgn .poster{width:108px;height:162px}
+  /* La tuile de fin de rangée. Elle occupe exactement la place d'une affiche
+     pour que le rail garde son rythme, mais s'annonce comme un bouton et non
+     comme un titre : fond creux, contour discontinu, chevron cerclé. */
+  /* `align-self` est indispensable : un `<button>` centre son contenu
+     verticalement, et comme la tuile n'a ni titre ni note sous elle, elle
+     s'étirait sur toute la hauteur du rail puis se recentrait — décalée d'une
+     trentaine de pixels vers le bas par rapport aux affiches. */
+  .vgtout{flex:0 0 108px;align-self:flex-start}
+  .vgtoutbox{width:108px;height:162px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:7px;text-align:center;padding:0 8px;
+    border:1px dashed var(--line);border-radius:10px;background:var(--surface)}
+  .vgtoutbox b{font-size:12.5px;font-weight:750;color:var(--accent)}
+  .vgtoutbox i{font-size:11px;font-style:normal;color:var(--muted)}
+  .vgtrond{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;
+    background:var(--accent-dim);color:var(--accent)}
+  .vgtrond svg{width:16px;height:16px}
+  .vgtout:active .vgtoutbox{background:var(--surface2)}
+
+  /* La même vignette, dépliée en grille par « Tout voir ». On neutralise la
+     largeur fixe du rail horizontal : ici la vignette remplit sa colonne, et
+     l'affiche garde son 2/3 quelle que soit la largeur d'écran. */
+  .vgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));
+    gap:16px 12px;padding:6px 16px;align-items:start}
+  .vgrid .vgn{flex:none;width:100%}
+  .vgrid .vgn .poster{width:100%;height:auto;aspect-ratio:2/3}
   .vgdeja{position:absolute;top:6px;right:6px;width:22px;height:22px;border-radius:50%;
     background:var(--ok);color:#08130d;display:grid;place-items:center}
   .vgdeja svg{width:13px;height:13px}

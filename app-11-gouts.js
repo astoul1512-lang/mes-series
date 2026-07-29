@@ -473,16 +473,30 @@ async function chargerSuggestions(force){
 /* Les rangées de la vitrine, dans l'ordre où elles s'affichent. L'ordre des
    sections est fixe — choix d'Adrien : « toujours le même ordre », pour savoir
    où regarder sans réfléchir. */
+/* Chaque rangée porte une clé stable : c'est elle qui permet à l'écran
+   « Tout voir » de retrouver sa liste au retour d'une fiche, sans qu'on ait à
+   recopier les titres dans les paramètres de navigation. Les acteurs sont
+   désignés par leur nom faute d'identifiant conservé à ce stade — deux acteurs
+   homonymes dans la même vitrine se partageraient la rangée, ce qui reste
+   préférable à une clé qui change à chaque calcul. */
 function rangeesSuggerees(){
   suggCourantes();
   const out = [];
-  (suggestions.sections || []).forEach(s=>{ if(s.l.length) out.push({ titre:s.titre, l:s.l }); });
-  (suggestions.acteurs || []).forEach(p=>{ if(p.l.length) out.push({ titre:'Avec '+p.titre, l:p.l }); });
+  (suggestions.sections || []).forEach(s=>{ if(s.l.length) out.push({ cle:s.cle, titre:s.titre, l:s.l }); });
+  (suggestions.acteurs || []).forEach(p=>{ if(p.l.length) out.push({ cle:'acteur:'+p.titre, titre:'Avec '+p.titre, l:p.l }); });
   if(suggestions.esprit && suggestions.esprit.l.length)
-    out.push({ titre:'Dans l\'esprit de '+suggestions.esprit.titre, l:suggestions.esprit.l });
+    out.push({ cle:'esprit', titre:'Dans l\'esprit de '+suggestions.esprit.titre, l:suggestions.esprit.l });
   if((suggestions.nouveautes || []).length)
-    out.push({ titre:'Sorties récentes', l:suggestions.nouveautes });
+    out.push({ cle:'nouv', titre:'Sorties récentes', l:suggestions.nouveautes });
   return out;
+}
+
+/* La rangée désignée par une clé, ou `null` si elle n'existe plus — cas réel :
+   les suggestions ont été recalculées (24 h de cache écoulées, ou changement de
+   puce) pendant qu'on était sur une fiche. L'écran doit alors le dire, pas
+   afficher une grille vide. */
+function rangeeParCle(cle){
+  return rangeesSuggerees().find(r => r.cle === cle) || null;
 }
 
 /* ---------------------------------------------------------------------------

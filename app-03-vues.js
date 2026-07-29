@@ -32,6 +32,7 @@ function corpsDeVue(){
   if(view==='biblio')   return viewBiblio();
   if(view==='moi')      return viewMoi();
   if(view==='acteur')   return viewActeur();
+  if(view==='rangee')   return viewRangee();
   if(view==='motdepasse') return viewMotDePasse();
   if(view==='notifs')   return viewNotifications();
   if(view==='clochettes') return viewClochettes();
@@ -112,7 +113,7 @@ function renderNav(){
     ['profile','Mon profil',I.user]
   ];
   const depuis = params.from;
-  const cur = (view==='preview') ? 'discover'
+  const cur = (view==='preview'||view==='rangee') ? 'discover'
             : (view==='account'||view==='abos'||view==='biblio') ? 'profile'
             : (view==='show'||view==='movie'||view==='settings')
               ? (depuis==='discover' ? 'discover' : (depuis||'profile'))
