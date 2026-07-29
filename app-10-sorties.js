@@ -324,24 +324,13 @@ async function chargerBientotPerso(){
   if(view === 'follow') render();
 }
 
-/* Le HTML de la section, ou '' : une section vide n'existe pas. */
-function blocBientotPerso(){
+/* Les films qui arrivent, en DONNÉES et non en HTML : « À suivre » les mêle
+   désormais à ses épisodes dans un calendrier unique, il lui faut la matière
+   brute. Le chargement se déclenche tout seul au premier appel. */
+function filmsBientot(){
   const ids = filmsSuivisIds();
-  if(!ids.length) return '';
+  if(!ids.length) return [];
   const cle = ids.slice().sort((a, b) => a - b).join(',');
   if(!bientotPerso.films || bientotPerso.cle !== cle) setTimeout(chargerBientotPerso, 0);
-  const films = (bientotPerso.cle === cle && bientotPerso.films) ? bientotPerso.films : [];
-  if(!films.length) return '';
-  let cur = '', html = '<div class="sectitle">Bientôt<span class="cnt">' + films.length + '</span></div><div class="day">';
-  films.forEach(f => {
-    if(f.dfr !== cur){ cur = f.dfr; html += '<div class="daylbl">' + fmtDayLabel(f.dfr) + '</div>'; }
-    html += '<div class="crow" onclick="go(\'movie\',{id:' + f.id + ',from:\'follow\'})">' +
-      (f.image ? '<img class="cthumb" loading="lazy" src="' + IMG(f.image, 'w300') + '" alt="">'
-               : '<div class="cthumb"></div>') +
-      '<div class="epinfo">' +
-        '<div class="epname">' + esc(f.titre) + '</div>' +
-        '<div class="epsub">' + f.mot + '</div>' +
-      '</div></div>';
-  });
-  return html + '</div>';
+  return (bientotPerso.cle === cle && bientotPerso.films) ? bientotPerso.films : [];
 }

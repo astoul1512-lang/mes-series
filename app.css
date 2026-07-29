@@ -216,8 +216,63 @@
     font-size:11px;font-weight:750;padding:3px 7px;border-radius:9px;
     display:flex;align-items:center;gap:3px;box-shadow:0 2px 8px rgba(0,0,0,.45)}
   .gcard .gnote svg{width:10px;height:10px}
-  .resume{padding:0 16px 10px;font-size:12px;color:var(--muted);display:flex;gap:8px;align-items:baseline}
-  .resume b{color:var(--text);font-weight:650}
+  .resume{padding:0 16px 10px;font-size:12px;color:var(--muted);display:flex;gap:8px;align-items:center}
+  .resume b{color:var(--text);font-weight:650;flex:1}
+  /* La croix qui efface tous les filtres d'un geste. */
+  .resume .rx{width:26px;height:26px;border-radius:50%;flex:none;display:grid;place-items:center;
+    background:var(--surface2);border:1px solid var(--line);color:var(--muted)}
+  .resume .rx svg{width:13px;height:13px}
+  .resume .rx:active{background:var(--accent);color:#fff;border-color:transparent}
+
+  /* ---------- Découvrir : la vitrine ---------- */
+  .dhero{position:relative;margin-bottom:4px}
+  .dhimg{width:100%;height:340px;object-fit:cover;background:var(--surface2)}
+  .dhero::after{content:'';position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(180deg,rgba(7,7,10,.06) 26%,rgba(7,7,10,.88) 76%,var(--bg))}
+  .dhsur{position:absolute;left:0;right:0;bottom:0;z-index:1;padding:16px}
+  .dhetiq{font-size:11px;font-weight:800;letter-spacing:.12em;color:var(--accent)}
+  .dhsur h2{font-size:28px;font-weight:850;letter-spacing:-.02em;margin:2px 0 0;
+    text-shadow:0 2px 14px rgba(0,0,0,.55)}
+  .dhmeta{color:#cfd4dc;font-size:13px;margin-top:4px}
+  .dhact{display:flex;gap:10px;margin-top:13px;align-items:center}
+  .dhdeja{display:inline-flex;align-items:center;gap:6px;color:var(--ok);
+    font-size:13px;font-weight:700}
+  .dhdeja svg{width:16px;height:16px}
+
+  /* Le carrousel des suggestions du jour : cinq diapositives, une par écran,
+     que l'on fait défiler du pouce. `scroll-snap` fait le calage — sans lui,
+     on s'arrêtait toujours entre deux affiches. */
+  .carr{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;
+    -webkit-overflow-scrolling:touch;margin-bottom:4px}
+  .carr::-webkit-scrollbar{display:none}
+  .diapo{position:relative;flex:0 0 100%;width:100%;scroll-snap-align:center;scroll-snap-stop:always}
+  .diapo::after{content:'';position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(180deg,rgba(7,7,10,.06) 26%,rgba(7,7,10,.88) 76%,var(--bg))}
+  /* Les points de position. Ils ne sont pas cliquables : sur un carrousel de
+     cinq, viser un point de 6 px au pouce rate plus souvent qu'il ne réussit. */
+  .carrpts{display:flex;justify-content:center;gap:6px;padding:2px 0 10px}
+  .carrpts i{width:6px;height:6px;border-radius:50%;background:var(--line);
+    transition:background .18s,width .18s}
+  .carrpts i.on{background:var(--accent);width:16px;border-radius:3px}
+
+  /* Les rangées horizontales. */
+  .rangee{display:flex;gap:11px;overflow-x:auto;padding:2px 16px 6px;scrollbar-width:none;
+    -webkit-overflow-scrolling:touch}
+  .rangee::-webkit-scrollbar{display:none}
+  .vgn{flex:0 0 108px;text-align:left;color:var(--text)}
+  .vgimg{position:relative;border-radius:10px;overflow:hidden}
+  .vgn .poster{width:108px;height:162px}
+  .vgdeja{position:absolute;top:6px;right:6px;width:22px;height:22px;border-radius:50%;
+    background:var(--ok);color:#08130d;display:grid;place-items:center}
+  .vgdeja svg{width:13px;height:13px}
+  .vgnom{font-size:12.5px;font-weight:640;margin-top:6px;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  .vgnote{font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:3px}
+  .vgnote svg{width:11px;height:11px;color:var(--accent)}
+  /* Séries et films sont mélangés dans les rangées : sans cette étiquette on
+     ne sait pas ce qu'on ouvre. */
+  .vgmed{font-size:10.5px;font-weight:750;letter-spacing:.03em;color:var(--muted);
+    border:1px solid var(--line);border-radius:4px;padding:0 4px;line-height:15px}
   .iconbtn.actif{color:var(--accent)}
   .fgrp{font-size:11px;font-weight:750;letter-spacing:.6px;text-transform:uppercase;
     color:var(--muted);margin:14px 0 8px}
@@ -256,6 +311,7 @@
     display:grid;place-items:center;color:var(--muted)}
   .qclear svg{width:15px;height:15px}
   .masque{visibility:hidden;pointer-events:none}
+  .resume.masque{display:none}
 
   /* ---------- Detail ---------- */
   .hero{position:relative;height:190px;background:var(--surface2);overflow:hidden}
@@ -298,12 +354,42 @@
   .future .epname,.future .epsub{opacity:.5}
 
   /* ---------- Calendar ---------- */
+  /* ---------- À suivre : les cartes du retard ---------- */
+  /* Grandes, images en vedette, faites pour être balayées du pouce. */
+  .rattrap{display:flex;gap:12px;overflow-x:auto;padding:2px 16px 8px;scrollbar-width:none;
+    -webkit-overflow-scrolling:touch}
+  .rattrap::-webkit-scrollbar{display:none}
+  .rcarte{position:relative;flex:0 0 252px;height:142px;border-radius:15px;overflow:hidden;
+    background:var(--surface);border:1px solid var(--line)}
+  .rfond{position:absolute;inset:0}
+  .rfond img{width:100%;height:100%;object-fit:cover}
+  .rcarte::after{content:'';position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(180deg,rgba(7,7,10,.05) 34%,rgba(7,7,10,.88))}
+  .rbadge{position:absolute;top:9px;left:9px;z-index:2;background:var(--accent);color:#fff;
+    font-size:11px;font-weight:800;padding:3px 9px;border-radius:9px}
+  .rtexte{position:absolute;left:0;right:0;bottom:0;z-index:2;padding:10px 12px}
+  .rtexte b{display:block;font-size:14.5px;font-weight:750;text-shadow:0 1px 6px rgba(0,0,0,.7);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rtexte i{font-style:normal;font-size:12px;color:#d3d8e0;display:block;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* Les deux ronds d'action flottent par-dessus, à l'écart du texte. */
+  .ract{position:absolute;top:8px;right:8px;z-index:3;display:flex;gap:6px}
+  .rcarte .rond{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;
+    color:#fff;background:rgba(10,10,14,.55);
+    backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+    border:1px solid rgba(255,255,255,.16)}
+  .rcarte .rond svg{width:18px;height:18px}
+  .rcarte .rond.vu:active{background:var(--accent);border-color:transparent}
+  /* Le texte s'arrête avant les boutons. */
+  .rtexte{padding-right:14px}
+
   .day{margin:0 16px 8px}
   .daylbl{font-size:12px;font-weight:750;letter-spacing:.06em;text-transform:uppercase;
     color:var(--accent);margin:20px 0 8px}
   .daylbl.past{color:var(--muted)}
   .crow{display:flex;gap:12px;align-items:center;background:var(--surface);
     border:1px solid var(--line);border-radius:12px;padding:10px;margin-bottom:8px;width:100%;text-align:left}
+  .crow .epsub.film{color:var(--accent);font-weight:640}
   .cthumb{width:74px;height:42px;border-radius:7px;object-fit:cover;background:var(--surface2);flex:none}
 
   /* ---------- Nav ---------- */
@@ -432,6 +518,30 @@
   .kv{display:flex;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--line)}
   .kv:last-child{border-bottom:0}
 
+  /* ---------- Mes goûts ---------- */
+  /* Les puces des genres ne défilent pas ici : il y en a une vingtaine et on
+     veut toutes les voir d'un coup pour cocher, pas les chercher au doigt. */
+  .wrapchips{flex-wrap:wrap;overflow:visible;row-gap:8px}
+  /* Un genre écarté n'est pas « éteint » : il est barré. La nuance compte —
+     sinon on ne distingue pas « pas choisi » de « refusé ». */
+  .chip.hors{background:#ff5a5a1c;border-color:#ff5a5a55;color:#ff9b9b;
+    text-decoration:line-through}
+  .inp{margin-bottom:10px}
+  .listact{display:flex;flex-direction:column;gap:2px}
+  .listact.choisis{margin-bottom:12px}
+  .lact{display:flex;align-items:center;gap:11px;width:100%;text-align:left;
+    padding:8px 4px;color:var(--text)}
+  .lact img,.lact .ph2{width:38px;height:38px;border-radius:50%;object-fit:cover;
+    background:var(--surface2);flex:0 0 auto}
+  .lact .ph2{display:grid;place-items:center;color:var(--muted);font-size:15px;font-weight:700}
+  .lact span{flex:1;font-size:14.5px;font-weight:600;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  .lact i{color:var(--accent);display:grid;place-items:center}
+  .lact i svg,.lretirer svg{width:17px;height:17px}
+  .lact:active{background:var(--surface);border-radius:10px}
+  .lretirer{color:var(--muted);padding:6px;display:grid;place-items:center}
+  .lretirer:active{color:#ff9b9b}
+
   /* ---------- Fiche / aperçu ---------- */
   .note{display:inline-flex;align-items:center;gap:4px;background:#ffb84d1e;color:#ffc46b;
     padding:3px 8px;border-radius:7px;font-size:12.5px;font-weight:700}
@@ -475,7 +585,34 @@
   .codebox{font-size:30px;font-weight:800;letter-spacing:.22em;text-align:center;
     padding:14px 8px;margin-bottom:10px;border-radius:12px;background:var(--surface2);
     border:1px dashed var(--accent);color:var(--accent);-webkit-user-select:all;user-select:all}
-  .aborow{display:flex;gap:14px;overflow-x:auto;padding:2px 16px 4px;scrollbar-width:none}
+  /* ---------- Mon profil : l'en-tête façon Instagram ---------- */
+  .phero{position:relative;overflow:hidden;padding:18px 16px 15px}
+  .pfond{position:absolute;inset:0;display:flex;filter:blur(26px) saturate(150%);
+    opacity:.5;transform:scale(1.3)}
+  .pfond i{flex:1;background-size:cover;background-position:center}
+  .pfond.uni{background:linear-gradient(140deg,var(--accent-dim),transparent 60%);
+    filter:none;opacity:1;transform:none}
+  .phero::after{content:'';position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(180deg,rgba(7,7,10,.18),rgba(7,7,10,.95))}
+  .pdevant{position:relative;z-index:1}
+  .phaut{display:flex;align-items:center;gap:16px}
+  /* L'anneau dégradé autour de la photo, façon story. */
+  .panneau{width:86px;height:86px;border-radius:50%;padding:3px;flex:none;
+    background:conic-gradient(from 210deg,var(--accent),#9dc4ff,var(--accent))}
+  .panneau .avatar{width:100%;height:100%;border-radius:50%;font-size:32px;
+    border:3px solid var(--bg)}
+  .panneau img.avatar{object-fit:cover}
+  .pcompts{display:flex;flex:1;justify-content:space-around}
+  .pcompt{text-align:center;color:var(--text)}
+  .pcompt b{display:block;font-size:21px;font-weight:800;letter-spacing:-.02em;
+    text-shadow:0 1px 8px rgba(0,0,0,.55)}
+  .pcompt span{font-size:11.5px;color:#c7ccd6}
+  .pcompt:active b{color:var(--accent)}
+  .pnom{font-weight:800;font-size:19px;margin-top:12px;letter-spacing:-.01em;
+    text-shadow:0 1px 8px rgba(0,0,0,.5)}
+  .pstats{color:#bcc2cd;font-size:12.5px;margin-top:3px}
+
+  .aborow{display:flex;gap:14px;overflow-x:auto;padding:12px 16px 2px;scrollbar-width:none}
   .aborow::-webkit-scrollbar{display:none}
   .abomini{flex:none;width:66px;text-align:center;color:var(--text)}
   .abomini .avatar{width:52px;height:52px;font-size:20px;margin:0 auto}

@@ -267,11 +267,11 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
            /* « Quoi » démarre sur tout le catalogue : les sorties des 90 derniers
               jours sont un sous-ensemble étroit, mauvais point de départ pour
               découvrir quelque chose. */
-           disc:{ type:'tv', genres:[], plates:[], toutesPlates:false,
+           disc:{ type:'tout', genres:[], plates:[], toutesPlates:false,
                   perimetre:'tout', tri:'populaire', noteMin:0,
                   page:1, pages:1, res:[], loading:false, err:'', charge:false } };
 
-const DEPTH = { motdepasse:0, avatar:0, discover:0, sorties:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, acteur:2, account:2, biblio:2, notifs:2, clochettes:3 };
+const DEPTH = { motdepasse:0, avatar:0, discover:0, sorties:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, acteur:2, account:2, biblio:2, notifs:2, gouts:2, clochettes:3 };
 let navDir = 'none';
 /* Position de défilement mémorisée pour les écrans qui sont des listes.
    Quitter une liste puis y revenir doit rendre la page là où on l'avait laissée ;
@@ -337,6 +337,10 @@ function currentBack(){
   if(view==='biblio') return params.from || 'abos';
   if(view==='notifs') return params.from || 'settings';
   if(view==='clochettes') return params.from || 'notifs';
+  /* Depuis la création du compte, il n'y a pas de « retour » : l'écran
+     précédent était le choix de l'avatar, déjà validé. On en sort par
+     « C'est parti » ou « Passer ». */
+  if(view==='gouts') return params.from === 'compte' ? null : (params.from || 'settings');
   return null;
 }
 function goBack(){

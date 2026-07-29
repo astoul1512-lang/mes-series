@@ -21,7 +21,8 @@ function searchBody(){
   if(!ui.searchRes || !ui.searchRes.length)
     return '<div class="empty"><h3>Rien trouvé dans '+esc(libelleCherche())+'</h3>'+
       '<p>Essaie une autre orthographe, ou change de type juste au-dessus.</p></div>';
-  return '<div class="grid">'+ui.searchRes.map(r=>carteTitre(r, discMedia())).join('')+'</div>';
+  return '<div class="grid">'+ui.searchRes.map(r=>
+    carteTitre(r, r.media_type || discMedia())).join('')+'</div>';
 }
 
 function onSearchInput(v){
@@ -89,10 +90,16 @@ async function runSearch(q){
     if(ui.disc.type === 'anime') await chargerGenres('tv');   // besoin de l'id du genre Animation
     if(seq !== searchSeq) return;
     /* Mini-séries et animés restent des séries : TMDB ne cherche que dans tv ou movie. */
-    const d = await tmdb('/search/'+discMedia(), { query:q, include_adult:'false' },
+    /* Sur « Tout », films et séries se cherchent ensemble : taper « Dune »
+       depuis la vitrine ne doit pas rester muet parce que c'est un film. */
+    const chemin = ui.disc.type === 'tout' ? '/search/multi' : '/search/'+discMedia();
+    const d = await tmdb(chemin, { query:q, include_adult:'false' },
                          ctrl ? {signal:ctrl.signal} : null);
     if(seq !== searchSeq) return;                      // une frappe plus récente a pris la main
-    ui.searchRes = garderAnimes(d.results||[]).slice(0, SEARCH_MAX);
+    let res = d.results || [];
+    if(ui.disc.type === 'tout')
+      res = res.filter(r => r.media_type === 'tv' || r.media_type === 'movie');
+    ui.searchRes = garderAnimes(res).slice(0, SEARCH_MAX);
     ui.searching = false; ui.searchErr = '';
     peindreDisc();
   }catch(e){
@@ -185,6 +192,9 @@ async function addMovie(id, seen){
    pour que les identifiants et les libellés français viennent de la source. */
 
 const DISC_TYPES = [
+  /* « Tout » n'est pas un type mais un état : la vitrine, où films et séries
+     se mêlent. Les autres puces sont des filtres, et basculent sur la grille. */
+  { id:'tout',  label:'Tout' },
   { id:'tv',    label:'Séries' },
   { id:'movie', label:'Films' },
   { id:'mini',  label:'Mini-séries' },
@@ -465,9 +475,16 @@ function peindreDisc(){
   const el = document.getElementById('dres');
   if(!el) return render();
   const cherche = enRecherche();
-  el.innerHTML = cherche ? searchBody() : discBody();
+  const vitr = vitrineVisible();
+  el.innerHTML = cherche ? searchBody() : (vitr ? vitrineBody() : discBody());
   const r = document.querySelector('.resume');
-  if(r) r.innerHTML = '<b>'+esc(cherche ? resumeRecherche() : resumeFiltres())+'</b>';
+  if(r){
+    r.classList.toggle('masque', vitr);
+    const b = r.querySelector('b');
+    if(b) b.textContent = cherche ? resumeRecherche() : resumeFiltres();
+    const x = r.querySelector('.rx');
+    if(x) x.classList.toggle('masque', cherche);
+  }
   const b = document.getElementById('fbtn');
   if(b){ b.classList.toggle('actif', filtresActifs()); b.classList.toggle('masque', cherche); }
   const c = document.querySelector('.qclear');
@@ -482,15 +499,26 @@ function setDiscType(t){
     ui.searchRes = null; ui.searchErr = ''; ui.searching = true;
   }
   render();
-  chargerDecouverte();
+  /* Chacun son chargement : la vitrine au repos, la grille quand on filtre. */
+  if(vitrineVisible()) chargerSuggestions();
+  else chargerDecouverte();
   if(enRecherche()) searchNow();
 }
-function setDiscTri(t){ ui.disc.tri = t; ouvrirFiltres(); chargerDecouverte(); }
-function setDiscPerimetre(p){ ui.disc.perimetre = p; ouvrirFiltres(); chargerDecouverte(); }
-function setDiscNote(n){ ui.disc.noteMin = n; ouvrirFiltres(); chargerDecouverte(); }
+/* Les filtres portent sur un type précis — c'est ce qu'Adrien attend : « avec
+   les filtres on a soit l'un soit l'autre ». Depuis « Tout », on bascule donc
+   sur les séries, et on le dit plutôt que de filtrer un mélange en silence. */
+function typePourFiltrer(){
+  if(ui.disc.type !== 'tout') return;
+  ui.disc.type = 'tv';
+  toast('Les filtres s\'appliquent aux séries — la puce Films passe côté cinéma');
+}
+function setDiscTri(t){ typePourFiltrer(); ui.disc.tri = t; ouvrirFiltres(); chargerDecouverte(); }
+function setDiscPerimetre(p){ typePourFiltrer(); ui.disc.perimetre = p; ouvrirFiltres(); chargerDecouverte(); }
+function setDiscNote(n){ typePourFiltrer(); ui.disc.noteMin = n; ouvrirFiltres(); chargerDecouverte(); }
 function bascGenre(i){
   const g = genresAffiches()[i];
   if(!g) return;
+  typePourFiltrer();
   const sel = ui.disc.genres, k = sel.indexOf(g.nom);
   if(k < 0) sel.push(g.nom); else sel.splice(k,1);
   ouvrirFiltres(); chargerDecouverte();
@@ -625,8 +653,112 @@ function champRecherche(){
   '</div>';
 }
 
+/* ---------------------------------------------------------------------------
+   Découvrir a deux états, et un seul tap les sépare.
+
+   AU REPOS — la vitrine : un titre mis en avant en grand, puis des rangées
+   thématiques que l'on fait défiler du pouce. La loupe et le bouton Filtres
+   restent en haut, toujours visibles : c'est le reproche d'Adrien sur la
+   première maquette, on ne perd jamais la notion de filtre.
+
+   FILTRÉ OU EN RECHERCHE — la grille : dès qu'un filtre mord, la vitrine
+   s'efface au profit des résultats, avec le résumé de ce qui est appliqué et
+   une croix pour tout effacer. Toute la puissance d'avant, intacte.
+--------------------------------------------------------------------------- */
+function vitrineVisible(){
+  return ui.disc.type === 'tout' && !enRecherche() && !filtresActifs();
+}
+
+/* Une diapositive du carrousel : grande image, la raison de sa présence,
+   le titre, et les deux actions. Cinq d'affilée, que l'on balaie du pouce. */
+function diapoVedette(x){
+  const bouts = [year(x.date), x.note ? '\u2605 '+(Math.round(x.note*10)/10) : ''].filter(Boolean);
+  const img = IMG(x.bandeau,'w780') || IMG(x.affiche,'w342');
+  const item = x.media === 'tv' ? db.shows[x.id] : db.movies[x.id];
+  return '<div class="diapo">'+
+    (img ? '<img class="dhimg" loading="lazy" src="'+img+'" alt="">' : '<div class="dhimg"></div>')+
+    '<div class="dhsur">'+
+      '<div class="dhetiq">'+esc(x.pourquoi || 'À découvrir')+'</div>'+
+      '<h2>'+esc(x.nom)+'</h2>'+
+      '<div class="dhmeta">'+esc((x.media==='tv'?'Série':'Film')+(bouts.length?' · '+bouts.join(' · '):''))+'</div>'+
+      '<div class="dhact">'+
+        '<button class="btn" onclick="openPreview('+x.id+',\''+x.media+'\',\'discover\')">Voir la fiche</button>'+
+        (item ? '<span class="dhdeja">'+I.check+' Dans ma liste</span>'
+              : '<button class="btn ghost" onclick="ajouterDepuisVitrine('+x.id+',\''+x.media+'\')">'+
+                  I.plus+' Ma liste</button>')+
+      '</div>'+
+    '</div></div>';
+}
+
+/* Le carrousel : un rail que l'on fait glisser, avec ses points repères.
+   Aucun défilement automatique — rien ne bouge sous le doigt sans qu'on l'ait
+   demandé. */
+function carrouselVedettes(l){
+  if(!l.length) return '';
+  return '<div class="carr" id="carr" onscroll="majPointsCarr()">'+
+    l.map(diapoVedette).join('')+'</div>'+
+    (l.length > 1 ? '<div class="carrpts" id="carrpts">'+
+      l.map((x,i)=>'<i class="'+(i===0?'on':'')+'"></i>').join('')+'</div>' : '');
+}
+
+/* Les points suivent le doigt : on lit la position du rail plutôt que de tenir
+   un compteur qui se désynchroniserait au moindre geste interrompu. */
+function majPointsCarr(){
+  const r = document.getElementById('carr'), p = document.getElementById('carrpts');
+  if(!r || !p) return;
+  const i = Math.round(r.scrollLeft / Math.max(1, r.clientWidth));
+  [...p.children].forEach((pt, k)=> pt.classList.toggle('on', k === i));
+}
+
+function ajouterDepuisVitrine(id, media){
+  if(media === 'tv') return addOrOpenShow(id);
+  return addMovie(id, false);
+}
+
+/* Une vignette de rangée, à partir d'un titre normalisé par le moteur de
+   goûts — films et séries mêlés, donc le média voyage avec chaque titre. */
+function vignetteSugg(x){
+  const item = x.media === 'tv' ? db.shows[x.id] : db.movies[x.id];
+  return '<button class="vgn" onclick="openPreview('+x.id+',\''+x.media+'\',\'discover\')">'+
+    '<div class="vgimg">'+posterEl(x.affiche,'w342','',x.nom)+
+      (item ? '<span class="vgdeja">'+I.check+'</span>' : '')+'</div>'+
+    '<div class="vgnom">'+esc(x.nom)+'</div>'+
+    '<div class="vgnote">'+(x.note ? I.star+' '+(Math.round(x.note*10)/10)+' ' : '')+
+      '<span class="vgmed">'+(x.media==='tv'?'Série':'Film')+'</span></div>'+
+  '</button>';
+}
+
+function vitrineBody(){
+  const e = suggestions.etat;
+  if(e === 'froid' || e === 'attente')
+    return '<div class="empty"><span class="spin"></span>'+
+      '<p style="margin-top:12px">On prépare tes suggestions…</p></div>';
+  if(e === 'erreur')
+    return '<div class="empty">'+I.boussole+'<h3>Pas de connexion</h3>'+
+      '<p>Vérifie ta connexion, puis réessaie.</p>'+
+      '<button class="btn ghost" onclick="chargerSuggestions(true)">Réessayer</button></div>';
+
+  const rangees = rangeesSuggerees();
+  if(!suggestions.vedettes.length && !rangees.length)
+    return '<div class="empty">'+I.boussole+'<h3>Rien à proposer pour l\'instant</h3>'+
+      '<p>Ajoute une série ou un film : les suggestions se règlent sur ce que tu regardes.</p>'+
+      '<button class="btn ghost" onclick="ouvrirChamp()">Chercher un titre</button></div>';
+
+  let html = carrouselVedettes(suggestions.vedettes);
+  rangees.forEach(r=>{
+    html += '<div class="sectitle">'+esc(r.titre)+'</div>'+
+      '<div class="rangee">'+r.l.map(vignetteSugg).join('')+'</div>';
+  });
+  /* Une porte discrète vers le réglage des goûts : c'est ici qu'on se dit
+     « ces suggestions ne me ressemblent pas ». */
+  html += '<div class="wrap" style="padding-top:16px;padding-bottom:6px">'+
+    '<button class="btn ghost block" onclick="go(\'gouts\',{from:\'discover\'})">'+
+      'Régler mes goûts</button></div>';
+  return html;
+}
+
 function viewDiscover(){
-  const d = ui.disc, cherche = enRecherche();
+  const d = ui.disc, cherche = enRecherche(), vitr = vitrineVisible();
   /* La loupe vit dans la rangée des puces. On appuie : le champ se déplie
      sur toute la largeur et les puces descendent d'un cran. */
   const sub = (ui.champOuvert ? champRecherche() : '') +
@@ -637,16 +769,37 @@ function viewDiscover(){
       DISC_TYPES.map(t=>
         '<button class="chip '+(d.type===t.id?'on':'')+'" onclick="setDiscType(\''+t.id+'\')">'+
           t.label+'</button>').join('')+'</div>'+
-    '<div class="resume"><b>'+esc(cherche ? resumeRecherche() : resumeFiltres())+'</b></div>';
+    /* Le résumé n'a de sens que lorsqu'on filtre ou qu'on cherche : au repos,
+       il répétait « Toutes » sans rien dire. On le MASQUE au lieu de le retirer
+       — le sortir du DOM en pleine frappe emporterait le focus du champ. */
+    '<div class="resume'+(vitr?' masque':'')+'">'+
+      '<b>'+esc(cherche ? resumeRecherche() : resumeFiltres())+'</b>'+
+      '<button class="rx'+(cherche?' masque':'')+'" onclick="resetFiltres()" '+
+        'aria-label="Tout effacer">'+I.close+'</button></div>';
   /* Les filtres ne s'appliquent pas à une recherche par titre : le bouton s'efface. */
   const bouton = '<button class="iconbtn '+(filtresActifs()?'actif ':'')+(cherche?'masque':'')+
     '" id="fbtn" onclick="ouvrirFiltres()">'+I.filtre+'</button>';
   return header('Découvrir', {right:bouton, sub:sub}) + needKeyBanner() +
-    '<div id="dres">'+(cherche ? searchBody() : discBody())+'</div>' + '<div style="height:20px"></div>';
+    '<div id="dres">'+(cherche ? searchBody() : (vitr ? vitrineBody() : discBody()))+'</div>' +
+    '<div style="height:20px"></div>';
+}
+
+/* Depuis l'ajout de « Tout », les six puces ne tiennent plus dans la largeur
+   d'un iPhone : la rangée défile. On ramène donc la puce active dans le champ
+   de vision après chaque rendu — sinon, en choisissant « Animés » on ne voyait
+   plus quel type était sélectionné. */
+function centrerTypeActif(){
+  const r = document.querySelector('.chips.types');
+  if(!r || r.scrollWidth <= r.clientWidth) return;
+  const on = r.querySelector('.chip.on');
+  if(!on) return;
+  const cible = on.offsetLeft - (r.clientWidth - on.offsetWidth) / 2;
+  r.scrollTo({ left: Math.max(0, cible), behavior:'auto' });
 }
 
 function libelleCherche(){
   const t = ui.disc.type;
+  if(t === 'tout')  return 'les séries et les films';
   if(t === 'anime') return 'les animés';
   return discMedia()==='tv' ? 'les séries' : 'les films';
 }

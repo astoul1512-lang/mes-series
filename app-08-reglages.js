@@ -65,6 +65,7 @@ function viewSettings(){
   '</div>';
 
   html += '<div class="sectitle">Application</div><div class="wrap" style="padding-top:0">'+
+    ligne('Mes goûts', resumeGouts(), "go('gouts',{from:'settings'})", I.coeur)+
     ligne('Notifications', resumeNotif(), "go('notifs',{from:'settings'})", I.cloche)+
     '<div style="height:14px"></div>'+
     '<div class="tiny muted" style="margin:0 0 12px">Les affiches, les résumés et les dates '+
@@ -197,6 +198,7 @@ async function boot(){
   /* Les préférences de notification n'existent pas dans les bases d'avant :
      on les crée avant le premier rendu, sinon l'écran des réglages plante. */
   migrerNotif();
+  migrerGouts();
   nettoyerCloches();
   askPersist();
   document.body.classList.remove('booting');

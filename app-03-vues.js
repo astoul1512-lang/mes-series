@@ -36,6 +36,7 @@ function corpsDeVue(){
   if(view==='notifs')   return viewNotifications();
   if(view==='clochettes') return viewClochettes();
   if(view==='avatar')   return viewAvatar();
+  if(view==='gouts')    return viewGouts();
   return '';
 }
 /* Fabrique le HTML d'un autre écran que celui affiché, puis remet tout en place. */
@@ -68,7 +69,8 @@ function render(){
   /* Porte d'entrée, mot de passe et choix de l'avatar occupent tout l'écran :
      la barre du bas n'a rien à y faire, il n'y a qu'une chose à faire. */
   document.body.classList.toggle('accueil',
-    view === 'motdepasse' || view === 'avatar' || (view === 'account' && !signedIn()));
+    view === 'motdepasse' || view === 'avatar' || (view === 'account' && !signedIn())
+    || (view === 'gouts' && params.from === 'compte'));
   app.classList.remove('enter','back');
   /* Le retour à deux couches gère lui-même son mouvement : pas d'animation par-dessus. */
   if(sansAnim){ sansAnim = false; navDir = 'none'; }
@@ -91,8 +93,11 @@ function render(){
   if(view==='discover'){
     const inp = document.getElementById('q');
     if(inp && ui.focusSearch){ inp.focus(); ui.focusSearch=false; }
-    /* Premier passage sur Découvrir : on va chercher les suggestions */
-    if(!ui.disc.charge && !ui.disc.loading) chargerDecouverte();
+    if(typeof centrerTypeActif === 'function') centrerTypeActif();
+    /* La vitrine et la grille filtrée ont chacune leur chargement : on ne
+       dépense des requêtes que pour l'état réellement affiché. */
+    if(typeof vitrineVisible === 'function' && vitrineVisible()) chargerSuggestions();
+    else if(!ui.disc.charge && !ui.disc.loading) chargerDecouverte();
   }
 }
 function renderNav(){
@@ -143,7 +148,27 @@ function header(title, opts){
    La fonction reste, elle est appelée par les vues. */
 function needKeyBanner(){ return ''; }
 
-/* ---------- Vue : À suivre (à rattraper + à venir) ---------- */
+/* ---------- Vue : À suivre ----------
+
+   Deux blocs, deux formes franchement différentes — c'était le reproche
+   d'Adrien sur l'ancienne version : trois listes de lignes qui se
+   ressemblaient toutes.
+
+   1. « À rattraper » : de grandes cartes image que l'on fait défiler du
+      pouce, une par série en retard, avec le nombre d'épisodes en attente.
+   2. « Calendrier » : UNE seule liste chronologique où les épisodes à venir
+      et les sorties de tes films se mêlent, jour par jour. Deux sections
+      d'avant (« À venir » et « Bientôt ») n'en font plus qu'une : c'est la
+      même question — qu'est-ce qui arrive ? — donc une seule réponse.
+--------------------------------------------------------------------------- */
+
+/* Combien d'épisodes diffusés attendent d'être vus. */
+function retardSerie(s){
+  const t = todayISO();
+  return allEpisodes(s, false)
+    .filter(ep => ep.d && ep.d <= t && !s.watched[key(ep.s, ep.e)]).length;
+}
+
 function viewFollow(){
   const shows = Object.values(db.shows);
   const t = todayISO();
@@ -157,25 +182,27 @@ function viewFollow(){
   });
   todo.sort((a,b)=> (b.ep.d||'').localeCompare(a.ep.d||''));   // épisode le plus récent d'abord
 
-  /* --- À venir : diffusions futures --- */
+  /* --- Le calendrier : épisodes futurs ET sorties de films, mêlés --- */
   /* Les séries pas encore commencées (« À voir ») n'apparaissent pas ici :
      cet onglet ne parle que de ce qu'on suit réellement. */
-  const items = [];
+  const cal = [];
   shows.forEach(s=>{
     const st = statutSerie(s);
     if(st === 'avoir' || st === 'pause') return;
-    allEpisodes(s,false).forEach(ep=>{ if(ep.d && ep.d >= t) items.push({d:ep.d, show:s, ep:ep}); });
+    allEpisodes(s,false).forEach(ep=>{ if(ep.d && ep.d >= t) cal.push({d:ep.d, show:s, ep:ep}); });
     if(s.next && s.next.d && s.next.d >= t && !(s.seasons[s.next.s]||[]).some(e=>e.e===s.next.e))
-      items.push({d:s.next.d, show:s, ep:{s:s.next.s, e:s.next.e, n:s.next.n, d:s.next.d}});
+      cal.push({d:s.next.d, show:s, ep:{s:s.next.s, e:s.next.e, n:s.next.n, d:s.next.d}});
   });
-  items.sort((a,b)=>a.d.localeCompare(b.d));
-  const upcoming = items.slice(0,80);
+  if(typeof filmsBientot === 'function')
+    filmsBientot().forEach(f=> cal.push({d:f.dfr, film:f}));
+  cal.sort((a,b)=>a.d.localeCompare(b.d));
+  const agenda = cal.slice(0,80);
 
   let html = header('À suivre', {right:'<button class="iconbtn" onclick="go(\'discover\')">'+I.plus+'</button>'});
   html += needKeyBanner();
 
   /* L'écran vide n'a de sens que si rien n'est suivi du tout : quelqu'un qui
-     n'a que des films doit quand même voir sa section « Bientôt ». */
+     n'a que des films doit quand même voir son calendrier. */
   const desFilms = (typeof filmsSuivisIds === 'function') && filmsSuivisIds().length;
   if(!shows.length && !desFilms){
     return html + '<div class="empty">'+I.tv+'<h3>Rien à suivre pour l\'instant</h3>'+
@@ -183,8 +210,9 @@ function viewFollow(){
       '<button class="btn" onclick="go(\'discover\')">Chercher une série</button></div>';
   }
 
-  /* Section 1 */
-  html += '<div class="sectitle">À rattraper'+(todo.length?'<span class="cnt">'+todo.length+'</span>':'')+'</div>';
+  /* Section 1 : les cartes du retard */
+  html += '<div class="sectitle">À rattraper'+
+    (todo.length?'<span class="cnt">'+todo.length+'</span>':'')+'</div>';
   if(!todo.length){
     const enAttente = shows.filter(x=>statutSerie(x)==='avoir').length;
     html += '<div class="wrap" style="padding-top:0"><div class="card" style="padding:18px;text-align:center">'+
@@ -197,34 +225,46 @@ function viewFollow(){
           '<div class="small muted" style="margin-top:3px">Plus aucun épisode diffusé en attente.</div>')+
       '</div></div>';
   } else {
-    html += '<div class="list">'+todo.map(x=>catchupRow(x.s,x.ep)).join('')+'</div>';
+    html += '<div class="rattrap">'+todo.map(x=>carteRattrapage(x.s,x.ep)).join('')+'</div>';
   }
 
-  /* Entre le retard et le calendrier des épisodes : tes films qui arrivent.
-     La section n'existe que si un film suivi a une date française confirmée. */
-  html += (typeof blocBientotPerso === 'function') ? blocBientotPerso() : '';
-
-  /* Section 2 */
-  html += '<div class="sectitle">À venir</div>';
-  if(!upcoming.length){
+  /* Section 2 : le calendrier unique */
+  html += '<div class="sectitle">Calendrier</div>';
+  if(!agenda.length){
     html += '<div class="wrap" style="padding-top:0"><div class="card" style="padding:18px;text-align:center">'+
-      '<div class="small muted">Aucune date de diffusion annoncée pour tes séries.</div></div></div>';
+      '<div class="small muted">Aucune date annoncée pour tes séries et tes films.</div></div></div>';
   } else {
     let cur = '', out = '<div class="day">';
-    upcoming.forEach(i=>{
+    agenda.forEach(i=>{
       if(i.d !== cur){ cur = i.d; out += '<div class="daylbl">'+fmtDayLabel(i.d)+'</div>'; }
-      const thumb = IMG(i.ep.st,'w300') || IMG(i.show.backdrop,'w300') || IMG(i.show.poster,'w154');
-      out += '<div class="crow" onclick="go(\'show\',{id:'+i.show.id+',from:\'follow\'})">'+
-        (thumb ? '<img class="cthumb" loading="lazy" src="'+thumb+'" alt="">' : '<div class="cthumb"></div>')+
-        '<div class="epinfo">'+
-          '<div class="epname">'+esc(i.show.name)+'</div>'+
-          '<div class="epsub">'+codeEp(i.ep.s,i.ep.e)+' · '+esc(i.ep.n||'')+'</div>'+
-        '</div></div>';
+      out += i.film ? ligneFilmCal(i.film) : ligneEpisodeCal(i.show, i.ep);
     });
     out += '</div>';
     html += out;
   }
   return html + '<div style="height:24px"></div>';
+}
+
+/* Une ligne d'épisode dans le calendrier. */
+function ligneEpisodeCal(s, ep){
+  const thumb = IMG(ep.st,'w300') || IMG(s.backdrop,'w300') || IMG(s.poster,'w154');
+  return '<div class="crow" onclick="go(\'show\',{id:'+s.id+',from:\'follow\'})">'+
+    (thumb ? '<img class="cthumb" loading="lazy" src="'+thumb+'" alt="">' : '<div class="cthumb"></div>')+
+    '<div class="epinfo">'+
+      '<div class="epname">'+esc(s.name)+'</div>'+
+      '<div class="epsub">'+codeEp(ep.s,ep.e)+' · '+esc(ep.n||'')+'</div>'+
+    '</div></div>';
+}
+
+/* Une ligne de film dans le même calendrier : même forme, autre sous-titre. */
+function ligneFilmCal(f){
+  return '<div class="crow" onclick="go(\'movie\',{id:'+f.id+',from:\'follow\'})">'+
+    (f.image ? '<img class="cthumb" loading="lazy" src="'+IMG(f.image,'w300')+'" alt="">'
+             : '<div class="cthumb"></div>')+
+    '<div class="epinfo">'+
+      '<div class="epname">'+esc(f.titre)+'</div>'+
+      '<div class="epsub film">'+esc(f.mot)+'</div>'+
+    '</div></div>';
 }
 
 /* Appui long sur une ligne « À rattraper » : c'est là qu'on se dit qu'on ne
@@ -261,27 +301,30 @@ function menuPause(id){
     '<button class="opt" onclick="closeSheet()">Annuler</button>');
 }
 
-function catchupRow(s, nx){
-  const p = progress(s);
-  const recent = nx.d && nx.d < todayISO() && (Date.now()-Date.parse(nx.d)) < 45*86400000;
-  return '<div class="srow">'+
-    '<div style="display:flex;gap:12px;flex:1;min-width:0" onclick="pressClic('+s.id+',event)"'+
+/* La carte d'une série en retard. L'image passe au premier plan, le texte se
+   pose dessus dans un dégradé — c'est la même grammaire que le héros d'une
+   fiche. Le badge dit combien d'épisodes attendent, le rond bleu en coche un
+   d'un seul geste, l'appui long ouvre la mise en pause (comme avant). */
+function carteRattrapage(s, nx){
+  const n = retardSerie(s);
+  const img = IMG(s.backdrop,'w780') || IMG(s.poster,'w342');
+  return '<div class="rcarte">'+
+    '<div class="rfond" onclick="pressClic('+s.id+',event)"'+
       ' ontouchstart="pressStart('+s.id+',event)" ontouchend="pressEnd()" ontouchmove="pressMove(event)"'+
       ' ontouchcancel="pressEnd()">'+
-      posterEl(s.poster,'w154','',s.name)+
-      '<div class="sinfo">'+
-        '<div class="sname">'+esc(s.name)+'</div>'+
-        '<div class="snext"><b>'+codeEp(nx.s,nx.e)+'</b> · '+esc(nx.n)+'</div>'+
-        '<div class="tiny muted" style="margin-top:2px">'+
-          p.watched+' / '+p.total+' épisodes'+
-          (recent ? ' · sorti le '+fmtDateShort(nx.d) : '')+'</div>'+
-        '<div class="bar"><i style="width:'+p.pct+'%"></i></div>'+
+      (img ? '<img loading="lazy" src="'+img+'" alt="">' : '')+
+      (n > 1 ? '<span class="rbadge">'+n+' ép.</span>' : '')+
+      '<div class="rtexte">'+
+        '<b>'+esc(s.name)+'</b>'+
+        '<i>'+codeEp(nx.s,nx.e)+' · '+esc(nx.n||'')+'</i>'+
       '</div>'+
     '</div>'+
-    /* Le menu est visible : la mise en pause ne doit pas dépendre d'un geste caché. */
-    '<div class="srowact">'+
-      '<button class="rowdots" title="Options" onclick="menuPause('+s.id+')">'+I.dots+'</button>'+
-      '<button class="watchbtn" title="Marquer '+codeEp(nx.s,nx.e)+' comme vu" onclick="quickWatch('+s.id+',event)">'+I.check+'</button>'+
+    /* Les deux actions restent VISIBLES : mettre en pause ne doit pas
+       dépendre d'un appui long que personne ne devine. */
+    '<div class="ract">'+
+      '<button class="rond" title="Options" onclick="menuPause('+s.id+')">'+I.dots+'</button>'+
+      '<button class="rond vu" title="Marquer '+codeEp(nx.s,nx.e)+' comme vu" '+
+        'onclick="quickWatch('+s.id+',event)">'+I.check+'</button>'+
     '</div>'+
   '</div>';
 }
@@ -325,54 +368,66 @@ function viewProfile(){
      l'onglet sélectionné pointer dans le vide */
   if(!tabs.some(t=>t[0]===ui.profTab)) ui.profTab = 'series';
 
+  /* ---------------------------------------------------------------------
+     L'en-tête façon Instagram, voulu par Adrien : photo à gauche, compteurs
+     à droite, prénom, une ligne de stats, puis les puces et les jaquettes.
+
+     Le fond est fait de TES affiches, floutées : le profil devient la fiche
+     de ta bibliothèque, et il est différent chez chacun. Sans affiche, on
+     retombe sur un dégradé sobre plutôt que sur un trou noir.
+  --------------------------------------------------------------------- */
+  const qui = (db.pseudo||'').trim();
+  const nbSeries = Object.keys(db.shows).length;
+  const nbAbonnes = (partage.abonnes||[]).length;
+  const nbAbos = (partage.suivis||[]).length;
+
+  const affiches = Object.values(db.shows).map(x=>x.poster).filter(Boolean).slice(0,5);
+  const fond = affiches.length
+    ? '<div class="pfond">'+affiches.map(p=>
+        '<i style="background-image:url('+IMG(p,'w154')+')"></i>').join('')+'</div>'
+    : '<div class="pfond uni"></div>';
+
+  const compteur = (n, mot, action)=>
+    '<button class="pcompt"'+(action?' onclick="'+action+'"':'')+'>'+
+      '<b>'+n+'</b><span>'+mot+'</span></button>';
+
   let html = header('Mon profil', {
     /* Un engrenage plutôt que trois points : il mène à un écran, pas à un menu
        flottant, et son sens est immédiat. */
     right:'<button class="iconbtn" onclick="go(\'settings\',{from:\'profile\'})" '+
-      'aria-label="Réglages">'+I.cog+'</button>',
-    sub:'<div class="chips">'+tabs.map(([id,l,n])=>
-      '<button class="chip '+(ui.profTab===id?'on':'')+'" onclick="ui.profTab=\''+id+'\';render()">'+
-      l+' <span style="opacity:.65">'+n+'</span></button>').join('')+'</div>'
+      'aria-label="Réglages">'+I.cog+'</button>'
   });
 
-  /* Une identité avant les chiffres : c'est ton profil, pas un tableau de bord. */
-  const qui = (db.pseudo||'').trim();
-  const depuis = plusAnciennementAjoute();
-  /* Le bandeau menait à la personnalisation de l'avatar — le moins important de
-     l'écran, pour la plus grosse cible. Il ouvre maintenant les réglages, où
-     tout se trouve, et la personnalisation n'y est qu'une ligne parmi d'autres. */
-  html += '<button class="entete" onclick="go(\'settings\',{from:\'profile\'})">'+
-    avatarMoi('gros')+
-    '<div class="etxt">'+
-      '<div class="enom">'+(qui ? esc(qui) : 'Ton profil')+'</div>'+
-      '<div class="tiny muted">'+(qui
-        ? 'Mon compte et réglages'
-        : 'Ton prénom, ton emblème, et tes séries à l\'abri')+'</div>'+
+  html += '<div class="phero">'+fond+'<div class="pdevant">'+
+    '<div class="phaut">'+
+      '<button class="panneau" onclick="go(\'moi\',{from:\'profile\'})" aria-label="Changer d\'avatar">'+
+        avatarMoi('gros')+'</button>'+
+      '<div class="pcompts">'+
+        compteur(nbSeries, 'série'+(nbSeries>1?'s':''), '') +
+        compteur(nbAbonnes, 'abonné'+(nbAbonnes>1?'s':''), 'ouvrirAbos()') +
+        compteur(nbAbos, 'abonnement'+(nbAbos>1?'s':''), 'ouvrirAbos()') +
+      '</div>'+
     '</div>'+
-    '<span class="ecaret">'+I.caret+'</span>'+
-  '</button>';
+    '<div class="pnom">'+(qui ? esc(qui) : 'Ton profil')+'</div>'+
+    '<div class="pstats">'+epCount+' épisode'+(epCount>1?'s':'')+' · '+
+      fmtDurShort(minutes)+' de visionnage · '+doneShows+' série'+(doneShows>1?'s':'')+
+      ' finie'+(doneShows>1?'s':'')+'</div>'+
+  '</div></div>';
 
-  /* Un seul bloc de chiffres. L'ancienne carte « X séries · Y films · soit Z »
-     répétait deux des trois tuiles avec d'autres mots : les puces du haut
-     donnent déjà les décomptes, la tuile du milieu donne déjà la durée. */
-  html += '<div class="stats">'+
-    '<div class="stat"><b>'+epCount+'</b><span>épisode'+(epCount>1?'s':'')+' vu'+(epCount>1?'s':'')+'</span></div>'+
-    '<div class="stat"><b>'+fmtDurShort(minutes)+'</b><span>de visionnage</span></div>'+
-    '<div class="stat"><b>'+doneShows+'</b><span>série'+(doneShows>1?'s':'')+' finie'+(doneShows>1?'s':'')+'</span></div>'+
-  '</div>';
-
-  /* Les abonnements tenaient une rangée d'avatars en plein milieu de l'écran :
-     une ligne suffit, leur vrai foyer est l'écran qu'elle ouvre. */
+  /* Les visages de tes abonnements, juste sous l'identité : un tap ouvre la
+     bibliothèque de la personne, comme avant. */
   if(signedIn() && partage.suivis.length){
-    const noms = partage.suivis.map(p=>p.pseudo).filter(Boolean);
-    const resume = noms.length <= 2 ? noms.join(' et ')
-                 : noms.slice(0,2).join(', ')+' et '+(noms.length-2)+' autre'+(noms.length>3?'s':'');
-    html += '<div class="wrap" style="padding-top:0">'+
-      '<button class="reg" style="width:100%" onclick="ouvrirAbos()">'+
-        '<i>'+I.user+'</i>'+
-        '<span class="rtxt"><b>Mes abonnements</b><em>'+esc(resume)+'</em></span>'+
-        '<span class="ecaret">'+I.caret+'</span></button></div>';
+    html += '<div class="aborow">'+partage.suivis.slice(0,10).map(p=>
+      '<button class="abomini" onclick="ouvrirBiblio(\''+p.id+'\')">'+
+        avatarDe(p)+'<span>'+esc(p.pseudo)+'</span></button>').join('')+
+      '<button class="abomini" onclick="ouvrirAbos()">'+
+        '<div class="avatar plus">'+I.plus+'</div><span>Gérer</span></button>'+
+    '</div>';
   }
+
+  html += '<div class="chips" style="padding-top:12px">'+tabs.map(([id,l,n])=>
+    '<button class="chip '+(ui.profTab===id?'on':'')+'" onclick="ui.profTab=\''+id+'\';render()">'+
+    l+' <span style="opacity:.65">'+n+'</span></button>').join('')+'</div>';
 
   let cards = '';
   if(ui.profTab==='series'){
@@ -546,6 +601,10 @@ function viewAvatar(){
 function finirAvatar(){
   saveDB();
   if(signedIn()) majProfil();
+  /* Dernière étape de la création : ses goûts, qu'on peut passer d'un bouton.
+     Quelqu'un qui a déjà répondu une fois (nouvel appareil, même compte) n'y
+     repasse pas — `propose` est synchronisé avec le reste de la base. */
+  if(db.gouts && !db.gouts.propose) return go('gouts',{from:'compte'});
   go('follow');
 }
 
