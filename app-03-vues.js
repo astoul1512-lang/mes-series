@@ -112,12 +112,23 @@ function renderNav(){
     ['follow','À suivre',I.cal],
     ['profile','Mon profil',I.user]
   ];
-  const depuis = params.from;
-  const cur = (view==='preview'||view==='rangee') ? 'discover'
-            : (view==='account'||view==='abos'||view==='biblio') ? 'profile'
-            : (view==='show'||view==='movie'||view==='settings')
-              ? (depuis==='discover' ? 'discover' : (depuis||'profile'))
-            : view;
+  /* L'onglet à allumer. Chaque écran appartient à une des trois sections, et
+     ceux qui s'ouvrent depuis plusieurs endroits suivent leur origine — sans
+     quoi la barre s'éteignait : une fiche ouverte depuis la grille « Tout
+     voir » arrivait avec from:'rangee', que personne ne savait rattacher, et
+     plus aucun onglet n'était allumé. Une barre éteinte se lit comme une
+     panne, pas comme une nuance. */
+  const TAB_DIRECT = { discover:'discover', follow:'follow', profile:'profile',
+    preview:'discover', rangee:'discover',
+    account:'profile', abos:'profile', biblio:'profile', moi:'profile',
+    notifs:'profile', clochettes:'profile' };
+  let cur = TAB_DIRECT[view];
+  if(!cur){
+    /* show, movie, settings, acteur, gouts : l'onglet est celui d'où l'on vient. */
+    cur = TAB_DIRECT[params.from]
+       || ((view==='show'||view==='movie') ? 'follow'
+          : view==='acteur' ? 'discover' : 'profile');
+  }
 
   /* La barre n'est construite qu'une fois, puis seul son état change : c'est
      ce qui permet à la pastille de GLISSER d'un onglet à l'autre. Reconstruire

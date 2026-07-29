@@ -235,14 +235,20 @@ function toast(msg){
 }
 function openSheet(html){
   const el = document.getElementById('sheetin');
+  /* Un panneau DÉJÀ ouvert qu'on redessine garde sa position de lecture.
+     La feuille de filtres se redessine à chaque puce touchée : remettre le
+     défilement à zéro à chaque fois renvoyait en haut celui qui venait de
+     cocher « Années 90 » en bas de la feuille. */
+  const deja = document.getElementById('sheet').classList.contains('show');
+  const y = deja ? el.scrollTop : 0;
   /* Une poignée en haut : elle dit que le panneau se tire, et donne une prise
      franche là où le contenu ne défile pas. */
   el.innerHTML = '<div class="poignee"></div>' + html;
   el.style.transition = ''; el.style.transform = '';
   document.getElementById('sheet').classList.add('show');
   /* Après l'affichage, pas avant : tant que le panneau est masqué il n'a pas de
-     hauteur, et remettre le défilement à zéro n'a aucun effet. */
-  el.scrollTop = 0;
+     hauteur, et poser le défilement n'a aucun effet. */
+  el.scrollTop = y;
 }
 function closeSheet(){
   const s = document.getElementById('sheet');
@@ -436,8 +442,14 @@ const glisseRetour = (function(){
        L'empilement, lui, est donné par les z-index. */
     el.insertAdjacentElement('afterend', couche);
     couche.insertAdjacentElement('afterend', voile);
-    /* Même position de lecture que si on y était resté. */
-    const y = LISTES[dest] ? (memDefil[cleDefil(dest)] || 0) : 0;
+    /* Même position de lecture que si on y était resté. Les paramètres de
+       l'écran d'arrivée doivent venir de SA mémoire, pas de l'écran courant :
+       `cleDefil(dest)` seul lisait les paramètres de la fiche qu'on quitte,
+       la clé devenait « rangee: » au lieu de « rangee:film », et la grille
+       dépliée se montrait en haut pendant le geste avant de sauter à la bonne
+       position au relâchement. C'est aussi ce qui obligeait `cleDefil` à se
+       replier sur `ui.acteurId` pour les filmographies. */
+    const y = LISTES[dest] ? (memDefil[cleDefil(dest, paramsRetour(dest))] || 0) : 0;
     couche.scrollTop = y;
 
     el.classList.add('glisse');

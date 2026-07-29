@@ -671,7 +671,11 @@ function resetFiltres(){
   const d = ui.disc;
   d.genres = []; d.plates = []; d.envies = [];
   d.perimetre = 'tout'; d.tri = 'populaire'; d.noteMin = 0; d.duree = 'tout';
-  ouvrirFiltres(); chargerDecouverte();
+  /* On ne redessine la feuille QUE si elle est ouverte. Cette fonction est
+     aussi celle de la croix de la ligne de résumé, feuille fermée — et là,
+     effacer ses filtres faisait surgir le panneau sans qu'on ait rien demandé. */
+  if(feuilleFiltresOuverte()) ouvrirFiltres();
+  chargerDecouverte();
 }
 
 function resumeFiltres(){
@@ -1050,6 +1054,11 @@ let rangeeVue = { cle:null, titre:'', l:[], vus:{}, page:0, pages:1,
 
 function ouvrirRangee(cle){
   amorcerRangee(cle);
+  /* Ouvrir la rangée est un nouveau départ : la liste vient d'être remise à
+     zéro, la position mémorisée lors d'une visite précédente désignerait le
+     milieu d'une grille qui n'existe plus. Revenir d'une fiche, en revanche,
+     garde sa position — c'est `go` qui la restaure, pas nous. */
+  delete memDefil[cleDefil('rangee', { cle:cle })];
   go('rangee', { cle:cle, from:'discover' }, 'enter');
   chargerRangee();
 }
