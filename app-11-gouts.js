@@ -202,24 +202,35 @@ async function chargerSuggestions(force){
     /* On sert d'abord les sources les plus personnelles : ce qui découle de ce
        qu'il a aimé passe avant les nouveautés génériques. */
     const parce = [], parGenre = [], parActeur = [], nouv = [];
+    /* Les rangées « genres » et « nouveautés » arrivent en deux paquets — un
+       par média. Les mettre bout à bout donnait vingt séries avant le premier
+       film : le mélange n'existait qu'au bout du défilement. On les entrelace
+       donc un pour un, pour que série et film alternent dès la première case. */
+    const entrelacer = paquets => {
+      const out = [];
+      for(let i = 0; paquets.some(p => i < p.length); i++)
+        paquets.forEach(p => { if(i < p.length) out.push(p[i]); });
+      return out;
+    };
     rep.forEach(r=>{
       const l = tamiser(r.l || [], vus).slice(0, 20);
       if(!l.length) return;
       if(r.genre === 'parce')      parce.push({ titre:r.titre, l:l });
-      else if(r.genre === 'genres')     parGenre.push(...l);
+      else if(r.genre === 'genres')     parGenre.push(l);
       else if(r.genre === 'acteurs')    parActeur.push({ titre:r.titre, l:l });
-      else                              nouv.push(...l);
+      else                              nouv.push(l);
     });
 
     /* Le carrousel du jour : les cinq meilleures, prises dans les sources les
        plus personnelles d'abord. La rotation est calculée à partir de la date,
        donc stable toute la journée et différente demain — rien de tiré au sort,
        sinon la vitrine changerait sous les doigts. */
+    const parGenreMele = entrelacer(parGenre), nouvMele = entrelacer(nouv);
     const bassin = []
       .concat(...parce.map(p => p.l.map(x => Object.assign({ pourquoi:'Parce que tu as regardé '+p.titre }, x))))
       .concat(...parActeur.map(p => p.l.map(x => Object.assign({ pourquoi:'Avec '+p.titre }, x))))
-      .concat(parGenre.map(x => Object.assign({ pourquoi:'Dans tes genres' }, x)))
-      .concat(nouv.map(x => Object.assign({ pourquoi:'Nouveauté' }, x)));
+      .concat(parGenreMele.map(x => Object.assign({ pourquoi:'Dans tes genres' }, x)))
+      .concat(nouvMele.map(x => Object.assign({ pourquoi:'Nouveauté' }, x)));
     const graine = Math.floor(Date.parse(auj) / 86400000);
     const vedettes = [];
     for(let i = 0; i < 5 && bassin.length; i++){
@@ -229,7 +240,7 @@ async function chargerSuggestions(force){
 
     suggestions = { etat:'ok', quand:Date.now(), vedettes:vedettes,
                     parce:parce, acteurs:parActeur,
-                    genres:parGenre.slice(0, SUGG_MAX), nouveautes:nouv.slice(0, SUGG_MAX) };
+                    genres:parGenreMele.slice(0, SUGG_MAX), nouveautes:nouvMele.slice(0, SUGG_MAX) };
   }catch(e){
     suggestions.etat = 'erreur';
   }
