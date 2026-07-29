@@ -11,8 +11,9 @@
 
    Ce que la vitrine doit montrer, mot pour mot : « un mélange de film et
    série », « des choses qu'on n'a jamais vues ou de nouvelles sorties ».
-   D'où deux règles absolues ici : on mêle toujours les deux médias, et on
-   retire systématiquement ce qui est déjà dans la bibliothèque.
+   Depuis, chaque puce a sa propre vitrine : « Tout » mêle séries, films et
+   animés ; les trois autres cadrent. Deux règles ne bougent jamais — on retire
+   ce qui est déjà dans la bibliothèque, et on dit d'où vient chaque proposition.
 --------------------------------------------------------------------------- */
 
 /* Le bloc de préférences. Absent des bases d'avant : on le crée au démarrage. */
@@ -100,14 +101,53 @@ function titresAimes(){
 function dejaChezMoi(media, id){
   return media === 'tv' ? !!db.shows[id] : !!db.movies[id];
 }
-
 /* ---------- Le moteur ---------- */
 
-const SUGG_TTL = 12 * 3600000;      // les suggestions se refont deux fois par jour au plus
+/* Le cache dure une journée : au-delà, une « suggestion du jour » qui change
+   à midi n'en est plus une. */
+const SUGG_TTL = 24 * 3600000;
 const SUGG_MAX = 40;                // au-delà, personne ne fait défiler
+/* En dessous de ce nombre de propositions issues de la bibliothèque, on
+   complète par les genres. Au-dessus, on s'en passe : les rangées de genre
+   sont celles qu'Adrien ne reconnaissait pas — du Batman de 1999 parce qu'il
+   regarde des animés d'action. */
+const SUGG_ASSEZ = 20;
 
-let suggestions = { etat:'froid' /* froid|attente|ok|erreur */, quand:0,
-                    vedettes:[], parce:[], genres:[], acteurs:[], nouveautes:[] };
+/* Une vitrine par puce, chacune avec son cache : passer de Séries à Animés ne
+   doit pas relancer quatre requêtes si on vient d'y aller. */
+const cacheSugg = {};
+function suggVide(){
+  return { etat:'froid' /* froid|attente|ok|erreur */, quand:0,
+           vedettes:[], parce:[], genres:[], acteurs:[], nouveautes:[],
+           /* Ce sur quoi l'app s'est appuyée, gardé pour pouvoir le montrer :
+              « je ne sais pas ce que l'app croit savoir » était le reproche. */
+           base:[], genresUtilises:[] };
+}
+let suggestions = suggVide();       // celles de la puce affichée
+
+/* Repointe `suggestions` sur la puce courante. Appelée par tout ce qui lit
+   les suggestions : sans ça, changer de puce affichait celles de la
+   précédente le temps d'un rendu. */
+function suggCourantes(){
+  const t = (ui.disc && ui.disc.type) || 'tout';
+  if(!cacheSugg[t]) cacheSugg[t] = suggVide();
+  suggestions = cacheSugg[t];
+  return suggestions;
+}
+/* Les goûts ont changé : tout est à refaire, sur toutes les puces. */
+function oublierSuggestions(){
+  Object.keys(cacheSugg).forEach(t => { delete cacheSugg[t]; });
+  suggCourantes();
+}
+
+/* Ce que chaque puce accepte. `anime` vaut true (que des animés), false
+   (jamais d'animé) ou null (on ne tranche pas — c'est « Tout »). */
+function cadreSugg(t){
+  if(t === 'movie') return { medias:['movie'], anime:false };
+  if(t === 'tv')    return { medias:['tv'],    anime:false };
+  if(t === 'anime') return { medias:['tv'],    anime:true  };
+  return { medias:['tv','movie'], anime:null };
+}
 
 /* Normalise un résultat TMDB, quel que soit son média. */
 function normaliser(r, media){
@@ -119,19 +159,43 @@ function normaliser(r, media){
            genre_ids: r.genre_ids || [], langue: r.original_language || null };
 }
 
+/* Un animé, au sens de la puce : japonais ET classé animation. Les deux
+   conditions comptent — un drama japonais n'est pas un animé, un dessin animé
+   américain non plus. */
+function estUnAnime(x){
+  if(x.langue !== 'ja') return false;
+  const a = genreParNom(x.media, 'Animation');
+  return a != null && x.genre_ids.indexOf(a) >= 0;
+}
+function estOccidental(x){
+  return !x.langue || LANGUES_OCCIDENT.indexOf(x.langue) >= 0;
+}
+/* La règle d'origine, dépendante de la puce.
+   `perso` distingue ce qui découle de la bibliothèque (recommandations d'un
+   titre regardé, acteur suivi) du catalogue générique. C'était l'incohérence
+   de fond : l'app déduisait les goûts d'Adrien d'une bibliothèque d'animés,
+   puis s'interdisait de lui en proposer un seul. Ce qui vient de chez lui n'a
+   plus d'origine imposée ; seul le ratissage général reste cadré. */
+function passeOrigine(x, cadre, perso){
+  if(cadre.anime === true)  return estUnAnime(x);          // puce Animés
+  if(cadre.anime === false) return !estUnAnime(x) && estOccidental(x);
+  return perso || estUnAnime(x) || estOccidental(x);       // puce Tout
+}
+
 /* Le tamis commun à toutes les sources : jamais un titre déjà chez soi, jamais
-   un genre écarté, jamais deux fois le même, et la règle d'origine de l'app. */
-function tamiser(liste, vus){
+   un genre écarté, jamais deux fois le même, et le cadre de la puce. */
+function tamiser(liste, vus, cadre, perso){
   const hors = (db.gouts && db.gouts.exclus) || [];
   const idsHors = hors.map(nom => genreParNom('tv', nom) || genreParNom('movie', nom))
                       .filter(x => x != null);
   return liste.filter(x=>{
     if(!x) return false;
+    if(cadre.medias.indexOf(x.media) < 0) return false;
     const cle = x.media + ':' + x.id;
     if(vus[cle]) return false;
     if(dejaChezMoi(x.media, x.id)) return false;
     if(idsHors.some(g => x.genre_ids.indexOf(g) >= 0)) return false;
-    if(x.langue && LANGUES_OCCIDENT.indexOf(x.langue) < 0) return false;
+    if(!passeOrigine(x, cadre, perso)) return false;
     vus[cle] = 1;
     return true;
   });
@@ -143,10 +207,22 @@ async function sourceDouce(promesse){
   try{ return await promesse; }catch(e){ return null; }
 }
 
+/* Les paquets « genres » et « nouveautés » arrivent média par média. Les mettre
+   bout à bout donnait vingt séries avant le premier film : le mélange n'existait
+   qu'au bout du défilement. On les entrelace un pour un. */
+function entrelacerSugg(paquets){
+  const out = [];
+  for(let i = 0; paquets.some(p => i < p.length); i++)
+    paquets.forEach(p => { if(i < p.length) out.push(p[i]); });
+  return out;
+}
+
 async function chargerSuggestions(force){
-  if(suggestions.etat === 'attente') return;
-  if(!force && suggestions.etat === 'ok' && Date.now() - suggestions.quand < SUGG_TTL) return;
-  suggestions.etat = 'attente';
+  const type = (ui.disc && ui.disc.type) || 'tout';
+  const c = suggCourantes();
+  if(c.etat === 'attente') return;
+  if(!force && c.etat === 'ok' && Date.now() - c.quand < SUGG_TTL) return;
+  c.etat = 'attente';
   if(typeof peindreDisc === 'function') peindreDisc();
   try{
     await Promise.all([chargerGenres('tv'), chargerGenres('movie')]);
@@ -155,82 +231,102 @@ async function chargerSuggestions(force){
        était vide. On ne l'attend pas — elle arrive en arrière-plan. */
     if(typeof chargerPlates === 'function' && typeof discMedia === 'function')
       chargerPlates(discMedia()).catch(()=>{});
+
+    const cadre = cadreSugg(type);
     const vus = {};
-    const aimes = titresAimes().slice(0, 3);
-    const genres = genresRetenus();
-    const acteurs = ((db.gouts||{}).acteurs || []).slice(0, 2);
     const auj = todayISO();
     const debut = isoIlYA(60);
+    const anim = { tv: genreParNom('tv','Animation'), movie: genreParNom('movie','Animation') };
 
-    /* Les genres, traduits pour chaque média : « Drame » n'a pas le même
-       identifiant côté séries et côté films. */
-    const idsG = media => genres.map(n => genreParNom(media, n)).filter(x => x != null);
+    /* --- Première vague : ce qui vient de ma bibliothèque ---
+       C'est le choix d'Adrien : « ce que tu as vraiment regardé » d'abord, les
+       genres seulement en bouche-trou. On tire donc de six titres au lieu de
+       trois, et on n'ira chercher le catalogue que si ça ne suffit pas. */
+    const aimes = titresAimes().filter(t => cadre.medias.indexOf(t.media) >= 0).slice(0, 6);
+    const acteurs = ((db.gouts||{}).acteurs || []).slice(0, 3);
 
-    const demandes = [
-      /* 1. « Parce que tu as regardé … » — une source par titre aimé. */
+    const persos = await Promise.all([
       ...aimes.map(t => sourceDouce(tmdb('/'+t.media+'/'+t.id+'/recommendations'))
-        .then(d => ({ genre:'parce', titre:t.nom, media:t.media,
+        .then(d => ({ genre:'parce', titre:t.nom,
                       l:(d&&d.results||[]).map(r=>normaliser(r, t.media)) }))),
-      /* 2. Tes genres, des deux côtés — c'est ce qui mêle films et séries. */
-      ...['tv','movie'].map(m => {
-        const g = idsG(m);
-        if(!g.length) return Promise.resolve({genre:'genres', l:[]});
-        return sourceDouce(tmdb('/discover/'+m, { include_adult:'false', page:'1',
-            sort_by:'popularity.desc', with_genres:g.join(','), 'vote_count.gte':'150' }))
-          .then(d => ({ genre:'genres', l:(d&&d.results||[]).map(r=>normaliser(r, m)) }));
-      }),
-      /* 3. Les nouveautés, des deux côtés aussi. */
-      ...['tv','movie'].map(m => {
-        const champ = m === 'movie' ? 'primary_release_date' : 'first_air_date';
-        return sourceDouce(tmdb('/discover/'+m, { include_adult:'false', page:'1',
-            sort_by:'popularity.desc', [champ+'.gte']:debut, [champ+'.lte']:auj }))
-          .then(d => ({ genre:'nouveautes', l:(d&&d.results||[]).map(r=>normaliser(r, m)) }));
-      }),
-      /* 4. Les acteurs favoris. TMDB ne sait filtrer les séries par acteur que
-            pour les films : on passe donc par la filmographie de la personne,
-            le même chemin que les fiches acteurs de l'app. */
+      /* TMDB ne sait filtrer les séries par acteur que pour les films : on passe
+         donc par la filmographie de la personne, le même chemin que les fiches
+         acteurs de l'app. */
       ...acteurs.map(a => sourceDouce(tmdb('/person/'+a.id+'/combined_credits'))
         .then(d => ({ genre:'acteurs', titre:a.nom,
                       l:((d&&d.cast)||[])
                         .filter(r => r.media_type === 'tv' || r.media_type === 'movie')
                         .sort((x,y)=>(y.popularity||0)-(x.popularity||0))
                         .map(r => normaliser(r, r.media_type)) })))
-    ];
+    ]);
 
-    const rep = await Promise.all(demandes);
-
-    /* On sert d'abord les sources les plus personnelles : ce qui découle de ce
-       qu'il a aimé passe avant les nouveautés génériques. */
-    const parce = [], parGenre = [], parActeur = [], nouv = [];
-    /* Les rangées « genres » et « nouveautés » arrivent en deux paquets — un
-       par média. Les mettre bout à bout donnait vingt séries avant le premier
-       film : le mélange n'existait qu'au bout du défilement. On les entrelace
-       donc un pour un, pour que série et film alternent dès la première case. */
-    const entrelacer = paquets => {
-      const out = [];
-      for(let i = 0; paquets.some(p => i < p.length); i++)
-        paquets.forEach(p => { if(i < p.length) out.push(p[i]); });
-      return out;
-    };
-    rep.forEach(r=>{
-      const l = tamiser(r.l || [], vus).slice(0, 20);
+    const parce = [], parActeur = [];
+    let nPerso = 0;
+    persos.forEach(r=>{
+      const l = tamiser(r.l || [], vus, cadre, true).slice(0, 20);
       if(!l.length) return;
-      if(r.genre === 'parce')      parce.push({ titre:r.titre, l:l });
-      else if(r.genre === 'genres')     parGenre.push(l);
-      else if(r.genre === 'acteurs')    parActeur.push({ titre:r.titre, l:l });
-      else                              nouv.push(l);
+      nPerso += l.length;
+      if(r.genre === 'parce') parce.push({ titre:r.titre, l:l });
+      else                    parActeur.push({ titre:r.titre, l:l });
     });
 
-    /* Le carrousel du jour : les cinq meilleures, prises dans les sources les
-       plus personnelles d'abord. La rotation est calculée à partir de la date,
-       donc stable toute la journée et différente demain — rien de tiré au sort,
-       sinon la vitrine changerait sous les doigts. */
-    const parGenreMele = entrelacer(parGenre), nouvMele = entrelacer(nouv);
+    /* --- Seconde vague : le catalogue ---
+       Les nouveautés sont demandées à chaque fois — « de nouvelles sorties »
+       fait partie de la commande. Les genres, eux, ne servent qu'à combler. */
+    const genres = genresRetenus();
+    const besoinGenres = nPerso < SUGG_ASSEZ && genres.length > 0;
+    const idsG = media => {
+      const l = genres.map(n => genreParNom(media, n)).filter(x => x != null);
+      /* Sur la puce Animés, l'animation est acquise : la garder comme critère
+         ne trierait rien et écraserait les genres qui, eux, distinguent. */
+      return cadre.anime === true ? l.filter(x => x !== anim[media]) : l;
+    };
+
+    const generiques = await Promise.all([
+      ...cadre.medias.map(m => {
+        const champ = m === 'movie' ? 'primary_release_date' : 'first_air_date';
+        const p = { include_adult:'false', page:'1', sort_by:'popularity.desc',
+                    [champ+'.gte']:debut, [champ+'.lte']:auj };
+        if(cadre.anime === true){
+          p.with_original_language = 'ja';
+          if(anim[m] != null) p.with_genres = String(anim[m]);
+        }
+        return sourceDouce(tmdb('/discover/'+m, p))
+          .then(d => ({ genre:'nouveautes', l:(d&&d.results||[]).map(r=>normaliser(r, m)) }));
+      }),
+      ...(besoinGenres ? cadre.medias.map(m => {
+        const g = idsG(m);
+        const p = { include_adult:'false', page:'1', sort_by:'popularity.desc',
+                    'vote_count.gte':'150' };
+        if(cadre.anime === true){
+          p.with_original_language = 'ja';
+          g.unshift(anim[m]);                       // l'animation redevient obligatoire ici
+        }
+        const ids = g.filter(x => x != null);
+        if(!ids.length) return Promise.resolve({genre:'genres', l:[]});
+        p.with_genres = ids.join(',');
+        return sourceDouce(tmdb('/discover/'+m, p))
+          .then(d => ({ genre:'genres', l:(d&&d.results||[]).map(r=>normaliser(r, m)) }));
+      }) : [])
+    ]);
+
+    const paqGenre = [], paqNouv = [];
+    generiques.forEach(r=>{
+      const l = tamiser(r.l || [], vus, cadre, false).slice(0, 20);
+      if(!l.length) return;
+      if(r.genre === 'genres') paqGenre.push(l); else paqNouv.push(l);
+    });
+    const parGenre = entrelacerSugg(paqGenre), nouv = entrelacerSugg(paqNouv);
+
+    /* Le carrousel du jour : cinq titres pris d'abord dans ce qui vient de la
+       bibliothèque. La rotation est calculée à partir de la date — stable toute
+       la journée, différente demain, et jamais tirée au sort : la vitrine ne
+       doit pas changer sous les doigts. */
     const bassin = []
       .concat(...parce.map(p => p.l.map(x => Object.assign({ pourquoi:'Parce que tu as regardé '+p.titre }, x))))
       .concat(...parActeur.map(p => p.l.map(x => Object.assign({ pourquoi:'Avec '+p.titre }, x))))
-      .concat(parGenreMele.map(x => Object.assign({ pourquoi:'Dans tes genres' }, x)))
-      .concat(nouvMele.map(x => Object.assign({ pourquoi:'Nouveauté' }, x)));
+      .concat(parGenre.map(x => Object.assign({ pourquoi:'Dans tes genres' }, x)))
+      .concat(nouv.map(x => Object.assign({ pourquoi:'Sortie récente' }, x)));
     const graine = Math.floor(Date.parse(auj) / 86400000);
     const vedettes = [];
     for(let i = 0; i < 5 && bassin.length; i++){
@@ -238,18 +334,20 @@ async function chargerSuggestions(force){
       vedettes.push(bassin.splice(idx, 1)[0]);
     }
 
-    suggestions = { etat:'ok', quand:Date.now(), vedettes:vedettes,
-                    parce:parce, acteurs:parActeur,
-                    genres:parGenreMele.slice(0, SUGG_MAX), nouveautes:nouvMele.slice(0, SUGG_MAX) };
+    Object.assign(c, { etat:'ok', quand:Date.now(), vedettes:vedettes,
+      parce:parce, acteurs:parActeur,
+      genres:parGenre.slice(0, SUGG_MAX), nouveautes:nouv.slice(0, SUGG_MAX),
+      base:aimes.map(t=>t.nom), genresUtilises: besoinGenres ? genres : [] });
   }catch(e){
-    suggestions.etat = 'erreur';
+    c.etat = 'erreur';
   }
+  suggCourantes();
   if(view === 'discover' && typeof peindreDisc === 'function') peindreDisc();
 }
 
-/* Les rangées de la vitrine, dans l'ordre où elles s'affichent. Chacune mêle
-   films et séries — c'est la demande explicite d'Adrien. */
+/* Les rangées de la vitrine, dans l'ordre où elles s'affichent. */
 function rangeesSuggerees(){
+  suggCourantes();
   const out = [];
   suggestions.parce.forEach(p=>{
     if(p.l.length) out.push({ titre:'Parce que tu as regardé '+p.titre, l:p.l });
@@ -258,12 +356,45 @@ function rangeesSuggerees(){
     if(p.l.length) out.push({ titre:'Avec '+p.titre, l:p.l });
   });
   if(suggestions.genres.length){
-    const g = genresRetenus();
+    const g = suggestions.genresUtilises.length ? suggestions.genresUtilises : genresRetenus();
     out.push({ titre: g.length ? 'Parce que tu aimes '+g.slice(0,2).join(' et ') : 'Pour toi',
                l: suggestions.genres });
   }
   if(suggestions.nouveautes.length) out.push({ titre:'Sorties récentes', l:suggestions.nouveautes });
   return out;
+}
+
+/* ---------------------------------------------------------------------------
+   « Ce que l'app croit savoir »
+
+   Le reproche d'Adrien, mot pour mot : « je ne sais pas ce que l'app croit
+   savoir ». Tant que le raisonnement reste caché, une suggestion ratée passe
+   pour de l'arbitraire — alors qu'elle est presque toujours la conséquence
+   visible d'une déduction discutable. On l'affiche donc là où les suggestions
+   sont, pas seulement dans un écran de réglages.
+--------------------------------------------------------------------------- */
+
+/* Les deux phrases qui expliquent le profil courant. Rendues séparément pour
+   que la vitrine en montre une version courte et l'écran des goûts la version
+   complète, sans écrire le raisonnement à deux endroits. */
+function explicationProfil(){
+  const g = db.gouts || {};
+  const bases = titresAimes().slice(0, 3).map(t=>t.nom);
+  const manuels = (g.genres||[]).length > 0;
+  const genres = genresRetenus();
+  return {
+    manuels: manuels,
+    bases: bases,
+    genres: genres,
+    acteurs: (g.acteurs||[]).map(a=>a.nom),
+    exclus: (g.exclus||[]).slice(),
+    /* La phrase d'origine : d'où viennent les genres retenus. */
+    origine: manuels
+      ? 'Tu as choisi ces genres toi-même.'
+      : (bases.length
+          ? 'Déduits de ce que tu as terminé ou bien avancé.'
+          : 'Rien à déduire pour l\'instant : ta bibliothèque est trop jeune.')
+  };
 }
 
 /* ---------------------------------------------------------------------------
@@ -297,7 +428,7 @@ function bascGoutGenre(nom){
   const g = db.gouts;
   const i = g.genres.indexOf(nom);
   if(i >= 0) g.genres.splice(i,1); else { g.genres.push(nom); retirerExclu(nom); }
-  saveDB(); render();
+  oublierSuggestions(); saveDB(); render();
 }
 function bascGoutExclu(nom){
   const g = db.gouts;
@@ -308,7 +439,7 @@ function bascGoutExclu(nom){
     const j = g.genres.indexOf(nom);
     if(j >= 0) g.genres.splice(j,1);          // aimer et écarter à la fois n'a pas de sens
   }
-  saveDB(); render();
+  oublierSuggestions(); saveDB(); render();
 }
 function retirerExclu(nom){
   const g = db.gouts, i = g.exclus.indexOf(nom);
@@ -316,13 +447,13 @@ function retirerExclu(nom){
 }
 function retirerActeur(id){
   db.gouts.acteurs = db.gouts.acteurs.filter(a=>String(a.id) !== String(id));
-  saveDB(); render();
+  oublierSuggestions(); saveDB(); render();
 }
 function ajouterActeur(id, nom){
   if(db.gouts.acteurs.some(a=>String(a.id) === String(id))) return;
   db.gouts.acteurs.push({ id:id, nom:nom });
   rechActeur = { q:'', res:null, occupe:false, seq:rechActeur.seq };
-  saveDB(); render();
+  oublierSuggestions(); saveDB(); render();
 }
 
 async function chercherActeur(q){
@@ -389,14 +520,34 @@ function viewGouts(){
       : 'Ces réglages passent avant ce que l\'app devine. Laisse tout vide et elle reprend la main.')+
     '</div></div>';
 
-  /* Ce que l'app a déduit — montré en clair, pour qu'on sache ce qu'on corrige. */
-  const deduits = genresDeduits().slice(0,3);
-  if(!g.genres.length && deduits.length){
-    html += '<div class="wrap" style="padding-top:0"><div class="card" style="padding:12px 14px">'+
-      '<div class="tiny muted">D\'après ce que tu regardes, tu aimes</div>'+
-      '<div style="font-weight:700;margin-top:2px">'+esc(deduits.join(' · '))+'</div>'+
-    '</div></div>';
-  }
+  /* Le raisonnement complet, écrit noir sur blanc. La version courte de ce même
+     bloc est dans la vitrine ; ici on montre en plus le détail des genres
+     déduits et leur classement, puisque c'est l'écran où on les corrige. */
+  const p = explicationProfil();
+  const deduits = genresDeduits();
+  const lignes = [];
+  if(p.bases.length)
+    lignes.push('<div><b>Je pars de</b> '+esc(p.bases.join(', '))+'</div>');
+  if(deduits.length)
+    lignes.push('<div><b>Genres qui en ressortent</b> '+esc(deduits.slice(0,5).join(', '))+
+      (deduits.length > 5 ? ' <span class="muted">et '+(deduits.length-5)+' autre'+
+        (deduits.length-5>1?'s':'')+'</span>' : '')+'</div>');
+  if(p.genres.length)
+    lignes.push('<div><b>'+(p.manuels ? 'Ce que tu as choisi' : 'Ce que je retiens')+'</b> '+
+      esc(p.genres.join(', '))+'</div>');
+  if(p.acteurs.length)
+    lignes.push('<div><b>Acteurs suivis</b> '+esc(p.acteurs.join(', '))+'</div>');
+  if(p.exclus.length)
+    lignes.push('<div><b>Écartés</b> '+esc(p.exclus.join(', '))+'</div>');
+
+  html += '<div class="wrap" style="padding-top:0"><div class="profcarte">'+
+    '<div class="proftitre">'+I.boussole+' Ce que je crois savoir de toi</div>'+
+    (lignes.length
+      ? '<div class="proflignes">'+lignes.join('')+'</div>'+
+        '<div class="tiny muted" style="margin-top:8px">'+esc(p.origine)+'</div>'
+      : '<div class="tiny muted">Rien encore. Coche quelques épisodes, ou choisis '+
+        'des genres ci-dessous — les deux marchent.</div>')+
+  '</div></div>';
 
   html += '<div class="sectitle">J\'aime</div>'+
     '<div class="chips wrapchips">'+genres.map(n=>
@@ -433,7 +584,7 @@ function viewGouts(){
 
 function finirGouts(){
   db.gouts.propose = true; saveDB();
-  suggestions.etat = 'froid';                 // le profil a changé : on recalcule
+  oublierSuggestions();                       // le profil a changé : on recalcule
   go('follow');
 }
 function passerGouts(){

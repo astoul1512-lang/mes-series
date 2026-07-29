@@ -255,6 +255,18 @@
     transition:background .18s,width .18s}
   .carrpts i.on{background:var(--accent);width:16px;border-radius:3px}
 
+  /* « Sur quoi je me base » : le raisonnement de l'app, rendu visible.
+     Encadré et légèrement teinté d'accent pour se distinguer des rangées de
+     contenu — ce n'est pas une proposition de plus, c'est une explication. */
+  .profcarte{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+    padding:14px 15px}
+  .proftitre{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:750;
+    letter-spacing:.07em;text-transform:uppercase;color:var(--accent);margin-bottom:9px}
+  .proftitre svg{width:15px;height:15px;flex:0 0 auto}
+  .proflignes{display:flex;flex-direction:column;gap:5px;font-size:13.5px;line-height:1.45}
+  .proflignes b{font-weight:750;color:var(--muted);font-size:12px;text-transform:uppercase;
+    letter-spacing:.04em;margin-right:5px}
+
   /* Les rangées horizontales. */
   .rangee{display:flex;gap:11px;overflow-x:auto;padding:2px 16px 6px;scrollbar-width:none;
     -webkit-overflow-scrolling:touch}

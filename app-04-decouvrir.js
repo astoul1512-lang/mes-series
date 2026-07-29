@@ -89,7 +89,7 @@ async function runSearch(q){
   try{
     if(ui.disc.type === 'anime') await chargerGenres('tv');   // besoin de l'id du genre Animation
     if(seq !== searchSeq) return;
-    /* Mini-séries et animés restent des séries : TMDB ne cherche que dans tv ou movie. */
+    /* Les animés restent des séries : TMDB ne cherche que dans tv ou movie. */
     /* Sur « Tout », films et séries se cherchent ensemble : taper « Dune »
        depuis la vitrine ne doit pas rester muet parce que c'est un film. */
     const chemin = ui.disc.type === 'tout' ? '/search/multi' : '/search/'+discMedia();
@@ -191,13 +191,14 @@ async function addMovie(id, seen){
    codés en dur : ils sont demandés à TMDB (/genre/tv/list, /genre/movie/list)
    pour que les identifiants et les libellés français viennent de la source. */
 
+/* Chaque puce ouvre sa propre vitrine de suggestions ; poser un filtre bascule
+   sur la grille. « Tout » mêle les trois, les autres cadrent.
+   « Mini-séries » a été retiré à la demande d'Adrien : c'était un sous-cas des
+   séries, qui prenait une place de premier rang sans rien apporter à personne. */
 const DISC_TYPES = [
-  /* « Tout » n'est pas un type mais un état : la vitrine, où films et séries
-     se mêlent. Les autres puces sont des filtres, et basculent sur la grille. */
   { id:'tout',  label:'Tout' },
   { id:'tv',    label:'Séries' },
   { id:'movie', label:'Films' },
-  { id:'mini',  label:'Mini-séries' },
   { id:'anime', label:'Animés' }
 ];
 /* Deux réglages distincts, longtemps mélangés dans une seule rangée :
@@ -262,7 +263,7 @@ const sondagesFaits = {};                   // « tv:anime » → true
 let sondageEnCours = false;
 let discSeq = 0;
 
-/* Le média TMDB derrière chaque puce : mini-séries et animés restent des séries. */
+/* Le média TMDB derrière chaque puce : les animés restent des séries. */
 function discMedia(){ return ui.disc.type === 'movie' ? 'movie' : 'tv'; }
 function isoIlYA(jours){ return new Date(Date.now() - jours*86400000).toISOString().slice(0,10); }
 
@@ -341,7 +342,6 @@ function discParams(){
   const p = { include_adult:'false', page:String(d.page) };
 
   const noms = d.genres.slice();
-  if(d.type === 'mini') p.with_type = '2';                       // 2 = mini-série chez TMDB
   if(d.type === 'anime'){
     p.with_original_language = 'ja';
     if(noms.indexOf('Animation') < 0) noms.unshift('Animation');
@@ -643,7 +643,6 @@ function fermerChamp(){
 function champRecherche(){
   const t = ui.disc.type;
   const quoi = t==='anime' ? "Chercher un animé…"
-             : t==='mini'  ? "Chercher une série…"
              : discMedia()==='tv' ? "Chercher une série…" : "Chercher un film…";
   return '<div class="qbar">'+I.search+
     '<input type="search" id="q" enterkeyhint="search" autocomplete="off" autocorrect="off" '+
@@ -665,8 +664,10 @@ function champRecherche(){
    s'efface au profit des résultats, avec le résumé de ce qui est appliqué et
    une croix pour tout effacer. Toute la puissance d'avant, intacte.
 --------------------------------------------------------------------------- */
+/* Chaque puce a désormais sa vitrine : Tout mêle séries, films et animés, les
+   trois autres cadrent. La grille filtrée n'apparaît que si un filtre mord. */
 function vitrineVisible(){
-  return ui.disc.type === 'tout' && !enRecherche() && !filtresActifs();
+  return !enRecherche() && !filtresActifs();
 }
 
 /* Une diapositive du carrousel : grande image, la raison de sa présence,
@@ -728,8 +729,34 @@ function vignetteSugg(x){
   '</button>';
 }
 
+/* Le panneau « voilà sur quoi je me base ».
+   Adrien, mot pour mot : « je ne sais pas ce que l'app croit savoir ». Tant que
+   le raisonnement reste caché, une suggestion ratée passe pour de l'arbitraire.
+   Il est posé juste sous le carrousel, là où la question se pose — pas rangé
+   dans un écran de réglages qu'on n'ouvre jamais. */
+function panneauProfil(){
+  const p = explicationProfil();
+  const bouts = [];
+  if(p.bases.length)   bouts.push('<b>Je pars de</b> '+esc(p.bases.join(', ')));
+  if(p.genres.length)  bouts.push('<b>'+(p.manuels ? 'Tes genres' : 'J\'en déduis')+'</b> '+
+                                  esc(p.genres.join(', ')));
+  if(p.acteurs.length) bouts.push('<b>Tu suis</b> '+esc(p.acteurs.join(', ')));
+  if(p.exclus.length)  bouts.push('<b>J\'écarte</b> '+esc(p.exclus.join(', ')));
+  if(!bouts.length)
+    bouts.push('Je n\'ai encore rien pour me régler sur toi : coche quelques épisodes, '+
+               'ou dis-moi ce que tu aimes.');
+  return '<div class="wrap" style="padding-top:14px;padding-bottom:2px">'+
+    '<div class="profcarte">'+
+      '<div class="proftitre">'+I.boussole+' Sur quoi je me base</div>'+
+      '<div class="proflignes">'+bouts.map(b=>'<div>'+b+'</div>').join('')+'</div>'+
+      '<div class="tiny muted" style="margin-top:8px">'+esc(p.origine)+'</div>'+
+      '<button class="btn ghost block" style="margin-top:12px" '+
+        'onclick="go(\'gouts\',{from:\'discover\'})">Corriger ce que tu aimes</button>'+
+    '</div></div>';
+}
+
 function vitrineBody(){
-  const e = suggestions.etat;
+  const e = suggCourantes().etat;
   if(e === 'froid' || e === 'attente')
     return '<div class="empty"><span class="spin"></span>'+
       '<p style="margin-top:12px">On prépare tes suggestions…</p></div>';
@@ -740,21 +767,32 @@ function vitrineBody(){
 
   const rangees = rangeesSuggerees();
   if(!suggestions.vedettes.length && !rangees.length)
-    return '<div class="empty">'+I.boussole+'<h3>Rien à proposer pour l\'instant</h3>'+
+    /* L'écran vide est justement celui où l'on se demande pourquoi : le panneau
+       d'explication y a plus sa place qu'ailleurs. */
+    return '<div class="empty">'+I.boussole+'<h3>Rien à proposer '+esc(dansCettePuce())+'</h3>'+
       '<p>Ajoute une série ou un film : les suggestions se règlent sur ce que tu regardes.</p>'+
-      '<button class="btn ghost" onclick="ouvrirChamp()">Chercher un titre</button></div>';
+      '<button class="btn ghost" onclick="ouvrirChamp()">Chercher un titre</button></div>'+
+      panneauProfil();
 
   let html = carrouselVedettes(suggestions.vedettes);
+  /* Le panneau vient juste après le carrousel : on voit d'abord les
+     propositions, puis pourquoi elles sont là. L'inverse ferait un écran qui
+     s'explique avant d'avoir rien montré. */
+  html += panneauProfil();
   rangees.forEach(r=>{
     html += '<div class="sectitle">'+esc(r.titre)+'</div>'+
       '<div class="rangee">'+r.l.map(vignetteSugg).join('')+'</div>';
   });
-  /* Une porte discrète vers le réglage des goûts : c'est ici qu'on se dit
-     « ces suggestions ne me ressemblent pas ». */
-  html += '<div class="wrap" style="padding-top:16px;padding-bottom:6px">'+
-    '<button class="btn ghost block" onclick="go(\'gouts\',{from:\'discover\'})">'+
-      'Régler mes goûts</button></div>';
-  return html;
+  return html + '<div style="height:6px"></div>';
+}
+
+/* Le nom de ce qu'on regarde, pour les messages : « dans les animés ». */
+function dansCettePuce(){
+  const t = ui.disc.type;
+  if(t === 'tv')    return 'dans les séries';
+  if(t === 'movie') return 'dans les films';
+  if(t === 'anime') return 'dans les animés';
+  return 'pour l\'instant';
 }
 
 function viewDiscover(){
