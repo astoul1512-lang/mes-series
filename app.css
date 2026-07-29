@@ -271,15 +271,23 @@
   .rangee{display:flex;gap:11px;overflow-x:auto;padding:2px 16px 6px;scrollbar-width:none;
     -webkit-overflow-scrolling:touch}
   .rangee::-webkit-scrollbar{display:none}
-  .vgn{flex:0 0 108px;text-align:left;color:var(--text)}
+  /* `min-width:0` est indispensable : un élément flex vaut par défaut au moins
+     la largeur de son contenu (`min-width:auto`), si bien qu'un titre à rallonge
+     élargissait la vignette et décalait toute la suite de la rangée. */
+  .vgn{flex:0 0 108px;min-width:0;text-align:left;color:var(--text)}
   .vgimg{position:relative;border-radius:10px;overflow:hidden}
   .vgn .poster{width:108px;height:162px}
   .vgdeja{position:absolute;top:6px;right:6px;width:22px;height:22px;border-radius:50%;
     background:var(--ok);color:#08130d;display:grid;place-items:center}
   .vgdeja svg{width:13px;height:13px}
-  .vgnom{font-size:12.5px;font-weight:640;margin-top:6px;white-space:nowrap;
-    overflow:hidden;text-overflow:ellipsis}
-  .vgnote{font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:3px}
+  /* Deux lignes plutôt qu'une coupée net : « Stuart Fails to Save the Universe »
+     n'a plus rien à dire réduit à « Stuart Fai… ». La hauteur est figée pour que
+     la note reste alignée d'une vignette à l'autre, titre court ou long. */
+  .vgnom{font-size:12.5px;font-weight:640;margin-top:6px;line-height:1.25;
+    height:2.5em;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;
+    -webkit-box-orient:vertical;overflow-wrap:anywhere}
+  .vgnote{font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:3px;
+    margin-top:3px}
   .vgnote svg{width:11px;height:11px;color:var(--accent)}
   /* Séries et films sont mélangés dans les rangées : sans cette étiquette on
      ne sait pas ce qu'on ouvre. */
@@ -562,7 +570,9 @@
   .actions .btn{flex:1}
   .cast{display:flex;gap:12px;overflow-x:auto;padding:2px 16px 4px;scrollbar-width:none}
   .cast::-webkit-scrollbar{display:none}
-  .cperson{width:74px;flex:none;text-align:center}
+  /* Même précaution que pour les vignettes : sans `min-width:0`, un nom long
+     élargit la colonne et décale tout le casting. */
+  .cperson{width:74px;flex:none;min-width:0;text-align:center}
   .cperson img,.cperson .ph2{width:74px;height:74px;border-radius:50%;object-fit:cover;background:var(--surface2)}
   .cperson .ph2{display:grid;place-items:center;color:var(--muted);font-size:20px;font-weight:700}
   .cperson{color:var(--text)}
@@ -626,7 +636,7 @@
 
   .aborow{display:flex;gap:14px;overflow-x:auto;padding:12px 16px 2px;scrollbar-width:none}
   .aborow::-webkit-scrollbar{display:none}
-  .abomini{flex:none;width:66px;text-align:center;color:var(--text)}
+  .abomini{flex:none;width:66px;min-width:0;text-align:center;color:var(--text)}
   .abomini .avatar{width:52px;height:52px;font-size:20px;margin:0 auto}
   .abomini .avatar.plus{background:var(--surface2);border:1px dashed var(--line);color:var(--muted)}
   .abomini .avatar.plus svg{width:20px;height:20px}
@@ -673,7 +683,7 @@
   .filmrow{display:flex;gap:12px;overflow-x:auto;padding:4px 16px 8px;scrollbar-width:none;
     -webkit-overflow-scrolling:touch}
   .filmrow::-webkit-scrollbar{display:none}
-  .filmrow .pcard{flex:0 0 104px}
+  .filmrow .pcard{flex:0 0 104px;min-width:0}
   .filmrow .poster{width:104px;height:156px;border-radius:9px;object-fit:cover}
   .sortiecarte .psub svg{width:10px;height:10px;vertical-align:-1px;color:var(--accent)}
   .pcard{position:relative;text-align:left}
