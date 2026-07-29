@@ -244,6 +244,12 @@ const DISC_TRIS = [
   { id:'populaire', label:'Les plus populaires', court:'populaire' },
   { id:'note',      label:'Les mieux notées',    court:'mieux notées' }
 ];
+/* Le plancher de votes, posé dès qu'on trie par note ou qu'on exige une note
+   minimale. Sans lui, `vote_average.desc` remonte les 10/10 à trois voix.
+   Il était à 300 pour le tri et à 100 pour la note minimale : deux valeurs
+   pour la même idée, dont la plus sévère écartait des titres en silence.
+   Une seule valeur, mesurée, et ANNONCÉE dans la feuille. */
+const DISC_VOTES_MINI = 100;
 const DISC_NOTES = [
   { v:0, label:'Toutes' }, { v:6, label:'6 et +' }, { v:7, label:'7 et +' }, { v:8, label:'8 et +' }
 ];
@@ -427,13 +433,28 @@ function discParams(){
   const d = ui.disc, media = discMedia();
   const p = { include_adult:'false', page:String(d.page) };
 
-  const noms = d.genres.slice();
+  /* Les genres partent en OU — la barre verticale, pas la virgule.
+
+     La virgule est un ET chez TMDB. Cocher « Comédie » et « Crime » exigeait
+     donc les deux à la fois, alors que la feuille écrit noir sur blanc « tu
+     cherches comédie OU crime ». L'écran promettait une chose et la requête en
+     faisait une autre.
+
+     Sur la puce Animés, l'animation japonaise est la DÉFINITION de la puce,
+     pas une préférence : elle devrait rester un ET. Mais mélanger les deux
+     (`16,10759|10765`) ne marche pas — mesuré le 29/07, TMDB rend alors
+     exactement le même total qu'avec `16,10759` seul : tout ce qui suit la
+     barre est ignoré, en silence. On s'appuie donc sur la langue dans la
+     requête et on vérifie l'animation chez nous (`garderAnimes`). Le tamis ne
+     retire presque rien : sur 80 séries japonaises d'action ou de SF lues,
+     79 portaient bien le genre Animation. */
+  const ids = d.genres.map(n => genreParNom(media, n)).filter(x => x != null);
   if(d.type === 'anime'){
     p.with_original_language = 'ja';
-    if(noms.indexOf('Animation') < 0) noms.unshift('Animation');
-  }
-  const ids = noms.map(n => genreParNom(media, n)).filter(x => x != null);
-  if(ids.length) p.with_genres = ids.join(',');
+    const anim = genreParNom(media, 'Animation');
+    if(ids.length) p.with_genres = ids.join('|');          // Animation trié chez nous
+    else if(anim != null) p.with_genres = String(anim);
+  }else if(ids.length) p.with_genres = ids.join('|');
 
   /* Les envies partent en OU, comme les genres : cocher « braquage » ET
      « enquête » ne doit pas exiger les deux à la fois — presque aucun titre ne
@@ -448,7 +469,14 @@ function discParams(){
     p.with_watch_monetization_types = 'flatrate';
   }
 
-  if(d.tri === 'note'){ p.sort_by = 'vote_average.desc'; p['vote_count.gte'] = '300'; }
+  /* Trier par note EXIGE un plancher de votes, sinon un 10/10 à trois voix
+     passe devant tout le reste. Mais ce plancher retire des titres sans le
+     dire, et 300 votes était bien trop haut : « 86 Eighty Six » (258 votes,
+     8,1 de moyenne) devenait introuvable pour Adrien, qui n'avait choisi
+     qu'un ORDRE. Mesuré le 29/07 sur les animés d'action depuis 2020 :
+     300 votes ne laissaient que 40 titres, 100 en laissent 101.
+     Le plancher est maintenant écrit dans la feuille, sous le tri. */
+  if(d.tri === 'note'){ p.sort_by = 'vote_average.desc'; p['vote_count.gte'] = String(DISC_VOTES_MINI); }
   else p.sort_by = 'popularity.desc';
 
   /* « Peu importe » ne pose aucune borne de date : c'est tout le catalogue.
@@ -473,7 +501,7 @@ function discParams(){
   }
   if(d.noteMin){
     p['vote_average.gte'] = String(d.noteMin);
-    if(!p['vote_count.gte']) p['vote_count.gte'] = '100';        // évite les 10/10 à trois votes
+    if(!p['vote_count.gte']) p['vote_count.gte'] = String(DISC_VOTES_MINI);
   }
   return p;
 }
@@ -549,7 +577,11 @@ async function chargerDecouverte(suite){
       if(seq !== discSeq) return;
       pagesTotal = data.total_pages || 1;
       const bruts = (data.results||[]).filter(r => r.poster_path);
-      trouves = trouves.concat(garderOccident(bruts));
+      /* `garderAnimes` est neutre hors de la puce Animés, `garderOccident` est
+         neutre dedans : les deux peuvent s'enchaîner sans condition. Le premier
+         est devenu nécessaire ici depuis que les genres cochés partent en OU —
+         c'est lui qui garantit l'animation que la requête ne peut plus exiger. */
+      trouves = trouves.concat(garderAnimes(garderOccident(bruts)));
       if(trouves.length >= DISC_CIBLE || pageLue >= pagesTotal) break;
       pageLue++;
     }
@@ -860,7 +892,13 @@ function ouvrirFiltres(){
 
   h += blocPliable('ordre', 'Dans quel ordre',
     (DISC_TRIS.find(t=>t.id===d.tri)||{}).court || '',
-    puces(DISC_TRIS, x=>d.tri===x.id, x=>'setDiscTri(\''+x.id+'\')'));
+    puces(DISC_TRIS, x=>d.tri===x.id, x=>'setDiscTri(\''+x.id+'\')')+
+    (d.tri === 'note'
+      ? '<div class="small muted" style="margin-top:8px">Les titres qui ont moins de '+
+        DISC_VOTES_MINI+' votes sont écartés : sans ça, un 10 sur 10 noté par trois '+
+        'personnes passerait devant tout le reste. Passe sur <b>Les plus populaires</b> '+
+        'pour les voir aussi.</div>'
+      : ''));
 
   h += blocPliable('note', 'Note minimale', d.noteMin ? d.noteMin+' et +' : '',
     '<div class="fchips">'+DISC_NOTES.map(n=>
