@@ -322,6 +322,19 @@
   .fgrp{font-size:11px;font-weight:750;letter-spacing:.6px;text-transform:uppercase;
     color:var(--muted);margin:14px 0 8px}
   .fchips{display:flex;flex-wrap:wrap;gap:8px}
+  /* Une rubrique repliable de la feuille de filtres. Repliée, elle tient sur
+     une ligne et dit ce qu'elle contient : c'est ce qui permet d'ajouter des
+     critères sans transformer la feuille en formulaire. */
+  .fpli{display:flex;align-items:center;gap:9px;width:100%;text-align:left;
+    padding:13px 2px;border-top:1px solid var(--line);margin-top:4px}
+  .fplititre{font-size:14px;font-weight:700;color:var(--text);flex:none}
+  .fpliresume{font-size:12.5px;color:var(--accent);font-weight:640;flex:1;min-width:0;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fplicaret{margin-left:auto;color:var(--muted);display:grid;place-items:center;
+    transition:transform .18s ease}
+  .fpliresume + .fplicaret{margin-left:0}
+  .fpli.ouvert .fplicaret{transform:rotate(90deg)}
+  .fplicorps{padding:2px 0 14px}
   /* Puce de plateforme : le logo aide à reconnaître plus vite que le nom. */
   .chip.chiplogo{display:inline-flex;align-items:center;gap:7px;padding:5px 12px 5px 5px}
   .chip.chiplogo img{width:22px;height:22px;border-radius:6px;background:#000;flex:0 0 auto}

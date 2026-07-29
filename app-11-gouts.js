@@ -395,10 +395,10 @@ async function chargerSuggestions(force){
         .then(d => ({ kind:'section', sec:sec, l:(d&&d.results||[]).map(x=>normaliser(x, r.media)) })));
     });
     if(esprit) demandes.push(sourceDouce(tmdb('/'+esprit.media+'/'+esprit.id+'/recommendations'))
-      .then(d => ({ kind:'esprit', titre:esprit.nom,
+      .then(d => ({ kind:'esprit', titre:esprit.nom, id:esprit.id, media:esprit.media,
                     l:(d&&d.results||[]).map(x=>normaliser(x, esprit.media)) })));
     acteurs.forEach(a => demandes.push(sourceDouce(tmdb('/person/'+a.id+'/combined_credits'))
-      .then(d => ({ kind:'acteur', titre:a.nom,
+      .then(d => ({ kind:'acteur', titre:a.nom, id:a.id,
                     l:((d&&d.cast)||[])
                       .filter(x => x.media_type === 'tv' || x.media_type === 'movie')
                       .sort((x,y)=>(y.popularity||0)-(x.popularity||0))
@@ -431,12 +431,12 @@ async function chargerSuggestions(force){
     let espritPret = null;
     parKind('esprit').forEach(r=>{
       const l = tamiser(r.l || [], vus, cadre, true).slice(0, 20);
-      if(l.length) espritPret = { titre:r.titre, l:l };
+      if(l.length) espritPret = { titre:r.titre, id:r.id, media:r.media, l:l };
     });
     const parActeur = [];
     parKind('acteur').forEach(r=>{
       const l = tamiser(r.l || [], vus, cadre, true).slice(0, 20);
-      if(l.length) parActeur.push({ titre:r.titre, l:l });
+      if(l.length) parActeur.push({ id:r.id, titre:r.titre, l:l });
     });
     const paqNouv = [];
     parKind('nouv').forEach(r=>{
@@ -483,12 +483,81 @@ function rangeesSuggerees(){
   suggCourantes();
   const out = [];
   (suggestions.sections || []).forEach(s=>{ if(s.l.length) out.push({ cle:s.cle, titre:s.titre, l:s.l }); });
-  (suggestions.acteurs || []).forEach(p=>{ if(p.l.length) out.push({ cle:'acteur:'+p.titre, titre:'Avec '+p.titre, l:p.l }); });
+  (suggestions.acteurs || []).forEach(p=>{ if(p.l.length) out.push({ cle:'acteur:'+p.id, titre:'Avec '+p.titre, l:p.l }); });
   if(suggestions.esprit && suggestions.esprit.l.length)
     out.push({ cle:'esprit', titre:'Dans l\'esprit de '+suggestions.esprit.titre, l:suggestions.esprit.l });
   if((suggestions.nouveautes || []).length)
     out.push({ cle:'nouv', titre:'Sorties récentes', l:suggestions.nouveautes });
   return out;
+}
+
+/* ---------------------------------------------------------------------------
+   Aller chercher la SUITE d'une rangée
+
+   Adrien, en voyant la première version : « à quoi sert le voir plus si on voit
+   la même liste que le carrousel ? ». Il avait raison — chaque rangée ne
+   demandait qu'UNE page à TMDB (vingt titres au plus), et le rail les montrait
+   déjà tous. Déplier ne changeait que la mise en page.
+
+   Maintenant la rangée est un aperçu (dix titres) et la grille va chercher la
+   suite, page après page. Cette fonction rend une page supplémentaire, déjà
+   normalisée et tamisée contre `vus` — la même règle que la vitrine, sinon on
+   reproposerait des titres qu'on a déjà écartés dix lignes plus haut.
+--------------------------------------------------------------------------- */
+async function chargerPageRangee(cle, page, vus){
+  const type = (ui.disc && ui.disc.type) || 'tout';
+  const cadre = cadreSugg(type);
+
+  /* Un acteur : la filmographie arrive d'un bloc, il n'y a pas de page 2.
+     La vitrine n'en garde que vingt titres ; ici on les prend tous. */
+  if(cle.indexOf('acteur:') === 0){
+    if(page > 1) return { titres:[], pages:1 };
+    const d = await tmdb('/person/'+cle.slice(7)+'/combined_credits');
+    const l = ((d&&d.cast)||[])
+      .filter(x => x.media_type === 'tv' || x.media_type === 'movie')
+      .sort((x,y)=>(y.popularity||0)-(x.popularity||0))
+      .map(x => normaliser(x, x.media_type));
+    return { titres: tamiser(l, vus, cadre, true), pages:1 };
+  }
+
+  if(cle === 'esprit'){
+    const e = suggCourantes().esprit;
+    if(!e || !e.id) return { titres:[], pages:1 };
+    const d = await tmdb('/'+e.media+'/'+e.id+'/recommendations', { page:String(page) });
+    const l = ((d&&d.results)||[]).map(x=>normaliser(x, e.media));
+    return { titres: tamiser(l, vus, cadre, true), pages:(d&&d.total_pages)||1 };
+  }
+
+  /* Les nouveautés interrogent chaque média du cadre et s'entrelacent, comme
+     dans la vitrine — sinon on lirait vingt séries avant le premier film. */
+  if(cle === 'nouv'){
+    const auj = todayISO(), debut = isoIlYA(60);
+    const paquets = [], totaux = [];
+    for(const m of cadre.medias){
+      const champ = m === 'movie' ? 'primary_release_date' : 'first_air_date';
+      const p = { include_adult:'false', page:String(page), sort_by:'popularity.desc',
+                  [champ+'.gte']:debut, [champ+'.lte']:auj };
+      if(cadre.origine === 'anime'){
+        p.with_original_language = 'ja';
+        const a = genreParNom(m,'Animation');
+        if(a != null) p.with_genres = String(a);
+      }
+      const d = await sourceDouce(tmdb('/discover/'+m, p));
+      totaux.push((d&&d.total_pages)||1);
+      paquets.push(tamiser(((d&&d.results)||[]).map(x=>normaliser(x,m)), vus, cadre, false));
+    }
+    return { titres: entrelacerSugg(paquets), pages: Math.max.apply(null, totaux) };
+  }
+
+  /* Une section : exactement la requête qui a bâti la rangée, page suivante. */
+  const sec = sectionsPourPuce(type).find(s=>s.cle===cle) || SECTIONS_TOUT.find(s=>s.cle===cle);
+  if(!sec) return { titres:[], pages:1 };
+  const r = requeteSection(sec);
+  if(!r) return { titres:[], pages:1 };
+  r.p.page = String(page);
+  const d = await tmdb('/discover/'+r.media, r.p);
+  const l = ((d&&d.results)||[]).map(x=>normaliser(x, r.media));
+  return { titres: tamiser(l, vus, sec.cadre, false), pages:(d&&d.total_pages)||1 };
 }
 
 /* La rangée désignée par une clé, ou `null` si elle n'existe plus — cas réel :

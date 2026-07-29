@@ -204,9 +204,41 @@ const DISC_TYPES = [
 /* Deux réglages distincts, longtemps mélangés dans une seule rangée :
    ce qu'on regarde (tout le catalogue ou les sorties récentes),
    et dans quel ordre on le classe. */
+/* Une seule question pour le temps qui passe : « Toutes » ouvre le catalogue,
+   « Sorties récentes » le referme sur les derniers mois, et les décennies
+   ouvrent une fenêtre précise. Deux réglages de date distincts se seraient
+   contredits — celui-ci en remplace un seul. */
 const DISC_PERIMETRES = [
-  { id:'tout',   label:'Toutes',           court:'Toutes' },
-  { id:'recent', label:'Sorties récentes', court:'Sorties récentes' }
+  /* Pas de résumé quand rien n'est choisi : « Toutes » sur la ligne repliée
+     laissait croire à un réglage actif. */
+  { id:'tout',   label:'Peu importe',       court:'' },
+  { id:'recent', label:'Sorties récentes',  court:'Sorties récentes' },
+  { id:'2020s',  label:'Depuis 2020',       court:'depuis 2020', de:'2020-01-01', a:'2099-12-31' },
+  { id:'2010s',  label:'Années 2010',       court:'années 2010', de:'2010-01-01', a:'2019-12-31' },
+  { id:'2000s',  label:'Années 2000',       court:'années 2000', de:'2000-01-01', a:'2009-12-31' },
+  { id:'1990s',  label:'Années 90',         court:'années 90',   de:'1990-01-01', a:'1999-12-31' },
+  { id:'1980s',  label:'Années 80',         court:'années 80',   de:'1980-01-01', a:'1989-12-31' }
+];
+/* LA DURÉE EST DÉSACTIVÉE, et il faut dire pourquoi.
+
+   `with_runtime` a été mesuré en direct le 29/07 sur des films établis d'avant
+   2020, là où les fiches TMDB sont les plus sûres : la borne « 1 à 95 min »
+   ramenait Les Infiltrés (151 min), Toy Story 3 (103) et WALL·E (98) — quatre
+   titres hors bornes sur dix. La borne « 150 min et plus » ramenait Spider-Man
+   (121) et Inception (148) — trois sur huit. La durée que TMDB garde dans son
+   index de recherche n'est pas celle de la fiche.
+
+   Un filtre qui se trompe trois fois sur dix est pire que pas de filtre : on
+   croit avoir répondu à « j'ai une heure et demie » et on se retrouve devant
+   2h30. Tant que ça n'est pas fiable, la rubrique reste hors de la feuille.
+   Le tableau ci-dessous est conservé : il ne coûte rien et servira le jour où
+   l'on aura de quoi vérifier la durée autrement. */
+const DISC_DUREE_FIABLE = false;
+const DISC_DUREES = [
+  { id:'tout', label:'Peu importe',   court:'' },
+  { id:'court',label:'Moins d\'1h30', court:'moins d\'1h30', max:89 },
+  { id:'moyen',label:'Moins de 2h',   court:'moins de 2h',   max:119 },
+  { id:'long', label:'2h et plus',    court:'2h et plus',    min:120 }
 ];
 const DISC_TRIS = [
   { id:'populaire', label:'Les plus populaires', court:'populaire' },
@@ -216,6 +248,60 @@ const DISC_NOTES = [
   { v:0, label:'Toutes' }, { v:6, label:'6 et +' }, { v:7, label:'7 et +' }, { v:8, label:'8 et +' }
 ];
 const DISC_FENETRE = 90;     // « sorti récemment » = les 90 derniers jours
+
+/* ---------------------------------------------------------------------------
+   Les envies
+
+   Un genre décrit un rayon de vidéoclub — « thriller », c'est des milliers de
+   titres. Une envie décrit une soirée : un braquage, une enquête, une boucle
+   temporelle. TMDB appelle ça des mots-clés, et c'est le seul moyen d'être
+   précis sans écrire une phrase.
+
+   Chaque identifiant a été relevé EN DIRECT sur TMDB, pas deviné : le nom du
+   mot-clé devait correspondre exactement. Un identifiant inventé ne renvoie
+   pas d'erreur, il renvoie une liste vide — d'où la vérification.
+
+   `puces` dit où l'envie a un sens : « isekai » n'existe pas côté films,
+   « hôpital » ne veut rien dire dans une liste d'animés. Sur la puce « Tout »,
+   on montre le fonds commun. */
+const ENVIES = [
+  { id:6149,   label:'Enquête policière', puces:['tout','tv','movie'] },
+  { id:9826,   label:'Meurtre',           puces:['tout','tv','movie'] },
+  { id:10291,  label:'Crime organisé',    puces:['tout','tv','movie'] },
+  { id:378,    label:'Prison',            puces:['tout','tv','movie'] },
+  { id:9748,   label:'Vengeance',         puces:['tout','tv','movie'] },
+  { id:6078,   label:'Politique',         puces:['tout','tv','movie'] },
+  { id:11612,  label:'Hôpital',           puces:['tout','tv'] },
+  { id:6282,   label:'Au boulot',         puces:['tout','tv','movie'] },
+  { id:12279,  label:'Drame familial',    puces:['tout','tv','movie'] },
+  { id:6054,   label:'Amitié',            puces:['tout','tv','movie','anime'] },
+  { id:6270,   label:'Lycée',             puces:['tout','tv','movie'] },
+  { id:10854,  label:'Boucle temporelle', puces:['tout','tv','movie','anime'] },
+  { id:12332,  label:'Apocalypse',        puces:['tout','tv','movie','anime'] },
+  { id:4458,   label:'Monde d\'après',    puces:['tout','tv','movie','anime'] },
+  { id:9715,   label:'Super-héros',       puces:['tout','tv','movie'] },
+  { id:6152,   label:'Surnaturel',        puces:['tout','tv','movie','anime'] },
+  { id:2343,   label:'Magie',             puces:['tout','tv','movie','anime'] },
+  { id:177895, label:'Dark fantasy',      puces:['tout','tv','movie','anime'] },
+  { id:161176, label:'Space opera',       puces:['tout','tv','movie','anime'] },
+  { id:6075,   label:'Sport',             puces:['tout','tv','movie','anime'] },
+  { id:1918,   label:'Cuisine',           puces:['tout','tv','movie','anime'] },
+  { id:1462,   label:'Samouraï',          puces:['tout','tv','movie','anime'] },
+  /* Le vocabulaire propre aux animés : ces mots-clés n'ont aucun équivalent
+     utile ailleurs, et ce sont ceux qu'on emploie vraiment pour en parler. */
+  { id:207826, label:'Shōnen',            puces:['anime'] },
+  { id:237451, label:'Isekai',            puces:['anime'] },
+  { id:10046,  label:'Mecha',             puces:['anime'] },
+  { id:9914,   label:'Tranche de vie',    puces:['anime'] },
+  { id:12380,  label:'Tournoi',           puces:['anime'] },
+  { id:15001,  label:'Démons',            puces:['anime'] },
+  { id:10873,  label:'École',             puces:['anime'] }
+];
+function enviesAffichees(){
+  const t = ui.disc.type;
+  return ENVIES.filter(e => e.puces.indexOf(t) >= 0);
+}
+function envieParId(id){ return ENVIES.find(e => e.id === id) || null; }
 
 /* Origine des titres proposés dans Découvrir.
    Classé par popularité, TMDB fait remonter énormément de production indienne,
@@ -349,6 +435,11 @@ function discParams(){
   const ids = noms.map(n => genreParNom(media, n)).filter(x => x != null);
   if(ids.length) p.with_genres = ids.join(',');
 
+  /* Les envies partent en OU, comme les genres : cocher « braquage » ET
+     « enquête » ne doit pas exiger les deux à la fois — presque aucun titre ne
+     porterait les deux mots-clés, et on tomberait sur un écran vide. */
+  if(d.envies.length) p.with_keywords = d.envies.join('|');
+
   /* Plateformes : « ou » entre elles (barre verticale), et uniquement ce qui est
      inclus dans un abonnement. TMDB exige la région avec ce filtre. */
   if(d.plates.length){
@@ -360,11 +451,25 @@ function discParams(){
   if(d.tri === 'note'){ p.sort_by = 'vote_average.desc'; p['vote_count.gte'] = '300'; }
   else p.sort_by = 'popularity.desc';
 
-  /* « Toutes » ne pose aucune borne de date : c'est tout le catalogue. */
+  /* « Peu importe » ne pose aucune borne de date : c'est tout le catalogue.
+     Les décennies portent les leurs, « Sorties récentes » reste une fenêtre
+     glissante calculée à partir d'aujourd'hui. */
+  const champ = media === 'movie' ? 'primary_release_date' : 'first_air_date';
   if(d.perimetre === 'recent'){
-    const champ = media === 'movie' ? 'primary_release_date' : 'first_air_date';
     p[champ+'.gte'] = isoIlYA(DISC_FENETRE);
     p[champ+'.lte'] = todayISO();
+  }else{
+    const per = DISC_PERIMETRES.find(x=>x.id === d.perimetre);
+    if(per && per.de){ p[champ+'.gte'] = per.de; p[champ+'.lte'] = per.a; }
+  }
+
+  /* La durée ne part QUE si elle a été mesurée fiable — voir DISC_DUREE_FIABLE.
+     La borne basse à 1 est indispensable le jour où on la rallumera : sans
+     elle, tout ce dont TMDB ignore la durée passe pour un film court. */
+  if(DISC_DUREE_FIABLE && media === 'movie'){
+    const du = DISC_DUREES.find(x=>x.id === d.duree);
+    if(du && du.max != null){ p['with_runtime.lte'] = String(du.max); p['with_runtime.gte'] = '1'; }
+    if(du && du.min != null) p['with_runtime.gte'] = String(du.min);
   }
   if(d.noteMin){
     p['vote_average.gte'] = String(d.noteMin);
@@ -515,6 +620,7 @@ function typePourFiltrer(){
 function setDiscTri(t){ typePourFiltrer(); ui.disc.tri = t; ouvrirFiltres(); chargerDecouverte(); }
 function setDiscPerimetre(p){ typePourFiltrer(); ui.disc.perimetre = p; ouvrirFiltres(); chargerDecouverte(); }
 function setDiscNote(n){ typePourFiltrer(); ui.disc.noteMin = n; ouvrirFiltres(); chargerDecouverte(); }
+function setDiscDuree(id){ typePourFiltrer(); ui.disc.duree = id; ouvrirFiltres(); chargerDecouverte(); }
 function bascGenre(i){
   const g = genresAffiches()[i];
   if(!g) return;
@@ -525,6 +631,27 @@ function bascGenre(i){
 }
 /* Les plateformes sont retenues avec leur nom et leur logo : la ligne de résumé
    et les puces restent lisibles même si la liste TMDB n'est pas encore revenue. */
+/* Cocher ou décocher une envie. Comme pour les genres, on passe par l'index
+   dans la liste affichée : l'identifiant traverserait un `onclick` sans mal,
+   mais l'index évite d'avoir à l'échapper et reste lisible dans le HTML. */
+function bascEnvie(i){
+  /* On résout l'envie AVANT `typePourFiltrer` : celui-ci fait basculer la puce
+     « Tout » vers « Séries », et la liste des envies n'est pas la même d'une
+     puce à l'autre — l'index désignerait alors une autre envie que celle
+     touchée. Même ordre que `bascGenre`, pour la même raison. */
+  const e = enviesAffichees()[i];
+  if(!e) return;
+  typePourFiltrer();
+  const sel = ui.disc.envies, k = sel.indexOf(e.id);
+  if(k >= 0) sel.splice(k,1); else sel.push(e.id);
+  ouvrirFiltres(); chargerDecouverte();
+}
+function viderEnvies(){
+  typePourFiltrer();
+  ui.disc.envies = [];
+  ouvrirFiltres(); chargerDecouverte();
+}
+
 function bascPlate(i){
   const p = platesAffichees()[i];
   if(!p) return;
@@ -542,7 +669,8 @@ function viderPlates(){
 }
 function resetFiltres(){
   const d = ui.disc;
-  d.genres = []; d.plates = []; d.perimetre = 'tout'; d.tri = 'populaire'; d.noteMin = 0;
+  d.genres = []; d.plates = []; d.envies = [];
+  d.perimetre = 'tout'; d.tri = 'populaire'; d.noteMin = 0; d.duree = 'tout';
   ouvrirFiltres(); chargerDecouverte();
 }
 
@@ -551,6 +679,13 @@ function resumeFiltres(){
   const bouts = [ (DISC_PERIMETRES.find(p=>p.id===d.perimetre)||{}).court,
                   (DISC_TRIS.find(t=>t.id===d.tri)||{}).court ];
   if(d.noteMin) bouts.push('note '+d.noteMin+' et +');
+  if(DISC_DUREE_FIABLE && discMedia() === 'movie'){
+    const du = DISC_DUREES.find(x=>x.id === d.duree);
+    if(du && du.court) bouts.push(du.court);
+  }
+  /* Les envies avant les genres : c'est le réglage le plus parlant de la
+     ligne, « braquage » dit bien plus que « thriller ». */
+  d.envies.forEach(id=>{ const e = envieParId(id); if(e) bouts.push(e.label.toLowerCase()); });
   d.genres.forEach(n=> bouts.push(n.toLowerCase()));
   /* Au-delà de deux plateformes on compte au lieu d'énumérer : la ligne tient. */
   if(d.plates.length) bouts.push('sur '+(d.plates.length > 2
@@ -560,23 +695,45 @@ function resumeFiltres(){
 }
 function filtresActifs(){
   const d = ui.disc;
-  return d.genres.length > 0 || d.plates.length > 0 || d.noteMin > 0 ||
-         d.perimetre !== 'tout' || d.tri !== 'populaire';
+  return d.genres.length > 0 || d.plates.length > 0 || d.envies.length > 0 ||
+         d.noteMin > 0 || d.perimetre !== 'tout' || d.tri !== 'populaire' ||
+         (DISC_DUREE_FIABLE && d.duree && d.duree !== 'tout' && discMedia() === 'movie');
 }
 
 /* La feuille de filtres est-elle à l'écran ? Sert à la redessiner quand la liste
    des plateformes arrive après coup, sans inventer un état de plus. */
+/* La feuille de filtres est-elle à l'écran ? Sert à la redessiner quand la
+   liste des plateformes arrive après coup. On teste un marqueur posé en tête de
+   la feuille, PAS la section des plateformes : depuis qu'elle se replie, elle
+   peut très bien être absente du DOM alors que la feuille est ouverte. */
 function feuilleFiltresOuverte(){
   const s = document.getElementById('sheet');
-  return !!(s && s.classList.contains('show') && document.getElementById('fplates'));
+  return !!(s && s.classList.contains('show') && document.getElementById('feuilfiltres'));
+}
+
+/* Section « De quoi t'as envie » de la feuille de filtres. Elle vient en tête :
+   c'est la question qu'on se pose vraiment devant l'écran, avant la note ou la
+   plateforme. */
+function blocFiltreEnvies(){
+  const d = ui.disc, liste = enviesAffichees();
+  if(!liste.length) return '';
+  let h = '<div class="fgrp">De quoi t\'as envie'+(d.envies.length?' ('+d.envies.length+')':'')+'</div>';
+  h += '<div class="fchips">'+liste.map((e,i)=>
+    '<button class="chip '+(d.envies.indexOf(e.id)>=0?'on':'')+'" onclick="bascEnvie('+i+')">'+
+      esc(e.label)+'</button>').join('')+'</div>';
+  if(d.envies.length)
+    h += '<div class="small muted" style="margin-top:8px">'+
+         'Il suffit qu\'un titre corresponde à <b>une</b> de ces envies. '+
+         '<button class="lienplus" style="margin:0" onclick="viderEnvies()">Tout décocher</button></div>';
+  return h;
 }
 
 /* Section « Plateformes » de la feuille de filtres. */
 function blocFiltrePlates(){
   const d = ui.disc;
   const liste = platesAffichees(), reste = platesCachees();
-  let h = '<div class="fgrp" id="fplates">Plateformes'+(d.plates.length?' ('+d.plates.length+')':'')+
-          ' · abonnement en France</div>';
+  let h = '<div class="small muted" id="fplates" style="margin-bottom:8px">'+
+          'Uniquement ce qui est inclus dans un abonnement, en France.</div>';
   if(!liste.length)
     return h + '<div class="small muted">La liste des plateformes arrive avec les premiers résultats.</div>';
   /* La feuille peut s'ouvrir avant la fin du sondage : on le termine et on redessine. */
@@ -600,32 +757,122 @@ function blocFiltrePlates(){
   return h;
 }
 
+/* Une rubrique de la feuille. Repliée, elle tient sur une ligne et annonce ce
+   qu'elle contient — c'est ce qui permet d'ajouter des critères sans que
+   l'écran devienne un formulaire à faire défiler. */
+/* Les rubriques ouvertes d'emblée. Le défaut vit ICI et nulle part ailleurs :
+   quand `blocPliable` et la bascule le déduisaient chacun de leur côté, un
+   premier appui sur une rubrique repliée la laissait repliée. */
+const FILTRES_OUVERTS = { genres:true, envies:true };
+function sectionPliee(cle){
+  const v = ui.disc.plies[cle];
+  return v === undefined ? !FILTRES_OUVERTS[cle] : v;
+}
+function blocPliable(cle, titre, resume, contenu){
+  const plie = sectionPliee(cle);
+  return '<button class="fpli'+(plie?'':' ouvert')+'" onclick="bascSectionFiltre(\''+cle+'\')">'+
+      '<span class="fplititre">'+esc(titre)+'</span>'+
+      (resume ? '<span class="fpliresume">'+esc(resume)+'</span>' : '')+
+      '<span class="fplicaret">'+I.caret+'</span>'+
+    '</button>' +
+    (plie ? '' : '<div class="fplicorps">'+contenu+'</div>');
+}
+function bascSectionFiltre(cle){
+  ui.disc.plies[cle] = !sectionPliee(cle);
+  ouvrirFiltres();
+}
+
+/* La feuille de filtres.
+
+   Deux décisions d'Adrien la façonnent. Les GENRES ont disparu : « les envies
+   remplacent les genres » — deux vocabulaires pour la même chose, c'est le
+   reproche qu'il avait déjà fait à l'ancien menu. Et « surtout pas » n'est pas
+   ici mais dans Mes goûts : écarter l'horreur est une préférence durable, pas
+   une humeur du soir ; une seule porte, pas deux. */
 function ouvrirFiltres(){
   const d = ui.disc;
-  const genres = genresAffiches();
   const quoi = (DISC_TYPES.find(t=>t.id===d.type)||{}).label || '';
-  let h = '<h3>Filtres</h3><div class="small muted" style="margin-top:-4px">'+
+  const puces = (liste, actif, action) => '<div class="fchips">'+liste.map(x=>
+    '<button class="chip '+(actif(x)?'on':'')+'" onclick="'+action(x)+'">'+
+      esc(x.label)+'</button>').join('')+'</div>';
+
+  let h = '<h3 id="feuilfiltres">Filtres</h3><div class="small muted" style="margin-top:-4px">'+
     'Ces réglages s\'appliquent à <b>'+esc(quoi.toLowerCase())+'</b>.</div>';
-  h += '<div class="fgrp">Quoi</div><div class="fchips">'+
-    DISC_PERIMETRES.map(p=>'<button class="chip '+(d.perimetre===p.id?'on':'')+
-      '" onclick="setDiscPerimetre(\''+p.id+'\')">'+p.label+'</button>').join('')+'</div>'+
+
+  /* 1. Le large. Adrien : « soit une recherche micro soit une recherche
+        macro ». Le genre est l'axe large — c'est lui qui répond à « montre-moi
+        de la comédie » quand on n'a rien de plus précis en tête. */
+  const genres = genresAffiches();
+  h += blocPliable('genres', 'En gros',
+    d.genres.length ? d.genres.join(', ').toLowerCase() : '',
+    '<div class="small muted" style="margin:-2px 0 9px">Le rayon : comédie, '+
+      'thriller, science-fiction…</div>'+
+    (genres.length
+      ? '<div class="fchips">'+genres.map((g,i)=>
+          '<button class="chip '+(d.genres.indexOf(g.nom)>=0?'on':'')+'" onclick="bascGenre('+i+')">'+
+            esc(g.nom)+'</button>').join('')+'</div>'
+      : '<div class="small muted">Les genres arrivent avec les premiers résultats.</div>'));
+
+  /* 2. Le précis. Il vient APRÈS le large, dans l'ordre où l'on pense :
+        « une comédie » d'abord, « de braquage » ensuite. */
+  const envies = enviesAffichees();
+  if(envies.length)
+    h += blocPliable('envies', 'Plus précisément',
+      d.envies.length ? d.envies.length+' envie'+(d.envies.length>1?'s':'') : '',
+      '<div class="small muted" style="margin:-2px 0 9px">Le sujet : un braquage, '+
+        'une enquête, une boucle temporelle…</div>'+
+      '<div class="fchips">'+envies.map((e,i)=>
+        '<button class="chip '+(d.envies.indexOf(e.id)>=0?'on':'')+'" onclick="bascEnvie('+i+')">'+
+          esc(e.label)+'</button>').join('')+'</div>'+
+      (d.envies.length
+        ? '<div class="small muted" style="margin-top:8px">Il suffit qu\'un titre corresponde à '+
+          '<b>une</b> de ces envies. <button class="lienplus" style="margin:0" '+
+          'onclick="viderEnvies()">Tout décocher</button></div>'
+        : ''));
+
+  /* Le trait d'union entre les deux niveaux : croiser un genre et une envie
+     donne l'intersection — vérifié en direct, « comédie » seul rend 173 456
+     titres, « comédie » + « enquête policière » en rend 379. C'est ce que la
+     phrase doit dire, sinon on croirait à une addition. */
+  if(d.genres.length && d.envies.length)
+    h += '<div class="small muted" style="margin:2px 0 4px">'+
+      'Tu cherches <b>'+esc(d.genres.join(' ou ').toLowerCase())+'</b> qui parle de <b>'+
+      esc(d.envies.map(id=>(envieParId(id)||{}).label).filter(Boolean).join(' ou ').toLowerCase())+
+      '</b>.</div>';
+
+  /* 3. Le reste, replié : utile, mais pas à chaque fois. */
+  const per = DISC_PERIMETRES.find(x=>x.id===d.perimetre) || DISC_PERIMETRES[0];
+  h += blocPliable('quand', 'De quelle époque', per.court,
+    puces(DISC_PERIMETRES, x=>d.perimetre===x.id, x=>'setDiscPerimetre(\''+x.id+'\')')+
     '<div class="small muted" style="margin-top:8px">'+
-      (d.perimetre==='tout'
-        ? 'Tout le catalogue, sans limite de date.'
-        : 'Uniquement ce qui est sorti depuis '+DISC_FENETRE+' jours.')+'</div>';
-  h += '<div class="fgrp">Dans quel ordre</div><div class="fchips">'+
-    DISC_TRIS.map(t=>'<button class="chip '+(d.tri===t.id?'on':'')+'" onclick="setDiscTri(\''+t.id+'\')">'+
-      t.label+'</button>').join('')+'</div>';
-  h += '<div class="fgrp">Note minimale</div><div class="fchips">'+
-    DISC_NOTES.map(n=>'<button class="chip '+(d.noteMin===n.v?'on':'')+'" onclick="setDiscNote('+n.v+')">'+
-      n.label+'</button>').join('')+'</div>';
-  h += blocFiltrePlates();
-  h += '<div class="fgrp">Genres'+(d.genres.length?' ('+d.genres.length+')':'')+
-       (d.type==='anime'?' · animation déjà incluse':'')+'</div>';
-  h += genres.length
-    ? '<div class="fchips">'+genres.map((g,i)=>'<button class="chip '+(d.genres.indexOf(g.nom)>=0?'on':'')+
-        '" onclick="bascGenre('+i+')">'+esc(g.nom)+'</button>').join('')+'</div>'
-    : '<div class="small muted">Les genres arrivent avec les premiers résultats.</div>';
+      (d.perimetre==='tout' ? 'Tout le catalogue, sans limite de date.'
+       : d.perimetre==='recent' ? 'Uniquement ce qui est sorti depuis '+DISC_FENETRE+' jours.'
+       : 'Uniquement les titres de cette période.')+'</div>');
+
+  h += blocPliable('plates', 'Sur mes plateformes',
+    d.plates.length ? (d.plates.length>2 ? d.plates.length+' plateformes'
+                                         : d.plates.map(p=>p.nom).join(' ou ')) : '',
+    blocFiltrePlates());
+
+  h += blocPliable('ordre', 'Dans quel ordre',
+    (DISC_TRIS.find(t=>t.id===d.tri)||{}).court || '',
+    puces(DISC_TRIS, x=>d.tri===x.id, x=>'setDiscTri(\''+x.id+'\')'));
+
+  h += blocPliable('note', 'Note minimale', d.noteMin ? d.noteMin+' et +' : '',
+    '<div class="fchips">'+DISC_NOTES.map(n=>
+      '<button class="chip '+(d.noteMin===n.v?'on':'')+'" onclick="setDiscNote('+n.v+')">'+
+        esc(n.label)+'</button>').join('')+'</div>');
+
+  /* Les genres écartés vivent dans Mes goûts, et l'écran doit le dire :
+     sans ça, on chercherait « surtout pas » ici jusqu'à la fin des temps. */
+  const exclus = (db.gouts && db.gouts.exclus) || [];
+  h += '<div class="small muted" style="margin-top:16px">'+
+    (exclus.length
+      ? 'Tu ne vois jamais : <b>'+esc(exclus.join(', '))+'</b>. '
+      : 'Pour écarter un genre une fois pour toutes, ')+
+    '<button class="lienplus" style="margin:0" onclick="closeSheet();go(\'gouts\',{from:\'discover\'})">'+
+      (exclus.length ? 'Changer dans Mes goûts' : 'passe par Mes goûts')+'</button></div>';
+
   h += '<button class="btn" style="margin-top:18px" onclick="closeSheet()">Voir les résultats</button>';
   if(filtresActifs()) h += '<button class="opt" onclick="resetFiltres()">Tout effacer</button>';
   openSheet(h);
@@ -752,23 +999,31 @@ function vitrineBody(){
   let html = carrouselVedettes(suggestions.vedettes);
   rangees.forEach(r=>{
     html += '<div class="sectitle">'+esc(r.titre)+'</div>'+
-      '<div class="rangee">'+r.l.map(x=>vignetteSugg(x,'discover')).join('')+
+      '<div class="rangee">'+
+        r.l.slice(0, RANGEE_APERCU).map(x=>vignetteSugg(x,'discover')).join('')+
         finRangee(r)+'</div>';
   });
   return html + '<div style="height:6px"></div>';
 }
 
+/* Le rail est un APERÇU, pas la liste. Dix titres : de quoi balayer du pouce
+   sans que ça devienne un couloir sans fin, et de quoi laisser à « Tout voir »
+   quelque chose à montrer. */
+const RANGEE_APERCU = 10;
+/* Ce que la grille dépliée vise avant de rendre la main, et ce qu'ajoute
+   chaque « Voir plus ». Une page TMDB rend vingt titres : trois pages environ,
+   moins ce que le tamis retire. */
+const RANGEE_LOT = 50;
+/* Au-delà, on arrête d'insister : une page entièrement filtrée n'est pas une
+   panne, mais dix d'affilée veulent dire que la source est épuisée. */
+const RANGEE_PAGES_MAX = 8;
+
 /* La dernière tuile de la rangée : « Tout voir ». Elle est au BOUT du rail,
    pas en haut à droite — choix d'Adrien. C'est le geste naturel : on pousse les
    affiches jusqu'à ce qu'il n'y en ait plus, et on tombe dessus sans lever le
-   pouce ni remonter chercher un bouton.
-
-   Une rangée tient environ trois vignettes dans la largeur d'un iPhone : en
-   dessous de RANGEE_SEUIL titres, le rail se parcourt d'un geste et la tuile
-   ne cacherait rien. */
-const RANGEE_SEUIL = 6;
+   pouce ni remonter chercher un bouton. */
 function finRangee(r){
-  if(!r.cle || r.l.length <= RANGEE_SEUIL) return '';
+  if(!r.cle || !r.l.length) return '';
   /* Pas de classe `vgn` : ce n'est pas une vignette de titre, et tout ce qui
      parcourt `.rangee .vgn` (les tests de mise en page, notamment) y chercherait
      un nom et une note qu'elle n'a pas. */
@@ -776,31 +1031,93 @@ function finRangee(r){
     '<div class="vgimg vgtoutbox">'+
       '<span class="vgtrond">'+I.caret+'</span>'+
       '<b>Tout voir</b>'+
-      '<i>'+r.l.length+' titres</i>'+
+      '<i>et bien plus</i>'+
     '</div></button>';
 }
 
 /* ---------------------------------------------------------------------------
    Une rangée dépliée en grille
 
-   Les rangées gardent déjà jusqu'à quarante titres en mémoire et n'en montrent
-   que trois : « Tout voir » ne va rien rechercher, il déplie ce qui est là.
-   Aucun appel réseau, donc aucun écran de chargement — et rien à changer au
-   relais TMDB.
+   La rangée montre dix titres ; ici on va chercher la suite auprès de TMDB,
+   page après page, avec exactement la requête qui a bâti la rangée. Le premier
+   lot part tout seul à l'ouverture, les suivants sur « Voir plus ».
+
+   Les titres déjà connus servent d'amorce : la grille s'affiche pleine dès la
+   première image, et le chargement se voit en bas plutôt qu'à la place de tout.
 --------------------------------------------------------------------------- */
+let rangeeVue = { cle:null, titre:'', l:[], vus:{}, page:0, pages:1,
+                  loading:false, err:'', fini:false, seq:0 };
+
 function ouvrirRangee(cle){
+  amorcerRangee(cle);
   go('rangee', { cle:cle, from:'discover' }, 'enter');
+  chargerRangee();
+}
+
+/* Repart de la rangée telle qu'elle est dans la vitrine. Appelée aussi au
+   retour d'une fiche si l'état a été perdu entre-temps. */
+function amorcerRangee(cle){
+  const r = rangeeParCle(cle);
+  rangeeVue = { cle:cle, titre: r ? r.titre : 'Suggestions',
+                l: r ? r.l.slice() : [], vus:{}, page:0, pages:99,
+                loading:false, err:'', fini:!r, seq: rangeeVue.seq + 1 };
+  rangeeVue.l.forEach(x=>{ rangeeVue.vus[x.media+':'+x.id] = 1; });
+}
+
+/* Un lot : on enchaîne les pages jusqu'à RANGEE_LOT titres neufs, ou jusqu'à
+   épuisement de la source. Une page peut ne rien rapporter du tout — tout son
+   contenu est déjà chez toi — sans que ce soit la fin pour autant. */
+async function chargerRangee(){
+  const st = rangeeVue;
+  if(st.loading || st.fini || !st.cle) return;
+  const seq = st.seq;
+  st.loading = true; st.err = '';
+  if(view === 'rangee') render();
+  const vise = st.l.length + RANGEE_LOT;
+  try{
+    for(let tour = 0; tour < RANGEE_PAGES_MAX; tour++){
+      const d = await chargerPageRangee(st.cle, st.page + 1, st.vus);
+      if(seq !== rangeeVue.seq) return;              // on a changé de rangée entre-temps
+      st.page++;
+      st.pages = d.pages || 1;
+      st.l = st.l.concat(d.titres);
+      if(st.page >= st.pages){ st.fini = true; break; }
+      if(st.l.length >= vise) break;
+    }
+  }catch(e){
+    if(seq !== rangeeVue.seq) return;
+    st.err = 'Pas de connexion';
+  }
+  st.loading = false;
+  if(view === 'rangee') render();
 }
 
 function viewRangee(){
-  const r = rangeeParCle(params.cle);
-  const corps = r
-    ? '<div class="vgrid">'+r.l.map(x=>vignetteSugg(x,'rangee')).join('')+'</div><div style="height:20px"></div>'
-    : '<div class="empty">'+I.boussole+'<h3>Cette liste a été recalculée</h3>'+
+  /* Le retour d'une fiche repasse par ici : si l'état ne correspond plus à
+     l'écran demandé, on le reconstruit avant de dessiner. */
+  if(rangeeVue.cle !== params.cle) amorcerRangee(params.cle);
+  const st = rangeeVue;
+
+  if(!st.l.length && !st.loading)
+    return header('Suggestions', { back:'goBack()' }) +
+      '<div class="empty">'+I.boussole+'<h3>Cette liste a été recalculée</h3>'+
       '<p>Les suggestions se rafraîchissent toutes les 24 heures. Reviens à Découvrir '+
       'pour voir la nouvelle sélection.</p>'+
       '<button class="btn ghost" onclick="go(\'discover\')">Retour à Découvrir</button></div>';
-  return header(r ? r.titre : 'Suggestions', { back:'goBack()' }) + corps;
+
+  let bas = '';
+  if(st.err)
+    bas = '<div class="plus"><div class="small muted" style="margin-bottom:8px">'+esc(st.err)+'</div>'+
+          '<button class="btn ghost" onclick="chargerRangee()">Réessayer</button></div>';
+  else if(st.loading)
+    bas = '<div class="plus"><button class="btn ghost" disabled>'+
+          '<span class="spin"></span> Chargement…</button></div>';
+  else if(!st.fini)
+    bas = '<div class="plus"><button class="btn ghost" onclick="chargerRangee()">Voir plus</button></div>';
+
+  return header(st.titre, { back:'goBack()' }) +
+    '<div class="vgrid">'+st.l.map(x=>vignetteSugg(x,'rangee')).join('')+'</div>'+
+    bas + '<div style="height:20px"></div>';
 }
 
 /* Le nom de ce qu'on regarde, pour les messages : « dans les animés ». */

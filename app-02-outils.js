@@ -279,6 +279,16 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
               jours sont un sous-ensemble étroit, mauvais point de départ pour
               découvrir quelque chose. */
            disc:{ type:'tout', genres:[], plates:[], toutesPlates:false,
+                  /* Les envies : des identifiants de mots-clés TMDB. Un genre dit
+                     « thriller », une envie dit « braquage » — c'est ce qui manquait
+                     pour passer de mille titres à une poignée. */
+                  envies:[],
+                  /* La durée, côté films seulement. */
+                  duree:'tout',
+                  /* Les rubriques repliées de la feuille de filtres, par clé.
+                     Repliées par défaut sauf les deux premières : la feuille
+                     compte assez de rubriques pour devenir un formulaire. */
+                  plies:{},
                   perimetre:'tout', tri:'populaire', noteMin:0,
                   page:1, pages:1, res:[], loading:false, err:'', charge:false } };
 
