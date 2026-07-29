@@ -547,6 +547,19 @@
   .chip.hors{background:#ff5a5a1c;border-color:#ff5a5a55;color:#ff9b9b;
     text-decoration:line-through}
   .inp{margin-bottom:10px}
+  /* « facultatif » accolé à un titre de section : rien n'est obligatoire ici,
+     et la recherche d'acteurs passait pour une étape à franchir. */
+  .facult{font-size:10.5px;font-weight:700;letter-spacing:.04em;color:var(--muted);
+    border:1px solid var(--line);border-radius:5px;padding:1px 5px;margin-left:7px;
+    text-transform:none}
+  /* La barre de validation, collée au-dessus de la barre d'onglets : on doit
+     pouvoir refermer l'écran sans avoir fait défiler deux listes de genres. */
+  .gbarre{position:sticky;bottom:calc(76px + var(--safe-b));z-index:20;padding:12px 16px;
+    background:linear-gradient(180deg,rgba(7,7,10,0),rgba(7,7,10,.94) 28%,rgba(7,7,10,.98));
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+  /* Pendant la création du compte la barre du bas n'existe pas : on se recolle
+     au bord de l'écran. */
+  body.accueil .gbarre{bottom:0;padding-bottom:calc(14px + var(--safe-b))}
   .listact{display:flex;flex-direction:column;gap:2px}
   .listact.choisis{margin-bottom:12px}
   .lact{display:flex;align-items:center;gap:11px;width:100%;text-align:left;

@@ -276,7 +276,10 @@ let navDir = 'none';
 /* Position de défilement mémorisée pour les écrans qui sont des listes.
    Quitter une liste puis y revenir doit rendre la page là où on l'avait laissée ;
    une fiche, elle, s'ouvre toujours en haut. */
-const LISTES = { discover:1, follow:1, profile:1, abos:1, biblio:1 };
+/* La filmographie d'un acteur en fait partie : elle compte parfois deux cents
+   titres, et revenir d'une fiche pour retomber tout en haut est le reproche
+   exact d'Adrien. */
+const LISTES = { discover:1, follow:1, profile:1, abos:1, biblio:1, acteur:1 };
 const memDefil = {};
 /* Paramètres du dernier passage sur chaque écran. En revenant en arrière on
    remet l'écran d'arrivée exactement dans l'état où on l'avait quitté : sans
@@ -285,8 +288,15 @@ const memDefil = {};
 const memParams = {};
 function paramsRetour(dest){ return memParams[dest] || {}; }
 
+/* Deux listes du même écran ne partagent pas leur position : la bibliothèque
+   d'Alex n'est pas celle de Camille, la filmographie de Morgan Freeman n'est
+   pas celle de Tom Hanks. On repli sur `ui.acteurId` parce que le retour ne
+   repasse pas toujours les paramètres de l'écran d'arrivée. */
 function cleDefil(v, p){
-  return v === 'biblio' ? 'biblio:'+((p||params||{}).id||'') : v;
+  const q = p || params || {};
+  if(v === 'biblio') return 'biblio:'+(q.id||'');
+  if(v === 'acteur') return 'acteur:'+(q.id || ui.acteurId || '');
+  return v;
 }
 
 /* L'ordre des onglets du bas — il donne le sens du glissement quand on passe

@@ -72,12 +72,17 @@ function genresDeduits(){
 }
 
 /* Les genres réellement retenus : ceux choisis à la main s'ils existent,
-   les déduits sinon — et jamais ceux qu'on a écartés. */
+   les déduits sinon — et jamais ceux qu'on a écartés.
+   Ce qui a été coché à la main est retenu EN ENTIER. Le plafond de trois
+   valait pour la déduction, où la queue de liste n'est que du bruit ; appliqué
+   aux choix d'Adrien, il en jetait quatre sur sept sans rien dire. */
+const GENRES_DEDUITS_MAX = 3;
 function genresRetenus(){
   const g = db.gouts || {};
-  const base = (g.genres||[]).length ? g.genres.slice() : genresDeduits();
+  const manuels = (g.genres||[]).length > 0;
+  const base = manuels ? g.genres.slice() : genresDeduits().slice(0, GENRES_DEDUITS_MAX);
   const hors = g.exclus || [];
-  return base.filter(x => hors.indexOf(x) < 0).slice(0, 3);
+  return base.filter(x => hors.indexOf(x) < 0);
 }
 
 /* Les titres que l'on a visiblement aimés : finis, ou bien avancés. Ce sont
@@ -295,16 +300,25 @@ async function chargerSuggestions(force){
           .then(d => ({ genre:'nouveautes', l:(d&&d.results||[]).map(r=>normaliser(r, m)) }));
       }),
       ...(besoinGenres ? cadre.medias.map(m => {
-        const g = idsG(m);
         const p = { include_adult:'false', page:'1', sort_by:'popularity.desc',
                     'vote_count.gte':'150' };
+        let ids;
         if(cadre.anime === true){
+          /* Sur la puce Animés, l'animation japonaise n'est pas une préférence
+             mais la définition même de la puce : elle doit rester un ET. TMDB
+             ne sait pas mêler un ET et un OU dans `with_genres` de façon dont
+             on soit sûr — on s'en tient donc à l'animation seule, et les goûts
+             de genre ne cadrent pas cette rangée-là. */
           p.with_original_language = 'ja';
-          g.unshift(anim[m]);                       // l'animation redevient obligatoire ici
+          ids = [anim[m]].filter(x => x != null);
+        } else {
+          /* La barre verticale est un OU chez TMDB, la virgule un ET. « J'aime
+             l'action ET l'aventure ET la comédie ET la guerre » ne décrit
+             presque aucun titre ; « l'un ou l'autre » dit ce qu'on voulait. */
+          ids = idsG(m).filter(x => x != null);
         }
-        const ids = g.filter(x => x != null);
         if(!ids.length) return Promise.resolve({genre:'genres', l:[]});
-        p.with_genres = ids.join(',');
+        p.with_genres = ids.join('|');
         return sourceDouce(tmdb('/discover/'+m, p))
           .then(d => ({ genre:'genres', l:(d&&d.results||[]).map(r=>normaliser(r, m)) }));
       }) : [])
@@ -337,7 +351,10 @@ async function chargerSuggestions(force){
     Object.assign(c, { etat:'ok', quand:Date.now(), vedettes:vedettes,
       parce:parce, acteurs:parActeur,
       genres:parGenre.slice(0, SUGG_MAX), nouveautes:nouv.slice(0, SUGG_MAX),
-      base:aimes.map(t=>t.nom), genresUtilises: besoinGenres ? genres : [] });
+      base:aimes.map(t=>t.nom),
+      /* Sur la puce Animés la rangée de secours ne suit pas les genres choisis :
+         on ne les annonce donc pas dans son titre. */
+      genresUtilises: (besoinGenres && cadre.anime !== true) ? genres : [] });
   }catch(e){
     c.etat = 'erreur';
   }
@@ -561,7 +578,11 @@ function viewGouts(){
         'onclick="bascGoutExclu(\''+esc(n).replace(/'/g,"\\'")+'\')">'+esc(n)+'</button>').join('')+
     '</div>';
 
-  html += '<div class="sectitle">Acteurs que je suis</div><div class="wrap" style="padding-top:0">';
+  /* « Je suis obligé de sélectionner des acteurs ? » — non, et il fallait
+     l'écrire : la recherche d'acteurs était le dernier élément actif de la
+     page, ce qui la faisait passer pour une étape à franchir. */
+  html += '<div class="sectitle">Acteurs que je suis <span class="facult">facultatif</span></div>'+
+    '<div class="wrap" style="padding-top:0">';
   if(g.acteurs.length){
     html += '<div class="listact choisis">'+g.acteurs.map(a=>
       '<div class="lact"><div class="ph2">'+esc(a.nom[0])+'</div><span>'+esc(a.nom)+'</span>'+
@@ -573,15 +594,29 @@ function viewGouts(){
     '<div id="resacteurs">'+corpsRechActeur()+'</div>'+
   '</div>';
 
-  html += '<div class="wrap" style="padding-top:18px;padding-bottom:30px">'+
+  /* La barre de validation est collée en bas, pas reléguée en fin de page.
+     Adrien : « je ne peux pas valider ma sélection » — il fallait faire défiler
+     deux listes de vingt genres et la recherche d'acteurs pour l'atteindre.
+     Les choix sont enregistrés au fil des appuis ; le bouton ne sert qu'à
+     refermer l'écran, et le dit. */
+  html += '<div style="height:26px"></div>';
+  html += '<div class="gbarre'+(depuisCompte ? ' seul' : '')+'">'+
     (depuisCompte
       ? '<button class="btn block" onclick="finirGouts()">C\'est parti</button>'+
-        '<button class="btn ghost block" style="margin-top:10px" onclick="passerGouts()">Passer</button>'
-      : '<div class="tiny muted center">Les suggestions se refont à la prochaine ouverture de Découvrir.</div>')+
+        '<button class="tiny muted" style="display:block;width:100%;text-align:center;padding:10px 8px 2px" '+
+          'onclick="passerGouts()">Passer cette étape</button>'
+      : '<button class="btn block" onclick="fermerGouts()">Terminé</button>'+
+        '<div class="tiny muted center" style="margin-top:7px">Tes choix sont déjà enregistrés.</div>')+
   '</div>';
   return html;
 }
 
+/* Sortie depuis les réglages ou la vitrine : rien à enregistrer, tout l'a déjà
+   été. On repart simplement d'où l'on vient, et les suggestions se referont. */
+function fermerGouts(){
+  toast('Goûts enregistrés');
+  goBack();
+}
 function finirGouts(){
   db.gouts.propose = true; saveDB();
   oublierSuggestions();                       // le profil a changé : on recalcule
