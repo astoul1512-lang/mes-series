@@ -1,5 +1,20 @@
 "use strict";
 /* ---------- Vue : Mes abonnements ---------- */
+/* ---------------------------------------------------------------------------
+   Vue : mes abonnements
+
+   Refonte demandée par Adrien : « la partie abonnement il faut la retravailler ».
+   Trois défauts pointés, et corrigés ici.
+
+   1. Les deux formulaires (saisir un code, générer le sien) occupaient tout
+      l'écran AVANT les personnes, alors que l'écran existe pour elles. Ils sont
+      devenus deux lignes qui ne se déplient qu'à la demande.
+   2. « Je suis » est ambigu en français — être ou suivre. Le vocabulaire suit
+      désormais les compteurs du profil : mes abonnements, mes abonnés.
+   3. La même croix faisait deux choses opposées selon la liste : se désabonner
+      d'un côté, couper l'accès de l'autre. L'action se découvre maintenant en
+      glissant la ligne vers la gauche, et porte son nom.
+--------------------------------------------------------------------------- */
 function viewAbos(){
   let html = header('Mes abonnements', {back:"goBack()"});
 
@@ -9,31 +24,34 @@ function viewAbos(){
       '<button class="btn" onclick="go(\'account\',{from:\'profile\'})">Ouvrir Compte & synchro</button></div>';
   }
 
-  /* --- rejoindre quelqu'un --- */
-  html += '<div class="wrap">'+
-    '<div class="card" style="padding:16px">'+
-      '<div style="font-weight:680;margin-bottom:6px">Suivre quelqu\'un</div>'+
-      '<div class="small muted" style="margin-bottom:12px">Demande-lui son code, puis saisis-le ici. '+
+  /* --- les deux actions, repliées --- */
+  const ouvert = ui.aboPanneau;
+  const ligneAction = (cle, titre, sous, icone, corps)=>
+    '<button class="reg" onclick="basculerPanneauAbo(\''+cle+'\')">'+
+      '<i>'+icone+'</i>'+
+      '<span class="rtxt"><b>'+titre+'</b><em>'+sous+'</em></span>'+
+      '<span class="ecaret'+(ouvert===cle?' ouvert':'')+'">'+I.caret+'</span>'+
+    '</button>'+
+    (ouvert===cle ? '<div class="volet">'+corps+'</div>' : '');
+
+  html += '<div class="wrap" style="padding-bottom:2px">'+
+    ligneAction('suivre', 'Suivre quelqu\'un', 'Saisir le code qu\'on t\'a donné', I.plus,
+      '<div class="small muted" style="margin-bottom:10px">Demande-lui son code, puis saisis-le ici. '+
       'Tu verras alors sa bibliothèque, en lecture seule.</div>'+
       '<input type="text" id="codein" placeholder="ABC123" autocapitalize="characters" '+
-      'autocorrect="off" spellcheck="false" maxlength="8" style="text-transform:uppercase;letter-spacing:.12em;text-align:center;font-weight:700">'+
-      '<button class="btn block" style="margin-top:10px" onclick="utiliserCode(document.getElementById(\'codein\').value)">Valider le code</button>'+
-    '</div>'+
-  '</div>';
-
-  /* --- partager sa propre bibliothèque --- */
-  html += '<div class="wrap" style="padding-top:0">'+
-    '<div class="card" style="padding:16px">'+
-      '<div style="font-weight:680;margin-bottom:6px">Me faire suivre</div>'+
+      'autocorrect="off" spellcheck="false" maxlength="8" '+
+      'style="text-transform:uppercase;letter-spacing:.12em;text-align:center;font-weight:700">'+
+      '<button class="btn block" style="margin-top:10px" '+
+        'onclick="utiliserCode(document.getElementById(\'codein\').value)">Valider le code</button>')+
+    ligneAction('code', 'Me faire suivre', 'Générer un code à donner', I.user,
       (partage.code
         ? '<div class="codebox">'+esc(partage.code)+'</div>'+
           '<div class="small muted" style="text-align:center">Valable 24 h, une seule utilisation. '+
           'Transmets-le à la personne de ton choix.</div>'+
           '<button class="btn ghost block" style="margin-top:12px" onclick="genererCode()">Générer un autre code</button>'
-        : '<div class="small muted" style="margin-bottom:12px">Génère un code et donne-le à qui tu veux. '+
+        : '<div class="small muted" style="margin-bottom:10px">Génère un code et donne-le à qui tu veux. '+
           'Tant que tu n\'en donnes pas, personne ne voit ta bibliothèque.</div>'+
-          '<button class="btn block" onclick="genererCode()">Générer mon code</button>')+
-    '</div>'+
+          '<button class="btn block" onclick="genererCode()">Générer mon code</button>'))+
   '</div>';
 
   /* --- le serveur n'est pas encore préparé --- */
@@ -51,40 +69,162 @@ function viewAbos(){
     return html + '<div style="height:26px"></div>';
   }
 
-  html += '<div class="sectitle">Je suis'+(partage.suivis.length?'<span class="cnt">'+partage.suivis.length+'</span>':'')+'</div>';
+  const vide = t => '<div class="wrap" style="padding-top:0"><div class="card" style="padding:15px;text-align:center">'+
+    '<span class="small muted">'+t+'</span></div></div>';
+
+  html += '<div class="sectitle">Mes abonnements'+
+    (partage.suivis.length?'<span class="cnt">'+partage.suivis.length+'</span>':'')+'</div>';
   html += partage.suivis.length
     ? '<div class="list">'+partage.suivis.map(p=>ligneAbo(p,'suiveur')).join('')+'</div>'
-    : '<div class="wrap" style="padding-top:0"><div class="card" style="padding:15px;text-align:center">'+
-      '<span class="small muted">Tu ne suis personne pour l\'instant.</span></div></div>';
+    : vide('Tu ne suis personne pour l\'instant.');
 
-  html += '<div class="sectitle">Me suivent'+(partage.abonnes.length?'<span class="cnt">'+partage.abonnes.length+'</span>':'')+'</div>';
+  html += '<div class="sectitle">Mes abonnés'+
+    (partage.abonnes.length?'<span class="cnt">'+partage.abonnes.length+'</span>':'')+'</div>';
   html += partage.abonnes.length
     ? '<div class="list">'+partage.abonnes.map(p=>ligneAbo(p,'suivi')).join('')+'</div>'
-    : '<div class="wrap" style="padding-top:0"><div class="card" style="padding:15px;text-align:center">'+
-      '<span class="small muted">Personne ne te suit.</span></div></div>';
+    : vide('Personne ne te suit.');
+
+  /* Le geste ne s'annonce pas tout seul : c'est la faiblesse connue de cette
+     maquette. Adrien a tranché pour la démonstration jouée une fois plutôt
+     qu'une phrase permanente — voir `montrerAstuceGlis`. */
 
   return html + '<div style="height:26px"></div>';
 }
 
+function basculerPanneauAbo(cle){
+  ui.aboPanneau = (ui.aboPanneau === cle) ? null : cle;
+  fermerGlisAbo();
+  render();
+  /* Le champ s'ouvre prêt à recevoir le code : une étape de moins. */
+  if(ui.aboPanneau === 'suivre'){
+    const i = document.getElementById('codein');
+    if(i) i.focus();
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Le glissement d'une ligne
+
+   Choisi par Adrien parmi trois maquettes. La ligne se pousse vers la gauche
+   et découvre son action, nommée. Deux garde-fous : une seule ligne ouverte à
+   la fois, et l'action ne s'exécute jamais au glissement — elle ouvre le
+   panneau de confirmation existant, parce qu'elle est irréversible.
+--------------------------------------------------------------------------- */
+/* Maquette C2, choisie par Adrien : un bloc court, pictogramme et mot bref.
+   Sur les 104 px de la version longue, l'avatar et la moitié du nom
+   disparaissaient pendant le glissement — on ne voyait plus de qui il
+   s'agissait au moment de décider. */
+const GLIS_LARGEUR = 78;       // ce que découvre le glissement, en pixels
+const GLIS_DECLIC = 34;        // au-delà, on ouvre ; en deçà, la ligne se referme
+let glisAbo = { el:null, x0:0, y0:0, base:0, axe:null, ouvert:null };
+
 function ligneAbo(p, role){
-  return '<div class="srow" style="align-items:center">'+
-    (role==='suiveur'
-      ? '<div style="display:flex;gap:12px;align-items:center;flex:1;min-width:0" onclick="ouvrirBiblio(\''+p.id+'\')">'
-      : '<div style="display:flex;gap:12px;align-items:center;flex:1;min-width:0">')+
+  const cle = role+':'+p.id;
+  const suit = role === 'suiveur';
+  const mot  = suit ? 'Ne plus<br>suivre' : 'Retirer<br>l\'accès';
+  /* Le pictogramme seul serait ambigu — les deux actions se ressemblent trop.
+     Le mot reste donc, en petit, sous l'icône. */
+  const act = (suit ? I.usermoins : I.oeilbarre) + '<span>'+mot+'</span>';
+  return '<div class="glis" data-cle="'+esc(cle)+'">'+
+    '<div class="glisfond">'+
+      '<button class="glisact" aria-label="'+(suit?'Ne plus suivre':'Retirer l\'accès')+'" '+
+        'onclick="confirmerRupture(\''+p.id+'\',\''+role+'\')">'+act+'</button>'+
+    '</div>'+
+    '<div class="srow glisrow" style="align-items:center"'+
+      ' ontouchstart="glisAboStart(event,\''+esc(cle)+'\')"'+
+      ' ontouchmove="glisAboMove(event)" ontouchend="glisAboEnd(event)"'+
+      ' ontouchcancel="glisAboEnd(event)"'+
+      ' onclick="glisAboClic(event,\''+p.id+'\',\''+role+'\')">'+
       avatarDe(p, 'moyen')+
       '<div class="sinfo" style="justify-content:center">'+
         '<div class="sname">'+esc(p.pseudo)+'</div>'+
-        '<div class="tiny muted">'+(role==='suiveur' ? 'Voir sa bibliothèque' : 'Voit ta bibliothèque')+'</div>'+
+        '<div class="tiny muted">'+(role==='suiveur' ? 'Tu vois sa bibliothèque' : 'Voit ta bibliothèque')+'</div>'+
       '</div>'+
+      (role==='suiveur' ? '<span class="ecaret">'+I.caret+'</span>' : '')+
     '</div>'+
-    '<button class="iconbtn" title="'+(role==='suiveur'?'Se désabonner':'Retirer')+'" '+
-      'onclick="confirmerRupture(\''+p.id+'\',\''+role+'\')">'+I.close+'</button>'+
   '</div>';
+}
+
+function rangeeGlis(cle){
+  const box = document.querySelector('.glis[data-cle="'+cle.replace(/"/g,'')+'"]');
+  return box ? box.querySelector('.glisrow') : null;
+}
+function poserGlis(el, x, anime){
+  if(!el) return;
+  el.style.transition = anime ? 'transform .22s cubic-bezier(.22,.7,.3,1)' : 'none';
+  el.style.transform = 'translate3d('+x+'px,0,0)';
+}
+function fermerGlisAbo(){
+  if(glisAbo.ouvert){ poserGlis(rangeeGlis(glisAbo.ouvert), 0, true); glisAbo.ouvert = null; }
+}
+
+function glisAboStart(e, cle){
+  const t = e.touches[0];
+  /* Le geste de retour appartient au bord de l'écran : on ne le lui dispute pas. */
+  if(t.clientX <= 28){ glisAbo.el = null; return; }
+  glisAbo.el = e.currentTarget;
+  glisAbo.cle = cle;
+  glisAbo.x0 = t.clientX; glisAbo.y0 = t.clientY;
+  glisAbo.base = (glisAbo.ouvert === cle) ? -GLIS_LARGEUR : 0;
+  glisAbo.axe = null;
+}
+function glisAboMove(e){
+  if(!glisAbo.el) return;
+  const t = e.touches[0];
+  const dx = t.clientX - glisAbo.x0, dy = t.clientY - glisAbo.y0;
+  /* On tranche une fois pour toutes : ce geste défile la page, ou il glisse la
+     ligne. Sans cet arbitrage, un défilement du pouce faisait trembler les
+     lignes latéralement. */
+  if(glisAbo.axe === null){
+    if(Math.abs(dx) < 9 && Math.abs(dy) < 9) return;
+    glisAbo.axe = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+    if(glisAbo.axe === 'x' && glisAbo.ouvert && glisAbo.ouvert !== glisAbo.cle) fermerGlisAbo();
+  }
+  if(glisAbo.axe !== 'x') return;
+  e.preventDefault();                       // la page ne défile pas pendant qu'on glisse
+  let x = glisAbo.base + dx;
+  if(x > 0) x = 0;                          // rien à découvrir de ce côté
+  if(x < -GLIS_LARGEUR) x = -GLIS_LARGEUR - (GLIS_LARGEUR + x) * 0.7;   // résistance au-delà
+  if(x < -GLIS_LARGEUR - 22) x = -GLIS_LARGEUR - 22;
+  poserGlis(glisAbo.el, x, false);
+}
+function glisAboEnd(){
+  if(!glisAbo.el || glisAbo.axe !== 'x'){ glisAbo.el = null; return; }
+  const m = /translate3d\((-?[\d.]+)px/.exec(glisAbo.el.style.transform || '');
+  const x = m ? parseFloat(m[1]) : 0;
+  const ouvrir = x < -GLIS_DECLIC;
+  poserGlis(glisAbo.el, ouvrir ? -GLIS_LARGEUR : 0, true);
+  glisAbo.ouvert = ouvrir ? glisAbo.cle : null;
+  glisAbo.el = null;
+}
+/* Un appui sur une ligne ouverte la referme, et rien d'autre : on ne veut pas
+   ouvrir une bibliothèque en voulant annuler son geste. */
+function glisAboClic(e, id, role){
+  if(glisAbo.axe === 'x'){ glisAbo.axe = null; return; }
+  if(glisAbo.ouvert){ fermerGlisAbo(); return; }
+  if(role === 'suiveur') ouvrirBiblio(id);
+}
+
+/* La démonstration, jouée une seule fois dans la vie du compte : la première
+   ligne s'entrouvre puis se referme. C'est le seul remède connu à un geste
+   qui ne s'annonce pas, et il ne coûte rien à qui l'a déjà compris. */
+function montrerAstuceGlis(){
+  if(db.astuceGlis) return;
+  const el = document.querySelector('.glis .glisrow');
+  if(!el) return;
+  db.astuceGlis = true; saveDB();
+  setTimeout(()=>{
+    poserGlis(el, -58, true);
+    setTimeout(()=> poserGlis(el, 0, true), 620);
+  }, 480);
 }
 
 /* Le nom n'est jamais recopié dans l'attribut onclick : une apostrophe suffirait à
    casser le bouton. On le retrouve dans les listes au moment d'ouvrir le panneau. */
 function confirmerRupture(id, role){
+  /* La ligne se referme avant d'ouvrir le panneau : si l'on annule, on ne
+     retrouve pas une rangée restée ouverte sur une action qu'on a refusée. */
+  fermerGlisAbo();
   const liste = (role==='suiveur' ? partage.suivis : partage.abonnes) || [];
   const p = liste.find(x=>String(x.id) === String(id));
   const nom = (p && p.pseudo) || 'Cette personne';

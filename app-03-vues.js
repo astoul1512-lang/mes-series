@@ -90,6 +90,8 @@ function render(){
   /* Une seule fois : l'étiquette qui apprend à quoi sert la cloche. */
   if((view==='show' || view==='movie') && typeof montrerAstuceCloche === 'function')
     montrerAstuceCloche();
+  /* Une seule fois : la démonstration du glissement sur une ligne d'abonnement. */
+  if(view==='abos' && typeof montrerAstuceGlis === 'function') montrerAstuceGlis();
   if(view==='discover'){
     const inp = document.getElementById('q');
     if(inp && ui.focusSearch){ inp.focus(); ui.focusSearch=false; }

@@ -617,6 +617,32 @@
   .phead{display:flex;align-items:center;gap:14px;padding:18px 16px 4px}
   .ro{display:inline-flex;align-items:center;gap:7px;justify-content:center}
   .ro svg{width:15px;height:15px;flex:none}
+  /* ---------- Abonnements ---------- */
+  /* Le volet qui se déplie sous une ligne d'action : les deux formulaires ne
+     prennent plus l'écran avant les personnes, ils s'ouvrent à la demande. */
+  .volet{background:var(--surface);border:1px solid var(--line);border-top:0;
+    border-radius:0 0 13px 13px;margin:-10px 0 8px;padding:14px}
+  .ecaret.ouvert{transform:rotate(90deg)}
+  .ecaret{transition:transform .18s}
+  /* La ligne glissante et ce qu'elle découvre. `.glis` porte le fond rouge,
+     `.glisrow` glisse par-dessus. Le fond n'est jamais cliquable tant qu'il est
+     caché : le bouton vit à droite, là où la ligne le libère. */
+  .glis{position:relative;border-radius:var(--radius);overflow:hidden}
+  .glisfond{position:absolute;inset:0;display:flex;justify-content:flex-end;
+    background:#ff5a5a;border-radius:var(--radius)}
+  .glisact{width:78px;color:#fff;display:grid;justify-items:center;align-content:center;
+    gap:4px;grid-auto-rows:min-content;text-align:center}
+  .glisact svg{width:20px;height:20px}
+  .glisact span{font-size:9.5px;font-weight:800;letter-spacing:.03em;
+    text-transform:uppercase;line-height:1.2}
+  .glisact:active{background:rgba(0,0,0,.16)}
+  .glisrow{position:relative;z-index:1;will-change:transform;
+    /* Le navigateur ne doit pas s'approprier le geste horizontal : sans ça,
+       iOS déclenche son propre retour de page au lieu de glisser la ligne. */
+    touch-action:pan-y}
+  .glisrow .ecaret{color:var(--muted)}
+  .glisrow .ecaret svg{width:16px;height:16px;display:block}
+
   .codebox{font-size:30px;font-weight:800;letter-spacing:.22em;text-align:center;
     padding:14px 8px;margin-bottom:10px;border-radius:12px;background:var(--surface2);
     border:1px dashed var(--accent);color:var(--accent);-webkit-user-select:all;user-select:all}

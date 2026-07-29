@@ -261,6 +261,10 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
            avatarOnglet:null,
            /* Sorties : la section affichée — l'affiche par défaut. */
            sortiesOnglet:'salle',
+           /* Abonnements : lequel des deux volets d'action est déplié
+              ('suivre', 'code'), ou aucun. Les deux formulaires occupaient tout
+              l'écran avant les personnes ; ils ne s'ouvrent plus qu'à la demande. */
+           aboPanneau:null,
            /* Découvrir : type affiché, genres cochés, tri, note minimale, page en cours */
            /* Découvrir : type affiché, genres cochés, plateformes cochées, tri,
               note minimale, page en cours */
