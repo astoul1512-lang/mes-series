@@ -123,7 +123,7 @@ const FAMILLES = ['serie', 'film', 'anime'];
 function grainesSuggestions(cadre, combien){
   const aimes = titresAimes().filter(t => cadre.medias.indexOf(t.media) >= 0);
   /* Une puce précise ne mélange rien : son cadre est déjà la variété voulue. */
-  if(cadre.anime !== null) return aimes.slice(0, combien);
+  if(cadre.medias.length === 1) return aimes.slice(0, combien);
 
   const paniers = {};
   FAMILLES.forEach(f => { paniers[f] = aimes.filter(t => t.famille === f); });
@@ -161,7 +161,7 @@ const SUGG_ASSEZ = 20;
 const cacheSugg = {};
 function suggVide(){
   return { etat:'froid' /* froid|attente|ok|erreur */, quand:0,
-           vedettes:[], parce:[], genres:[], acteurs:[], nouveautes:[],
+           vedettes:[], sections:[], esprit:null, acteurs:[], nouveautes:[],
            /* Ce sur quoi l'app s'est appuyée, gardé pour pouvoir le montrer :
               « je ne sais pas ce que l'app croit savoir » était le reproche. */
            base:[], genresUtilises:[] };
@@ -183,13 +183,18 @@ function oublierSuggestions(){
   suggCourantes();
 }
 
-/* Ce que chaque puce accepte. `anime` vaut true (que des animés), false
-   (jamais d'animé) ou null (on ne tranche pas — c'est « Tout »). */
+/* Ce que chaque puce accepte. `origine` dit l'intention plutôt qu'un booléen :
+     'anime'     — rien d'autre que de l'animation japonaise ;
+     'sansAnime' — jamais d'animé, et rien hors du monde occidental ;
+     'mixte'     — l'animation japonaise est admise, le reste du monde non.
+   Adrien, sur la puce Films : « j'autorise les films d'animation ». Un film
+   d'animation japonais y était écarté alors qu'un Pixar passait — la règle
+   d'origine, écrite pour les séries, s'y appliquait sans raison. */
 function cadreSugg(t){
-  if(t === 'movie') return { medias:['movie'], anime:false };
-  if(t === 'tv')    return { medias:['tv'],    anime:false };
-  if(t === 'anime') return { medias:['tv'],    anime:true  };
-  return { medias:['tv','movie'], anime:null };
+  if(t === 'movie') return { medias:['movie'], origine:'mixte' };
+  if(t === 'tv')    return { medias:['tv'],    origine:'sansAnime' };
+  if(t === 'anime') return { medias:['tv'],    origine:'anime' };
+  return { medias:['tv','movie'], origine:'mixte' };
 }
 
 /* Normalise un résultat TMDB, quel que soit son média. */
@@ -220,9 +225,9 @@ function estOccidental(x){
    puis s'interdisait de lui en proposer un seul. Ce qui vient de chez lui n'a
    plus d'origine imposée ; seul le ratissage général reste cadré. */
 function passeOrigine(x, cadre, perso){
-  if(cadre.anime === true)  return estUnAnime(x);          // puce Animés
-  if(cadre.anime === false) return !estUnAnime(x) && estOccidental(x);
-  return perso || estUnAnime(x) || estOccidental(x);       // puce Tout
+  if(cadre.origine === 'anime')     return estUnAnime(x);
+  if(cadre.origine === 'sansAnime') return !estUnAnime(x) && estOccidental(x);
+  return perso || estUnAnime(x) || estOccidental(x);
 }
 
 /* Le tamis commun à toutes les sources : jamais un titre déjà chez soi, jamais
@@ -259,6 +264,98 @@ function entrelacerSugg(paquets){
     paquets.forEach(p => { if(i < p.length) out.push(p[i]); });
   return out;
 }
+/* ---------------------------------------------------------------------------
+   Les sections d'une vitrine
+
+   Refonte demandée par Adrien : « pas par rapport à 1 titre que j'ai vu mais
+   par rapport à l'ensemble des séries ou films que j'ai consommé ». Les rangées
+   partaient chacune d'un titre ; elles partent maintenant du profil de genres,
+   calculé SÉPARÉMENT par famille. C'est ce qui manquait — un seul profil global
+   servait aux trois, d'où du Batman de 1999 déduit de ses animés d'action.
+
+   Et sa règle, mot pour mot : « si la personne n'a pas renseigné d'animé il n'y
+   a pas de sélection d'animé ». Une section n'existe que si sa famille existe
+   dans la bibliothèque. Un seul titre suffit.
+--------------------------------------------------------------------------- */
+const SECTIONS_TOUT = [
+  { cle:'serie', titre:'Des séries pour toi', cadre:{ medias:['tv'],    origine:'sansAnime' } },
+  { cle:'film',  titre:'Des films pour toi',  cadre:{ medias:['movie'], origine:'mixte'     } },
+  { cle:'anime', titre:'Des animés pour toi', cadre:{ medias:['tv'],    origine:'anime'     } }
+];
+
+/* Les familles réellement présentes dans la bibliothèque, d'après ce qui a été
+   regardé — pas d'après ce qui a été ajouté sans jamais être ouvert. */
+function famillesVues(){
+  const vu = {};
+  Object.values(db.shows).forEach(s=>{
+    if(progress(s).watched > 0) vu[familleDe(s,'tv')] = true;
+  });
+  if(Object.values(db.movies).some(m=>m.seen)) vu.film = true;
+  return vu;
+}
+
+/* Les sections à construire pour la puce affichée. Sur une puce précise il n'y
+   en a qu'une, celle de la puce : elle est demandée explicitement, donc elle
+   s'affiche même sans historique dans cette famille. */
+function sectionsPourPuce(type){
+  if(type === 'tv')    return [{ cle:'serie', titre:'Des séries pour toi', cadre:cadreSugg('tv') }];
+  if(type === 'movie') return [{ cle:'film',  titre:'Des films pour toi',  cadre:cadreSugg('movie') }];
+  if(type === 'anime') return [{ cle:'anime', titre:'Des animés pour toi', cadre:cadreSugg('anime') }];
+  const vues = famillesVues();
+  return SECTIONS_TOUT.filter(s => vues[s.cle]);
+}
+
+/* Le profil de genres, calculé famille par famille. Un genre choisi à la main
+   l'emporte partout : c'est la promesse de l'écran « Mes goûts », qui annonce
+   que ces réglages passent avant ce que l'app devine. */
+function genresDeFamille(famille){
+  const g = db.gouts || {};
+  const hors = g.exclus || [];
+  if((g.genres||[]).length) return g.genres.filter(x => hors.indexOf(x) < 0);
+
+  const poids = {};
+  Object.values(db.shows).forEach(s=>{
+    if(familleDe(s,'tv') !== famille) return;
+    const p = progress(s);
+    if(!p.watched) return;
+    const n = p.watched + (isFinished(s) ? 10 : 0);
+    (s.genres||[]).forEach(x=>{ poids[x] = (poids[x]||0) + n; });
+  });
+  if(famille === 'film') Object.values(db.movies).forEach(m=>{
+    if(!m.seen) return;
+    (m.genres||[]).forEach(x=>{ poids[x] = (poids[x]||0) + 5; });
+  });
+  return Object.keys(poids)
+    .sort((a,b)=>poids[b]-poids[a])
+    .filter(x => hors.indexOf(x) < 0)
+    .slice(0, GENRES_DEDUITS_MAX);
+}
+
+/* La requête d'une section. Les genres partent en OU — « action OU aventure »
+   décrit ce qu'on voulait dire, « action ET aventure » ne décrit presque rien.
+   Seule exception : sur les animés, l'animation japonaise n'est pas une
+   préférence mais la définition de la section, elle reste donc un ET. */
+function requeteSection(sec){
+  const media = sec.cadre.medias[0];
+  const noms = genresDeFamille(sec.cle);
+  const anim = genreParNom(media, 'Animation');
+  const p = { include_adult:'false', page:'1', sort_by:'popularity.desc', 'vote_count.gte':'120' };
+
+  if(sec.cadre.origine === 'anime'){
+    p.with_original_language = 'ja';
+    /* Animation, plus le genre dominant s'il en existe un autre : deux
+       identifiants séparés par une virgule sont un ET chez TMDB, ce qui est
+       exactement ce qu'on veut ici. */
+    const autre = noms.map(n=>genreParNom(media,n)).filter(x => x != null && x !== anim)[0];
+    const ids = [anim, autre].filter(x => x != null);
+    if(!ids.length) return null;
+    p.with_genres = ids.join(',');
+  } else {
+    const ids = noms.map(n=>genreParNom(media,n)).filter(x => x != null);
+    if(ids.length) p.with_genres = ids.join('|');
+  }
+  return { media:media, p:p };
+}
 
 async function chargerSuggestions(force){
   const type = (ui.disc && ui.disc.type) || 'tout';
@@ -279,122 +376,93 @@ async function chargerSuggestions(force){
     const vus = {};
     const auj = todayISO();
     const debut = isoIlYA(60);
-    const anim = { tv: genreParNom('tv','Animation'), movie: genreParNom('movie','Animation') };
-
-    /* --- Première vague : ce qui vient de ma bibliothèque ---
-       C'est le choix d'Adrien : « ce que tu as vraiment regardé » d'abord, les
-       genres seulement en bouche-trou. On tire donc de six titres au lieu de
-       trois, et on n'ira chercher le catalogue que si ça ne suffit pas. */
-    /* Quatre points de départ sur « Tout » plutôt que six : au-delà, les rangées
-       personnelles occupent tout l'écran et l'on ne voit plus rien d'autre. */
-    const aimes = grainesSuggestions(cadre, cadre.anime === null ? 4 : 6);
+    const sections = sectionsPourPuce(type);
     const acteurs = ((db.gouts||{}).acteurs || []).slice(0, 3);
 
-    const persos = await Promise.all([
-      ...aimes.map(t => sourceDouce(tmdb('/'+t.media+'/'+t.id+'/recommendations'))
-        .then(d => ({ genre:'parce', titre:t.nom,
-                      l:(d&&d.results||[]).map(r=>normaliser(r, t.media)) }))),
-      /* TMDB ne sait filtrer les séries par acteur que pour les films : on passe
-         donc par la filmographie de la personne, le même chemin que les fiches
-         acteurs de l'app. */
-      ...acteurs.map(a => sourceDouce(tmdb('/person/'+a.id+'/combined_credits'))
-        .then(d => ({ genre:'acteurs', titre:a.nom,
-                      l:((d&&d.cast)||[])
-                        .filter(r => r.media_type === 'tv' || r.media_type === 'movie')
-                        .sort((x,y)=>(y.popularity||0)-(x.popularity||0))
-                        .map(r => normaliser(r, r.media_type)) })))
-    ]);
+    /* Le titre qui sert de comparaison du jour. Une seule rangée, choisie parmi
+       ce qu'on a terminé ou bien avancé — et intitulée « Dans l'esprit de » et
+       non « parce que tu as aimé » : l'app ne sait pas si on a aimé, elle sait
+       seulement qu'on l'a regardé. Adrien a mis le doigt dessus. */
+    const candidats = grainesSuggestions(cadre, 12);
+    const graineJour = Math.floor(Date.parse(auj) / 86400000);
+    const esprit = candidats.length ? candidats[graineJour % candidats.length] : null;
 
-    const parce = [], parActeur = [];
-    let nPerso = 0;
-    persos.forEach(r=>{
+    const demandes = [];
+    sections.forEach(sec=>{
+      const r = requeteSection(sec);
+      if(!r) return demandes.push(Promise.resolve({ kind:'section', sec:sec, l:[] }));
+      demandes.push(sourceDouce(tmdb('/discover/'+r.media, r.p))
+        .then(d => ({ kind:'section', sec:sec, l:(d&&d.results||[]).map(x=>normaliser(x, r.media)) })));
+    });
+    if(esprit) demandes.push(sourceDouce(tmdb('/'+esprit.media+'/'+esprit.id+'/recommendations'))
+      .then(d => ({ kind:'esprit', titre:esprit.nom,
+                    l:(d&&d.results||[]).map(x=>normaliser(x, esprit.media)) })));
+    acteurs.forEach(a => demandes.push(sourceDouce(tmdb('/person/'+a.id+'/combined_credits'))
+      .then(d => ({ kind:'acteur', titre:a.nom,
+                    l:((d&&d.cast)||[])
+                      .filter(x => x.media_type === 'tv' || x.media_type === 'movie')
+                      .sort((x,y)=>(y.popularity||0)-(x.popularity||0))
+                      .map(x => normaliser(x, x.media_type)) }))));
+    /* Les nouveautés, sur chaque média du cadre de la puce. */
+    cadre.medias.forEach(m=>{
+      const champ = m === 'movie' ? 'primary_release_date' : 'first_air_date';
+      const p = { include_adult:'false', page:'1', sort_by:'popularity.desc',
+                  [champ+'.gte']:debut, [champ+'.lte']:auj };
+      if(cadre.origine === 'anime'){
+        p.with_original_language = 'ja';
+        const a = genreParNom(m,'Animation');
+        if(a != null) p.with_genres = String(a);
+      }
+      demandes.push(sourceDouce(tmdb('/discover/'+m, p))
+        .then(d => ({ kind:'nouv', media:m, l:(d&&d.results||[]).map(x=>normaliser(x, m)) })));
+    });
+
+    const rep = await Promise.all(demandes);
+
+    /* L'ordre de dépouillement fixe les priorités : ce qui est servi en premier
+       garde les titres, les suivants héritent du reste. Les sections d'abord —
+       ce sont elles que l'écran doit montrer. */
+    const parKind = k => rep.filter(r => r && r.kind === k);
+    const sectionsPretes = [];
+    parKind('section').forEach(r=>{
+      const l = tamiser(r.l || [], vus, r.sec.cadre, false).slice(0, SUGG_MAX);
+      if(l.length) sectionsPretes.push({ cle:r.sec.cle, titre:r.sec.titre, l:l });
+    });
+    let espritPret = null;
+    parKind('esprit').forEach(r=>{
       const l = tamiser(r.l || [], vus, cadre, true).slice(0, 20);
-      if(!l.length) return;
-      nPerso += l.length;
-      if(r.genre === 'parce') parce.push({ titre:r.titre, l:l });
-      else                    parActeur.push({ titre:r.titre, l:l });
+      if(l.length) espritPret = { titre:r.titre, l:l };
     });
-
-    /* --- Seconde vague : le catalogue ---
-       Les nouveautés sont demandées à chaque fois — « de nouvelles sorties »
-       fait partie de la commande. Les genres, eux, ne servent qu'à combler. */
-    const genres = genresRetenus();
-    const besoinGenres = nPerso < SUGG_ASSEZ && genres.length > 0;
-    const idsG = media => {
-      const l = genres.map(n => genreParNom(media, n)).filter(x => x != null);
-      /* Sur la puce Animés, l'animation est acquise : la garder comme critère
-         ne trierait rien et écraserait les genres qui, eux, distinguent. */
-      return cadre.anime === true ? l.filter(x => x !== anim[media]) : l;
-    };
-
-    const generiques = await Promise.all([
-      ...cadre.medias.map(m => {
-        const champ = m === 'movie' ? 'primary_release_date' : 'first_air_date';
-        const p = { include_adult:'false', page:'1', sort_by:'popularity.desc',
-                    [champ+'.gte']:debut, [champ+'.lte']:auj };
-        if(cadre.anime === true){
-          p.with_original_language = 'ja';
-          if(anim[m] != null) p.with_genres = String(anim[m]);
-        }
-        return sourceDouce(tmdb('/discover/'+m, p))
-          .then(d => ({ genre:'nouveautes', l:(d&&d.results||[]).map(r=>normaliser(r, m)) }));
-      }),
-      ...(besoinGenres ? cadre.medias.map(m => {
-        const p = { include_adult:'false', page:'1', sort_by:'popularity.desc',
-                    'vote_count.gte':'150' };
-        let ids;
-        if(cadre.anime === true){
-          /* Sur la puce Animés, l'animation japonaise n'est pas une préférence
-             mais la définition même de la puce : elle doit rester un ET. TMDB
-             ne sait pas mêler un ET et un OU dans `with_genres` de façon dont
-             on soit sûr — on s'en tient donc à l'animation seule, et les goûts
-             de genre ne cadrent pas cette rangée-là. */
-          p.with_original_language = 'ja';
-          ids = [anim[m]].filter(x => x != null);
-        } else {
-          /* La barre verticale est un OU chez TMDB, la virgule un ET. « J'aime
-             l'action ET l'aventure ET la comédie ET la guerre » ne décrit
-             presque aucun titre ; « l'un ou l'autre » dit ce qu'on voulait. */
-          ids = idsG(m).filter(x => x != null);
-        }
-        if(!ids.length) return Promise.resolve({genre:'genres', l:[]});
-        p.with_genres = ids.join('|');
-        return sourceDouce(tmdb('/discover/'+m, p))
-          .then(d => ({ genre:'genres', l:(d&&d.results||[]).map(r=>normaliser(r, m)) }));
-      }) : [])
-    ]);
-
-    const paqGenre = [], paqNouv = [];
-    generiques.forEach(r=>{
+    const parActeur = [];
+    parKind('acteur').forEach(r=>{
+      const l = tamiser(r.l || [], vus, cadre, true).slice(0, 20);
+      if(l.length) parActeur.push({ titre:r.titre, l:l });
+    });
+    const paqNouv = [];
+    parKind('nouv').forEach(r=>{
       const l = tamiser(r.l || [], vus, cadre, false).slice(0, 20);
-      if(!l.length) return;
-      if(r.genre === 'genres') paqGenre.push(l); else paqNouv.push(l);
+      if(l.length) paqNouv.push(l);
     });
-    const parGenre = entrelacerSugg(paqGenre), nouv = entrelacerSugg(paqNouv);
+    const nouv = entrelacerSugg(paqNouv);
 
-    /* Le carrousel du jour : cinq titres pris d'abord dans ce qui vient de la
-       bibliothèque. La rotation est calculée à partir de la date — stable toute
-       la journée, différente demain, et jamais tirée au sort : la vitrine ne
-       doit pas changer sous les doigts. */
+    /* Le carrousel du jour : cinq titres pris dans les sections d'abord, dans
+       l'ordre où elles s'affichent, puis dans le reste. La rotation vient de la
+       date — stable toute la journée, différente demain, jamais tirée au sort. */
     const bassin = []
-      .concat(...parce.map(p => p.l.map(x => Object.assign({ pourquoi:'Parce que tu as regardé '+p.titre }, x))))
+      .concat(...sectionsPretes.map(s => s.l.map(x => Object.assign({ pourquoi:s.titre }, x))))
       .concat(...parActeur.map(p => p.l.map(x => Object.assign({ pourquoi:'Avec '+p.titre }, x))))
-      .concat(parGenre.map(x => Object.assign({ pourquoi:'Dans tes genres' }, x)))
+      .concat(espritPret ? espritPret.l.map(x => Object.assign({ pourquoi:'Dans l\'esprit de '+espritPret.titre }, x)) : [])
       .concat(nouv.map(x => Object.assign({ pourquoi:'Sortie récente' }, x)));
-    const graine = Math.floor(Date.parse(auj) / 86400000);
     const vedettes = [];
     for(let i = 0; i < 5 && bassin.length; i++){
-      const idx = (graine + i * 7) % bassin.length;
+      const idx = (graineJour + i * 7) % bassin.length;
       vedettes.push(bassin.splice(idx, 1)[0]);
     }
 
     Object.assign(c, { etat:'ok', quand:Date.now(), vedettes:vedettes,
-      parce:parce, acteurs:parActeur,
-      genres:parGenre.slice(0, SUGG_MAX), nouveautes:nouv.slice(0, SUGG_MAX),
-      base:aimes.map(t=>t.nom),
-      /* Sur la puce Animés la rangée de secours ne suit pas les genres choisis :
-         on ne les annonce donc pas dans son titre. */
-      genresUtilises: (besoinGenres && cadre.anime !== true) ? genres : [] });
+      sections:sectionsPretes, esprit:espritPret, acteurs:parActeur,
+      nouveautes:nouv.slice(0, SUGG_MAX),
+      base:sections.map(s=>s.cle), genresUtilises:[] });
   }catch(e){
     c.etat = 'erreur';
   }
@@ -402,22 +470,18 @@ async function chargerSuggestions(force){
   if(view === 'discover' && typeof peindreDisc === 'function') peindreDisc();
 }
 
-/* Les rangées de la vitrine, dans l'ordre où elles s'affichent. */
+/* Les rangées de la vitrine, dans l'ordre où elles s'affichent. L'ordre des
+   sections est fixe — choix d'Adrien : « toujours le même ordre », pour savoir
+   où regarder sans réfléchir. */
 function rangeesSuggerees(){
   suggCourantes();
   const out = [];
-  suggestions.parce.forEach(p=>{
-    if(p.l.length) out.push({ titre:'Parce que tu as regardé '+p.titre, l:p.l });
-  });
-  suggestions.acteurs.forEach(p=>{
-    if(p.l.length) out.push({ titre:'Avec '+p.titre, l:p.l });
-  });
-  if(suggestions.genres.length){
-    const g = suggestions.genresUtilises.length ? suggestions.genresUtilises : genresRetenus();
-    out.push({ titre: g.length ? 'Parce que tu aimes '+g.slice(0,2).join(' et ') : 'Pour toi',
-               l: suggestions.genres });
-  }
-  if(suggestions.nouveautes.length) out.push({ titre:'Sorties récentes', l:suggestions.nouveautes });
+  (suggestions.sections || []).forEach(s=>{ if(s.l.length) out.push({ titre:s.titre, l:s.l }); });
+  (suggestions.acteurs || []).forEach(p=>{ if(p.l.length) out.push({ titre:'Avec '+p.titre, l:p.l }); });
+  if(suggestions.esprit && suggestions.esprit.l.length)
+    out.push({ titre:'Dans l\'esprit de '+suggestions.esprit.titre, l:suggestions.esprit.l });
+  if((suggestions.nouveautes || []).length)
+    out.push({ titre:'Sorties récentes', l:suggestions.nouveautes });
   return out;
 }
 
@@ -434,27 +498,31 @@ function rangeesSuggerees(){
 /* Les deux phrases qui expliquent le profil courant. Rendues séparément pour
    que la vitrine en montre une version courte et l'écran des goûts la version
    complète, sans écrire le raisonnement à deux endroits. */
+const LIB_FAMILLE = { serie:'séries', film:'films', anime:'animés' };
 function explicationProfil(){
   const g = db.gouts || {};
-  /* Les titres annoncés doivent être ceux dont les rangées partent réellement,
-     pas les trois mieux notés de la bibliothèque : sur « Tout », les deux
-     listes divergeaient depuis que les points de départ sont répartis. */
-  const cadre = cadreSugg((ui.disc && ui.disc.type) || 'tout');
-  const bases = grainesSuggestions(cadre, 3).map(t=>t.nom);
   const manuels = (g.genres||[]).length > 0;
-  const genres = genresRetenus();
+  /* Le panneau doit décrire ce qui alimente RÉELLEMENT les sections : le profil
+     de genres par famille, et non plus une poignée de titres de départ. C'est
+     la question d'Adrien — « je ne sais pas ce que l'app croit savoir » — et la
+     réponse a changé de nature en même temps que le moteur. */
+  const type = (ui.disc && ui.disc.type) || 'tout';
+  const parFamille = sectionsPourPuce(type).map(sec=>({
+    nom: LIB_FAMILLE[sec.cle] || sec.cle,
+    genres: genresDeFamille(sec.cle)
+  })).filter(f => f.genres.length);
   return {
     manuels: manuels,
-    bases: bases,
-    genres: genres,
+    parFamille: parFamille,
+    volume: { series: Object.values(db.shows).filter(s=>progress(s).watched>0).length,
+              films:  Object.values(db.movies).filter(m=>m.seen).length },
     acteurs: (g.acteurs||[]).map(a=>a.nom),
     exclus: (g.exclus||[]).slice(),
-    /* La phrase d'origine : d'où viennent les genres retenus. */
     origine: manuels
-      ? 'Tu as choisi ces genres toi-même.'
-      : (bases.length
-          ? 'Déduits de ce que tu as terminé ou bien avancé.'
-          : 'Rien à déduire pour l\'instant : ta bibliothèque est trop jeune.')
+      ? 'Tu as choisi ces genres toi-même : ils passent avant ce que je devine.'
+      : (parFamille.length
+          ? 'Calculés séparément pour chaque famille, d\'après tout ce que tu as regardé.'
+          : 'Rien à déduire pour l\'instant : coche quelques épisodes.')
   };
 }
 
@@ -585,17 +653,17 @@ function viewGouts(){
      bloc est dans la vitrine ; ici on montre en plus le détail des genres
      déduits et leur classement, puisque c'est l'écran où on les corrige. */
   const p = explicationProfil();
-  const deduits = genresDeduits();
   const lignes = [];
-  if(p.bases.length)
-    lignes.push('<div><b>Je pars de</b> '+esc(p.bases.join(', '))+'</div>');
-  if(deduits.length)
-    lignes.push('<div><b>Genres qui en ressortent</b> '+esc(deduits.slice(0,5).join(', '))+
-      (deduits.length > 5 ? ' <span class="muted">et '+(deduits.length-5)+' autre'+
-        (deduits.length-5>1?'s':'')+'</span>' : '')+'</div>');
-  if(p.genres.length)
-    lignes.push('<div><b>'+(p.manuels ? 'Ce que tu as choisi' : 'Ce que je retiens')+'</b> '+
-      esc(p.genres.join(', '))+'</div>');
+  const v = p.volume;
+  if(v.series || v.films)
+    lignes.push('<div><b>Je pars de</b> '+
+      [v.series ? v.series+' série'+(v.series>1?'s':'')+' commencée'+(v.series>1?'s':'') : '',
+       v.films  ? v.films+' film'+(v.films>1?'s':'')+' vu'+(v.films>1?'s':'')            : ''
+      ].filter(Boolean).join(' et ')+'</div>');
+  /* Le détail par famille : c'est ici qu'on le corrige, donc c'est ici qu'il
+     doit être le plus explicite. */
+  p.parFamille.forEach(f=>
+    lignes.push('<div><b>Tes '+esc(f.nom)+'</b> '+esc(f.genres.join(', '))+'</div>'));
   if(p.acteurs.length)
     lignes.push('<div><b>Acteurs suivis</b> '+esc(p.acteurs.join(', '))+'</div>');
   if(p.exclus.length)

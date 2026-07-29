@@ -319,12 +319,18 @@ function viewPreview(){
        principale — discret, comme demandé, mais toujours à portée. */
     const s0 = db.shows[d.id];
     const enPause = !!(s0 && s0.pause);
-    html += '<div class="actions">'+ (inList
-      ? '<button class="btn" onclick="go(\'show\',{id:'+d.id+', from:\''+(params.from||'discover')+'\'})">'+I.eye+' Ouvrir ma fiche</button>'+
-        '<button class="btn ghost carre'+(enPause?' actif':'')+'" onclick="basculerPause('+d.id+')" '+
+    /* Rien à mettre en pause tant que la série n'est pas commencée : le bouton
+       n'apparaît donc pas sur une série tout juste ajoutée. Il revient dès le
+       premier épisode coché, et reste toujours là pour reprendre. */
+    const boutonPause = (enPause || peutSeMettreEnPause(s0))
+      ? '<button class="btn ghost carre'+(enPause?' actif':'')+'" onclick="basculerPause('+d.id+')" '+
           'title="'+(enPause?'Reprendre cette série':'Mettre en pause')+'" '+
           'aria-label="'+(enPause?'Reprendre cette série':'Mettre en pause')+'">'+
           (enPause ? I.play : I.pause)+'</button>'
+      : '';
+    html += '<div class="actions">'+ (inList
+      ? '<button class="btn" onclick="go(\'show\',{id:'+d.id+', from:\''+(params.from||'discover')+'\'})">'+I.eye+' Ouvrir ma fiche</button>'+
+        boutonPause
       : '<button class="btn" id="addbtn" onclick="addOrOpenShow('+d.id+')">'+I.plus+' Ajouter à ma liste</button>')
       +'</div>'+
       (enPause ? '<div class="wrap" style="padding:8px 16px 0"><div class="tiny muted center">'+
@@ -543,6 +549,11 @@ function movieMenu(id){
     '<button class="opt" onclick="closeSheet()">Annuler</button>');
 }
 function removeMovie(id){
+  const m = db.movies[id];
+  const nom = (m && m.title) || 'Le film';
   markDeleted('movies',id); delete db.movies[id]; saveDB(); closeSheet();
-  if(view==='movie'){ ui.profTab='films'; go('profile'); } else render();
+  toast('« '+nom+' » retiré de ta liste');
+  /* Même règle que pour les séries : on ne quitte l'écran que s'il a disparu
+     avec le titre, et on revient alors d'où l'on vient. */
+  if(view==='movie') goBack(); else render();
 }

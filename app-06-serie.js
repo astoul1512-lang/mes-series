@@ -34,13 +34,20 @@ function viewShow(){
   if(nx && !s.pause){
     /* Le bouton de pause accompagne l'action principale au lieu de dormir dans
        le menu ⋮ : trois appuis pour mettre une série de côté, c'était deux de
-       trop. Icône seule — il ne doit pas concurrencer « marquer comme vu ». */
-    html += '<div class="wrap" style="padding-bottom:0"><div class="actions" style="padding:0">'+
-      '<button class="btn" onclick="quickWatch('+s.id+')">'+
-        I.check+' Marquer '+codeEp(nx.s,nx.e)+' comme vu</button>'+
-      '<button class="btn ghost carre" onclick="basculerPause('+s.id+')" '+
-        'title="Mettre en pause" aria-label="Mettre en pause">'+I.pause+'</button>'+
-      '</div>'+
+       trop. Icône seule — il ne doit pas concurrencer « marquer comme vu ».
+       Il ne s'affiche que sur une série commencée : mettre en pause quelque
+       chose qu'on n'a jamais ouvert ne veut rien dire, et c'est exactement ce
+       qu'Adrien a pu faire par erreur sur une série à 0/26. */
+    html += '<div class="wrap" style="padding-bottom:0">'+
+      (peutSeMettreEnPause(s)
+        ? '<div class="actions" style="padding:0">'+
+            '<button class="btn" onclick="quickWatch('+s.id+')">'+
+              I.check+' Marquer '+codeEp(nx.s,nx.e)+' comme vu</button>'+
+            '<button class="btn ghost carre" onclick="basculerPause('+s.id+')" '+
+              'title="Mettre en pause" aria-label="Mettre en pause">'+I.pause+'</button>'+
+          '</div>'
+        : '<button class="btn block" onclick="quickWatch('+s.id+')">'+
+            I.check+' Marquer '+codeEp(nx.s,nx.e)+' comme vu</button>')+
       '<div class="tiny muted center" style="margin-top:8px">'+esc(nx.n)+'</div></div>';
   } else if(s.next){
     html += '<div class="wrap" style="padding-bottom:0"><div class="card" style="padding:14px;text-align:center">'+
@@ -211,13 +218,24 @@ function showMenu(id){
   const s = db.shows[id];
   openSheet('<h3>'+esc(s.name)+'</h3><p class="small muted" style="margin:0 0 6px">Mise à jour : '+
       fmtDate(new Date(s.updated||Date.now()).toISOString().slice(0,10))+'</p>'+
-    '<button class="opt" onclick="basculerPause('+id+')">'+
-      (s.pause ? 'Reprendre cette série' : 'Mettre en pause')+'</button>'+
+    /* « Reprendre » reste toujours proposé — sans quoi une série mise en pause
+       par erreur avant cette règle n'aurait plus aucun moyen d'en sortir. */
+    (s.pause || peutSeMettreEnPause(s)
+      ? '<button class="opt" onclick="basculerPause('+id+')">'+
+          (s.pause ? 'Reprendre cette série' : 'Mettre en pause')+'</button>'
+      : '')+
     '<button class="opt" onclick="refreshShow('+id+')">Actualiser les épisodes</button>'+
     '<button class="opt" onclick="markAllAired('+id+')">Tout marquer comme vu</button>'+
     '<button class="opt" onclick="unmarkAll('+id+')">Tout décocher</button>'+
     '<button class="opt danger" onclick="removeShow('+id+')">Retirer de ma liste</button>'+
     '<button class="opt" onclick="closeSheet()">Annuler</button>');
+}
+
+/* Une série jamais commencée n'a rien à mettre en pause : elle n'apparaît déjà
+   ni dans « À rattraper » ni dans le calendrier, la pause ne changerait rien.
+   Une série déjà en pause peut toujours reprendre, quel que soit son avancement. */
+function peutSeMettreEnPause(s){
+  return !!s && !s.pause && progress(s).watched > 0;
 }
 
 /* Mettre de côté sans rien perdre : la série quitte « À rattraper » et le
@@ -227,6 +245,9 @@ function basculerPause(id){
   const s = db.shows[id];
   if(!s) return;
   closeSheet();
+  /* Dernier rempart : l'écran peut être en retard sur la base. */
+  if(!s.pause && !peutSeMettreEnPause(s))
+    return toast('Commence-la d\'abord : il n\'y a rien à mettre en pause');
   if(s.pause){
     delete s.pause; delete s.pauseLe;
     s.updated = Date.now(); saveDB(); render();
@@ -250,7 +271,18 @@ async function refreshShow(id){
 }
 function markAllAired(id){ closeSheet(); marquerToutVu(id); }
 function unmarkAll(id){ closeSheet(); toutDecocher(id); }
-function removeShow(id){ markDeleted('shows',id); delete db.shows[id]; saveDB(); closeSheet(); go('follow'); }
+/* Retirer un titre ne doit pas déporter ailleurs. Sur sa propre fiche il faut
+   bien la quitter — elle n'existe plus — mais on revient d'où l'on vient, pas
+   systématiquement dans « À suivre » : venu de Découvrir, on y retourne.
+   Partout ailleurs (aperçu, liste, profil), l'écran reste valable et se
+   contente de se redessiner. */
+function removeShow(id){
+  const s = db.shows[id];
+  const nom = (s && s.name) || 'La série';
+  markDeleted('shows',id); delete db.shows[id]; saveDB(); closeSheet();
+  toast('« '+nom+' » retirée de ta liste');
+  if(view === 'show') goBack(); else render();
+}
 
 function toggleEp(id,s,e){
   const sh = db.shows[id], k = key(s,e);

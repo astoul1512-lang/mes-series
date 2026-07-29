@@ -737,9 +737,16 @@ function vignetteSugg(x){
 function panneauProfil(){
   const p = explicationProfil();
   const bouts = [];
-  if(p.bases.length)   bouts.push('<b>Je pars de</b> '+esc(p.bases.join(', ')));
-  if(p.genres.length)  bouts.push('<b>'+(p.manuels ? 'Tes genres' : 'J\'en déduis')+'</b> '+
-                                  esc(p.genres.join(', ')));
+  const v = p.volume;
+  if(v.series || v.films)
+    bouts.push('<b>Je pars de</b> '+
+      [v.series ? v.series+' série'+(v.series>1?'s':'') : '',
+       v.films  ? v.films+' film'+(v.films>1?'s':'')    : ''].filter(Boolean).join(' et '));
+  /* Une ligne par famille : c'est le cœur du nouveau moteur, chaque sélection a
+     son propre profil de genres. L'annoncer ainsi rend le raisonnement lisible
+     d'un coup d'œil. */
+  p.parFamille.forEach(f=>
+    bouts.push('<b>Tes '+esc(f.nom)+'</b> '+esc(f.genres.join(', '))));
   if(p.acteurs.length) bouts.push('<b>Tu suis</b> '+esc(p.acteurs.join(', ')));
   if(p.exclus.length)  bouts.push('<b>J\'écarte</b> '+esc(p.exclus.join(', ')));
   if(!bouts.length)
