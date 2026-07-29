@@ -1,6 +1,6 @@
 :root{
-    --bg:#0f1115; --surface:#181b22; --surface2:#212530; --line:#2b303c;
-    --text:#e8eaf0; --muted:#8b92a4; --accent:#ff6b57; --accent-dim:#ff6b5722;
+    --bg:#07070a; --surface:#121319; --surface2:#1a1c25; --line:#262a35;
+    --text:#eef0f5; --muted:#8b92a4; --accent:#3d8bff; --accent-dim:#3d8bff22;
     --ok:#3ecf8e; --warn:#ffb84d; --radius:14px;
     --safe-b:env(safe-area-inset-bottom,0px);
     --safe-t:env(safe-area-inset-top,0px);
@@ -64,7 +64,7 @@
   .etapes{margin:22px 0 22px;padding:0 0 0 20px;color:var(--text);font-size:14.5px;line-height:1.55}
   .etapes li{margin-bottom:10px}
   .etapes li::marker{color:var(--accent);font-weight:750}
-  .accerr{margin-top:12px;background:#ff6b5718;border:1px solid #ff6b5755;color:#ffb1a3;
+  .accerr{margin-top:12px;background:#3d8bff18;border:1px solid #3d8bff55;color:#a9c8ff;
     border-radius:11px;padding:10px 12px;font-size:13.5px}
   .accliens{display:flex;justify-content:center;gap:22px;margin-top:16px}
   .accliens button{color:var(--muted);font-size:13.5px;font-weight:650;padding:8px}
@@ -82,7 +82,7 @@
 
   /* ---------- Header ---------- */
   header{
-    position:sticky;top:0;z-index:30;background:rgba(15,17,21,.94);
+    position:sticky;top:0;z-index:30;background:rgba(7,7,10,.94);
     transform:translateZ(0);                 /* couche stable : évite le décrochage sur iOS */
     backdrop-filter:blur(18px) saturate(160%);-webkit-backdrop-filter:blur(18px) saturate(160%);
     border-bottom:1px solid var(--line);padding-top:var(--safe-t);
@@ -261,7 +261,7 @@
   .hero{position:relative;height:190px;background:var(--surface2);overflow:hidden}
   .hero img{width:100%;height:100%;object-fit:cover;opacity:.5}
   .hero::after{content:"";position:absolute;inset:0;
-    background:linear-gradient(to bottom,rgba(15,17,21,.25),var(--bg))}
+    background:linear-gradient(to bottom,rgba(7,7,10,.25),var(--bg))}
   .dhead{display:flex;gap:14px;padding:0 16px;margin-top:-58px;position:relative;z-index:2}
   .dhead .poster{width:92px;height:138px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
   .dmeta{padding-top:62px;min-width:0;flex:1}
@@ -307,7 +307,7 @@
   .cthumb{width:74px;height:42px;border-radius:7px;object-fit:cover;background:var(--surface2);flex:none}
 
   /* ---------- Nav ---------- */
-  nav{position:fixed;bottom:0;left:0;right:0;z-index:40;background:rgba(15,17,21,.97);
+  nav{position:fixed;bottom:0;left:0;right:0;z-index:40;background:rgba(7,7,10,.97);
     transform:translateZ(0);                 /* idem : la barre reste collée au bas de l'écran */
     backdrop-filter:blur(18px) saturate(160%);-webkit-backdrop-filter:blur(18px) saturate(160%);
     border-top:1px solid var(--line);padding-bottom:var(--safe-b);
@@ -325,7 +325,7 @@
   #navpip{position:absolute;top:0;left:0;width:25%;height:100%;pointer-events:none;
     transition:left .3s cubic-bezier(.3,.72,.3,1), opacity .2s}
   #navpip::before{content:'';position:absolute;left:50%;top:5px;transform:translateX(-50%);
-    width:56px;height:32px;border-radius:16px;background:rgba(255,107,87,.14)}
+    width:56px;height:32px;border-radius:16px;background:rgba(61,139,255,.15)}
   #navpip.cache{opacity:0}
   /* Le contenu glisse dans le sens du changement d'onglet — même tempo que la
      pastille, pour que la barre et l'écran racontent le même mouvement. */
