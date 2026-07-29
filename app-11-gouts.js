@@ -94,12 +94,50 @@ function titresAimes(){
     if(!p.total) return;
     const part = p.watched / p.total;
     if(isFinished(s) || part >= 0.5)
-      out.push({ media:'tv', id:s.id, nom:s.name, score: part * 100 + p.watched });
+      out.push({ media:'tv', id:s.id, nom:s.name, famille: familleDe(s, 'tv'),
+                 score: part * 100 + p.watched });
   });
   Object.values(db.movies).forEach(m=>{
-    if(m.seen) out.push({ media:'movie', id:m.id, nom:m.title, score: 60 });
+    if(m.seen) out.push({ media:'movie', id:m.id, nom:m.title, famille:'film', score: 60 });
   });
   return out.sort((a,b)=>b.score-a.score);
+}
+
+/* De quelle famille relève un titre de la bibliothèque : film, animé, ou série.
+   La langue d'origine n'est pas conservée localement — on se fie donc au genre
+   « Animation », qui suffit à séparer ce qu'Adrien appelle ses animés du reste
+   de ses séries. C'est une approximation assumée : un dessin animé occidental
+   compterait comme un animé. Elle ne sert qu'à répartir les points de départ,
+   jamais à filtrer un résultat. */
+function familleDe(o, media){
+  if(media === 'movie') return 'film';
+  return (o.genres||[]).some(g=>/^animation$/i.test(String(g))) ? 'anime' : 'serie';
+}
+
+/* Les titres qui servent de point de départ aux recommandations.
+   Sur « Tout », les prendre par score pur donnait six animés d'affilée : ce
+   sont eux qu'Adrien a le plus avancés, et One Piece pèse mille épisodes. On
+   pioche donc à tour de rôle dans les trois familles, pour que la vitrine
+   parte de films, de séries ET d'animés — sa demande, mot pour mot. */
+const FAMILLES = ['serie', 'film', 'anime'];
+function grainesSuggestions(cadre, combien){
+  const aimes = titresAimes().filter(t => cadre.medias.indexOf(t.media) >= 0);
+  /* Une puce précise ne mélange rien : son cadre est déjà la variété voulue. */
+  if(cadre.anime !== null) return aimes.slice(0, combien);
+
+  const paniers = {};
+  FAMILLES.forEach(f => { paniers[f] = aimes.filter(t => t.famille === f); });
+  const out = [];
+  for(let tour = 0; out.length < combien; tour++){
+    let pris = 0;
+    FAMILLES.forEach(f=>{
+      if(out.length >= combien) return;
+      const t = paniers[f][tour];
+      if(t){ out.push(t); pris++; }
+    });
+    if(!pris) break;                        // tous les paniers sont épuisés
+  }
+  return out;
 }
 
 /* Déjà dans la bibliothèque ? Alors ce n'est pas une découverte. */
@@ -247,7 +285,9 @@ async function chargerSuggestions(force){
        C'est le choix d'Adrien : « ce que tu as vraiment regardé » d'abord, les
        genres seulement en bouche-trou. On tire donc de six titres au lieu de
        trois, et on n'ira chercher le catalogue que si ça ne suffit pas. */
-    const aimes = titresAimes().filter(t => cadre.medias.indexOf(t.media) >= 0).slice(0, 6);
+    /* Quatre points de départ sur « Tout » plutôt que six : au-delà, les rangées
+       personnelles occupent tout l'écran et l'on ne voit plus rien d'autre. */
+    const aimes = grainesSuggestions(cadre, cadre.anime === null ? 4 : 6);
     const acteurs = ((db.gouts||{}).acteurs || []).slice(0, 3);
 
     const persos = await Promise.all([
@@ -396,7 +436,11 @@ function rangeesSuggerees(){
    complète, sans écrire le raisonnement à deux endroits. */
 function explicationProfil(){
   const g = db.gouts || {};
-  const bases = titresAimes().slice(0, 3).map(t=>t.nom);
+  /* Les titres annoncés doivent être ceux dont les rangées partent réellement,
+     pas les trois mieux notés de la bibliothèque : sur « Tout », les deux
+     listes divergeaient depuis que les points de départ sont répartis. */
+  const cadre = cadreSugg((ui.disc && ui.disc.type) || 'tout');
+  const bases = grainesSuggestions(cadre, 3).map(t=>t.nom);
   const manuels = (g.genres||[]).length > 0;
   const genres = genresRetenus();
   return {
