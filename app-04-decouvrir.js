@@ -729,39 +729,6 @@ function vignetteSugg(x){
   '</button>';
 }
 
-/* Le panneau « voilà sur quoi je me base ».
-   Adrien, mot pour mot : « je ne sais pas ce que l'app croit savoir ». Tant que
-   le raisonnement reste caché, une suggestion ratée passe pour de l'arbitraire.
-   Il est posé juste sous le carrousel, là où la question se pose — pas rangé
-   dans un écran de réglages qu'on n'ouvre jamais. */
-function panneauProfil(){
-  const p = explicationProfil();
-  const bouts = [];
-  const v = p.volume;
-  if(v.series || v.films)
-    bouts.push('<b>Je pars de</b> '+
-      [v.series ? v.series+' série'+(v.series>1?'s':'') : '',
-       v.films  ? v.films+' film'+(v.films>1?'s':'')    : ''].filter(Boolean).join(' et '));
-  /* Une ligne par famille : c'est le cœur du nouveau moteur, chaque sélection a
-     son propre profil de genres. L'annoncer ainsi rend le raisonnement lisible
-     d'un coup d'œil. */
-  p.parFamille.forEach(f=>
-    bouts.push('<b>Tes '+esc(f.nom)+'</b> '+esc(f.genres.join(', '))));
-  if(p.acteurs.length) bouts.push('<b>Tu suis</b> '+esc(p.acteurs.join(', ')));
-  if(p.exclus.length)  bouts.push('<b>J\'écarte</b> '+esc(p.exclus.join(', ')));
-  if(!bouts.length)
-    bouts.push('Je n\'ai encore rien pour me régler sur toi : coche quelques épisodes, '+
-               'ou dis-moi ce que tu aimes.');
-  return '<div class="wrap" style="padding-top:14px;padding-bottom:2px">'+
-    '<div class="profcarte">'+
-      '<div class="proftitre">'+I.boussole+' Sur quoi je me base</div>'+
-      '<div class="proflignes">'+bouts.map(b=>'<div>'+b+'</div>').join('')+'</div>'+
-      '<div class="tiny muted" style="margin-top:8px">'+esc(p.origine)+'</div>'+
-      '<button class="btn ghost block" style="margin-top:12px" '+
-        'onclick="go(\'gouts\',{from:\'discover\'})">Corriger ce que tu aimes</button>'+
-    '</div></div>';
-}
-
 function vitrineBody(){
   const e = suggCourantes().etat;
   if(e === 'froid' || e === 'attente')
@@ -774,18 +741,11 @@ function vitrineBody(){
 
   const rangees = rangeesSuggerees();
   if(!suggestions.vedettes.length && !rangees.length)
-    /* L'écran vide est justement celui où l'on se demande pourquoi : le panneau
-       d'explication y a plus sa place qu'ailleurs. */
     return '<div class="empty">'+I.boussole+'<h3>Rien à proposer '+esc(dansCettePuce())+'</h3>'+
       '<p>Ajoute une série ou un film : les suggestions se règlent sur ce que tu regardes.</p>'+
-      '<button class="btn ghost" onclick="ouvrirChamp()">Chercher un titre</button></div>'+
-      panneauProfil();
+      '<button class="btn ghost" onclick="ouvrirChamp()">Chercher un titre</button></div>';
 
   let html = carrouselVedettes(suggestions.vedettes);
-  /* Le panneau vient juste après le carrousel : on voit d'abord les
-     propositions, puis pourquoi elles sont là. L'inverse ferait un écran qui
-     s'explique avant d'avoir rien montré. */
-  html += panneauProfil();
   rangees.forEach(r=>{
     html += '<div class="sectitle">'+esc(r.titre)+'</div>'+
       '<div class="rangee">'+r.l.map(vignetteSugg).join('')+'</div>';
