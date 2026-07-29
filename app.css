@@ -581,6 +581,13 @@
   .note svg{width:12px;height:12px}
   .actions{display:flex;gap:10px;padding:16px 16px 0}
   .actions .btn{flex:1}
+  /* Bouton d'icône seule posé à côté de l'action principale : il ne prend que
+     sa propre largeur, et ne lui dispute pas la place. */
+  .actions .btn.carre{flex:none;width:48px;padding:11px 0}
+  .actions .btn.carre svg{width:19px;height:19px}
+  /* Une série déjà en pause : le bouton porte la couleur de l'état plutôt que
+     de laisser deviner ce que l'icône veut dire. */
+  .actions .btn.carre.actif{background:#ffb84d1e;color:var(--warn)}
   .cast{display:flex;gap:12px;overflow-x:auto;padding:2px 16px 4px;scrollbar-width:none}
   .cast::-webkit-scrollbar{display:none}
   /* Même précaution que pour les vignettes : sans `min-width:0`, un nom long

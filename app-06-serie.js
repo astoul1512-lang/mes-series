@@ -32,8 +32,15 @@ function viewShow(){
   }
 
   if(nx && !s.pause){
-    html += '<div class="wrap" style="padding-bottom:0"><button class="btn block" onclick="quickWatch('+s.id+')">'+
-      I.check+' Marquer '+codeEp(nx.s,nx.e)+' comme vu</button>'+
+    /* Le bouton de pause accompagne l'action principale au lieu de dormir dans
+       le menu ⋮ : trois appuis pour mettre une série de côté, c'était deux de
+       trop. Icône seule — il ne doit pas concurrencer « marquer comme vu ». */
+    html += '<div class="wrap" style="padding-bottom:0"><div class="actions" style="padding:0">'+
+      '<button class="btn" onclick="quickWatch('+s.id+')">'+
+        I.check+' Marquer '+codeEp(nx.s,nx.e)+' comme vu</button>'+
+      '<button class="btn ghost carre" onclick="basculerPause('+s.id+')" '+
+        'title="Mettre en pause" aria-label="Mettre en pause">'+I.pause+'</button>'+
+      '</div>'+
       '<div class="tiny muted center" style="margin-top:8px">'+esc(nx.n)+'</div></div>';
   } else if(s.next){
     html += '<div class="wrap" style="padding-bottom:0"><div class="card" style="padding:14px;text-align:center">'+

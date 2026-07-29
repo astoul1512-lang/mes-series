@@ -313,10 +313,22 @@ function viewPreview(){
 
   /* Boutons d'action */
   if(isTv){
+    /* Une série déjà dans la liste peut se mettre de côté d'ici : le geste
+       n'existait qu'au fond du menu ⋮ de sa propre fiche, ou par appui long
+       depuis « À rattraper ». Bouton d'icône seule, posé à côté de l'action
+       principale — discret, comme demandé, mais toujours à portée. */
+    const s0 = db.shows[d.id];
+    const enPause = !!(s0 && s0.pause);
     html += '<div class="actions">'+ (inList
-      ? '<button class="btn" onclick="go(\'show\',{id:'+d.id+', from:\''+(params.from||'discover')+'\'})">'+I.eye+' Ouvrir ma fiche</button>'
+      ? '<button class="btn" onclick="go(\'show\',{id:'+d.id+', from:\''+(params.from||'discover')+'\'})">'+I.eye+' Ouvrir ma fiche</button>'+
+        '<button class="btn ghost carre'+(enPause?' actif':'')+'" onclick="basculerPause('+d.id+')" '+
+          'title="'+(enPause?'Reprendre cette série':'Mettre en pause')+'" '+
+          'aria-label="'+(enPause?'Reprendre cette série':'Mettre en pause')+'">'+
+          (enPause ? I.play : I.pause)+'</button>'
       : '<button class="btn" id="addbtn" onclick="addOrOpenShow('+d.id+')">'+I.plus+' Ajouter à ma liste</button>')
-      +'</div>';
+      +'</div>'+
+      (enPause ? '<div class="wrap" style="padding:8px 16px 0"><div class="tiny muted center">'+
+        'En pause : elle n\'apparaît ni dans « À rattraper » ni dans le calendrier.</div></div>' : '');
   } else {
     const m = db.movies[d.id];
     html += '<div class="actions">'+
