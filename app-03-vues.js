@@ -27,6 +27,7 @@ function premiereFois(){
 function corpsDeVue(){
   if(view==='follow')   return viewFollow();
   if(view==='discover') return viewDiscover();
+  if(view==='search')   return viewRecherche();
   if(view==='profile')  return viewProfile();
   if(view==='settings') return viewSettings();
   if(view==='show')     return viewShow();
@@ -116,6 +117,9 @@ function render(){
     montrerAstuceCloche();
   /* Une seule fois : la démonstration du glissement sur une ligne d'abonnement. */
   if(view==='abos' && typeof montrerAstuceGlis === 'function') montrerAstuceGlis();
+  /* L'onglet Recherche ne charge rien tout seul : au repos il n'a aucune
+     requête à faire, et c'est justement ce qui le distingue de Découvrir. */
+  if(view==='search' && typeof centrerCritereActif === 'function') centrerCritereActif();
   if(view==='discover'){
     /* E2 — plus de focus automatique : le champ est là dès l'ouverture, et
        ouvrir Découvrir n'est pas vouloir taper. Le clavier ne se lève que si
@@ -133,6 +137,7 @@ function renderNav(){
      d'À suivre en est restée, elle avait fait ses preuves. */
   const tabs = [
     ['discover','Découvrir',I.boussole],
+    ['search','Recherche',I.search],
     ['follow','En cours',I.cal],
     ['profile','Mon profil',I.user]
   ];
@@ -142,7 +147,7 @@ function renderNav(){
      voir » arrivait avec from:'rangee', que personne ne savait rattacher, et
      plus aucun onglet n'était allumé. Une barre éteinte se lit comme une
      panne, pas comme une nuance. */
-  const TAB_DIRECT = { discover:'discover', follow:'follow', profile:'profile',
+  const TAB_DIRECT = { discover:'discover', search:'search', follow:'follow', profile:'profile',
     preview:'discover', rangee:'discover',
     account:'profile', abos:'profile', biblio:'profile', moi:'profile',
     notifs:'profile', clochettes:'profile' };
