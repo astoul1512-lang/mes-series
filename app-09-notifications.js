@@ -46,15 +46,21 @@ function migrerNotif(){
   if(!db.notif || typeof db.notif !== 'object') db.notif = {};
   const n = db.notif;
   if(typeof n.actif !== 'boolean') n.actif = false;
-  if(n.quand !== 'sortie' && n.quand !== 'soir' && n.quand !== 'samedi') n.quand = 'sortie';
-  /* Le résumé du soir était le défaut d'une version précédente. Personne ne
-     l'avait choisi, et il ne fait que répéter ce que « À rattraper » montre
-     déjà : on repasse à l'événement, une notification par sortie. Un choix
-     fait à la main, lui, est respecté pour toujours. */
+  /* I9 — il n'y a plus qu'une fréquence. « Un résumé le soir » et « le samedi »
+     étaient affichés, choisissables… et jamais implémentés côté serveur, qui
+     saute toute personne dont `quand` vaut autre chose que `sortie`. Les
+     choisir n'espaçait donc pas les notifications : ça les ÉTEIGNAIT, sans le
+     dire. Le champ reste — le serveur le lit — mais il ne vaut plus que
+     `sortie`, et l'écran ne propose plus de choix.
+     La bascule d'une base existante est faite par la migration 3 (app-01), pas
+     ici : une transformation ponctuelle appartient au registre, un contrôle de
+     présence appartient à cette fonction (§B7). Le repli ci-dessous ne sert
+     qu'aux bases arrivées par la synchro depuis un appareil resté en arrière. */
+  if(n.quand !== 'sortie') n.quand = 'sortie';
   if(typeof n.quandChoisi !== 'boolean') n.quandChoisi = false;
-  if(!n.quandChoisi && n.quand === 'soir') n.quand = 'sortie';
-  if(!n.films || typeof n.films !== 'object') n.films = { cine:true, stream:true, vod:false };
-  ['cine','stream','vod'].forEach(k=>{ if(typeof n.films[k] !== 'boolean') n.films[k] = (k !== 'vod'); });
+  if(!n.films || typeof n.films !== 'object') n.films = { cine:true, maison:true };
+  normaliserFilmsNotif(n.films);
+  ['cine','maison'].forEach(k=>{ if(typeof n.films[k] !== 'boolean') n.films[k] = true; });
   if(!n.titres || typeof n.titres !== 'object') n.titres = {};
   /* Une cloche était un simple marqueur, vrai ou faux. Pour qu'elle puisse
      voyager d'un téléphone à l'autre, chacune retient désormais l'instant où
@@ -75,6 +81,24 @@ function migrerNotif(){
   /* Pourquoi la dernière inscription a échoué. Sans cette trace, un appareil
      qui n'arrive pas à s'abonner reste muet et l'app prétend le contraire. */
   if(n.erreur === undefined) n.erreur = null;
+}
+
+/* I8 — « Dispo en streaming » et « Sortie en VOD » étaient deux étiquettes pour
+   un seul événement : côté serveur, `stream` valait le type 4 de TMDB et `vod`
+   les types 4 et 5, or le type 5 (disque) est écarté partout ailleurs dans
+   l'app. Deux réglages qui se déclenchent sur la même donnée, c'est une
+   promesse de finesse que rien ne tient. Un seul : « À la maison ».
+
+   Le pliage vit dans une fonction à part parce qu'il s'applique à TROIS
+   entrées — la base locale (migration 3), une base réparée au démarrage, et un
+   objet venu d'un autre appareil par la synchro. Trois copies auraient divergé.
+   Idempotent : rejouable sans effet. */
+function normaliserFilmsNotif(f){
+  if(!f || typeof f !== 'object') return false;
+  const avaitAncien = typeof f.stream === 'boolean' || typeof f.vod === 'boolean';
+  if(typeof f.maison !== 'boolean' && avaitAncien) f.maison = !!(f.stream || f.vod);
+  delete f.stream; delete f.vod;
+  return avaitAncien;
 }
 
 function clocheAllumee(type, id){ return !!db.notif.titres[cleTitre(type,id)]; }
@@ -357,11 +381,17 @@ function fusionnerNotif(rem){
   /* Le réglage est un tout : on prend celui de l'appareil qui a tranché en
      dernier, plutôt que de mélanger deux choix contradictoires. */
   if((rem.maj || 0) > (n.maj || 0)){
-    if(rem.quand === 'sortie' || rem.quand === 'soir' || rem.quand === 'samedi') n.quand = rem.quand;
+    /* I9 — `quand` n'a plus qu'une valeur. Un appareil resté en arrière peut
+       encore envoyer `soir` ou `samedi` : on ne la reprend pas, sinon la
+       synchro rallumerait le réglage qui éteint tout. */
     if(typeof rem.quandChoisi === 'boolean') n.quandChoisi = rem.quandChoisi;
     if(rem.films && typeof rem.films === 'object'){
-      ['cine','stream','vod'].forEach(k=>{
-        if(typeof rem.films[k] === 'boolean') n.films[k] = rem.films[k];
+      /* I8 — l'objet distant peut porter l'ancienne forme. On le replie sur une
+         COPIE : `rem` appartient à la charge utile reçue, on n'y touche pas. */
+      const rf = Object.assign({}, rem.films);
+      normaliserFilmsNotif(rf);
+      ['cine','maison'].forEach(k=>{
+        if(typeof rf[k] === 'boolean') n.films[k] = rf[k];
       });
     }
     n.maj = rem.maj; change = true;
@@ -377,7 +407,7 @@ function boutonCloche(type, id){
   const on = clocheAllumee(type, id);
   return '<button class="iconbtn cloche'+(on?' on':'')+'" id="cloche-'+type+'-'+id+'" '+
     'aria-label="'+(on?'Ne plus me prévenir':'Me prévenir')+'" '+
-    'onclick="basculerCloche(\''+type+'\','+JSON.stringify(id)+')">'+
+    'onclick="basculerCloche(\\''+type+'\\','+JSON.stringify(id)+')">'+
     (on ? I.clochePleine : I.cloche)+'</button>';
 }
 
@@ -471,20 +501,17 @@ function resumeNotif(){
   return 'Activées · ' + t + ' série' + (t>1?'s':'') + ', ' + f + ' film' + (f>1?'s':'');
 }
 
-const QUANDS = [
-  { v:'sortie', t:'Dès la sortie',
-    d:'Une notification à chaque épisode qui sort et à chaque film qui sort. '+
-      'C\'est le réglage par défaut.' },
-  { v:'soir',   t:'Un résumé le soir · 19 h',
-    d:'Tout regroupé en une seule notification par jour, à 19 h. À choisir si '+
-      'les alertes à l\'unité deviennent trop nombreuses.' },
-  { v:'samedi', t:'Un résumé le samedi',
-    d:'Une seule notification par semaine, le samedi matin.' }
-];
+/* I9 — la liste `QUANDS` a disparu avec la section « Quand ». Deux de ses trois
+   entrées n'existaient pas côté serveur, et les choisir coupait tout. Le jour
+   où un résumé sera vraiment construit, le bon moment pour le proposer est
+   celui où le problème se pose — cinq notifications dans la même soirée — et
+   non une liste de réglages où personne ne va.
+
+   I8 — deux événements de film, plus trois. « Dispo en streaming » et « Sortie
+   en VOD » tapaient tous deux dans le type 4 de TMDB. */
 const EVENEMENTS_FILM = [
-  { v:'cine',   t:'Sortie au cinéma' },
-  { v:'stream', t:'Dispo en streaming' },
-  { v:'vod',    t:'Sortie en VOD' }
+  { v:'cine',   t:'En salle' },
+  { v:'maison', t:'À la maison' }
 ];
 
 function viewNotifications(){
@@ -521,27 +548,18 @@ function viewNotifications(){
       'téléphone : c\'est ce qui dit au serveur où envoyer.</div></div>';
   }
 
-  const quand = QUANDS.find(q=>q.v === db.notif.quand) || QUANDS[1];
-  html += '<div class="sectitle">Quand</div><div class="wrap" style="padding-top:0">'+
-    '<div class="fchips">'+
-      QUANDS.map(q=>'<button class="chip'+(db.notif.quand===q.v?' on':'')+'" '+
-        'onclick="choisirQuand(\''+q.v+'\')">'+q.t+'</button>').join('')+
-    '</div>'+
-    '<div class="small muted" style="margin-top:10px">'+esc(quand.d)+'</div>'+
-  '</div>';
-
   html += '<div class="sectitle">Mes films</div><div class="wrap" style="padding-top:0">'+
     '<div class="fchips">'+
       EVENEMENTS_FILM.map(f=>'<button class="chip'+(db.notif.films[f.v]?' on':'')+'" '+
-        'onclick="basculerEvenementFilm(\''+f.v+'\')">'+f.t+'</button>').join('')+
+        'onclick="basculerEvenementFilm(\\''+f.v+'\\')">'+f.t+'</button>').join('')+
     '</div>'+
     '<div class="small muted" style="margin-top:10px">Ces réglages ne concernent que les films '+
-    'où tu as allumé la cloche.</div>'+
+    'où tu as allumé la cloche. « À la maison » couvre le streaming et la location.</div>'+
   '</div>';
 
   const t = compterCloches('tv'), f = compterCloches('movie');
   html += '<div class="sectitle">Titres surveillés</div><div class="wrap" style="padding-top:0">'+
-    '<button class="reg" onclick="go(\'clochettes\',{from:\'notifs\'})">'+
+    '<button class="reg" onclick="go(\\'clochettes\\',{from:\\'notifs\\'})">'+
       '<i>'+I.cloche+'</i>'+
       '<span class="rtxt"><b>Voir la liste</b><em>'+
         t+' série'+(t>1?'s':'')+', '+f+' film'+(f>1?'s':'')+'</em></span>'+
@@ -550,16 +568,13 @@ function viewNotifications(){
     'depuis la fiche d\'une série ou d\'un film.</div>'+
   '</div>';
 
+  /* I9 — la promesse que l'app tient vraiment, écrite une fois, à la place du
+     choix de fréquence qui n'en était pas un. */
   html += '<div class="wrap tiny muted" style="padding-top:18px;padding-bottom:30px">'+
+    'Tu es prévenu dès qu\'un épisode ou un film que tu surveilles sort.<br><br>'+
     'Sur iPhone, la vignette d\'une notification est toujours l\'icône de l\'app : '+
     'Apple n\'autorise pas les affiches pour une app web.</div>';
   return html;
-}
-
-function choisirQuand(v){
-  if(db.notif.quand === v) return;
-  db.notif.quand = v; db.notif.quandChoisi = true; db.notif.maj = Date.now();
-  saveDB(); render(); poussserPlusTard(); scheduleSync();
 }
 function basculerEvenementFilm(v){
   db.notif.films[v] = !db.notif.films[v];
@@ -573,7 +588,14 @@ function basculerEvenementFilm(v){
 /* ---------- La liste des titres où la cloche est allumée ---------- */
 
 function viewClochettes(){
-  nettoyerCloches();
+  /* I9 — `nettoyerCloches()` était appelé ICI, c'est-à-dire depuis une fonction
+     de rendu. Il MUTE `db` (il retire les cloches des titres disparus et date
+     leur extinction) sans enregistrer : la modification attendait qu'un autre
+     geste appelle `saveDB` pour être écrite, et disparaissait si l'app se
+     fermait avant. Un rendu doit lire, jamais écrire.
+     Le nettoyage a lieu au démarrage (`boot`) et après une fusion distante
+     (`mergeRemote`), qui sont les deux seuls moments où un titre peut avoir
+     quitté la bibliothèque sans que les cloches l'aient su. */
   let html = header('Titres surveillés', {back:"goBack()"});
 
   const series = Object.values(db.shows)
@@ -587,7 +609,7 @@ function viewClochettes(){
   }
 
   const rang = (type, id, nom, sous, poster)=>
-    '<button class="srow clic" onclick="basculerCloche(\''+type+'\','+JSON.stringify(id)+')">'+
+    '<button class="srow clic" onclick="basculerCloche(\\''+type+'\\','+JSON.stringify(id)+')">'+
       posterEl(poster,'w185','',nom)+
       '<div class="sinfo"><div class="sname">'+esc(nom)+'</div>'+
         '<div class="snext">'+esc(sous)+'</div></div>'+
