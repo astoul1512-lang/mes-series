@@ -43,23 +43,27 @@ function viewAbos(){
       'style="text-transform:uppercase;letter-spacing:.12em;text-align:center;font-weight:700">'+
       '<button class="btn block" style="margin-top:10px" '+
         'onclick="utiliserCode(document.getElementById(\'codein\').value)">Valider le code</button>')+
-    ligneAction('code', 'Me faire suivre', 'Générer un code à donner', I.user,
-      (partage.code
-        ? '<div class="codebox">'+esc(partage.code)+'</div>'+
-          '<div class="small muted" style="text-align:center">Valable 24 h, une seule utilisation. '+
-          'Transmets-le à la personne de ton choix.</div>'+
-          '<button class="btn ghost block" style="margin-top:12px" onclick="genererCode()">Générer un autre code</button>'
-        : '<div class="small muted" style="margin-bottom:10px">Génère un code et donne-le à qui tu veux. '+
-          'Tant que tu n\'en donnes pas, personne ne voit ta bibliothèque.</div>'+
-          '<button class="btn block" onclick="genererCode()">Générer mon code</button>'))+
+    ligneAction('code', 'Me faire suivre',
+      partage.code ? 'Un code actif · '+resteCode() : 'Générer un code à donner', I.user,
+      voletCode())+
   '</div>';
 
-  /* --- le serveur n'est pas encore préparé --- */
+  /* --- le partage ne répond pas --- */
+  /* I4 — cet écran affichait des instructions SQL à quiconque tombait sur une
+     coupure réseau ou un jeton expiré. L'app est livrée avec un serveur
+     préconfiguré : PERSONNE n'a de fichier à exécuter. Pire, depuis A3, jouer
+     ce fichier-là dégraderait la sécurité — la policy de lecture des profils y
+     était en `using(true)` sous un ancien nom. Le détail part en console. */
   if(partage.erreur && !partage.charge){
-    html += '<div class="wrap" style="padding-top:0"><div class="banner" style="margin:0">'+
-      '<b>Le partage n\'est pas encore activé sur ton serveur.</b><br>'+
-      'Il reste à exécuter le fichier <code>supabase-partage.sql</code> dans Supabase '+
-      '(SQL Editor → New query → Run). Le reste de l\'app fonctionne normalement.</div></div>';
+    console.warn('partage indisponible : ' + partage.erreur);
+    html += '<div class="wrap" style="padding-top:0"><div class="banner" style="margin:0;'+
+      'display:flex;align-items:center;gap:12px">'+
+      '<div style="flex:1"><b>Le partage est momentanément indisponible.</b><br>'+
+      '<span class="small">Tes abonnements et ta bibliothèque ne sont pas touchés.</span></div>'+
+      '<button class="btn" style="flex:0 0 auto;padding:9px 16px"'+
+        (partage.occupe ? ' disabled' : '')+' onclick="chargerPartage()">'+
+        (partage.occupe ? '…' : 'Réessayer')+'</button>'+
+      '</div></div>';
     return html + '<div style="height:26px"></div>';
   }
 
@@ -71,6 +75,10 @@ function viewAbos(){
 
   const vide = t => '<div class="wrap" style="padding-top:0"><div class="card" style="padding:15px;text-align:center">'+
     '<span class="small muted">'+t+'</span></div></div>';
+
+  /* I6 — en tête, avant les listes de personnes : c'est la seule chose de cet
+     écran qui demande une réponse. */
+  html += blocConseilsRecus();
 
   html += '<div class="sectitle">Mes abonnements'+
     (partage.suivis.length?'<span class="cnt">'+partage.suivis.length+'</span>':'')+'</div>';
@@ -89,6 +97,221 @@ function viewAbos(){
      qu'une phrase permanente — voir `montrerAstuceGlis`. */
 
   return html + '<div style="height:26px"></div>';
+}
+
+/* ---------------------------------------------------------------------------
+   I1 + I2 — le code de partage : le transmettre, et savoir lequel est vivant.
+
+   I1. Le code s'affichait dans une boîte en `user-select:all`, ce qui est la
+   bonne intention — mais `body` porte `-webkit-touch-callout:none`, donc iOS
+   ne propose pas son menu « Copier » au long appui. Sur l'appareil que l'app
+   vise en premier, le seul moyen de transmettre son code était de le dicter.
+   Deux boutons, donc. « Envoyer » n'apparaît que si le navigateur sait
+   partager : un bouton qui ne fait rien serait pire que pas de bouton.
+
+   I2. « Générer un autre code » ne remplaçait rien : il ajoutait. L'action
+   s'appelle maintenant ce qu'elle est, et demande confirmation, parce qu'elle
+   invalide un code peut-être déjà donné à quelqu'un.
+--------------------------------------------------------------------------- */
+function partagePossible(){
+  return typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+}
+
+/* Le temps qui reste, en clair. Recalculé à chaque rendu et non rafraîchi par
+   une minuterie : l'écran n'est pas fait pour être regardé une heure, et une
+   minuterie de plus est une fuite d'écouteur de plus (§B10). */
+function resteCode(){
+  const t = partage.expire ? partage.expire - Date.now() : 0;
+  if(!partage.expire) return 'valable 24 h';
+  if(t <= 0) return 'expiré';
+  const h = Math.floor(t / 3600000), m = Math.floor((t % 3600000) / 60000);
+  if(h >= 1) return 'expire dans ' + h + ' h ' + (m < 10 ? '0' : '') + m;
+  if(m >= 1) return 'expire dans ' + m + ' min';
+  return 'expire dans moins d\'une minute';
+}
+
+function voletCode(){
+  if(!partage.code){
+    return '<div class="small muted" style="margin-bottom:10px">Génère un code et donne-le à qui tu veux. '+
+      'Tant que tu n\'en donnes pas, personne ne voit ta bibliothèque.</div>'+
+      '<button class="btn block" onclick="genererCode()">Générer mon code</button>';
+  }
+  return '<div class="codebox">'+esc(partage.code)+'</div>'+
+    '<div class="small muted" style="text-align:center;margin-bottom:12px">'+
+      'Une seule utilisation · <b>'+esc(resteCode())+'</b></div>'+
+    /* `.actions` porte un `padding:16px 16px 0` prévu pour une fiche pleine
+       largeur ; ici le volet a déjà le sien, d'où la remise à zéro. */
+    '<div class="actions" style="padding:0">'+
+      '<button class="btn" onclick="copierCode()">Copier</button>'+
+      (partagePossible() ? '<button class="btn ghost" onclick="envoyerCode()">Envoyer</button>' : '')+
+    '</div>'+
+    '<button class="lienplus" style="display:block;width:100%;text-align:center" '+
+      'onclick="confirmerAnnulationCode()">Annuler ce code</button>'+
+    /* Remplacer reste possible, mais ce n'est plus une action anodine posée en
+       bas d'un panneau : elle porte son vrai nom et passe par une confirmation. */
+    '<button class="lienplus" style="display:block;width:100%;text-align:center;color:var(--muted)" '+
+      'onclick="confirmerRemplacementCode()">Remplacer par un nouveau code</button>';
+}
+
+const messageCode = c => 'Mon code Mes Séries : ' + c;
+
+async function copierCode(){
+  const c = partage.code;
+  if(!c) return;
+  try{
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(c);
+    }else if(!copiePapierDeSecours(c)){
+      throw new Error('presse-papiers indisponible');
+    }
+    toast('Code copié');
+  }catch(e){
+    /* P2 — on ne fait pas semblant d'avoir réussi. Le code reste lisible à
+       l'écran : on dit quoi faire plutôt que de laisser croire. */
+    console.warn('copie impossible', e);
+    toast('Copie impossible — note le code affiché');
+  }
+}
+
+/* Repli pour les contextes où `navigator.clipboard` n'existe pas (page servie
+   en http, vieux navigateur). `execCommand` est déprécié mais reste le seul
+   recours ; il exige que la sélection soit visible, d'où le champ posé hors
+   écran plutôt que `display:none`, qui empêcherait la sélection. */
+function copiePapierDeSecours(txt){
+  try{
+    const z = document.createElement('textarea');
+    z.value = txt;
+    z.setAttribute('readonly','');
+    z.style.cssText = 'position:fixed;top:0;left:-9999px;opacity:0';
+    document.body.appendChild(z);
+    z.select(); z.setSelectionRange(0, txt.length);
+    const ok = document.execCommand('copy');
+    document.body.removeChild(z);
+    return ok;
+  }catch(e){ return false; }
+}
+
+async function envoyerCode(){
+  const c = partage.code;
+  if(!c) return;
+  try{
+    await navigator.share({ text: messageCode(c) });
+  }catch(e){
+    /* Fermer la feuille de partage iOS rejette la promesse avec `AbortError` :
+       ce n'est pas une panne, c'est un changement d'avis. Rien à dire. */
+    if(e && e.name === 'AbortError') return;
+    console.warn('partage impossible', e);
+    copierCode();
+  }
+}
+
+function confirmerRemplacementCode(){
+  const c = partage.code;
+  openSheet('<h3>Remplacer le code ?</h3>'+
+    '<p class="small muted" style="margin:0 0 8px"><b>'+esc(c)+'</b> cessera immédiatement de '+
+    'fonctionner. Si tu l\'as déjà donné à quelqu\'un, il ne pourra plus s\'en servir.</p>'+
+    '<button class="opt danger" onclick="closeSheet();genererCode()">Remplacer par un nouveau code</button>'+
+    '<button class="opt" onclick="closeSheet()">Annuler</button>');
+}
+function confirmerAnnulationCode(){
+  const c = partage.code;
+  openSheet('<h3>Annuler ce code ?</h3>'+
+    '<p class="small muted" style="margin:0 0 8px"><b>'+esc(c)+'</b> ne fonctionnera plus. '+
+    'Personne de nouveau ne pourra voir ta bibliothèque tant que tu n\'auras pas généré '+
+    'un autre code. Tes abonnés actuels ne sont pas touchés.</p>'+
+    '<button class="opt danger" onclick="closeSheet();annulerCode()">Annuler ce code</button>'+
+    '<button class="opt" onclick="closeSheet()">Revenir</button>');
+}
+
+/* ---------------------------------------------------------------------------
+   I6 — recommander un titre à quelqu'un de son cercle.
+
+   Le cercle, c'est l'union des deux listes : les gens que je suis et ceux qui
+   me suivent. C'est exactement ce que `dans_mon_cercle()` accepte côté base ;
+   les deux définitions doivent rester d'accord, sinon l'interface proposerait
+   des gens que le serveur refusera.
+
+   OÙ S'AFFICHE CE QU'ON REÇOIT. La bonne place est l'onglet « À suivre », dans
+   une section « On te conseille » — c'est là qu'on regarde ce qu'on va
+   regarder. Cet écran vit dans app-03, tenu par un autre chantier : la liste
+   est donc posée ici, en tête de « Mes abonnements », qui est l'écran du
+   partage. À déplacer quand app-03 se libère ; le rendu ci-dessous est écrit
+   pour être déplaçable tel quel.
+--------------------------------------------------------------------------- */
+function cercle(){
+  const vus = {};
+  return (partage.suivis || []).concat(partage.abonnes || [])
+    .filter(p => p && p.id && !vus[p.id] && (vus[p.id] = 1));
+}
+function nomDuCercle(id){
+  const p = cercle().find(x => String(x.id) === String(id));
+  return (p && p.pseudo) || 'Quelqu\'un';
+}
+
+function menuRecommander(type, id){
+  const gens = cercle();
+  const titre = type === 'tv' ? (db.shows[id] && db.shows[id].name)
+                              : (db.movies[id] && db.movies[id].title);
+  if(!gens.length) return toast('Personne dans ton cercle pour l\'instant');
+  /* Déjà conseillé à cette personne : on le dit au lieu de laisser renvoyer
+     dans le vide — la contrainte d'unicité côté base ignore le doublon, donc
+     sans cette mention le second envoi n'aurait aucun effet visible. */
+  const dejaFait = p => (conseils.envoyees || []).some(r =>
+    String(r.vers) === String(p.id) && r.type === type && String(r.tmdb_id) === String(id));
+  openSheet('<h3>Recommander</h3>'+
+    '<p class="small muted" style="margin:0 0 6px">'+esc(titre || 'Ce titre')+'</p>'+
+    gens.map(p =>
+      '<button class="opt" style="display:flex;align-items:center;gap:12px"'+
+        (dejaFait(p) ? ' disabled' : '')+
+        ' onclick="closeSheet();recommander(\''+esc(type)+'\','+Number(id)+
+          ',\''+escJs(titre||'')+'\',\''+escJs(p.id)+'\')">'+
+        avatarDe(p, 'moyen')+
+        '<span>'+esc(p.pseudo)+
+          (dejaFait(p) ? '<em style="display:block;font-style:normal;font-size:12px;color:var(--muted)">Déjà conseillé</em>' : '')+
+        '</span>'+
+      '</button>').join('')+
+    '<button class="opt annuler" onclick="closeSheet()">Annuler</button>');
+}
+
+/* Ce qu'on m'a conseillé. Une seule action franche — aller voir — et une
+   sortie — écarter. Pas de bouton « Ajouter » direct : ajouter sans avoir vu
+   de quoi il s'agit, c'est ce que personne ne fait. */
+function blocConseilsRecus(){
+  const l = (conseils.recues || []);
+  if(!l.length) return '';
+  return '<div class="sectitle">On te conseille<span class="cnt">'+l.length+'</span></div>'+
+    '<div class="list">'+l.map(r=>{
+      const idOk = estIdTmdb(r.tmdb_id) && (r.type === 'tv' || r.type === 'movie');
+      return '<div class="srow" style="align-items:center">'+
+        '<div class="sinfo">'+
+          '<div class="sname">'+esc(r.titre || 'Un titre')+'</div>'+
+          '<div class="tiny muted">'+esc(nomDuCercle(r.de))+' te le conseille'+
+            (dejaChezMoi(r.type === 'tv' ? 'tv' : 'movie', r.tmdb_id) ? ' · déjà chez toi' : '')+'</div>'+
+          '<div class="actions" style="padding:8px 0 0">'+
+            (idOk ? '<button class="btn mini" onclick="ouvrirConseil(\''+escJs(r.id)+'\','+
+                      Number(r.tmdb_id)+',\''+esc(r.type)+'\')">Voir</button>' : '')+
+            '<button class="btn mini ghost" onclick="ecarterConseil(\''+escJs(r.id)+'\')">Non merci</button>'+
+          '</div>'+
+        '</div>'+
+      '</div>';
+    }).join('')+'</div>';
+}
+
+/* Ouvrir vaut « vu » : la marque part sans qu'on attende sa réponse, elle ne
+   décide de rien à l'écran. */
+function ouvrirConseil(idReco, id, type){
+  marquerConseilVu(idReco);
+  ouvrirTitre(id, type, 'abos');
+}
+async function marquerConseilVu(idReco){
+  const r = (conseils.recues || []).find(x => x.id === idReco);
+  if(!r || r.vu) return;
+  r.vu = new Date().toISOString();
+  try{
+    await sbFetch('/rest/v1/recommandations?id=eq.'+encodeURIComponent(idReco),
+      { method:'PATCH', headers:{ Prefer:'return=minimal' },
+        body: JSON.stringify({ vu: r.vu }) });
+  }catch(e){ console.warn('marque « vu » non enregistrée', e); }
 }
 
 function basculerPanneauAbo(cle){
@@ -141,8 +364,26 @@ function ligneAbo(p, role){
         '<div class="tiny muted">'+(role==='suiveur' ? 'Tu vois sa bibliothèque' : 'Voit ta bibliothèque')+'</div>'+
       '</div>'+
       (role==='suiveur' ? '<span class="ecaret">'+I.caret+'</span>' : '')+
+      /* I3 — la seconde porte. L'action ne vivait que derrière un glissement,
+         donc derrière `ontouchstart` : sur un ordinateur, se désabonner ou
+         retirer un accès était tout bonnement IMPOSSIBLE, et l'était de même
+         pour qui a du mal avec un geste précis. Le glissement reste, inchangé ;
+         ce bouton ouvre exactement la même feuille.
+         C'est la décision déjà prise pour la mise en pause : « ne doit pas
+         dépendre d'un appui long que personne ne devine ». */
+      '<button class="ecaret" aria-haspopup="menu" '+
+        'aria-label="Actions pour '+esc(p.pseudo)+'" '+
+        'style="flex:none;width:36px;height:36px;border-radius:9px;background:var(--surface2)" '+
+        'onclick="menuAbo(event,\''+p.id+'\',\''+role+'\')">'+I.dots+'</button>'+
     '</div>'+
   '</div>';
+}
+
+/* Le bouton vit DANS la rangée, qui porte déjà un `onclick` : sans arrêt de la
+   propagation, un appui ouvrirait la feuille puis la bibliothèque derrière. */
+function menuAbo(e, id, role){
+  if(e){ e.stopPropagation(); e.preventDefault(); }
+  confirmerRupture(id, role);
 }
 
 function rangeeGlis(cle){
@@ -231,6 +472,13 @@ function confirmerRupture(id, role){
   openSheet('<h3>'+esc(nom)+'</h3>'+
     '<p class="small muted" style="margin:0 0 8px">'+
       (role==='suiveur' ? 'Tu ne verras plus sa bibliothèque.' : 'Cette personne ne verra plus la tienne.')+'</p>'+
+    /* I3 — la feuille sert désormais les DEUX portes : le glissement, qui
+       n'avait qu'une action à confirmer, et le bouton ⋮, qui a besoin d'une
+       issue non destructrice. D'où cette première entrée, absente au clavier
+       et à la souris jusqu'ici. */
+    (role==='suiveur'
+      ? '<button class="opt" onclick="closeSheet();ouvrirBiblio(\''+id+'\')">Voir sa bibliothèque</button>'
+      : '')+
     '<button class="opt danger" onclick="closeSheet();rompre(\''+id+'\',\''+role+'\')">'+
       (role==='suiveur' ? 'Me désabonner' : 'Retirer cet abonné')+'</button>'+
     '<button class="opt" onclick="closeSheet()">Annuler</button>');
@@ -288,31 +536,84 @@ function viewBiblio(){
       '<div class="pgrid">'+liste.map(rendu).join('')+'</div>'
     : '';
 
-  html += bloc('En cours', enCours, carteLecture);
-  html += bloc('Séries vues', vues, carteLecture);
+  /* Le prénom accompagne chaque avancement : sur un titre que j'ai aussi, «
+     63 % » sans dire de qui est confondu avec le mien en une seconde. */
+  const prenom = (nom || '').split(' ')[0].slice(0, 12);
+
+  html += bloc('En cours', enCours, sh=>carteLecture(sh, prenom));
+  html += bloc('Séries vues', vues, sh=>carteLecture(sh, prenom));
   html += bloc('Films vus', filmsVus, carteFilmLecture);
-  html += bloc('Sa liste à voir', aVoir, carteLecture);
+  html += bloc('Sa liste à voir', aVoir, sh=>carteLecture(sh, prenom));
   return html + '<div style="height:26px"></div>';
 }
 
-function carteLecture(sh){
+/* ---------------------------------------------------------------------------
+   I5 — la bibliothèque d'un proche devient une porte, pas une vitrine.
+
+   Ces deux cartes n'avaient AUCUN `onclick` : on regardait ce que quelqu'un
+   regarde sans pouvoir ouvrir une fiche ni ajouter un titre chez soi. La seule
+   question que cet écran existe pour servir — « qu'est-ce que je regarde ce
+   soir ? » — n'y trouvait pas de réponse actionnable.
+
+   Le document propose de fusionner ces fonctions avec `showCard` / `movieCard`
+   d'app-03. C'est la bonne cible, mais app-03 est tenu par un autre chantier :
+   on ajoute donc le geste ici, et la fusion viendra quand le fichier se
+   libérera. La duplication est assumée et datée.
+
+   FRONTIÈRE DE CONFIANCE. Ces objets viennent de la colonne `data` d'une AUTRE
+   personne, qu'elle peut écrire par appel direct à l'API. §A4 a durci les
+   chemins d'affiche ; l'identifiant, lui, part maintenant dans un `onclick`,
+   ce qui est un chemin d'injection tout neuf. D'où `estIdTmdb` : un
+   identifiant qui n'est pas une suite de chiffres n'est pas rendu cliquable du
+   tout. Pas d'échappement à la place — un `escJs` laisserait passer un
+   identifiant absurde jusqu'à `/tv/<n'importe quoi>` côté relais TMDB.
+--------------------------------------------------------------------------- */
+const estIdTmdb = id => /^\d{1,12}$/.test(String(id));
+
+/* Le badge « chez moi » : repérer d'un coup d'œil ce qui est nouveau pour moi.
+   Il se pose EN BAS de l'affiche, le haut étant déjà pris par le compteur
+   d'épisodes ; et il porte la couleur d'accent, pas le vert, qui veut dire
+   « vu » partout ailleurs et serait un contresens ici. */
+function badgeChezMoi(media, id){
+  if(!dejaChezMoi(media, id)) return '';
+  return '<div class="pbadge" style="top:auto;bottom:10px;right:6px;'+
+    'background:var(--accent);color:#fff">chez moi</div>';
+}
+
+function carteLecture(sh, prenom){
   const p = progress(sh);
   const full = p.total>0 && p.watched===p.total;
   const st = statutSerie(sh);
-  return '<div class="pcard">'+
+  const etat = st==='avoir' ? 'Pas commencée'
+             : full ? (isFinished(sh)?'Terminée':'À jour')
+             : p.pct+'%';
+  /* Même structure que `showCard` (app-03) — `.pcard` enveloppe, `.ptap` porte
+     le geste — pour que la fusion des deux fonctions, le jour où app-03 se
+     libère, soit un simple retrait et non une réécriture. */
+  const dedans =
     '<div class="wrapimg">'+posterEl(sh.poster,'w342','',sh.name)+
       (st!=='avoir' && p.total ? '<div class="pbadge '+(full?'done':'')+'">'+p.watched+'/'+p.total+'</div>' : '')+
+      badgeChezMoi('tv', sh.id)+
       (st!=='avoir' ? '<div class="pbar"><i class="'+(full?'full':'')+'" style="width:'+p.pct+'%"></i></div>' : '')+
     '</div>'+
     '<div class="pname">'+esc(sh.name)+'</div>'+
-    '<div class="psub">'+(st==='avoir' ? 'Pas commencée' : full ? (isFinished(sh)?'Terminée':'À jour') : p.pct+'%')+'</div>'+
+    '<div class="psub">'+(prenom ? esc(prenom)+' : ' : '')+esc(etat)+'</div>';
+  return '<div class="pcard">'+
+    (estIdTmdb(sh.id)
+      ? '<div class="ptap" onclick="ouvrirTitre('+Number(sh.id)+',\'tv\',\'biblio\')">'+dedans+'</div>'
+      : dedans)+
   '</div>';
 }
 function carteFilmLecture(m){
-  return '<div class="pcard">'+
-    '<div class="wrapimg">'+posterEl(m.poster,'w342','',m.title)+'<div class="pbadge done">vu</div></div>'+
+  const dedans =
+    '<div class="wrapimg">'+posterEl(m.poster,'w342','',m.title)+
+      '<div class="pbadge done">vu</div>'+badgeChezMoi('movie', m.id)+'</div>'+
     '<div class="pname">'+esc(m.title)+'</div>'+
-    '<div class="psub">'+esc(year(m.date))+'</div>'+
+    '<div class="psub">'+esc(year(m.date))+'</div>';
+  return '<div class="pcard">'+
+    (estIdTmdb(m.id)
+      ? '<div class="ptap" onclick="ouvrirTitre('+Number(m.id)+',\'movie\',\'biblio\')">'+dedans+'</div>'
+      : dedans)+
   '</div>';
 }
 
@@ -326,10 +627,18 @@ function viewAccount(){
 
   if(!syncReady() || ui.editServer){
     html += '<div class="wrap">'+
+      /* I4 — cet écran promettait une installation en deux réglages. C'est faux :
+         un espace neuf n'a ni les tables, ni les règles d'accès, ni le relais
+         d'affiches — on obtient une app vide et muette. Il vit derrière sept
+         appuis sur le logo, donc il s'adresse à quelqu'un qui sait ce qu'il
+         fait : on le lui dit, plutôt que de lui laisser découvrir. */
       '<div class="card" style="padding:16px">'+
-        '<div style="font-weight:680;margin-bottom:6px">Connecter une sauvegarde en ligne</div>'+
-        '<div class="small muted">Tes séries sont stockées sur ton propre espace Supabase (gratuit). '+
-        'Elles deviennent impossibles à perdre et identiques sur tous tes appareils.</div>'+
+        '<div style="font-weight:680;margin-bottom:6px">Changer de serveur</div>'+
+        '<div class="small muted">L\'app est déjà reliée à un serveur : tu n\'as normalement '+
+        'rien à faire ici. Ce réglage sert à en brancher un autre.</div>'+
+        '<div class="small muted" style="margin-top:8px">Un espace neuf ne suffit pas : il faut '+
+        'd\'abord y installer la base et les fonctions, sinon l\'app s\'ouvre sans affiches et '+
+        'sans partage. La marche à suivre est dans <b>INSTALL.md</b>, à la racine du dépôt.</div>'+
       '</div>'+
       '<div style="height:16px"></div>'+
       '<label class="fld"><span>URL du projet Supabase</span>'+
