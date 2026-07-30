@@ -407,7 +407,7 @@ function boutonCloche(type, id){
   const on = clocheAllumee(type, id);
   return '<button class="iconbtn cloche'+(on?' on':'')+'" id="cloche-'+type+'-'+id+'" '+
     'aria-label="'+(on?'Ne plus me prévenir':'Me prévenir')+'" '+
-    'onclick="basculerCloche(\\''+type+'\\','+JSON.stringify(id)+')">'+
+    'onclick="basculerCloche(\''+type+'\','+JSON.stringify(id)+')">'+
     (on ? I.clochePleine : I.cloche)+'</button>';
 }
 
@@ -551,7 +551,7 @@ function viewNotifications(){
   html += '<div class="sectitle">Mes films</div><div class="wrap" style="padding-top:0">'+
     '<div class="fchips">'+
       EVENEMENTS_FILM.map(f=>'<button class="chip'+(db.notif.films[f.v]?' on':'')+'" '+
-        'onclick="basculerEvenementFilm(\\''+f.v+'\\')">'+f.t+'</button>').join('')+
+        'onclick="basculerEvenementFilm(\''+f.v+'\')">'+f.t+'</button>').join('')+
     '</div>'+
     '<div class="small muted" style="margin-top:10px">Ces réglages ne concernent que les films '+
     'où tu as allumé la cloche. « À la maison » couvre le streaming et la location.</div>'+
@@ -559,7 +559,7 @@ function viewNotifications(){
 
   const t = compterCloches('tv'), f = compterCloches('movie');
   html += '<div class="sectitle">Titres surveillés</div><div class="wrap" style="padding-top:0">'+
-    '<button class="reg" onclick="go(\\'clochettes\\',{from:\\'notifs\\'})">'+
+    '<button class="reg" onclick="go(\'clochettes\',{from:\'notifs\'})">'+
       '<i>'+I.cloche+'</i>'+
       '<span class="rtxt"><b>Voir la liste</b><em>'+
         t+' série'+(t>1?'s':'')+', '+f+' film'+(f>1?'s':'')+'</em></span>'+
@@ -609,7 +609,7 @@ function viewClochettes(){
   }
 
   const rang = (type, id, nom, sous, poster)=>
-    '<button class="srow clic" onclick="basculerCloche(\\''+type+'\\','+JSON.stringify(id)+')">'+
+    '<button class="srow clic" onclick="basculerCloche(\''+type+'\','+JSON.stringify(id)+')">'+
       posterEl(poster,'w185','',nom)+
       '<div class="sinfo"><div class="sname">'+esc(nom)+'</div>'+
         '<div class="snext">'+esc(sous)+'</div></div>'+
