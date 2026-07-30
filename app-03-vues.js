@@ -117,8 +117,9 @@ function render(){
   /* Une seule fois : la démonstration du glissement sur une ligne d'abonnement. */
   if(view==='abos' && typeof montrerAstuceGlis === 'function') montrerAstuceGlis();
   if(view==='discover'){
-    const inp = document.getElementById('q');
-    if(inp && ui.focusSearch){ inp.focus(); ui.focusSearch=false; }
+    /* E2 — plus de focus automatique : le champ est là dès l'ouverture, et
+       ouvrir Découvrir n'est pas vouloir taper. Le clavier ne se lève que si
+       on touche le champ, ou depuis un bouton « Chercher un titre ». */
     if(typeof centrerTypeActif === 'function') centrerTypeActif();
     /* La vitrine et la grille filtrée ont chacune leur chargement : on ne
        dépense des requêtes que pour l'état réellement affiché. */

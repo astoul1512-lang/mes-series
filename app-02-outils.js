@@ -290,7 +290,25 @@ function toast(msg){
   t.textContent = msg; t.classList.add('show');
   clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove('show'), 2200);
 }
-function openSheet(html){
+/* E5 — CE QUI DOIT SE PASSER À LA FERMETURE D'UN PANNEAU.
+   La feuille de filtres compose un brouillon et ne lance sa requête qu'à la
+   fermeture — quelle que soit la fermeture : le bouton, le geste de tirage, un
+   appui sur le fond, ou un lien qui referme avant de naviguer. Le rappel est
+   désigné par une CLÉ et non par une fonction : `ouvrirFiltres` se redessine à
+   chaque coche, et comparer des closures aurait fait « fermer » la feuille à
+   chaque repeint. */
+const FERMETURES = {};              // clé -> fonction, remplie par les écrans
+let fermetureEnCours = null;
+function poserFermeture(cle){
+  if(fermetureEnCours && fermetureEnCours !== cle) jouerFermeture();
+  fermetureEnCours = cle || null;
+}
+function jouerFermeture(){
+  const cle = fermetureEnCours; fermetureEnCours = null;
+  const f = cle && FERMETURES[cle];
+  if(typeof f === 'function'){ try{ f(); }catch(e){} }
+}
+function openSheet(html, cle){
   const el = document.getElementById('sheetin');
   /* Un panneau DÉJÀ ouvert qu'on redessine garde sa position de lecture.
      La feuille de filtres se redessine à chaque puce touchée : remettre le
@@ -306,10 +324,12 @@ function openSheet(html){
   /* Après l'affichage, pas avant : tant que le panneau est masqué il n'a pas de
      hauteur, et poser le défilement n'a aucun effet. */
   el.scrollTop = y;
+  poserFermeture(cle);
 }
 function closeSheet(){
   const s = document.getElementById('sheet');
   s.classList.remove('show');
+  jouerFermeture();
   /* Un lecteur vidéo laissé dans le panneau continuerait de jouer, sans image
      et sans moyen de l'arrêter. On le retire à la fermeture. */
   const f = s.querySelector('iframe');
@@ -474,7 +494,11 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
                      compte assez de rubriques pour devenir un formulaire. */
                   plies:{},
                   perimetre:'tout', tri:'populaire', noteMin:0,
-                  page:1, pages:1, res:[], loading:false, err:'', charge:false } };
+                  page:1, pages:1, res:[], loading:false, err:'', charge:false },
+           /* E5 — l'état de TRAVAIL de la feuille de filtres, distinct de
+              `disc` qui est l'état appliqué. Créé à l'ouverture de la feuille,
+              versé dans `disc` à sa fermeture, remis à null ensuite. */
+           discBrouillon:null };
 
 const DEPTH = { bienvenue:0, motdepasse:0, avatar:0, discover:0, sorties:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, rangee:1, acteur:2, account:2, biblio:2, notifs:2, gouts:2, plates:2, clochettes:3 };
 let navDir = 'none';
@@ -666,7 +690,9 @@ function go(v, p, dir, opts){
   memoriserRails();
   /* En revenant sur Découvrir sans recherche en cours, le champ se referme :
      on retrouve l'écran de suggestions net. Une recherche en cours, elle, survit. */
-  if(v === 'discover' && !(ui.searchQ||'').trim()) ui.champOuvert = false;
+  /* E2 — il n'y a plus de champ à refermer : il est toujours à l'écran. Une
+     recherche en cours survit toujours à un aller-retour, c'est `ui.searchQ`
+     qui la porte et personne n'y touche ici. */
   const a = DEPTH[view]||0, b = DEPTH[v]||0;
   navDir = dir || (b > a ? 'enter' : b < a ? 'back' : 'none');
   if(navDir === 'enter') memParams[view] = params;

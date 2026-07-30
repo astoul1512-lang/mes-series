@@ -51,6 +51,10 @@ function migrerGouts(){
   /* Date du dernier calcul des suggestions, pour ne les refaire qu'une fois
      par jour — chaque source coûte une requête. */
   if(typeof g.jour !== 'string') g.jour = '';
+  /* E7 — les suggestions se limitent-elles à l'anglophone et à l'Europe de
+     l'Ouest ? Oui par défaut : c'est le comportement actuel, et le changer
+     sans qu'on le demande ferait bouger l'écran de tout le monde. */
+  if(typeof g.toutesOrigines !== 'boolean') g.toutesOrigines = false;
 }
 
 /* B8 — toute modification des goûts est datée. C'est cet horodatage, et lui
@@ -271,11 +275,28 @@ let suggestions = suggVide();       // celles de la puce affichée
 /* Repointe `suggestions` sur la puce courante. Appelée par tout ce qui lit
    les suggestions : sans ça, changer de puce affichait celles de la
    précédente le temps d'un rendu. */
-function suggCourantes(){
+/* E1 — LE TRI ENTRE DANS LA CLÉ DE CACHE. Sans ça, changer d'ordre n'aurait
+   eu aucun effet visible pendant 24 h (`SUGG_TTL`) : la vitrine aurait resservi
+   le calcul précédent, et le réglage aurait eu l'air cassé. */
+function cleSugg(){
   const t = (ui.disc && ui.disc.type) || 'tout';
-  if(!cacheSugg[t]) cacheSugg[t] = suggVide();
-  suggestions = cacheSugg[t];
+  const tri = (ui.disc && ui.disc.tri) || 'populaire';
+  return t + '|' + tri;
+}
+function suggCourantes(){
+  const k = cleSugg();
+  if(!cacheSugg[k]) cacheSugg[k] = suggVide();
+  suggestions = cacheSugg[k];
   return suggestions;
+}
+
+/* Le `sort_by` à passer à TMDB, et le plancher de votes qui va avec. Une seule
+   fonction : le tri était écrit en dur dans quatre requêtes différentes. */
+function triSuggestions(){
+  const tri = (ui.disc && ui.disc.tri) || 'populaire';
+  return tri === 'note'
+    ? { sort_by:'vote_average.desc', 'vote_count.gte': String(DISC_VOTES_MINI) }
+    : { sort_by:'popularity.desc',   'vote_count.gte':'120' };
 }
 /* Les goûts ont changé : tout est à refaire, sur toutes les puces. */
 function oublierSuggestions(){
@@ -361,9 +382,8 @@ function estUnAnime(x){
   const a = genreParNom(x.media, 'Animation');
   return a != null && x.genre_ids.indexOf(a) >= 0;
 }
-function estOccidental(x){
-  return !x.langue || LANGUES_OCCIDENT.indexOf(x.langue) >= 0;
-}
+/* E7 — `estOccidental` a disparu : la règle d'origine est dans `origineAdmise`
+   (app-04) et nulle part ailleurs. */
 /* La règle d'origine, dépendante de la puce.
    `perso` distingue ce qui découle de la bibliothèque (recommandations d'un
    titre regardé, acteur suivi) du catalogue générique. C'était l'incohérence
@@ -372,8 +392,8 @@ function estOccidental(x){
    plus d'origine imposée ; seul le ratissage général reste cadré. */
 function passeOrigine(x, cadre, perso){
   if(cadre.origine === 'anime')     return estUnAnime(x);
-  if(cadre.origine === 'sansAnime') return !estUnAnime(x) && estOccidental(x);
-  return perso || estUnAnime(x) || estOccidental(x);
+  if(cadre.origine === 'sansAnime') return !estUnAnime(x) && origineAdmise(x.langue);
+  return perso || estUnAnime(x) || origineAdmise(x.langue);
 }
 
 /* Le tamis commun à toutes les sources : jamais un titre déjà chez soi, jamais
@@ -494,7 +514,7 @@ function requeteSection(sec){
   const media = sec.cadre.medias[0];
   const noms = genresDeFamille(sec.cle);
   const anim = genreParNom(media, 'Animation');
-  const p = { include_adult:'false', page:'1', sort_by:'popularity.desc', 'vote_count.gte':'120' };
+  const p = Object.assign({ include_adult:'false', page:'1' }, triSuggestions());
 
   if(sec.cadre.origine === 'anime'){
     p.with_original_language = 'ja';
@@ -584,6 +604,9 @@ async function chargerSuggestions(force){
     /* Les nouveautés, sur chaque média du cadre de la puce. */
     cadre.medias.forEach(m=>{
       const champ = m === 'movie' ? 'primary_release_date' : 'first_air_date';
+      /* Les nouveautés gardent leur propre ordre : trier « les mieux notées »
+         une fenêtre de sorties récentes donnerait une liste sans rapport avec
+         la nouveauté, ce que la rangée promet. */
       const p = { include_adult:'false', page:'1', sort_by:'popularity.desc',
                   [champ+'.gte']:debut, [champ+'.lte']:auj };
       if(cadre.origine === 'anime'){
@@ -819,7 +842,7 @@ function rangeeParCle(cle){
    que la vitrine en montre une version courte et l'écran des goûts la version
    complète, sans écrire le raisonnement à deux endroits. */
 const LIB_FAMILLE = { serie:'séries', film:'films', anime:'animés' };
-function explicationProfil(){
+function explicationProfil(court){
   const g = db.gouts || {};
   const manuels = (g.genres||[]).length > 0;
   /* Le panneau doit décrire ce qui alimente RÉELLEMENT les sections : le profil
@@ -831,11 +854,23 @@ function explicationProfil(){
     nom: LIB_FAMILLE[sec.cle] || sec.cle,
     genres: genresDeFamille(sec.cle)
   })).filter(f => f.genres.length);
+  const volume = { series: Object.values(db.shows).filter(s=>progress(s).watched>0).length,
+                   films:  Object.values(db.movies).filter(m=>m.seen).length };
+  /* E6 — LA FORME COURTE, celle de la vitrine. Ce commentaire annonçait les
+     deux formes depuis le début ; seule la longue avait été branchée. Les
+     genres des familles y sont fondus en une liste de trois : le détail par
+     famille appartient à l'écran où on le corrige, pas à celui où on regarde
+     des affiches. */
+  if(court){
+    const fondus = [];
+    parFamille.forEach(f=>f.genres.forEach(n=>{ if(fondus.indexOf(n) < 0) fondus.push(n); }));
+    return { volume: volume, genres: fondus.slice(0, 3),
+             aDire: fondus.length > 0 || volume.series > 0 || volume.films > 0 };
+  }
   return {
     manuels: manuels,
     parFamille: parFamille,
-    volume: { series: Object.values(db.shows).filter(s=>progress(s).watched>0).length,
-              films:  Object.values(db.movies).filter(m=>m.seen).length },
+    volume: volume,
     acteurs: (g.acteurs||[]).map(a=>a.nom),
     exclus: (g.exclus||[]).slice(),
     origine: manuels
@@ -970,8 +1005,9 @@ function viewGouts(){
     '</div></div>';
 
   /* Le raisonnement complet, écrit noir sur blanc. La version courte de ce même
-     bloc est dans la vitrine ; ici on montre en plus le détail des genres
-     déduits et leur classement, puisque c'est l'écran où on les corrige. */
+     bloc est sous le carrousel de la vitrine (§E6, `blocProfilCourt`) ; ici on
+     montre en plus le détail des genres déduits famille par famille, puisque
+     c'est l'écran où on les corrige. */
   const p = explicationProfil();
   const lignes = [];
   const v = p.volume;
@@ -997,6 +1033,23 @@ function viewGouts(){
       : '<div class="tiny muted">Rien encore. Coche quelques épisodes, ou choisis '+
         'des genres ci-dessous — les deux marchent.</div>')+
   '</div></div>';
+
+  /* E7 — DIRE LE FILTRAGE GÉOGRAPHIQUE, ET POUVOIR LE LEVER. Écarter le
+     coréen, le japonais non-animé, l'indien, était un choix défendable — mais
+     muet. Quelqu'un qui regarde des K-dramas n'en recevait jamais une seule
+     suggestion et n'avait aucun moyen de comprendre pourquoi. */
+  const tout = !!g.toutesOrigines;
+  const pucOrig = (v, txt)=>
+    '<button class="chip '+(tout === v ? 'on' : '')+'" aria-pressed="'+(tout === v)+'" '+
+      'onclick="setToutesOrigines('+(v?'true':'false')+')">'+txt+'</button>';
+  html += '<div class="sectitle">Origine des suggestions</div>'+
+    '<div class="wrap" style="padding-top:0">'+
+      '<div class="small muted" style="margin-bottom:8px">Les suggestions '+
+        'privilégient les productions anglophones et européennes. La recherche '+
+        'par titre, elle, n\'est jamais filtrée.</div>'+
+      '<div class="chips ochips">'+pucOrig(false,'Anglophone et Europe')+
+                            pucOrig(true,'Toutes les origines')+'</div>'+
+    '</div>';
 
   html += '<div class="sectitle">J\'aime</div>'+
     '<div class="chips wrapchips">'+genres.map(n=>
@@ -1037,6 +1090,18 @@ function viewGouts(){
     '<div class="tiny muted center" style="margin-top:7px">Tes choix sont déjà enregistrés.</div>'+
   '</div>';
   return html;
+}
+
+/* E7 — le basculement doit se voir TOUT DE SUITE. Sans `oublierSuggestions`,
+   la vitrine aurait resservi son calcul précédent pendant 24 h (`SUGG_TTL`) et
+   l'interrupteur aurait eu l'air cassé. */
+function setToutesOrigines(v){
+  const g = db.gouts; if(!g) return;
+  if(!!g.toutesOrigines === !!v) return;
+  g.toutesOrigines = !!v;
+  oublierSuggestions();
+  toucheGouts();
+  render();
 }
 
 /* Sortie depuis les réglages ou la vitrine : rien à enregistrer, tout l'a déjà

@@ -72,14 +72,35 @@ function garderAnimes(res){
   return res.filter(r => r.original_language === 'ja' && r.genre_ids.indexOf(anim) >= 0);
 }
 
-/* Écarte des suggestions ce qui n'est pas occidental. Même prudence que pour
-   les animés : si les résultats ne portent pas la langue, on ne filtre pas à
-   l'aveugle plutôt que de vider l'écran. */
+/* E7 — LA RÈGLE D'ORIGINE, ÉCRITE UNE SEULE FOIS.
+
+   Elle l'était trois fois : `garderOccident` ici, le `.filter()` de
+   `chargerRecos` dans app-05, `estOccidental` dans app-11. Et les trois ne
+   traitaient pas pareil le cas « langue absente » — le lot entier échappait au
+   filtre ici, le titre passait là, le titre passait ailleurs. Un même titre
+   pouvait donc être proposé sur un écran et écarté sur l'autre. Une seule
+   fonction désormais, et c'est la seule que l'interrupteur « Ouvrir à toutes
+   les origines » débranche : brancher l'interrupteur sur trois implémentations
+   divergentes aurait garanti un comportement incohérent selon l'écran.
+
+   Langue inconnue : le titre passe. On ne devine pas, et vider l'écran sur une
+   absence de donnée serait le pire des deux.
+   `langueVoisine` : la langue du titre dont on part. Les recommandations d'une
+   série coréenne restent coréennes — c'est l'exception que portait app-05,
+   elle est conservée telle quelle. */
+function toutesOrigines(){ return !!(db.gouts && db.gouts.toutesOrigines); }
+function origineAdmise(langue, langueVoisine){
+  if(toutesOrigines()) return true;
+  if(typeof langue !== 'string' || !langue) return true;
+  if(LANGUES_OCCIDENT.indexOf(langue) >= 0) return true;
+  return !!(langueVoisine && langue === langueVoisine);
+}
+/* Écarte des suggestions ce qui n'est pas occidental. La puce Animés est
+   japonaise par construction : elle n'est pas concernée. */
 function garderOccident(res){
   if(ui.disc.type === 'anime') return res;
-  const exploitables = res.every(r => r && typeof r.original_language === 'string');
-  if(!exploitables) return res;
-  return res.filter(r => LANGUES_OCCIDENT.indexOf(r.original_language) >= 0);
+  if(toutesOrigines()) return res;
+  return res.filter(r => origineAdmise(r && r.original_language));
 }
 
 async function runSearch(q){
@@ -130,7 +151,7 @@ function carteTitre(r, media, from){
   }
 
   const prov = from || 'discover';
-  return '<button class="gcard" onclick="openPreview('+r.id+',\''+media+'\',\''+prov+'\')">'+
+  return '<button class="gcard" onclick="ouvrirTitre('+r.id+',\''+media+'\',\''+prov+'\')">'+
     posterEl(r.poster_path,'w342','',name)+ coin +
     (note ? '<div class="gnote">'+I.star+note.toFixed(1)+'</div>' : '')+
     '<div class="gname">'+esc(name)+'</div>'+
@@ -686,9 +707,13 @@ function peindreDisc(){
   el.innerHTML = cherche ? searchBody() : (vitr ? vitrineBody() : discBody());
   const r = document.querySelector('.resume');
   if(r){
-    r.classList.toggle('masque', vitr);
+    /* E1 — MÊME RÈGLE QUE DANS `discView`. Ce repeint partiel masquait la ligne
+       dès qu'on était en vitrine : `render()` l'affichait bien après un
+       changement de tri, puis `chargerDecouverte()` finissait par ici et la
+       remasquait. Le tri s'appliquait, sans que rien ne le dise. */
+    r.classList.toggle('masque', vitr && ui.disc.tri === 'populaire');
     const b = r.querySelector('b');
-    if(b) b.textContent = cherche ? resumeRecherche() : resumeFiltres();
+    if(b) b.textContent = cherche ? resumeRecherche() : (vitr ? resumeTri() : resumeFiltres());
     const x = r.querySelector('.rx');
     if(x) x.classList.toggle('masque', cherche);
   }
@@ -701,6 +726,7 @@ function peindreDisc(){
 function setDiscType(t){
   if(ui.disc.type === t) return;
   ui.disc.type = t;
+  ui.disc.typeForce = false;      // E4 — choix explicite : plus rien à signaler
   if(enRecherche()){                      // la recherche suit la puce choisie
     clearTimeout(searchTimer); abortSearch();
     ui.searchRes = null; ui.searchErr = ''; ui.searching = true;
@@ -711,25 +737,109 @@ function setDiscType(t){
   else chargerDecouverte();
   if(enRecherche()) searchNow();
 }
+/* ===================== E5 — LE BROUILLON DE LA FEUILLE =====================
+
+   Chaque coche relançait une requête ET redessinait la feuille entière :
+   cocher trois genres, c'était trois volées de requêtes pour un filtre qu'on
+   n'avait pas fini de composer. Le coût réseau était réel, et le modèle
+   empêchait de réfléchir tranquillement.
+
+   `ui.disc` reste l'état APPLIQUÉ — celui qui décrit ce qui est à l'écran.
+   `ui.discBrouillon` porte l'état de la feuille. Les coches n'écrivent que
+   dans le brouillon ; la requête part à la fermeture, quelle qu'elle soit :
+   le bouton « Voir les résultats », le geste de tirage, un appui sur le fond.
+   Tirer la feuille ne doit pas faire perdre ses choix — c'est le piège que la
+   spec demandait de traiter explicitement.
+
+   Ce qui N'EST PAS dans le brouillon : le type (sa puce vit hors de la
+   feuille, et changer de type change la liste même des genres proposés) et
+   les rubriques repliées (`plies`), qui ne retranchent rien. */
+const CHAMPS_BROUILLON = ['genres','envies','plates','platesTouchees',
+                          'perimetre','tri','noteMin','duree'];
+function copieFiltres(src){
+  const o = {};
+  CHAMPS_BROUILLON.forEach(k=>{
+    const v = src[k];
+    o[k] = Array.isArray(v) ? v.map(x => (x && typeof x === 'object') ? Object.assign({},x) : x) : v;
+  });
+  return o;
+}
+/* Le brouillon courant, créé à la demande depuis l'état appliqué. */
+function brouillon(){
+  if(!ui.discBrouillon) ui.discBrouillon = copieFiltres(ui.disc);
+  return ui.discBrouillon;
+}
+function memeFiltres(a, b){
+  return CHAMPS_BROUILLON.every(k=>{
+    const x = a[k], y = b[k];
+    if(Array.isArray(x) || Array.isArray(y)){
+      if(!Array.isArray(x) || !Array.isArray(y) || x.length !== y.length) return false;
+      return x.every((v,i)=>{
+        const w = y[i];
+        return (v && typeof v === 'object') ? (w && v.id === w.id) : v === w;
+      });
+    }
+    return x === y;
+  });
+}
+/* Appliqué à la fermeture. Sans changement, aucune requête : rouvrir puis
+   refermer la feuille sans rien toucher ne doit rien coûter. */
+function appliquerBrouillon(){
+  const b = ui.discBrouillon;
+  ui.discBrouillon = null;
+  if(!b) return false;
+  if(memeFiltres(b, ui.disc)) return false;
+  CHAMPS_BROUILLON.forEach(k=>{ ui.disc[k] = b[k]; });
+  chargerDecouverte();
+  return true;
+}
+FERMETURES.filtres = appliquerBrouillon;
+function voirResultats(){ closeSheet(); }
+/* Combien de critères mordent dans le brouillon. Sert au libellé du bouton :
+   « Voir les résultats (3 critères) » dit ce qu'on s'apprête à appliquer. */
+function compteCriteres(d){
+  let n = d.genres.length + d.envies.length;
+  if(d.platesTouchees && d.plates.length) n++;
+  if(d.noteMin > 0) n++;
+  if(d.perimetre !== 'tout') n++;
+  if(DISC_DUREE_FIABLE && d.duree && d.duree !== 'tout' && discMedia() === 'movie') n++;
+  return n;
+}
+
 /* Les filtres portent sur un type précis — c'est ce qu'Adrien attend : « avec
    les filtres on a soit l'un soit l'autre ». Depuis « Tout », on bascule donc
    sur les séries, et on le dit plutôt que de filtrer un mélange en silence. */
+/* E4 — LE MESSAGE NE PEUT PAS ÊTRE UN TOAST. Il s'affichait à 84 px du bas,
+   c'est-à-dire SOUS la feuille de filtres, qui occupe presque tout l'écran.
+   Personne ne l'a jamais vu : on cochait « Comédie » depuis « Tout » et on
+   découvrait plus tard que les films avaient disparu. On pose donc un drapeau,
+   et la feuille dit la chose à l'endroit où le geste a été fait. */
 function typePourFiltrer(){
   if(ui.disc.type !== 'tout') return;
   ui.disc.type = 'tv';
-  toast('Les filtres s\'appliquent aux séries — la puce Films passe côté cinéma');
+  ui.disc.typeForce = true;
 }
-function setDiscTri(t){ typePourFiltrer(); ui.disc.tri = t; ouvrirFiltres(); chargerDecouverte(); }
-function setDiscPerimetre(p){ typePourFiltrer(); ui.disc.perimetre = p; ouvrirFiltres(); chargerDecouverte(); }
-function setDiscNote(n){ typePourFiltrer(); ui.disc.noteMin = n; ouvrirFiltres(); chargerDecouverte(); }
-function setDiscDuree(id){ typePourFiltrer(); ui.disc.duree = id; ouvrirFiltres(); chargerDecouverte(); }
+/* Le lien du message. Choisir soi-même une puce lève le drapeau : le message a
+   été lu et suivi, le répéter n'apprendrait plus rien. */
+function basculerTypeFiltre(t){
+  ui.disc.typeForce = false;
+  ui.disc.type = t;
+  ouvrirFiltres();               // E5 — la requête partira à la fermeture
+}
+/* E5 — toutes ces bascules écrivent dans le brouillon et redessinent la
+   feuille. Aucune ne part sur le réseau : c'est `appliquerBrouillon`, à la
+   fermeture, qui le fait une seule fois. */
+function setDiscTri(t){ typePourFiltrer(); brouillon().tri = t; ouvrirFiltres(); }
+function setDiscPerimetre(p){ typePourFiltrer(); brouillon().perimetre = p; ouvrirFiltres(); }
+function setDiscNote(n){ typePourFiltrer(); brouillon().noteMin = n; ouvrirFiltres(); }
+function setDiscDuree(id){ typePourFiltrer(); brouillon().duree = id; ouvrirFiltres(); }
 function bascGenre(i){
   const g = genresAffiches()[i];
   if(!g) return;
   typePourFiltrer();
-  const sel = ui.disc.genres, k = sel.indexOf(g.nom);
+  const sel = brouillon().genres, k = sel.indexOf(g.nom);
   if(k < 0) sel.push(g.nom); else sel.splice(k,1);
-  ouvrirFiltres(); chargerDecouverte();
+  ouvrirFiltres();
 }
 /* Les plateformes sont retenues avec leur nom et leur logo : la ligne de résumé
    et les puces restent lisibles même si la liste TMDB n'est pas encore revenue. */
@@ -744,14 +854,14 @@ function bascEnvie(i){
   const e = enviesAffichees()[i];
   if(!e) return;
   typePourFiltrer();
-  const sel = ui.disc.envies, k = sel.indexOf(e.id);
+  const sel = brouillon().envies, k = sel.indexOf(e.id);
   if(k >= 0) sel.splice(k,1); else sel.push(e.id);
-  ouvrirFiltres(); chargerDecouverte();
+  ouvrirFiltres();
 }
 function viderEnvies(){
   typePourFiltrer();
-  ui.disc.envies = [];
-  ouvrirFiltres(); chargerDecouverte();
+  brouillon().envies = [];
+  ouvrirFiltres();
 }
 
 function bascPlate(i){
@@ -760,33 +870,53 @@ function bascPlate(i){
   /* À partir d'ici la sélection est la sienne, pas celle héritée de ses
      abonnements : elle ne suit plus les réglages, et elle compte comme un
      filtre posé — la grille remplace donc la vitrine. */
-  ui.disc.platesTouchees = true;
-  const sel = ui.disc.plates, k = sel.findIndex(x => x.id === p.id);
+  const b = brouillon();
+  b.platesTouchees = true;
+  const sel = b.plates, k = sel.findIndex(x => x.id === p.id);
   if(k < 0) sel.push({ id:p.id, nom:p.nom, logo:p.logo }); else sel.splice(k,1);
-  ouvrirFiltres(); chargerDecouverte();
+  ouvrirFiltres();
 }
 function voirToutesPlates(){
   ui.disc.toutesPlates = !ui.disc.toutesPlates;
   ouvrirFiltres();
 }
 function viderPlates(){
-  ui.disc.platesTouchees = true;
-  ui.disc.plates = [];
-  ouvrirFiltres(); chargerDecouverte();
+  const b = brouillon();
+  b.platesTouchees = true;
+  b.plates = [];
+  ouvrirFiltres();
 }
+/* Deux appelants, deux gestes différents. Dans la feuille, « Tout effacer »
+   remet le BROUILLON à zéro, sans requête (§E5). Feuille fermée, la croix de
+   la ligne de résumé efface pour de bon et recharge. */
 function resetFiltres(){
+  if(feuilleFiltresOuverte()){
+    const b = brouillon();
+    b.genres = []; b.envies = [];
+    b.perimetre = 'tout'; b.tri = 'populaire'; b.noteMin = 0; b.duree = 'tout';
+    b.platesTouchees = false;
+    b.plates = mesPlates().map(p => ({ id:p.id, nom:p.nom, logo:p.logo }));
+    ui.disc.typeForce = false;
+    ouvrirFiltres();
+    return;
+  }
   const d = ui.disc;
+  ui.discBrouillon = null;
   d.genres = []; d.envies = [];
   d.perimetre = 'tout'; d.tri = 'populaire'; d.noteMin = 0; d.duree = 'tout';
+  d.typeForce = false;            // E4 — plus de filtre, plus rien à expliquer
   /* « Tout effacer » remet l'écran dans son état de départ — et son état de
      départ, ce sont les abonnements déclarés. Vider jusque-là ferait perdre à
      chaque fois un réglage qu'on n'a jamais posé à la main. */
   d.platesTouchees = false; semerPlatesFiltres();
-  /* On ne redessine la feuille QUE si elle est ouverte. Cette fonction est
-     aussi celle de la croix de la ligne de résumé, feuille fermée — et là,
-     effacer ses filtres faisait surgir le panneau sans qu'on ait rien demandé. */
-  if(feuilleFiltresOuverte()) ouvrirFiltres();
   chargerDecouverte();
+}
+
+/* E1 — en vitrine, seul le tri peut être actif : tout le reste ferait basculer
+   sur la grille. La ligne le dit sans faire croire à un filtre. */
+function resumeTri(){
+  const t = DISC_TRIS.find(x=>x.id === ui.disc.tri);
+  return (t && t.court) ? 'Trié par : '+t.label.toLowerCase() : '';
 }
 
 function resumeFiltres(){
@@ -813,8 +943,19 @@ function filtresActifs(){
   /* Les plateformes ne comptent que si on y a touché. Sans ça, une personne
      ayant déclaré ses abonnements ouvrait Découvrir sur la grille filtrée : sa
      vitrine avait disparu sans qu'elle ait rien demandé. */
+  /* E1 — LE TRI N'EST PAS UN FILTRE. Il ordonne, il ne retranche rien. Le
+     laisser ici faisait disparaître toute la vitrine personnalisée — carrousel,
+     « Des séries pour toi », « Dans l'esprit de… », « Avec X » — sur un simple
+     changement d'ordre, et il fallait retrouver la croix de la ligne de résumé
+     pour revenir. Le tri s'applique désormais À L'INTÉRIEUR des rangées.
+
+     Le PÉRIMÈTRE reste, lui, contrairement à ce que proposait le document : il
+     pose une borne de date (`primary_release_date.gte/lte`, voir
+     `paramsDecouverte`). « Années 90 » retranche des titres du catalogue —
+     c'est une restriction, pas un cadrage. Vérifié dans le code avant de
+     trancher, comme la spec le demandait. */
   return d.genres.length > 0 || (d.platesTouchees && d.plates.length > 0) || d.envies.length > 0 ||
-         d.noteMin > 0 || d.perimetre !== 'tout' || d.tri !== 'populaire' ||
+         d.noteMin > 0 || d.perimetre !== 'tout' ||
          (DISC_DUREE_FIABLE && d.duree && d.duree !== 'tout' && discMedia() === 'movie');
 }
 
@@ -833,7 +974,7 @@ function feuilleFiltresOuverte(){
    c'est la question qu'on se pose vraiment devant l'écran, avant la note ou la
    plateforme. */
 function blocFiltreEnvies(){
-  const d = ui.disc, liste = enviesAffichees();
+  const d = brouillon(), liste = enviesAffichees();   // E5 — lecture du brouillon
   if(!liste.length) return '';
   let h = '<div class="fgrp">De quoi t\'as envie'+(d.envies.length?' ('+d.envies.length+')':'')+'</div>';
   h += '<div class="fchips">'+liste.map((e,i)=>
@@ -848,7 +989,7 @@ function blocFiltreEnvies(){
 
 /* Section « Plateformes » de la feuille de filtres. */
 function blocFiltrePlates(){
-  const d = ui.disc;
+  const d = brouillon();                              // E5 — lecture du brouillon
   const liste = platesAffichees(), reste = platesCachees();
   let h = '<div class="small muted" id="fplates" style="margin-bottom:8px">'+
           (aDeclarePlates()
@@ -868,9 +1009,11 @@ function blocFiltrePlates(){
     return '<button class="chip chiplogo '+(on?'on':'')+'" onclick="bascPlate('+i+')">'+
              logo+'<span>'+esc(p.nom)+'</span></button>';
   }).join('')+'</div>';
-  if(reste || d.toutesPlates)
+  /* `toutesPlates` n'est pas un critère mais un dépliage : il reste sur
+     l'état d'écran, pas sur le brouillon. */
+  if(reste || ui.disc.toutesPlates)
     h += '<button class="lienplus" onclick="voirToutesPlates()">'+
-         (d.toutesPlates ? 'Ne montrer que les principales'
+         (ui.disc.toutesPlates ? 'Ne montrer que les principales'
                          : (reste > 1 ? 'Voir les '+reste+' autres plateformes'
                                       : 'Voir la dernière plateforme'))+
          '</button>';
@@ -914,8 +1057,11 @@ function bascSectionFiltre(cle){
    ici mais dans Mes goûts : écarter l'horreur est une préférence durable, pas
    une humeur du soir ; une seule porte, pas deux. */
 function ouvrirFiltres(){
-  const d = ui.disc;
-  const quoi = (DISC_TYPES.find(t=>t.id===d.type)||{}).label || '';
+  /* E5 — la feuille lit et écrit le BROUILLON, jamais l'état appliqué. Seul le
+     type reste pris sur `ui.disc` : sa puce vit hors de la feuille, et c'est
+     lui qui décide de la liste des genres et des envies proposées. */
+  const d = brouillon();
+  const quoi = (DISC_TYPES.find(t=>t.id===ui.disc.type)||{}).label || '';
   const puces = (liste, actif, action) => '<div class="fchips">'+liste.map(x=>
     '<button class="chip '+(actif(x)?'on':'')+'" onclick="'+action(x)+'">'+
       esc(x.label)+'</button>').join('')+'</div>';
@@ -936,6 +1082,12 @@ function ouvrirFiltres(){
           '<button class="chip '+(d.genres.indexOf(g.nom)>=0?'on':'')+'" onclick="bascGenre('+i+')">'+
             esc(g.nom)+'</button>').join('')+'</div>'
       : '<div class="small muted">Les genres arrivent avec les premiers résultats.</div>'));
+
+  /* E4 — juste sous « En gros », là où le geste a eu lieu et sans avoir à
+     défiler. Un seul autre type possible aujourd'hui : les films. */
+  if(ui.disc.typeForce)
+    h += '<div class="fforce">Les filtres s\'appliquent aux <b>séries</b>. '+
+      '<button onclick="basculerTypeFiltre(\'movie\')">Changer pour les films</button></div>';
 
   /* 2. Le précis. Il vient APRÈS le large, dans l'ordre où l'on pense :
         « une comédie » d'abord, « de braquage » ensuite. */
@@ -1004,18 +1156,28 @@ function ouvrirFiltres(){
     '<button class="lienplus" style="margin:0" onclick="closeSheet();go(\'gouts\',{from:\'discover\'})">'+
       (exclus.length ? 'Changer dans Mes goûts' : 'passe par Mes goûts')+'</button></div>';
 
-  h += '<button class="btn" style="margin-top:18px" onclick="closeSheet()">Voir les résultats</button>';
-  if(filtresActifs()) h += '<button class="opt" onclick="resetFiltres()">Tout effacer</button>';
-  openSheet(h);
+  /* E5 — le bouton dit ce qu'il va appliquer. « Voir les résultats » seul ne
+     disait pas qu'une requête était en attente ; avec le compte, la feuille
+     assume d'être un formulaire qu'on valide. */
+  const n = compteCriteres(d);
+  h += '<button class="btn" style="margin-top:18px" onclick="voirResultats()">Voir les résultats'+
+       (n ? ' ('+n+' critère'+(n>1?'s':'')+')' : '')+'</button>';
+  if(n) h += '<button class="opt" onclick="resetFiltres()">Tout effacer</button>';
+  openSheet(h, 'filtres');
 }
 
-function ouvrirChamp(){
-  if(ui.champOuvert) return fermerChamp();
-  ui.champOuvert = true; ui.focusSearch = true; render();
-}
-function fermerChamp(){
-  ui.champOuvert = false;
-  viderRecherche();                 // referme et rend la main aux suggestions
+/* E2 — `ouvrirChamp` et `fermerChamp` ont disparu avec la puce loupe. Le champ
+   est là en permanence : il n'y a plus rien à ouvrir ni à refermer, seulement à
+   vider (`viderRecherche`). */
+
+/* Les deux boutons « Chercher un titre » des écrans vides. Le champ existe
+   déjà : il n'y a qu'à y amener la personne, et là seulement le clavier est
+   demandé — c'est elle qui vient de le réclamer. */
+function viserChamp(){
+  const el = document.getElementById('q');
+  if(!el) return;
+  el.focus();
+  window.scrollTo({ top:0, behavior:'smooth' });
 }
 
 function champRecherche(){
@@ -1061,7 +1223,7 @@ function diapoVedette(x){
       '<h2>'+esc(x.nom)+'</h2>'+
       '<div class="dhmeta">'+esc((x.media==='tv'?'Série':'Film')+(bouts.length?' · '+bouts.join(' · '):''))+'</div>'+
       '<div class="dhact">'+
-        '<button class="btn" onclick="openPreview('+x.id+',\''+x.media+'\',\'discover\')">Voir la fiche</button>'+
+        '<button class="btn" onclick="ouvrirTitre('+x.id+',\''+x.media+'\',\'discover\')">Voir la fiche</button>'+
         (item ? '<span class="dhdeja">'+I.check+' Dans ma liste</span>'
               : '<button class="btn ghost" onclick="ajouterDepuisVitrine('+x.id+',\''+x.media+'\')">'+
                   I.plus+' Ma liste</button>')+
@@ -1121,7 +1283,7 @@ function vignetteSugg(x, depuis){
   const tete = aVenir ? '<span class="vgquand">'+esc(dateCourte(x.date))+'</span> '
              : x.note ? I.star+' '+(Math.round(x.note*10)/10)+' '
              : '';
-  return '<button class="vgn" onclick="openPreview('+x.id+',\''+x.media+'\',\''+(depuis||'discover')+'\')">'+
+  return '<button class="vgn" onclick="ouvrirTitre('+x.id+',\''+x.media+'\',\''+(depuis||'discover')+'\')">'+
     '<div class="vgimg">'+posterEl(x.affiche,'w342','',x.nom)+
       (item ? '<span class="vgdeja">'+I.check+'</span>' : '')+'</div>'+
     '<div class="vgnom">'+esc(x.nom)+'</div>'+
@@ -1151,9 +1313,10 @@ function vitrineBody(){
   if(!suggestions.vedettes.length && !rangees.length)
     return '<div class="empty">'+I.boussole+'<h3>Rien à proposer '+esc(dansCettePuce())+'</h3>'+
       '<p>Ajoute une série ou un film : les suggestions se règlent sur ce que tu regardes.</p>'+
-      '<button class="btn ghost" onclick="ouvrirChamp()">Chercher un titre</button></div>';
+      '<button class="btn ghost" onclick="viserChamp()">Chercher un titre</button></div>';
 
-  let html = carteInvitGouts() + carrouselVedettes(suggestions.vedettes) + barreSuggPlates();
+  let html = carteInvitGouts() + carrouselVedettes(suggestions.vedettes) +
+             barreSuggPlates() + blocProfilCourt();
   rangees.forEach(r=>{
     html += '<div class="sectitle">'+esc(r.titre)+'</div>'+
       '<div class="rangee" data-rail="rangee-'+esc(r.cle||r.titre)+'">'+
@@ -1161,6 +1324,30 @@ function vitrineBody(){
         finRangee(r)+'</div>';
   });
   return html + '<div style="height:6px"></div>';
+}
+
+/* E6 — DEUX LIGNES SOUS LE CARROUSEL : ce que l'app a lu, ce qu'elle en a
+   déduit, et par où le corriger. Le reproche fondateur — « je ne sais pas ce
+   que l'app croit savoir » — n'était levé que pour qui allait fouiller
+   Réglages → Mes goûts : `explicationProfil` n'était appelée QUE là, alors que
+   son commentaire annonçait deux formes depuis le début. La forme courte
+   existe enfin, et elle est ici, là où les suggestions se regardent.
+   Bibliothèque vide : rien à dire, donc rien à afficher — ce cas-là, c'est la
+   grille d'amorçage (§D5) qui le traite. */
+function blocProfilCourt(){
+  if(typeof explicationProfil !== 'function') return '';
+  const p = explicationProfil(true);
+  if(!p.aDire) return '';
+  const v = p.volume;
+  const source = [ v.series ? v.series+' série'+(v.series>1?'s':'')+' commencée'+(v.series>1?'s':'') : '',
+                   v.films  ? v.films+' film'+(v.films>1?'s':'')+' vu'+(v.films>1?'s':'')            : ''
+                 ].filter(Boolean).join(' et ');
+  const lignes = [];
+  if(source) lignes.push('Je pars de tes '+source+'.');
+  if(p.genres.length) lignes.push('Genres retenus : '+p.genres.join(', ').toLowerCase()+'.');
+  return '<div class="profcourt">'+
+    '<span>'+esc(lignes.join(' '))+'</span>'+
+    '<button onclick="go(\'gouts\')">Ajuster</button></div>';
 }
 
 /* ===================== D5 — la grille d'amorçage ===================== */
@@ -1276,7 +1463,7 @@ function amorcageBody(){
     '<div class="wrap">'+
       '<button class="btn block"'+(reste ? ' disabled' : '')+' onclick="finirAmorcage()">'+
         (reste ? 'Encore '+reste+' titre'+(reste>1?'s':'') : 'C\'est bon, montre-moi')+'</button>'+
-      '<button class="btn ghost" style="width:100%;margin-top:9px" onclick="ouvrirChamp()">'+
+      '<button class="btn ghost" style="width:100%;margin-top:9px" onclick="viserChamp()">'+
         'Je préfère chercher un titre</button>'+
     '</div>'+
     '<div style="height:14px"></div>';
@@ -1617,21 +1804,26 @@ function dansCettePuce(){
 
 function viewDiscover(){
   const d = ui.disc, cherche = enRecherche(), vitr = vitrineVisible();
-  /* La loupe vit dans la rangée des puces. On appuie : le champ se déplie
-     sur toute la largeur et les puces descendent d'un cran. */
-  const sub = (ui.champOuvert ? champRecherche() : '') +
+  /* E2 — LE CHAMP EST TOUJOURS LÀ. Il vivait derrière une puce de 33 px sans
+     libellé, glissée dans une rangée qui défile, et `go()` la refermait dès
+     qu'on quittait l'écran : le geste le plus fréquent de l'app était le plus
+     caché. Il occupe maintenant sa ligne, sous le titre, au-dessus des puces.
+     Pas de focus automatique : le clavier ne doit pas surgir sans qu'on l'ait
+     demandé — ouvrir Découvrir n'est pas vouloir taper. */
+  const sub = champRecherche() +
     '<div class="chips types">'+
-      '<button class="chip chipico '+(ui.champOuvert?'ouvert':'')+'" onclick="ouvrirChamp()" '+
-        'aria-label="'+(ui.champOuvert?'Fermer la recherche':'Chercher un titre')+'">'+
-        (ui.champOuvert ? I.close : I.search)+'</button>'+
       DISC_TYPES.map(t=>
         '<button class="chip '+(d.type===t.id?'on':'')+'" onclick="setDiscType(\''+t.id+'\')">'+
           t.label+'</button>').join('')+'</div>'+
     /* Le résumé n'a de sens que lorsqu'on filtre ou qu'on cherche : au repos,
        il répétait « Toutes » sans rien dire. On le MASQUE au lieu de le retirer
        — le sortir du DOM en pleine frappe emporterait le focus du champ. */
-    '<div class="resume'+(vitr?' masque':'')+'">'+
-      '<b>'+esc(cherche ? resumeRecherche() : resumeFiltres())+'</b>'+
+    /* E1 — la ligne de résumé reste visible en vitrine QUAND UN TRI EST ACTIF :
+       le tri ne bascule plus sur la grille, il faut donc autre chose pour dire
+       qu'il est en place. Sans réglage, elle reste masquée — au repos elle
+       répétait « Toutes » sans rien dire. */
+    '<div class="resume'+((vitr && d.tri === 'populaire') ? ' masque' : '')+'">'+
+      '<b>'+esc(cherche ? resumeRecherche() : (vitr ? resumeTri() : resumeFiltres()))+'</b>'+
       '<button class="rx'+(cherche?' masque':'')+'" onclick="resetFiltres()" '+
         'aria-label="Tout effacer">'+I.close+'</button></div>';
   /* Les filtres ne s'appliquent pas à une recherche par titre : le bouton s'efface. */
@@ -1642,10 +1834,12 @@ function viewDiscover(){
     '<div style="height:20px"></div>';
 }
 
-/* Depuis l'ajout de « Tout », les six puces ne tiennent plus dans la largeur
-   d'un iPhone : la rangée défile. On ramène donc la puce active dans le champ
-   de vision après chaque rendu — sinon, en choisissant « Animés » on ne voyait
-   plus quel type était sélectionné. */
+/* E2 — MESURÉ APRÈS LE RETRAIT DE LA LOUPE : quatre puces (Tout, Séries,
+   Films, Animés) tiennent dans 375 px, la rangée ne défile plus. La fonction
+   reste malgré tout : elle ne fait rien quand tout tient (`scrollWidth <=
+   clientWidth`), et une traduction plus longue ou un réglage d'accessibilité
+   qui grossit le texte referait défiler la rangée. La retirer ne gagnerait
+   rien et rouvrirait le défaut qu'elle corrige. */
 function centrerTypeActif(){
   const r = document.querySelector('.chips.types');
   if(!r || r.scrollWidth <= r.clientWidth) return;
@@ -1688,6 +1882,19 @@ function discBody(){
 }
 
 /* ---------- Vue : aperçu avant ajout (série ou film) ---------- */
+/* E8 — DEPUIS DÉCOUVRIR, UN TITRE QU'ON A DÉJÀ OUVRE SA FICHE.
+   `preview` et `show`/`movie` sont deux fiches du même titre. Toucher une série
+   suivie ouvrait l'aperçu, qui proposait « Ouvrir ma fiche » : un tap de plus à
+   chaque consultation, pour arriver au même endroit.
+   L'aperçu reste atteignable — c'est lui qu'on ouvre pour tout ce qui n'est pas
+   encore dans la bibliothèque, et son bouton « Ouvrir ma fiche » sert encore
+   aux chemins qui y mènent (ajout depuis l'aperçu, lien partagé). */
+function ouvrirTitre(id, media, from){
+  const chezSoi = media === 'tv' ? db.shows[id] : db.movies[id];
+  if(chezSoi) return go(media === 'tv' ? 'show' : 'movie',
+                        { id:id, from: from || 'discover' }, 'enter');
+  openPreview(id, media, from);
+}
 function openPreview(id, type, from){
   ui.preview = { id:id, type:type, loading:true, data:null };
   /* Toujours un mouvement vers l'avant : depuis une fiche d'acteur aussi, où la

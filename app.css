@@ -345,15 +345,11 @@
   .lienplus{margin-top:10px;font-size:12px;font-weight:650;color:var(--accent);
     text-decoration:underline;text-underline-offset:2px}
   .plus{padding:16px;text-align:center}
-  /* Rangée de Découvrir : la loupe vient s'ajouter aux quatre types,
-     on resserre un peu pour que tout tienne sans défilement sur un iPhone. */
+  /* Rangée de Découvrir. E2 — la puce loupe est partie avec son dépliage : le
+     champ de recherche a sa propre ligne, en permanence. Restent quatre puces,
+     qui tiennent dans 375 px. */
   .chips.types{gap:6px}
   .chips.types .chip{padding:7px 9px;font-size:13px}
-  .chip.chipico{padding:7px 8px;display:grid;place-items:center;flex:0 0 auto}
-  .chip.chipico svg{width:16px;height:16px;display:block}
-  .chip.chipico.ouvert{border-color:var(--accent);color:var(--accent);background:var(--surface)}
-  @keyframes deplie{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
-  .qbar{animation:deplie .16s ease-out}
   /* Où regarder */
   .plats{display:flex;flex-wrap:wrap;gap:8px;margin:0 16px}
   .plato{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line);
@@ -890,3 +886,21 @@
     border-radius:50%;background:var(--accent)}
   .bvpourquoi{font-size:13.5px;line-height:1.45;color:var(--muted);margin:0}
   .bvbas{margin-top:auto;padding-top:26px}
+
+  /* E6 — le profil, version courte, sous le carrousel de la vitrine. Deux
+     lignes grises et un lien : assez pour savoir sur quoi l'app se fonde, pas
+     assez pour peser dans un écran qui doit rester une suite d'affiches. */
+  .profcourt{margin:2px 16px 12px;font-size:12.5px;line-height:1.5;color:var(--muted)}
+  .profcourt button{color:var(--accent);font-weight:650;font-size:12.5px;margin-left:5px}
+
+  /* E7 — les deux puces d'origine, dans Mes goûts. Elles s'enroulent comme les
+     listes de genres, mais ne sont pas une liste de genres : leur propre
+     classe, pour que rien ne les confonde. */
+  .chips.ochips{flex-wrap:wrap;padding:0;overflow:visible}
+
+  /* E4 — le message du type forcé, DANS la feuille de filtres. Un toast se
+     serait affiché sous elle, invisible. */
+  .fforce{margin:-2px 0 10px;padding:9px 11px;border-radius:11px;
+    background:var(--accent-dim);
+    font-size:13px;line-height:1.45}
+  .fforce button{color:var(--accent);font-weight:700;font-size:13px;text-decoration:underline}

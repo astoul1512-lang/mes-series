@@ -122,9 +122,10 @@ async function chargerRecos(type, id){
     const langue = langueDe[k] || null;
     const gardes = (d.results||[])
       .filter(r => r && r.poster_path && (r.title || r.name))
-      .filter(r => typeof r.original_language !== 'string' ||
-                   LANGUES_OCCIDENT.indexOf(r.original_language) >= 0 ||
-                   r.original_language === langue)
+      /* E7 — la règle d'origine vit dans `origineAdmise` (app-04) et nulle part
+         ailleurs. `langue` est celle du titre dont on part : ses
+         recommandations gardent son origine. */
+      .filter(r => origineAdmise(r.original_language, langue))
       .slice(0, 12);
     recos[k] = gardes.length ? gardes : null;
   }catch(e){ delete recos[k]; }      // un échec s'oublie, pour réessayer
@@ -143,7 +144,7 @@ function zoneRecos(type, id){
 function recoStrip(l, type){
   if(!l || l === 'attente' || !l.length) return '';
   return '<div class="sectitle">Dans le même esprit</div><div class="filmrow" data-rail="similaires">'+
-    l.map(r=>'<div class="pcard sortiecarte" onclick="openPreview('+r.id+',\''+type+'\', view)">'+
+    l.map(r=>'<div class="pcard sortiecarte" onclick="ouvrirTitre('+r.id+',\''+type+'\', view)">'+
       '<div class="wrapimg">'+posterEl(r.poster_path,'w342','',r.title||r.name)+'</div>'+
       '<div class="pname">'+esc(r.title||r.name)+'</div>'+
       (r.vote_average ? '<div class="psub">'+I.star+' '+(Math.round(r.vote_average*10)/10)+'</div>' : '')+
