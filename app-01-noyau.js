@@ -508,8 +508,14 @@ async function majProfil(){
       body: JSON.stringify({ user_id: db.auth.uid, pseudo: pseudo,
         /* L'avatar voyage avec le pseudo : sans ça les proches ne voyaient
            qu'une initiale grise, alors que l'app leur promettait le contraire.
-           La table n'est lisible que par le cercle — voir la règle
-           « profils lisibles par mon cercle » côté base. */
+           La table n'est lisible que par le cercle : la policy
+           « profils lisibles par mon cercle » s'appuie sur `dans_mon_cercle()`
+           — moi, les gens que je suis, les gens qui me suivent, personne
+           d'autre. Elle vit dans `/supabase/migrations/004_dans_mon_cercle.sql`,
+           et ce fichier commence par expliquer pourquoi il ne faut SURTOUT pas
+           y ajouter une règle plus large : les policies permissives se
+           combinent en OU, une seule ligne trop généreuse ouvrirait la table,
+           photos de visage comprises. */
         couleur: p.couleur || null,
         embleme: p.embleme || null,
         photo:   p.photo   || null,
