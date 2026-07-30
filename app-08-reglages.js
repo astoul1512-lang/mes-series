@@ -15,6 +15,11 @@ function viewSettings(){
 
   let html = header('Mon compte et réglages', {back:"goBack()"});
 
+  /* I10.4 — l'actualisation groupée dure plusieurs minutes et ne disait rien.
+     Un bandeau plutôt qu'une fenêtre : elle bloquerait l'écran tout ce
+     temps-là pour une tâche qui n'attend rien de personne. */
+  html += blocMajSeries();
+
   /* Une carte d'identité, pas un bouton : ce qu'on peut faire est listé juste
      en dessous, nommé. Le gros bloc cliquable qui menait à l'avatar était
      précisément ce qui trompait tout le monde. */
@@ -63,7 +68,12 @@ function viewSettings(){
     '<input type="file" id="imp" accept="application/json,.json" style="display:none" onchange="importData(this)">'+
     ligne('Actualiser toutes les séries', 'Nouveaux épisodes et affiches',
           "refreshAll()", I.refresh)+
-    ligne('Tout effacer', 'Vide la bibliothèque de cet appareil', "wipe()", I.close, true)+
+    /* I10.2 — le sous-titre disait « de cet appareil ». C'était faux : `doWipe`
+       appelle `markDeleted` sur chaque titre, donc la suppression remonte au
+       serveur et redescend sur tous les appareils. Un libellé qui minimise une
+       action irréversible est un piège, pas une imprécision. */
+    ligne('Tout effacer', 'Vide ta bibliothèque partout : cet appareil, tes autres appareils et la sauvegarde en ligne',
+          "wipe()", I.close, true)+
   '</div>';
 
   html += '<div class="sectitle">Application</div><div class="wrap" style="padding-top:0">'+
@@ -79,14 +89,29 @@ function viewSettings(){
       'de diffusion viennent de TMDB. Tu n\'as rien d\'autre à configurer.</div>'+
     '<label class="fld"><span>Langue des fiches</span>'+
       '<select id="lang" onchange="saveSettings()">'+
-        ['fr-FR','en-US','es-ES','de-DE','it-IT'].map(l=>'<option value="'+l+'" '+(db.lang===l?'selected':'')+'>'+l+'</option>').join('')+
+        /* I10.3 — « fr-FR » est un code de programmeur. La valeur envoyée à TMDB
+           ne change pas ; seul l'intitulé lu par la personne change. */
+        LANGUES.map(l=>'<option value="'+l.v+'" '+(db.lang===l.v?'selected':'')+'>'+l.t+'</option>').join('')+
       '</select></label>'+
   '</div>';
 
+  /* I10.1 — « données stockées uniquement sur cet appareil » était faux depuis
+     que le compte est obligatoire : tout part dans l'espace en ligne, et un
+     proche abonné lit la ligne entière. Une phrase rassurante et fausse est
+     pire qu'une phrase exacte : elle empêche de se poser la question. */
   html += '<div class="wrap tiny muted center" style="padding-top:6px;padding-bottom:30px">'+
-    'Mes Séries · données stockées uniquement sur cet appareil<br>Données films/séries fournies par TMDB.</div>';
+    'Mes Séries · tes données sont sur cet appareil et dans ton espace en ligne. '+
+    'Personne d\'autre que toi et les proches que tu as invités n\'y a accès.<br>'+
+    'Données films/séries fournies par TMDB.</div>';
   return html;
 }
+
+/* La langue demandée à TMDB, et son nom en clair. La valeur ne bouge pas :
+   c'est elle qui part dans `?language=`. */
+const LANGUES = [
+  { v:'fr-FR', t:'Français' }, { v:'en-US', t:'Anglais' }, { v:'es-ES', t:'Espagnol' },
+  { v:'de-DE', t:'Allemand' }, { v:'it-IT', t:'Italien' }
+];
 
 /* Les abonnements gardent leur provenance : on revient sur les réglages, pas
    sur le profil. */
@@ -180,12 +205,67 @@ function appliquerImport(){
   }
   saveDB(); render(); toast('Données importées');
 }
+/* ---------------------------------------------------------------------------
+   I10.4 — actualiser toutes les séries, en le disant.
+
+   Pour 103 séries c'est de l'ordre de 210 requêtes et plusieurs minutes. Avant,
+   un toast au départ, plus rien ensuite, et chaque échec avalé par un `catch`
+   nu : on ne savait ni où on en était, ni ce qui avait raté.
+
+   Le document proposait de brancher le callback `onStep` de `fetchShowFull`.
+   Vérifié : `onStep` compte les PAQUETS DE SAISONS D'UNE SEULE SÉRIE, pas les
+   séries. Il donnerait « 20/24 saisons » d'un titre dont on ignore le nom.
+   Le compteur qui répond à la question posée est l'indice de la boucle.
+
+   L'état vit hors du rendu : le bandeau se repeint tout seul, sans passer par
+   `render()` — 103 reconstructions complètes du DOM pendant une tâche de fond
+   seraient absurdes. Même procédé que `peindrePlateformes`.
+--------------------------------------------------------------------------- */
+let majSeries = { actif:false, fait:0, total:0, echecs:[], stop:false };
+
+function blocMajSeries(){
+  const m = majSeries;
+  if(!m.actif && !m.echecs.length) return '';
+  return '<div class="wrap" style="padding-bottom:0"><div class="banner" id="majprog" style="margin:0">'+
+    corpsMajSeries()+'</div></div>';
+}
+function corpsMajSeries(){
+  const m = majSeries;
+  if(m.actif){
+    return '<div style="display:flex;align-items:center;gap:12px">'+
+      '<div style="flex:1"><b>Actualisation en cours</b><br>'+
+        '<span class="small">'+m.fait+' / '+m.total+' séries</span></div>'+
+      '<button class="btn ghost" style="flex:0 0 auto;padding:9px 16px" '+
+        'onclick="arreterMajSeries()">Arrêter</button></div>';
+  }
+  /* Terminé, mais des séries ont échoué : on les nomme. Un décompte sans les
+     noms n'apprend rien — on ne sait pas laquelle rouvrir. */
+  return '<div style="display:flex;align-items:center;gap:12px">'+
+    '<div style="flex:1"><b>'+m.echecs.length+' série'+(m.echecs.length>1?'s n\'ont':' n\'a')+
+      ' pas répondu</b><br><span class="small">'+esc(m.echecs.join(' · '))+'</span></div>'+
+    '<button class="btn ghost" style="flex:0 0 auto;padding:9px 16px" '+
+      'onclick="oublierEchecsMaj()">Fermer</button></div>';
+}
+function peindreMajSeries(){
+  const el = document.getElementById('majprog');
+  if(el) el.innerHTML = corpsMajSeries();
+  else render();          // l'écran a changé pendant la tâche : on le refait entier
+}
+function arreterMajSeries(){ majSeries.stop = true; }
+function oublierEchecsMaj(){ majSeries.echecs = []; render(); }
+
 async function refreshAll(){
+  if(majSeries.actif) return;
   const ids = Object.keys(db.shows);
   if(!ids.length) return toast('Aucune série');
-  toast('Actualisation de '+ids.length+' série(s)…');
+  majSeries = { actif:true, fait:0, total:ids.length, echecs:[], stop:false };
+  render();
   let ok = 0;
   for(const id of ids){
+    if(majSeries.stop) break;
+    /* Le nom est lu AVANT la requête : si elle échoue, `db.shows[id]` est
+       toujours l'ancienne fiche et porte le nom qu'on veut afficher. */
+    const nom = (db.shows[id] && db.shows[id].name) || ('Série '+id);
     try{
       const fresh = await fetchShowFull(id);
       const ancien = db.shows[id];
@@ -193,14 +273,40 @@ async function refreshAll(){
       if(ancien.unwatched) fresh.unwatched = ancien.unwatched;
       if(ancien.pause){ fresh.pause = true; fresh.pauseLe = ancien.pauseLe; }   // une actualisation groupée ne réveille pas une série mise de côté
       db.shows[id] = fresh; ok++;
-    }catch(e){}
+    }catch(e){
+      /* P2 — l'échec ne disparaît plus dans un `catch` nu : il porte un nom et
+         il remonte à l'écran à la fin. */
+      majSeries.echecs.push(nom);
+      console.warn('actualisation impossible : '+nom, e);
+    }
+    majSeries.fait++;
+    peindreMajSeries();
     await sleep(120);
   }
-  saveDB(); render(); toast(ok+' série(s) actualisée(s)');
+  const arrete = majSeries.stop;
+  majSeries.actif = false; majSeries.stop = false;
+  saveDB(); render();
+  toast(arrete ? ('Arrêté · '+ok+' série(s) actualisée(s)')
+               : (ok+' série(s) actualisée(s)'));
 }
 function wipe(){
-  openSheet('<h3>Tout effacer ?</h3><p class="small muted" style="margin:0 0 8px">'+
-    'Séries, films et progression seront supprimés définitivement de cet appareil.</p>'+
+  /* I10.2 — l'action efface partout, et c'est irréversible. La confirmation dit
+     donc COMBIEN de titres partent et OÙ, et propose la sauvegarde sur-le-champ
+     plutôt que de la conseiller ailleurs. Le modèle est celui, déjà bon, de la
+     suppression de compte. */
+  const ns = Object.keys(db.shows).length, nf = Object.keys(db.movies).length;
+  const quoi = [ns ? ns+' série'+(ns>1?'s':'') : '', nf ? nf+' film'+(nf>1?'s':'') : '']
+                 .filter(Boolean).join(' et ') || 'Ta bibliothèque';
+  openSheet('<h3>Tout effacer ?</h3>'+
+    '<p class="small muted" style="margin:0 0 10px"><b style="color:#ff5a5a">'+esc(quoi)+'</b> '+
+      'et toute ta progression seront supprimés <b>partout</b> : de cet appareil, de tes '+
+      'autres appareils et de ta sauvegarde en ligne. C\'est irréversible.</p>'+
+    (ns+nf ? '<div class="card" style="padding:11px 12px;margin-bottom:6px">'+
+      '<div class="small">'+(db.lastExport
+        ? 'Dernière sauvegarde : '+esc(fmtDate(new Date(db.lastExport).toISOString().slice(0,10)))
+        : 'Tu n\'as jamais fait de sauvegarde.')+'</div>'+
+      '<button class="btn ghost block" style="margin-top:9px" onclick="exportData()">Exporter d\'abord</button>'+
+    '</div>' : '')+
     '<button class="opt danger" onclick="doWipe()">Oui, tout effacer</button>'+
     '<button class="opt" onclick="closeSheet()">Annuler</button>');
 }
@@ -229,7 +335,9 @@ async function boot(){
      après `migrerGouts` et avant le premier rendu : `ui` est bâti au chargement
      du script, quand la base n'est pas encore lue. */
   semerPlatesFiltres();
-  nettoyerCloches();
+  /* I9 — le nettoyage a quitté le rendu de l'écran des cloches, où il mutait
+     `db` sans jamais l'enregistrer. Ici, et son résultat est écrit. */
+  if(nettoyerCloches()) saveDB();
   askPersist();
   document.body.classList.remove('booting');
 
@@ -262,6 +370,14 @@ async function boot(){
      probable selon que l'appareil a déjà connu un compte ou non. */
   if(!signedIn()) demarrerAccueil();
   if(memoryOnly) toast('Stockage indisponible : pense à exporter tes données');
+  /* I9 — quelqu'un avait choisi « un résumé le soir » ou « le samedi », donc
+     ne recevait plus rien du tout. La migration 3 l'a remis sur « dès la
+     sortie » ; il doit l'apprendre, une fois, plutôt que de constater un jour
+     que les notifications sont revenues sans raison. */
+  if(db.notif && db.notif.reprisI9){
+    delete db.notif.reprisI9; saveDB();
+    setTimeout(()=> toast('Tes notifications sont réactivées : le résumé groupé n\'existait pas encore'), 900);
+  }
   if(syncReady() && signedIn()){ syncNow(true); majProfil(); chargerPartage(); inscrireSiBesoin(); }
 }
 /* `test.html` charge les mêmes fichiers dans le même ordre, pour éprouver le

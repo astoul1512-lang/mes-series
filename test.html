@@ -553,6 +553,272 @@ window.MODE_TEST = true;
     egal(JSON.stringify(db), dbAvant, 'la base a bougé');
   });
 
+  /* ==================== Lot I ==================== */
+  groupe('Notifications — I8 / I9');
+
+  /* Le pliage {cine, stream, vod} -> {cine, maison}. Il sert à TROIS entrées :
+     la migration numérotée, la remise en forme au démarrage, et ce qui arrive
+     par la synchro. S'il se trompe, quelqu'un cesse d'être prévenu pour ses
+     films sans que rien ne le dise. */
+  test('« streaming » ou « VOD » coché donne « à la maison »', ()=>{
+    const a = { cine:true, stream:true, vod:false };
+    normaliserFilmsNotif(a);
+    egal(a, { cine:true, maison:true });
+    const b = { cine:false, stream:false, vod:true };
+    normaliserFilmsNotif(b);
+    egal(b, { cine:false, maison:true });
+  });
+
+  test('aucun des deux coché ne réveille pas « à la maison »', ()=>{
+    const f = { cine:true, stream:false, vod:false };
+    normaliserFilmsNotif(f);
+    egal(f, { cine:true, maison:false });
+  });
+
+  test('le pliage est rejouable et ne touche pas une base déjà à jour', ()=>{
+    const f = { cine:false, maison:true };
+    egal(normaliserFilmsNotif(f), false, 'une base neuve est prise pour une ancienne');
+    egal(f, { cine:false, maison:true });
+    /* Deux fois de suite sur une ancienne : le second passage ne défait rien. */
+    const g = { cine:true, stream:true, vod:true };
+    normaliserFilmsNotif(g); normaliserFilmsNotif(g);
+    egal(g, { cine:true, maison:true });
+  });
+
+  test('« maison » déjà présent l\'emporte sur les anciennes clés', ()=>{
+    const f = { cine:true, maison:false, stream:true, vod:true };
+    normaliserFilmsNotif(f);
+    egal(f, { cine:true, maison:false }, 'un choix explicite a été écrasé');
+  });
+
+  test('migration 3 : une fréquence morte est ramenée à « dès la sortie »', ()=>{
+    baseVierge();
+    delete db.v;
+    db.notif = { quand:'soir', films:{ cine:true, stream:true, vod:false } };
+    migrer();
+    egal(db.v, SCHEMA, 'version');
+    egal(db.notif.quand, 'sortie', 'la personne resterait éteinte');
+    vrai(db.notif.reprisI9, 'aucun signalement : le changement serait invisible');
+    egal(db.notif.films, { cine:true, maison:true });
+  });
+
+  test('migration 3 : qui était déjà en « dès la sortie » n\'est prévenu de rien', ()=>{
+    baseVierge();
+    delete db.v;
+    db.notif = { quand:'sortie', films:{ cine:true, stream:false, vod:false } };
+    migrer();
+    vrai(!db.notif.reprisI9, 'message affiché sans raison');
+    egal(db.notif.films, { cine:true, maison:false });
+  });
+
+  test('migration 3 : une base sans bloc notif ne fait pas tomber le démarrage', ()=>{
+    baseVierge();
+    delete db.v;
+    db.notif = null;
+    migrer();
+    egal(db.v, SCHEMA, 'le démarrage s\'est arrêté sur une base sans notifications');
+  });
+
+  test('migrerNotif replie aussi une base arrivée par la synchro', ()=>{
+    baseVierge();
+    db.notif = { quand:'samedi', films:{ cine:false, stream:true, vod:false }, titres:{} };
+    migrerNotif();
+    egal(db.notif.quand, 'sortie');
+    egal(db.notif.films, { cine:false, maison:true });
+  });
+
+  test('un appareil resté en arrière ne rallume pas la fréquence morte', ()=>{
+    baseVierge();
+    db.notif = null; migrerNotif();
+    db.notif.maj = 10;
+    const distant = { quand:'soir', quandChoisi:true, maj:20,
+                      films:{ cine:false, stream:true, vod:false }, titres:{}, titresOff:{} };
+    fusionnerNotif(distant);
+    egal(db.notif.quand, 'sortie', 'la synchro a rallumé le réglage qui éteint tout');
+    egal(db.notif.films, { cine:false, maison:true });
+    /* L'objet reçu n'est pas modifié : il appartient à la charge utile. */
+    egal(distant.films, { cine:false, stream:true, vod:false }, 'la charge utile reçue a été modifiée');
+  });
+
+  test('les réglages de film ne partent jamais dans l\'ancienne forme', ()=>{
+    baseVierge();
+    db.notif = null; migrerNotif();
+    const p = notifPourSynchro();
+    vrai(!('stream' in p.films), 'clé « stream » envoyée au serveur');
+    vrai(!('vod' in p.films), 'clé « vod » envoyée au serveur');
+    egal(p.quand, 'sortie');
+  });
+
+  groupe('Code de partage — I1 / I2');
+
+  test('le temps restant se dit en clair', ()=>{
+    const avant = partage.expire;
+    try{
+      partage.expire = null;
+      egal(resteCode(), 'valable 24 h');
+      partage.expire = Date.now() - 1000;
+      egal(resteCode(), 'expiré');
+      partage.expire = Date.now() + 2*3600000 + 5*60000 + 5000;
+      egal(resteCode(), 'expire dans 2 h 05', 'les minutes ne sont pas sur deux chiffres');
+      partage.expire = Date.now() + 40*60000 + 5000;
+      egal(resteCode(), 'expire dans 40 min');
+      partage.expire = Date.now() + 20000;
+      egal(resteCode(), 'expire dans moins d\'une minute');
+    } finally { partage.expire = avant; }
+  });
+
+  groupe('Bibliothèque d\'un proche — I5');
+
+  /* La ligne d'une AUTRE personne est écrite par elle, par appel direct à
+     l'API si elle veut. L'identifiant part maintenant dans un `onclick` : ce
+     qui n'est pas une suite de chiffres ne doit pas devenir cliquable. */
+  test('un identifiant qui n\'en est pas un n\'est pas rendu cliquable', ()=>{
+    vrai(estIdTmdb('1399'), 'un vrai identifiant est refusé');
+    vrai(estIdTmdb(1399), 'un identifiant numérique est refusé');
+    ['1399" onclick="alert(1)', '1399\');alert(1);//', '', 'abc', '1e5', '-1', '1.5',
+     '1234567890123', null, undefined, '<img>', ' 1399'].forEach(x=>{
+      vrai(!estIdTmdb(x), 'accepté à tort : ' + JSON.stringify(x));
+    });
+  });
+
+  test('la carte d\'un proche ouvre un titre et signale ce que j\'ai déjà', ()=>{
+    baseVierge();
+    db.shows[1399] = serie(1399, [ep(1,HIER)], {});
+    const sien = serie(1399, [ep(1,HIER), ep(2,HIER)], {'1x1':1});
+    const h = carteLecture(sien, 'Camille');
+    vrai(h.indexOf('ouvrirTitre(1399,\'tv\',\'biblio\')') >= 0, 'la carte n\'est pas cliquable');
+    vrai(h.indexOf('chez moi') >= 0, 'le badge « chez moi » manque');
+    vrai(h.indexOf('Camille : ') >= 0, 'l\'avancement ne dit pas de qui il est');
+    /* Un titre absent de chez moi ne porte pas le badge. */
+    const autre = serie(42, [ep(1,HIER)], {});
+    vrai(carteLecture(autre, 'Camille').indexOf('chez moi') < 0, 'badge posé à tort');
+  });
+
+  test('un identifiant truqué ne produit aucun gestionnaire', ()=>{
+    baseVierge();
+    const piege = serie('1399" onclick="alert(1)', [ep(1,HIER)], {});
+    piege.poster = '/x.jpg" onclick="alert(3)';
+    /* On ne cherche pas la chaîne « alert » : elle survit légitimement à
+       l'échappement, sous forme de TEXTE. Ce qui compte est qu'aucun
+       gestionnaire d'événement n'ait été créé — donc on relit le fragment
+       comme le navigateur le lira. */
+    const boite = document.createElement('div');
+    boite.innerHTML = carteLecture(piege, 'Camille');
+    egal(boite.querySelectorAll('[onclick]').length, 0,
+         'un identifiant truqué a produit un gestionnaire');
+    /* Et le titre reste lisible : on refuse le geste, pas la carte. */
+    vrai(boite.querySelector('.pname').textContent.indexOf('1399') >= 0,
+         'la carte a disparu au lieu d\'être seulement non cliquable');
+  });
+
+  test('un identifiant honnête produit un gestionnaire, et un seul', ()=>{
+    baseVierge();
+    const boite = document.createElement('div');
+    boite.innerHTML = carteLecture(serie(1399, [ep(1,HIER)], {}), 'Camille');
+    egal(boite.querySelectorAll('[onclick]').length, 1);
+    const boite2 = document.createElement('div');
+    boite2.innerHTML = carteFilmLecture({ id:603, title:'Matrix', date:'1999-03-31', seen:1 });
+    egal(boite2.querySelectorAll('[onclick]').length, 1, 'un film n\'est pas cliquable');
+  });
+
+  groupe('Textes des réglages — I10');
+
+  test('les langues s\'affichent en clair sans changer la valeur envoyée', ()=>{
+    egal(LANGUES.map(l=>l.v), ['fr-FR','en-US','es-ES','de-DE','it-IT'],
+         'un code de langue a changé, les fiches changeraient de langue');
+    LANGUES.forEach(l=> vrai(!/-/.test(l.t), 'un intitulé est resté un code : ' + l.t));
+  });
+
+  groupe('Recommandations — I6');
+
+  function cercleFactice(){
+    partage.suivis  = [{id:'u2', pseudo:'Camille'}, {id:'u3', pseudo:'Alex'}];
+    partage.abonnes = [{id:'u3', pseudo:'Alex'}, {id:'u4', pseudo:'Léa'}];
+    conseils = { recues:[], envoyees:[], charge:true };
+  }
+
+  test('le cercle est l\'union des deux listes, sans doublon', ()=>{
+    cercleFactice();
+    egal(cercle().map(p=>p.id), ['u2','u3','u4'],
+         'quelqu\'un qui me suit ET que je suis apparaît deux fois');
+  });
+
+  /* C'est EXACTEMENT le bug B2, déjà payé une fois : une apostrophe dans un
+     `onclick` referme la chaîne JavaScript et le bouton ne fait plus rien, sans
+     message. « L'Étranger », « Grey's Anatomy »… ce n'est pas un cas d'école. */
+  test('un titre à apostrophe ne casse pas le bouton d\'envoi', ()=>{
+    cercleFactice();
+    baseVierge();
+    partage.suivis  = [{id:'u2', pseudo:'Camille'}];
+    partage.abonnes = [];
+    db.shows[1399] = serie(1399, [ep(1,HIER)], {});
+    db.shows[1399].name = "Grey's Anatomy \\ suite";
+    let html = '';
+    const vraiOpen = window.openSheet;
+    window.openSheet = h => { html = h; };
+    try{ menuRecommander('tv', 1399); } finally { window.openSheet = vraiOpen; }
+    const boite = document.createElement('div');
+    boite.innerHTML = html;
+    const b = boite.querySelector('button[onclick*="recommander"]');
+    vrai(b, 'aucun bouton d\'envoi produit');
+    /* Le test qui compte : le gestionnaire doit être du JavaScript VALIDE. */
+    let ok = true;
+    try{ new Function(b.getAttribute('onclick')); }catch(e){ ok = false; }
+    vrai(ok, 'le gestionnaire produit est du JavaScript invalide');
+  });
+
+  test('une recommandation déjà envoyée n\'est pas renvoyable', ()=>{
+    cercleFactice();
+    baseVierge();
+    db.shows[1399] = serie(1399, [ep(1,HIER)], {});
+    conseils.envoyees = [{ vers:'u2', type:'tv', tmdb_id:1399 }];
+    let html = '';
+    const vraiOpen = window.openSheet;
+    window.openSheet = h => { html = h; };
+    try{ menuRecommander('tv', 1399); } finally { window.openSheet = vraiOpen; }
+    const boite = document.createElement('div');
+    boite.innerHTML = html;
+    const lignes = [...boite.querySelectorAll('button[onclick*="recommander"]')];
+    const camille = lignes.find(b=> b.textContent.indexOf('Camille') >= 0);
+    vrai(camille && camille.hasAttribute('disabled'), 'Camille est encore proposée');
+    const alex = lignes.find(b=> b.textContent.indexOf('Alex') >= 0);
+    vrai(alex && !alex.hasAttribute('disabled'), 'Alex a été désactivé à tort');
+  });
+
+  test('une recommandation au contenu truqué ne produit aucun gestionnaire', ()=>{
+    cercleFactice();
+    baseVierge();
+    conseils.recues = [{ id:'r1', de:'u2', vers:'u1', type:'tv',
+                      tmdb_id:'99" onclick="alert(1)', titre:'Piege" onclick="alert(2)' }];
+    const boite = document.createElement('div');
+    boite.innerHTML = blocConseilsRecus();
+    /* Seul « Non merci » subsiste : sans identifiant valide, « Voir » n'a nulle
+       part où aller. Et aucun gestionnaire ne doit venir du contenu reçu. */
+    const gestionnaires = [...boite.querySelectorAll('[onclick]')]
+      .map(e=> e.getAttribute('onclick'));
+    vrai(gestionnaires.every(g=> g.indexOf('alert') < 0), 'du code reçu est devenu exécutable');
+    vrai(!gestionnaires.some(g=> g.indexOf('ouvrirConseil') >= 0),
+         '« Voir » proposé sur un identifiant qui n\'en est pas un');
+    vrai(gestionnaires.some(g=> g.indexOf('ecarterConseil') >= 0), '« Non merci » a disparu');
+  });
+
+  test('une recommandation honnête propose « Voir » et dit de qui elle vient', ()=>{
+    cercleFactice();
+    baseVierge();
+    conseils.recues = [{ id:'r1', de:'u2', vers:'u1', type:'tv', tmdb_id:1399, titre:'Severance' }];
+    const boite = document.createElement('div');
+    boite.innerHTML = blocConseilsRecus();
+    vrai(boite.textContent.indexOf('Camille te le conseille') >= 0,
+         'la provenance n\'est pas dite');
+    vrai(boite.querySelector('[onclick*="ouvrirConseil"]'), '« Voir » manque');
+    /* Et le badge « déjà chez toi » n'apparaît que si c'est vrai. */
+    vrai(boite.textContent.indexOf('déjà chez toi') < 0, 'mention posée à tort');
+    db.shows[1399] = serie(1399, [ep(1,HIER)], {});
+    const b2 = document.createElement('div');
+    b2.innerHTML = blocConseilsRecus();
+    vrai(b2.textContent.indexOf('déjà chez toi') >= 0, 'mention manquante');
+  });
+
   /* ==================== Bilan ==================== */
   const b = document.getElementById('bilan');
   b.className = 'bilan ' + (ko ? 'rouge' : 'vert');
