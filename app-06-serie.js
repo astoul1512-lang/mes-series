@@ -252,6 +252,12 @@ function showMenu(id){
       ? '<button class="opt" onclick="basculerPause('+id+')">'+
           (s.pause ? 'Reprendre cette série' : 'Mettre en pause')+'</button>'
       : '')+
+    /* I6 — la seule entrée de ce menu qui s'adresse à quelqu'un d'autre. Elle
+       n'apparaît que si le cercle n'est pas vide : proposer « recommander » à
+       qui ne suit personne, c'est ouvrir une feuille vide. */
+    (typeof cercle === 'function' && cercle().length
+      ? '<button class="opt" onclick="menuRecommander(\'tv\','+id+')">Recommander à…</button>'
+      : '')+
     '<button class="opt" onclick="refreshShow('+id+')">Actualiser les épisodes</button>'+
     '<button class="opt" onclick="markAllAired('+id+')">Tout marquer comme vu</button>'+
     '<button class="opt" onclick="unmarkAll('+id+')">Tout décocher</button>'+

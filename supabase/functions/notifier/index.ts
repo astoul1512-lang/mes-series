@@ -111,7 +111,10 @@ async function sortiesSerie(id: number): Promise<Annonce[]> {
     cle: `tv:${id}:${ep.season_number}x${ep.episode_number}`,
     titre: `${s.name} · ${code} est sorti`,
     corps: avecPlateforme(ep.name ? `« ${ep.name} »` : '', await plateformesFR('tv', id)),
-    url: `${APP}#show-${id}`,
+    // C1/C3 — nouvelle forme d'adresse. L'app lit AUSSI l'ancienne (`#show-<id>`)
+    // pendant au moins un mois : les notifications déjà parties dorment
+    // plusieurs jours dans le centre de notifications.
+    url: `${APP}#/serie/${id}`,
     affiche: img(s.poster_path, 'w185'),
     bandeau: img(s.backdrop_path, 'w780')
   }];
@@ -120,12 +123,31 @@ async function sortiesSerie(id: number): Promise<Annonce[]> {
 // --- Un film : sortie salle, streaming ou VOD, en France --------------------
 // TMDB distingue les types de sortie par pays : 3 = salle, 4 = numérique,
 // 5 = physique. On ne garde que la France et que les types demandés.
-const TYPES: Record<string, number[]> = { cine: [2, 3], stream: [4], vod: [4, 5] };
+// I8 — il y avait TROIS genres côté client (« cinéma », « streaming », « VOD »)
+// pour DEUX événements réels : `stream` valait le type 4, `vod` les types 4 et
+// 5, et le type 5 (le disque) est écarté partout ailleurs dans l'app. Deux
+// réglages qui se déclenchent sur la même donnée annoncent une finesse qui
+// n'existe pas — et un film sorti en numérique pouvait produire deux
+// notifications. Il en reste deux, qui recouvrent bien deux choses distinctes.
+//
+// L'ancienne forme est encore acceptée en lecture : un téléphone resté en
+// arrière peut continuer d'écrire `{stream, vod}` dans `push_reglages` pendant
+// quelques jours. Elle est repliée à l'entrée, pas propagée.
+const TYPES: Record<string, number[]> = { cine: [2, 3], maison: [4, 5] };
 const MOT:   Record<string, string>   = {
   cine:   'Sort au cinéma aujourd\'hui',
-  stream: 'Disponible en streaming',
-  vod:    'Disponible en VOD'
+  maison: 'Disponible chez toi'
 };
+
+// `{cine, stream, vod}` → `{cine, maison}`. Le même pliage que
+// `normaliserFilmsNotif` côté app : les deux doivent rester d'accord.
+function genresVoulus(films: Record<string, boolean>): Record<string, boolean> {
+  const f = films ?? {};
+  return {
+    cine:   f.cine === true,
+    maison: f.maison === true || f.stream === true || f.vod === true
+  };
+}
 
 async function sortiesFilm(id: number, veut: Record<string, boolean>): Promise<Annonce[]> {
   const [m, rel] = await Promise.all([
@@ -135,7 +157,7 @@ async function sortiesFilm(id: number, veut: Record<string, boolean>): Promise<A
   const fr = (rel.results || []).find((r: any) => r.iso_3166_1 === 'FR');
   if (!fr) return [];
   const out: Annonce[] = [];
-  for (const genre of ['cine', 'stream', 'vod']) {
+  for (const genre of ['cine', 'maison']) {
     if (!veut[genre]) continue;
     const trouve = (fr.release_dates || []).find((d: any) =>
       TYPES[genre].includes(d.type) &&
@@ -149,7 +171,7 @@ async function sortiesFilm(id: number, veut: Record<string, boolean>): Promise<A
       cle: `movie:${id}:${genre}`,
       titre: m.title,
       corps: noms.length ? `Disponible sur ${noms.join(', ')}` : MOT[genre],
-      url: `${APP}#movie-${id}`,
+      url: `${APP}#/film/${id}`,
       affiche: img(m.poster_path, 'w185'),
       bandeau: img(m.backdrop_path, 'w780')
     });
@@ -265,9 +287,16 @@ Deno.serve(async (req) => {
 
   const { data: reglages } = await sb.from('push_reglages').select('user_id, quand, films');
   for (const r of reglages ?? []) {
-    // Le résumé du soir et celui du samedi viendront plus tard : pour l'instant
-    // seul « dès la sortie » envoie, c'est le réglage choisi.
-    if (r.quand !== 'sortie') continue;
+    // I9 — il y avait ici `if (r.quand !== 'sortie') continue;`. L'app proposait
+    // trois fréquences, cette fonction n'en servait qu'une, et les deux autres
+    // ne différaient donc pas la notification : elles la supprimaient. Quelqu'un
+    // qui choisissait « un résumé le soir » ne recevait plus rien, pendant que
+    // son écran affichait « Activées · 3 séries, 1 film ».
+    //
+    // Le choix a été retiré de l'app, et le filtre avec lui : une ligne restée
+    // en `soir` ou `samedi` — un téléphone pas encore mis à jour — est traitée
+    // comme les autres plutôt que laissée muette. `quand` reste en base pour le
+    // jour où un vrai résumé existera ; il ne pilote plus rien.
 
     const { data: appareils } = await sb.from('push_appareils')
       .select('id, endpoint, p256dh, auth, echecs').eq('user_id', r.user_id);
@@ -285,7 +314,7 @@ Deno.serve(async (req) => {
       try {
         annonces = c.type === 'tv'
           ? await sortiesSerie(Number(c.tmdb_id))
-          : await sortiesFilm(Number(c.tmdb_id), films);
+          : await sortiesFilm(Number(c.tmdb_id), genresVoulus(films));
       } catch (e: any) {
         bilan.erreurs.push(`${c.type}:${c.tmdb_id} → ${e.message}`);
         continue;
