@@ -362,6 +362,11 @@ document.getElementById('sheet').addEventListener('click', e=>{ if(e.target.id==
    e-mail : une adresse qu'on colle dans une conversation ne doit pas y mener. */
 const ROUTES = {
   discover:   { seg:'decouvrir',     partageable:true  },
+  /* L'onglet Recherche est partageable sans paramètre : l'adresse mène à
+     l'écran vide, pas à une requête. Les critères vivent en mémoire — les
+     mettre dans l'adresse voudrait dire les restaurer au démarrage, donc
+     ouvrir l'app sur une grille filtrée que personne n'a demandée ce jour-là. */
+  search:     { seg:'recherche',     partageable:true  },
   follow:     { seg:'a-suivre',      partageable:true  },
   profile:    { seg:'profil',        partageable:true  },
   show:       { seg:'serie',         partageable:true,  cles:['id'] },
@@ -500,7 +505,7 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
               versé dans `disc` à sa fermeture, remis à null ensuite. */
            discBrouillon:null };
 
-const DEPTH = { bienvenue:0, motdepasse:0, avatar:0, discover:0, sorties:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, rangee:1, acteur:2, account:2, biblio:2, notifs:2, gouts:2, plates:2, clochettes:3 };
+const DEPTH = { bienvenue:0, motdepasse:0, avatar:0, discover:0, search:0, sorties:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, rangee:1, acteur:2, account:2, biblio:2, notifs:2, gouts:2, plates:2, clochettes:3 };
 let navDir = 'none';
 /* Position de défilement mémorisée pour les écrans qui sont des listes.
    Quitter une liste puis y revenir doit rendre la page là où on l'avait laissée ;
@@ -508,7 +513,7 @@ let navDir = 'none';
 /* La filmographie d'un acteur en fait partie : elle compte parfois deux cents
    titres, et revenir d'une fiche pour retomber tout en haut est le reproche
    exact d'Adrien. */
-const LISTES = { discover:1, follow:1, profile:1, abos:1, biblio:1, acteur:1, rangee:1 };
+const LISTES = { discover:1, search:1, follow:1, profile:1, abos:1, biblio:1, acteur:1, rangee:1 };
 const memDefil = {};
 /* Paramètres du dernier passage sur chaque écran. En revenant en arrière on
    remet l'écran d'arrivée exactement dans l'état où on l'avait quitté : sans
@@ -534,7 +539,7 @@ function cleDefil(v, p){
 
 /* L'ordre des onglets du bas — il donne le sens du glissement quand on passe
    de l'un à l'autre : vers Mon profil, le contenu arrive de la droite. */
-const ONGLETS_BARRE = ['discover', 'follow', 'profile'];
+const ONGLETS_BARRE = ['discover', 'search', 'follow', 'profile'];
 
 /* ========================= Historique — C2 =========================
    `go()` reste la seule porte d'entrée, avec la même signature : les ~100
