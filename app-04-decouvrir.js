@@ -864,7 +864,7 @@ function blocFiltrePlates(){
   if(!sondageEnCours) sonderPlates(discMedia()).then(ch=>{ if(ch && feuilleFiltresOuverte()) ouvrirFiltres(); });
   h += '<div class="fchips">'+liste.map((p,i)=>{
     const on = d.plates.some(x => x.id === p.id);
-    const logo = p.logo ? '<img loading="lazy" src="'+IMG(p.logo,'w45')+'" alt="">' : '';
+    const logo = srcImage(p.logo,'w45') ? '<img loading="lazy" src="'+srcImage(p.logo,'w45')+'" alt="">' : '';
     return '<button class="chip chiplogo '+(on?'on':'')+'" onclick="bascPlate('+i+')">'+
              logo+'<span>'+esc(p.nom)+'</span></button>';
   }).join('')+'</div>';
@@ -1052,7 +1052,7 @@ function vitrineVisible(){
    le titre, et les deux actions. Cinq d'affilée, que l'on balaie du pouce. */
 function diapoVedette(x){
   const bouts = [year(x.date), x.note ? '\u2605 '+(Math.round(x.note*10)/10) : ''].filter(Boolean);
-  const img = IMG(x.bandeau,'w780') || IMG(x.affiche,'w342');
+  const img = srcImage(x.bandeau,'w780') || srcImage(x.affiche,'w342');
   const item = x.media === 'tv' ? db.shows[x.id] : db.movies[x.id];
   return '<div class="diapo">'+
     (img ? '<img class="dhimg" loading="lazy" src="'+img+'" alt="">' : '<div class="dhimg"></div>')+
@@ -1307,7 +1307,7 @@ function viewPlates(){
   html += '<div class="wrap" style="padding-top:0"><div class="fchips">'+
     liste.map(p=>{
       const on = choisies.some(x => x.id === p.id);
-      const logo = p.logo ? '<img loading="lazy" src="'+IMG(p.logo,'w45')+'" alt="">' : '';
+      const logo = srcImage(p.logo,'w45') ? '<img loading="lazy" src="'+srcImage(p.logo,'w45')+'" alt="">' : '';
       return '<button class="chip chiplogo '+(on?'on':'')+'" aria-pressed="'+(on?'true':'false')+'" '+
         'onclick="bascMaPlate('+p.id+')">'+logo+'<span>'+esc(p.nom)+'</span></button>';
     }).join('')+'</div>';

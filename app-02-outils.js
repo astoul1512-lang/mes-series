@@ -7,7 +7,15 @@ const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'
    `esc` seul ne suffit donc pas — il transforme l'apostrophe en `&#39;`, que le
    parseur HTML rend telle quelle à JavaScript, qui y voit la fin de sa chaîne
    (« Avec N'Golo » cassait le gestionnaire). On échappe pour JavaScript AVANT
-   d'échapper pour HTML : la barre oblique, elle, survit au décodage. */
+   d'échapper pour HTML : la barre oblique, elle, survit au décodage.
+
+   RÈGLE : toute chaîne glissée dans un `onclick` passe par `escJs`, JAMAIS par
+   `esc(…).replace(/'/g, …)`. Cette seconde forme est un leurre — `esc` a déjà
+   transformé l'apostrophe en `&#39;`, le `replace` ne trouve plus rien et ne
+   fait donc rien. Elle traînait à trois endroits d'app-11 jusqu'au 30/07 :
+   chercher « O'Toole » dans Mes goûts affichait bien le résultat, mais le
+   bouton ne faisait rien, sans message. Contrôle :
+       git grep -n "esc(.*)\.replace(/'/g"   → ne doit renvoyer que cette ligne. */
 const escJs = s => esc(String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"));
 const key = (s,e)=> s+'x'+e;
 const aired = ep => !!ep.d && ep.d <= todayISO();
@@ -122,17 +130,46 @@ function fmtDayLabel(iso){
 }
 const year = iso => iso ? iso.slice(0,4) : '';
 
+/* ---------------------------------------------------------------------------
+   La frontière de confiance des chemins d'image
+
+   Un chemin d'affiche vient normalement de TMDB, et le coller tel quel dans un
+   `src` ne poserait aucun problème. Mais `chargerBiblio` charge la colonne
+   `data` d'une AUTRE personne — celle dont on a accepté le code de partage — et
+   ses `poster` traversent `posterEl` comme les nôtres. Quelqu'un peut écrire
+   dans sa propre ligne, par appel direct à l'API, un poster valant
+   `/x.jpg" onerror="…` : le guillemet referme l'attribut et le reste s'exécute
+   dans NOTRE app, avec notre jeton en mémoire.
+
+   Deux verrous, parce qu'un seul finit toujours par être contourné : la forme
+   est vérifiée (un chemin TMDB, rien d'autre), ET la sortie est échappée.
+   TMDB utilise des chemins du type `/8Gxv8gSFCU0XGDykEGv7zR1n2ua.jpg` :
+   lettres, chiffres, point, tiret, souligné, barre oblique. */
+/* Une barre oblique en tête, puis des segments de lettres, chiffres, point,
+   tiret et souligné, séparés par UNE seule barre. Le refus du double slash
+   n'est pas cosmétique : `//evil.example/x.jpg` est une adresse relative au
+   protocole, que le navigateur charge depuis un serveur tiers — soit très
+   exactement la balise de traçage que cette fonction existe pour empêcher.
+   Mon premier essai, `/^\/[\w.\-\/]+$/`, la laissait passer. */
+const cheminImage = p =>
+  (typeof p === 'string' && /^\/[\w.-]+(?:\/[\w.-]+)*$/.test(p)) ? p : null;
+/* Le `src` prêt à l'emploi, ou une chaîne vide si le chemin n'inspire pas
+   confiance — les appelants savent déjà retomber sur leur cadre neutre. */
+const srcImage = (p, size) => { const c = cheminImage(p); return c ? esc(IMG(c, size)) : ''; };
+
 function posterEl(path, size, cls, alt){
-  if(path) return '<img class="poster '+(cls||'')+'" loading="lazy" onerror="posterFail(this)" src="'+
-    IMG(path,size)+'" alt="'+esc(alt||'')+'">';
+  const src = srcImage(path, size);
+  if(src) return '<img class="poster '+(cls||'')+'" loading="lazy" onerror="posterFail(this)" src="'+
+    src+'" alt="'+esc(alt||'')+'">';
   return '<div class="poster ph '+(cls||'')+'">'+esc((alt||'?').slice(0,18))+'</div>';
 }
 /* Vignette d'épisode : image TMDB si elle existe, sinon un cadre neutre de même taille.
    Chargement différé pour que les longues saisons restent fluides. */
 function epThumb(ep){
-  if(ep && ep.st)
+  const src = ep ? srcImage(ep.st, 'w300') : '';
+  if(src)
     return '<div class="epthumb"><img loading="lazy" decoding="async" alt="" '+
-           'onerror="thumbFail(this)" src="'+IMG(ep.st,'w300')+'"></div>';
+           'onerror="thumbFail(this)" src="'+src+'"></div>';
   return '<div class="epthumb ph">'+I.frame+'</div>';
 }
 function thumbFail(img){

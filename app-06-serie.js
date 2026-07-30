@@ -12,7 +12,7 @@ function viewShow(){
   let html = header(s.name,{back:back,
     right: boutonCloche('tv', s.id) +
            '<button class="iconbtn" onclick="showMenu('+s.id+')">'+I.dots+'</button>'});
-  html += '<div class="hero">'+(s.backdrop?'<img src="'+IMG(s.backdrop,'w780')+'" alt="">':'')+'</div>';
+  html += '<div class="hero">'+(srcImage(s.backdrop,'w780')?'<img src="'+srcImage(s.backdrop,'w780')+'" alt="">':'')+'</div>';
   html += '<div class="dhead">'+posterEl(s.poster,'w342','',s.name)+
     '<div class="dmeta">'+
       '<h2>'+esc(s.name)+'</h2>'+
@@ -84,17 +84,8 @@ function viewShow(){
         '<span class="ck '+(w===eps.length&&eps.length?'on':'')+'" onclick="event.stopPropagation();toggleWholeSeason('+s.id+','+n+')">'+I.check+'</span>'+
       '</button>';
     if(open){
-      html += eps.map(ep=>{
-        const on = !!s.watched[key(n,ep.e)];
-        const fut = !aired(ep);
-        return '<div class="eprow '+(fut?'future':'')+(on?' seen':'')+'" onclick="tapEp('+s.id+','+n+','+ep.e+')">'+
-          '<span class="ck '+(on?'on':'')+'">'+I.check+'</span>'+
-          epThumb(ep)+
-          '<div class="epinfo">'+
-            '<div class="epname">'+codeEp(n, ep.e)+' · '+esc(ep.n)+'</div>'+
-            '<div class="epsub">'+(ep.d?fmtDate(ep.d):'Date inconnue')+(ep.r?' · '+ep.r+' min':'')+'</div>'+
-          '</div></div>';
-      }).join('');
+      html += eps.map(ep=>
+        ligneEpisode(s, n, ep, 'tapEp('+s.id+','+n+','+ep.e+')')).join('');
     }
     html += '</div>';
   });
@@ -104,6 +95,31 @@ function viewShow(){
   html += '<div style="height:28px"></div>';
   return html;
 }
+/* ---------------------------------------------------------------------------
+   UNE ligne d'épisode, pour les deux écrans qui en affichent
+
+   La fiche et l'aperçu rendaient chacun leur ligne, avec leurs propres classes.
+   Elles ont divergé : l'aperçu posait une coche TOUJOURS éteinte, même pour une
+   série vue en entier — et comme un appui basculait l'état, toucher une coche
+   vide pour comprendre RETIRAIT l'épisode des vus. Sans confirmation, sans
+   barre Annuler, et en projetant sur la fiche.
+
+   Une seule fonction pour les deux, donc, plutôt que corriger une instance :
+   la divergence ne peut plus revenir. `sh` vaut `null` quand la série n'est pas
+   dans la bibliothèque — rien n'est alors coché, ce qui est la vérité.
+--------------------------------------------------------------------------- */
+function ligneEpisode(sh, n, ep, action){
+  const on  = !!(sh && sh.watched[key(n, ep.e)]);
+  const fut = !aired(ep);
+  return '<div class="eprow '+(fut?'future':'')+(on?' seen':'')+'" onclick="'+action+'">'+
+    '<span class="ck '+(on?'on':'')+'">'+I.check+'</span>'+
+    epThumb(ep)+
+    '<div class="epinfo">'+
+      '<div class="epname">'+codeEp(n, ep.e)+' · '+esc(ep.n||'')+'</div>'+
+      '<div class="epsub">'+(ep.d?fmtDate(ep.d):'Date inconnue')+(ep.r?' · '+ep.r+' min':'')+'</div>'+
+    '</div></div>';
+}
+
 function toggleSeason(id,n){ const k=id+'.'+n; ui.openSeasons[k]=!ui.openSeasons[k]; render(); }
 
 /* ---------------------------------------------------------------------------
@@ -146,6 +162,9 @@ function blocSaisonsApercu(d){
   const saisons = (d.seasons || []).filter(s=>s.episode_count > 0)
                     .sort((a,b)=>a.season_number - b.season_number);
   if(!saisons.length) return '';
+  /* La série est-elle déjà suivie ? Tout ce bloc en dépend : les coches, ce que
+     dit l'en-tête de saison, ce que fait un appui, et la phrase de pied. */
+  const sh = db.shows[d.id] || null;
   let html = '<div class="sectitle">Épisodes</div>'+
     '<div class="card" style="margin:0 16px;overflow:hidden">';
   saisons.forEach(s=>{
@@ -153,13 +172,22 @@ function blocSaisonsApercu(d){
     const k    = d.id + '.' + n;
     const open = !!ui.openSeasons[k];
     const etat = apercuSaisons[k];
+    /* Sur une série suivie, l'en-tête compte les épisodes vus comme sur la
+       fiche. « 8 ép. · 2021 » est une information de catalogue ; « 8/8 » dit
+       où on en est, et c'est ce qu'on vient chercher. Le compte se fait sur la
+       saison telle qu'elle est ENREGISTRÉE, pas sur ce que TMDB annonce : les
+       deux peuvent diverger d'un épisode. */
+    const epsLoc = sh ? (sh.seasons[n] || []) : [];
+    const vus    = epsLoc.filter(e=>sh.watched[key(n, e.e)]).length;
+    const compte = (sh && epsLoc.length)
+      ? vus + '/' + epsLoc.length
+      : s.episode_count + ' ép.' + (year(s.air_date) ? ' · '+esc(year(s.air_date)) : '');
     html += '<div class="season">'+
       '<button class="shead '+(open?'open':'')+'" onclick="toggleSaisonApercu('+d.id+','+n+')">'+
         '<span class="caret">'+I.caret+'</span>'+
         '<b>'+(n===0?'Hors-série':'Saison '+n)+'</b>'+
         '<span class="spacer"></span>'+
-        '<span class="tiny muted">'+s.episode_count+' ép.'+
-          (year(s.air_date) ? ' · '+esc(year(s.air_date)) : '')+'</span>'+
+        '<span class="tiny muted">'+compte+'</span>'+
       '</button>';
     if(open){
       if(etat && etat.erreur){
@@ -171,22 +199,17 @@ function blocSaisonsApercu(d){
           '<div class="epinfo"><div class="epsub">Chargement des épisodes…</div></div></div>';
       } else {
         html += etat.map(ep=>
-          '<div class="eprow '+(aired(ep)?'':'future')+'" '+
-               'onclick="cocherDepuisApercu('+d.id+','+n+','+ep.e+')">'+
-            '<span class="ck">'+I.check+'</span>'+
-            epThumb(ep)+
-            '<div class="epinfo">'+
-              '<div class="epname">'+codeEp(n, ep.e)+' · '+esc(ep.n)+'</div>'+
-              '<div class="epsub">'+(ep.d?fmtDate(ep.d):'Date inconnue')+
-                (ep.r?' · '+ep.r+' min':'')+'</div>'+
-            '</div></div>').join('');
+          ligneEpisode(sh, n, ep, 'cocherDepuisApercu('+d.id+','+n+','+ep.e+')')).join('');
       }
     }
     html += '</div>';
   });
-  return html + '</div>'+
+  /* La phrase n'est vraie que pour une série absente. La laisser sur une série
+     déjà suivie, c'était promettre un ajout qui n'aura pas lieu et un voyage
+     qui n'aura pas lieu non plus. */
+  return html + '</div>' + (sh ? '' :
     '<div class="wrap tiny muted" style="padding-top:10px">Cocher un épisode ajoute la série '+
-    'à ta liste et t\'y emmène.</div>';
+    'à ta liste et t\'y emmène.</div>');
 }
 
 /* Cocher ici vaut « je suis cette série » : sans l'ajout, la coche n'aurait
@@ -194,7 +217,12 @@ function blocSaisonsApercu(d){
    tout ce qui précède a été vu serait deviner à sa place. */
 async function cocherDepuisApercu(id, n, e){
   const ou = { id:id, from: params.from || 'discover' };
-  if(db.shows[id]){ toggleEp(id, n, e); return go('show', ou); }
+  if(db.shows[id]){
+    /* Série déjà suivie : exactement la règle de la fiche — la question sur les
+       épisodes sautés, et la barre Annuler. Et on RESTE ici : on était venu
+       consulter la liste, pas demander à changer d'écran. */
+    return tapEp(id, n, e);
+  }
   if(ui.busy) return;
   ui.busy = true;
   toast('Ajout de la série…');
@@ -284,12 +312,17 @@ function removeShow(id){
   if(view === 'show') goBack(); else render();
 }
 
+/* Décocher est le geste le plus destructeur de l'app, et le plus facile à faire
+   par accident — un rond de 26 pixels dans une liste dense. Il passe donc par
+   `applyWatched`, comme les gestes de masse : une seule sauvegarde, et surtout
+   la barre Annuler. Cocher 26 épisodes d'un coup était annulable, en cocher un
+   seul par erreur ne l'était pas. */
 function toggleEp(id,s,e){
-  const sh = db.shows[id], k = key(s,e);
-  const avant = Object.assign({}, sh.watched);
-  if(sh.watched[k]) delete sh.watched[k]; else sh.watched[k] = Date.now();
-  noterDecoches(sh, avant);
-  saveDB(); render();
+  const sh = db.shows[id];
+  if(!sh) return;
+  const k = key(s,e), etaitVu = !!sh.watched[k];
+  applyWatched(id, x=>{ if(etaitVu) delete x.watched[k]; else x.watched[k] = Date.now(); },
+               codeEp(s,e) + (etaitVu ? ' décoché' : ' vu'));
 }
 /* Cocher une saison marque aussi les précédentes ; la décocher libère les suivantes.
    Les hors-série (saison 0) restent indépendants et ne déclenchent aucune cascade. */

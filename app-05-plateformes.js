@@ -46,7 +46,7 @@ function corpsPlateformes(k){
   return '<div class="sectitle">Où le regarder</div><div class="plats">'+
     p.abo.map(f=>{
       const nom = f && f.provider_name ? String(f.provider_name) : '';
-      const img = f && f.logo_path ? '<img loading="lazy" src="'+IMG(f.logo_path,'w92')+'" alt="">'
+      const img = f && srcImage(f.logo_path,'w92') ? '<img loading="lazy" src="'+srcImage(f.logo_path,'w92')+'" alt="">'
                                    : '<div class="ph3">'+esc(nom.slice(0,1))+'</div>';
       return '<div class="plato">'+img+'<span>'+esc(nom)+'</span></div>';
     }).join('')+'</div>'+credit;
@@ -97,7 +97,7 @@ function castStrip(cast){
   if(!cast || cast === 'attente' || !cast.length) return '';
   return '<div class="sectitle">Casting</div><div class="cast">'+cast.slice(0,16).map(p=>
     '<button class="cperson" onclick="ouvrirActeur('+p.id+')">'+
-      (p.profile_path ? '<img loading="lazy" src="'+IMG(p.profile_path,'w185')+'" alt="">'
+      (srcImage(p.profile_path,'w185') ? '<img loading="lazy" src="'+srcImage(p.profile_path,'w185')+'" alt="">'
                       : '<div class="ph2">'+esc((p.name||'?')[0])+'</div>')+
       '<div class="cname">'+esc(p.name)+'</div>'+
       '<div class="crole">'+esc(p.character||'')+'</div>'+
@@ -298,7 +298,7 @@ function viewPreview(){
   const note = d.vote_average ? Math.round(d.vote_average*10)/10 : null;
 
   let html = header(title,{back:back});
-  html += '<div class="hero">'+(d.backdrop_path?'<img src="'+IMG(d.backdrop_path,'w780')+'" alt="">':'')+'</div>';
+  html += '<div class="hero">'+(srcImage(d.backdrop_path,'w780')?'<img src="'+srcImage(d.backdrop_path,'w780')+'" alt="">':'')+'</div>';
   html += '<div class="dhead">'+posterEl(d.poster_path,'w342','',title)+
     '<div class="dmeta">'+
       '<h2>'+esc(title)+'</h2>'+
@@ -471,7 +471,7 @@ function viewActeur(){
                .filter(Boolean).join(' · ');
   html += '<div class="pers">'+
     (info.profile_path
-      ? '<img class="persimg" src="'+IMG(info.profile_path,'w342')+'" alt="">'
+      ? '<img class="persimg" src="'+srcImage(info.profile_path,'w342')+'" alt="">'
       : '<div class="persimg ph2">'+esc((info.name||'?')[0])+'</div>')+
     '<div class="persnom">'+esc(info.name||'')+'</div>'+
     (meta ? '<div class="small muted">'+esc(meta)+'</div>' : '')+
@@ -520,7 +520,7 @@ function viewMovie(){
   let html = header(m.title,{back:back,
     right: boutonCloche('movie', m.id) +
            '<button class="iconbtn" onclick="movieMenu('+m.id+')">'+I.dots+'</button>'});
-  html += '<div class="hero">'+(m.backdrop?'<img src="'+IMG(m.backdrop,'w780')+'" alt="">':'')+'</div>';
+  html += '<div class="hero">'+(srcImage(m.backdrop,'w780')?'<img src="'+srcImage(m.backdrop,'w780')+'" alt="">':'')+'</div>';
   html += '<div class="dhead">'+posterEl(m.poster,'w342','',m.title)+
     '<div class="dmeta"><h2>'+esc(m.title)+'</h2>'+
       '<div class="small muted">'+esc(year(m.date))+(m.runtime?' · '+m.runtime+' min':'')+'</div>'+

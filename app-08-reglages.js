@@ -52,9 +52,11 @@ function viewSettings(){
      : (nbShows && oldExport ? '<div class="banner" style="margin:0 0 14px">'+
         (db.lastExport ? 'Dernière sauvegarde il y a plus d\'un mois.' : 'Tu n\'as jamais fait de sauvegarde.')+
         ' <b>Exporte ton fichier de temps en temps</b> : c\'est ta seule copie de secours si tu changes de téléphone.</div>' : ''))+
+    '<div class="tiny muted" style="margin:0 0 12px">Le fichier contient ta bibliothèque et tes '+
+      'réglages. Il ne contient aucun mot de passe ni identifiant de connexion.</div>'+
     ligne('Exporter une sauvegarde',
           db.lastExport ? 'Dernière : '+fmtDate(new Date(db.lastExport).toISOString().slice(0,10))
-                        : 'Un fichier à garder de côté',
+                        : 'Ta bibliothèque et tes réglages, sans identifiants',
           "exportData()", I.bookmark)+
     ligne('Importer une sauvegarde', 'Remplace la bibliothèque',
           "document.getElementById('imp').click()", I.plus)+
@@ -100,7 +102,20 @@ function saveSettings(){
   saveDB(); toast('Langue des fiches enregistrée');
 }
 function exportData(){
-  const blob = new Blob([JSON.stringify(db,null,2)],{type:'application/json'});
+  /* Un export part dans iCloud, dans un dossier Téléchargements, dans un mail.
+     Il ne doit JAMAIS contenir de quoi ouvrir une session : `db.auth` porte le
+     jeton de rafraîchissement, qui survit à un changement de mot de passe et
+     permet de lire la bibliothèque, de modifier le profil vu par les proches,
+     et de supprimer le compte. `db.sync` n'a rien à y faire non plus : ces
+     coordonnées sont publiables, mais elles trompent si le fichier est
+     réimporté sur une autre configuration.
+
+     Copie de surface : `shows` et `movies` restent partagés avec `db`, on ne
+     fait que les lire. */
+  const copie = Object.assign({}, db);
+  delete copie.auth;
+  delete copie.sync;
+  const blob = new Blob([JSON.stringify(copie,null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'mes-series-'+todayISO()+'.json';

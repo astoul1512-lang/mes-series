@@ -263,7 +263,9 @@ function viewFollow(){
 
 /* Une ligne d'épisode dans le calendrier. */
 function ligneEpisodeCal(s, ep){
-  const thumb = IMG(ep.st,'w300') || IMG(s.backdrop,'w300') || IMG(s.poster,'w154');
+  /* `srcImage` : le chemin peut venir de la bibliothèque d'un proche, donc
+     d'ailleurs que de TMDB. Voir la frontière de confiance dans app-02. */
+  const thumb = srcImage(ep.st,'w300') || srcImage(s.backdrop,'w300') || srcImage(s.poster,'w154');
   return '<div class="crow" onclick="go(\'show\',{id:'+s.id+',from:\'follow\'})">'+
     (thumb ? '<img class="cthumb" loading="lazy" src="'+thumb+'" alt="">' : '<div class="cthumb"></div>')+
     '<div class="epinfo">'+
@@ -275,8 +277,9 @@ function ligneEpisodeCal(s, ep){
 /* Une ligne de film dans le même calendrier : même forme, autre sous-titre. */
 function ligneFilmCal(f){
   return '<div class="crow" onclick="go(\'movie\',{id:'+f.id+',from:\'follow\'})">'+
-    (f.image ? '<img class="cthumb" loading="lazy" src="'+IMG(f.image,'w300')+'" alt="">'
-             : '<div class="cthumb"></div>')+
+    (srcImage(f.image,'w300')
+       ? '<img class="cthumb" loading="lazy" src="'+srcImage(f.image,'w300')+'" alt="">'
+       : '<div class="cthumb"></div>')+
     '<div class="epinfo">'+
       '<div class="epname">'+esc(f.titre)+'</div>'+
       '<div class="epsub film">'+esc(f.mot)+'</div>'+
@@ -323,7 +326,7 @@ function menuPause(id){
    d'un seul geste, l'appui long ouvre la mise en pause (comme avant). */
 function carteRattrapage(s, nx){
   const n = retardSerie(s);
-  const img = IMG(s.backdrop,'w780') || IMG(s.poster,'w342');
+  const img = srcImage(s.backdrop,'w780') || srcImage(s.poster,'w342');
   return '<div class="rcarte">'+
     '<div class="rfond" onclick="pressClic('+s.id+',event)"'+
       ' ontouchstart="pressStart('+s.id+',event)" ontouchend="pressEnd()" ontouchmove="pressMove(event)"'+
@@ -400,7 +403,9 @@ function viewProfile(){
   const affiches = Object.values(db.shows).map(x=>x.poster).filter(Boolean).slice(0,5);
   const fond = affiches.length
     ? '<div class="pfond">'+affiches.map(p=>
-        '<i style="background-image:url('+IMG(p,'w154')+')"></i>').join('')+'</div>'
+        /* Dans une url() de CSS : une apostrophe ou une parenthèse suffirait à
+           sortir de la déclaration. On filtre AVANT de composer. */
+        '<i style="background-image:url('+srcImage(p,'w154')+')"></i>').join('')+'</div>'
     : '<div class="pfond uni"></div>';
 
   const compteur = (n, mot, action)=>

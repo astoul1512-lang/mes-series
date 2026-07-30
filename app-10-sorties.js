@@ -195,7 +195,7 @@ function lignesSorties(films, mot){
     if(f.dfr !== cur){ cur = f.dfr; html += '<div class="daylbl">' + fmtDayLabel(f.dfr) + '</div>'; }
     html += '<div class="crow" onclick="openPreview(' + f.id + ',\'movie\',\'sorties\')">' +
       (f.backdrop_path || f.poster_path
-        ? '<img class="cthumb" loading="lazy" src="' + IMG(f.backdrop_path || f.poster_path, 'w300') + '" alt="">'
+        ? '<img class="cthumb" loading="lazy" src="' + srcImage(f.backdrop_path || f.poster_path, 'w300') + '" alt="">'
         : '<div class="cthumb"></div>') +
       '<div class="epinfo">' +
         '<div class="epname">' + esc(f.title) + '</div>' +

@@ -868,8 +868,8 @@ function corpsRechActeur(){
   if(!rechActeur.res.length)
     return '<div class="tiny muted" style="padding:8px 0">Personne de ce nom.</div>';
   return '<div class="listact">'+rechActeur.res.map(p=>
-    '<button class="lact" onclick="ajouterActeur('+p.id+',\''+esc(p.nom).replace(/'/g,"\\'")+'\')">'+
-      (p.photo ? '<img src="'+IMG(p.photo,'w185')+'" alt="">' : '<div class="ph2">'+esc(p.nom[0])+'</div>')+
+    '<button class="lact" onclick="ajouterActeur('+p.id+',\''+escJs(p.nom)+'\')">'+
+      (srcImage(p.photo,'w185') ? '<img src="'+srcImage(p.photo,'w185')+'" alt="">' : '<div class="ph2">'+esc(p.nom[0])+'</div>')+
       '<span>'+esc(p.nom)+'</span><i>'+I.plus+'</i>'+
     '</button>').join('')+'</div>';
 }
@@ -932,13 +932,13 @@ function viewGouts(){
   html += '<div class="sectitle">J\'aime</div>'+
     '<div class="chips wrapchips">'+genres.map(n=>
       '<button class="chip '+(g.genres.indexOf(n)>=0?'on':'')+'" '+
-        'onclick="bascGoutGenre(\''+esc(n).replace(/'/g,"\\'")+'\')">'+esc(n)+'</button>').join('')+
+        'onclick="bascGoutGenre(\''+escJs(n)+'\')">'+esc(n)+'</button>').join('')+
     '</div>';
 
   html += '<div class="sectitle">Je ne veux pas voir</div>'+
     '<div class="chips wrapchips">'+genres.map(n=>
       '<button class="chip '+(g.exclus.indexOf(n)>=0?'hors':'')+'" '+
-        'onclick="bascGoutExclu(\''+esc(n).replace(/'/g,"\\'")+'\')">'+esc(n)+'</button>').join('')+
+        'onclick="bascGoutExclu(\''+escJs(n)+'\')">'+esc(n)+'</button>').join('')+
     '</div>';
 
   /* « Je suis obligé de sélectionner des acteurs ? » — non, et il fallait
