@@ -449,7 +449,7 @@ function etatNotif(){
     return { ton:'attente', titre:'Pas encore autorisées',
              sous:'Allume la cloche sur une série : iOS te demandera confirmation.' };
   const nb = compterCloches('tv') + compterCloches('movie');
-  if(!nb) return { ton:'attente', titre:'Autorisées, mais aucun titre suivi',
+  if(!nb) return { ton:'attente', titre:'Autorisées, mais aucun titre surveillé',
                    sous:'Allume la cloche sur une série ou un film.' };
   /* Autorisé et des cloches allumées, mais le serveur ne sait pas où envoyer :
      c'est le cas qu'il ne faut surtout pas taire. */
@@ -467,7 +467,7 @@ function resumeNotif(){
   if(permissionNotif() === 'denied') return 'Refusées';
   if(!notifAutorisees()) return 'Désactivées';
   const t = compterCloches('tv'), f = compterCloches('movie');
-  if(!t && !f) return 'Autorisées · aucun titre suivi';
+  if(!t && !f) return 'Autorisées · aucun titre surveillé';
   return 'Activées · ' + t + ' série' + (t>1?'s':'') + ', ' + f + ' film' + (f>1?'s':'');
 }
 
@@ -540,7 +540,7 @@ function viewNotifications(){
   '</div>';
 
   const t = compterCloches('tv'), f = compterCloches('movie');
-  html += '<div class="sectitle">Titres suivis</div><div class="wrap" style="padding-top:0">'+
+  html += '<div class="sectitle">Titres surveillés</div><div class="wrap" style="padding-top:0">'+
     '<button class="reg" onclick="go(\'clochettes\',{from:\'notifs\'})">'+
       '<i>'+I.cloche+'</i>'+
       '<span class="rtxt"><b>Voir la liste</b><em>'+
@@ -574,7 +574,7 @@ function basculerEvenementFilm(v){
 
 function viewClochettes(){
   nettoyerCloches();
-  let html = header('Titres suivis', {back:"goBack()"});
+  let html = header('Titres surveillés', {back:"goBack()"});
 
   const series = Object.values(db.shows)
     .sort((a,b)=>(a.name||'').localeCompare(b.name||'', 'fr'));

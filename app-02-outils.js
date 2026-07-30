@@ -80,7 +80,17 @@ function statutSerie(s){
 }
 function statutFilm(m){ return m.seen ? 'vu' : 'avoir'; }
 function statut(o){ return o && o.seasons !== undefined ? statutSerie(o) : statutFilm(o); }
-const LIB_STATUT = { avoir:'À voir', asuivre:'À suivre', vu:'Vu', pause:'En pause' };
+/* D6 — UN TERME PAR CONCEPT. Les clés internes et les libellés affichés ont
+   divergé VOLONTAIREMENT : `asuivre` reste `asuivre` dans le code, `view` reste
+   `follow`, `ROUTES.follow.seg` reste `a-suivre`. Renommer le code en même
+   temps que l'interface multiplierait la surface de régression pour zéro
+   bénéfice utilisateur — et les adresses déjà partagées cesseraient de marcher.
+   Le mot « suivre » disparaît en revanche de tout ce qui est AFFICHÉ : il
+   désignait à la fois l'onglet, le fait d'avoir commencé, et l'ajout. */
+/* `asuivre` s'affiche « En cours », PAS « À rattraper » : une série commencée
+   et à jour est bien en cours, et n'a rien à rattraper. « À rattraper » ne
+   qualifie que la section qui liste les épisodes réellement en retard. */
+const LIB_STATUT = { avoir:'À voir', asuivre:'En cours', vu:'Vu', pause:'En pause' };
 
 function fmtDur(min){
   if(!min) return '0 min';
@@ -349,7 +359,10 @@ const ROUTES = {
   biblio:     { seg:'bibliotheque',  partageable:false },
   account:    { seg:'compte',        partageable:false },
   avatar:     { seg:'avatar',        partageable:false },
-  motdepasse: { seg:'motdepasse',    partageable:false }
+  motdepasse: { seg:'motdepasse',    partageable:false },
+  /* D1 — l'écran de présentation n'a aucun sens hors de son parcours : il ne
+     s'affiche qu'une fois par appareil et ne mène nulle part qu'au formulaire. */
+  bienvenue:  { seg:'bienvenue',     partageable:false }
 };
 /* `sorties` existe dans DEPTH et a encore sa fonction de rendu, mais son onglet
    a été retiré le 28/07 : aucun `go('sorties')` ne subsiste. Lui donner une
@@ -463,7 +476,7 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
                   perimetre:'tout', tri:'populaire', noteMin:0,
                   page:1, pages:1, res:[], loading:false, err:'', charge:false } };
 
-const DEPTH = { motdepasse:0, avatar:0, discover:0, sorties:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, rangee:1, acteur:2, account:2, biblio:2, notifs:2, gouts:2, plates:2, clochettes:3 };
+const DEPTH = { bienvenue:0, motdepasse:0, avatar:0, discover:0, sorties:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, rangee:1, acteur:2, account:2, biblio:2, notifs:2, gouts:2, plates:2, clochettes:3 };
 let navDir = 'none';
 /* Position de défilement mémorisée pour les écrans qui sont des listes.
    Quitter une liste puis y revenir doit rendre la page là où on l'avait laissée ;
@@ -499,9 +512,158 @@ function cleDefil(v, p){
    de l'un à l'autre : vers Mon profil, le contenu arrive de la droite. */
 const ONGLETS_BARRE = ['discover', 'follow', 'profile'];
 
-function go(v, p, dir){
+/* ========================= Historique — C2 =========================
+   `go()` reste la seule porte d'entrée, avec la même signature : les ~100
+   appels existants ne bougent pas. On lui ajoute une pile d'historique réelle
+   en dessous, et le retour — flèche, geste, bouton matériel d'Android — devient
+   une seule et même mécanique.
+
+   POURQUOI UN MIROIR DE LA PILE. Le navigateur ne donne accès qu'à l'état de
+   l'entrée COURANTE (`history.state`) ; celui de l'entrée précédente est
+   inaccessible sans y naviguer. Or le geste de retour a besoin de savoir vers
+   quel écran il glisse AVANT de l'atteindre, pour le dessiner sous le doigt.
+   D'où `pileHisto`, indexée : chaque entrée poussée porte son rang, et le rang
+   reçu au `popstate` dit le sens du mouvement — ce qui gère aussi la marche
+   avant, qu'une simple pile ne saurait pas distinguer d'un retour. */
+let pileHisto = [], iHisto = -1;
+/* `msv` distingue nos entrées de celles d'un tiers (extension, ancre). */
+const etatHisto = (v, p, i)=> ({ msv:1, i:i, view:v, params:p||{} });
+/* Nombre d'entrées derrière nous. On ne se fie PAS à `history.length`, qui
+   compte aussi les pages visitées avant l'app. */
+const historiqueInterne = ()=> Math.max(0, iHisto);
+/* L'écran vers lequel le retour ramène. L'historique fait foi ; `currentBack()`
+   ne sert plus que quand il n'y a rien derrière — entrée directe par une
+   notification ou par un lien collé (voir C3). */
+/* Le miroir n'est juste que si sa tête décrit bien l'écran affiché. Du code qui
+   pose `view` à la main sans passer par `go()` le désaccorde — et alors le
+   retour partirait n'importe où. Plutôt que de faire confiance aveuglément, on
+   contrôle, et on se replie sur `currentBack()` quand ça ne colle pas.
+   Sans ce garde-fou, C2 renvoyait sur la porte d'entrée depuis n'importe quel
+   écran dès qu'un seul `view =` direct s'était glissé quelque part. */
+function miroirJuste(){
+  const t = pileHisto[iHisto];
+  return !!t && t.view === view;
+}
+function cibleRetour(){
+  const e = miroirJuste() ? pileHisto[iHisto - 1] : null;
+  return e ? e.view : currentBack();
+}
+function paramsCibleRetour(){
+  const e = miroirJuste() ? pileHisto[iHisto - 1] : null;
+  return e ? e.params : paramsRetour(currentBack());
+}
+/* Le `popstate` déclenché par NOTRE propre `history.back()` quand l'écran a
+   déjà été rendu (geste de retour) : il n'y a plus rien à faire, on l'avale. */
+let popstateAAvaler = 0;
+
+/* ===================== C3 — l'entrée directe =====================
+   Destination retenue quand on arrive par un lien sans être connecté : elle est
+   rejouée après connexion, sinon la notification touchée se perd. */
+let destinationEnAttente = null;
+
+/* Un écran atteint par une adresse n'a pas été préparé par le geste qui y mène
+   d'habitude : l'aperçu attend `ui.preview`, la fiche attend une série qui
+   peut ne plus être dans la bibliothèque. On répare ça ici, au seul endroit où
+   une entrée directe passe. */
+function preparerEntreeDirecte(v, p){
+  let vue = v, par = Object.assign({}, p || {});
+  if(vue === 'show' && !db.shows[par.id]){
+    /* La série a été retirée entre l'envoi de la notification et l'appui.
+       Plutôt qu'un cul-de-sac « Introuvable », on ouvre son aperçu : de là on
+       peut la remettre dans la bibliothèque. */
+    vue = 'preview'; par = { id: par.id, type: 'tv' };
+  }else if(vue === 'movie' && !db.movies[par.id]){
+    vue = 'preview'; par = { id: par.id, type: 'movie' };
+  }
+  if(vue === 'preview'){
+    ui.preview = { id: par.id, type: par.type, loading: true, data: null, error: '' };
+    /* Après le rendu : `loadPreview` redessine tout seul quand la réponse
+       arrive, et il ne doit pas courir avant que l'écran existe. */
+    setTimeout(()=>{ if(typeof loadPreview === 'function') loadPreview(); }, 0);
+  }
+  return { view: vue, params: par };
+}
+
+/* Rejoue la destination mise de côté. Appelée juste après une connexion
+   réussie ; rend `true` si elle a pris la main. */
+function rejouerDestination(){
+  if(!destinationEnAttente) return false;
+  const d = destinationEnAttente; destinationEnAttente = null;
+  const c = preparerEntreeDirecte(d.view, d.params);
+  go(c.view, c.params, 'enter', { remplacer:true });
+  return true;
+}
+
+/* Première entrée de la session. Appelée par `boot()` avant le premier rendu :
+   sans elle, le premier `popstate` arriverait sans état et on ne saurait pas
+   d'où l'on vient. C3 remplacera cet amorçage par la lecture du fragment. */
+function amorcerHistorique(){
+  /* Le navigateur mémorise LUI AUSSI une position de défilement par entrée, et
+     la restaure sur `history.back()` — après notre propre restauration, donc
+     par-dessus. C'est ce qui renvoyait en haut de page tout retour passant par
+     l'historique, en écrasant `memDefil`. L'app tient déjà ce registre, et le
+     tient mieux (par liste et par identité) : on reprend la main.
+     À poser avant la première entrée, sinon la première est déjà en « auto ». */
+  try{ if('scrollRestoration' in history) history.scrollRestoration = 'manual'; }catch(e){}
+  pileHisto = [{ view: view, params: params }];
+  iHisto = 0;
+  try{ history.replaceState(etatHisto(view, params, 0), '', routeVersFragment(view, params) || (location.pathname + location.search)); }
+  catch(e){ /* rien de vital : seule la barre d'adresse serait en retard */ }
+}
+
+/* REMPLACER OU EMPILER — la question centrale de C2.
+   Un écran qui se SUBSTITUE au précédent remplace son entrée ; un écran où l'on
+   DESCEND en pousse une nouvelle. Le document proposait de trancher sur
+   `DEPTH`, mais `DEPTH` est trop grossier : `rangee`, `preview`, `show` et
+   `movie` valent tous 1, alors qu'ouvrir une fiche depuis une rangée dépliée
+   est une descente et qu'ajouter une série depuis un aperçu est une
+   substitution. On l'écrit donc explicitement, cas par cas.
+
+   Deux substitutions, pas une de plus :
+   · onglet du bas → onglet du bas. Sinon dix allers-retours entre Découvrir et
+     Mon profil créent dix entrées et le retour devient un labyrinthe.
+   · aperçu → fiche du même titre. Ajouter une série remplace l'aperçu par sa
+     fiche ; empiler renverrait le retour sur l'aperçu d'un titre qu'on vient
+     de quitter, où il n'y a plus rien à faire.
+   Tout le reste empile. En cas de doute, empiler : le pire d'une entrée en
+   trop est un appui de retour supplémentaire ; le pire d'une entrée manquante
+   est un écran qu'on ne peut plus atteindre en revenant. */
+function substitue(avant, apres){
+  if(ONGLETS_BARRE.indexOf(avant) >= 0 && ONGLETS_BARRE.indexOf(apres) >= 0) return true;
+  if(avant === 'preview' && (apres === 'show' || apres === 'movie')) return true;
+  return false;
+}
+
+function inscrireHistorique(v, p, remplacer){
+  const frag = routeVersFragment(v, p);
+  /* Un écran non partageable ne met pas d'adresse dans la barre — mais il a
+     bien une entrée d'historique, sinon le retour le sauterait. On garde alors
+     l'adresse courante. */
+  const url = frag || (location.pathname + location.search);
+  const etat = { view: v, params: p || {} };
+  if(remplacer){
+    pileHisto[iHisto] = etat;
+  }else{
+    iHisto++;
+    pileHisto.length = iHisto;               // une nouvelle branche efface la marche avant
+    pileHisto.push(etat);
+  }
+  try{
+    if(remplacer) history.replaceState(etatHisto(v, p, iHisto), '', url);
+    else history.pushState(etatHisto(v, p, iHisto), '', url);
+  }catch(e){
+    /* Safari limite le nombre de pushState par intervalle (~100 / 30 s). Si ça
+       refuse, on continue : la navigation interne marche, seule la barre
+       d'adresse est en retard. Le miroir, lui, reste juste. */
+  }
+}
+
+function go(v, p, dir, opts){
+  opts = opts || {};
   if(view===v && JSON.stringify(params)===JSON.stringify(p||{})){ window.scrollTo(0,0); render(); return; }
+  const ancienneVue = view;
   if(LISTES[view]) memDefil[cleDefil(view)] = window.scrollY || 0;
+  memoriserRails();
   /* En revenant sur Découvrir sans recherche en cours, le champ se referme :
      on retrouve l'écran de suggestions net. Une recherche en cours, elle, survit. */
   if(v === 'discover' && !(ui.searchQ||'').trim()) ui.champOuvert = false;
@@ -525,10 +687,43 @@ function go(v, p, dir){
   window.scrollTo(0, y);
   /* La grille se peuple parfois juste après le rendu : on repositionne une fois de plus. */
   if(y) requestAnimationFrame(()=> window.scrollTo(0, y));
+
+  /* L'historique s'écrit APRÈS le rendu, et sur `view` plutôt que sur `v` :
+     `render()` renvoie sur la porte d'entrée quand la session est fermée
+     (`porteFermee`), et c'est cet écran-là qui doit entrer dans l'historique,
+     pas celui qu'on avait demandé.
+     `depuisHistorique` : l'appel vient de `popstate`, l'entrée existe déjà —
+     en pousser une autre empilerait un cran à chaque retour et l'historique ne
+     se viderait jamais. C'est le piège n°1 du lot. */
+  if(!opts.depuisHistorique && iHisto >= 0){
+    inscrireHistorique(view, params, opts.remplacer || substitue(ancienneVue, view));
+  }
 }
 
 /* Une liste qui repart de zéro (nouvelle recherche, filtre changé) oublie sa position. */
 function oublierDefil(v){ delete memDefil[cleDefil(v)]; }
+
+/* C4.3 — la position HORIZONTALE des rails.
+   `memDefil` ne gardait que `window.scrollY` : aucun conteneur à défilement
+   horizontal ne retenait sa position. Conséquences observées : ajouter un film
+   depuis le carrousel le ramenait à la première diapositive, cocher un épisode
+   remettait « À rattraper » au début, et toute action sur Découvrir remettait
+   toutes les rangées à zéro.
+   Les rails sont repérés par `data-rail`, posé sur le conteneur, et indexés par
+   la clé de l'écran — deux rangées dépliées ne partagent pas leur position.
+   F2 (repeindre au lieu de tout reconstruire) rendra ceci partiellement inutile
+   sur les chemins qu'il couvre ; ça vaut quand même pour tous les autres. */
+function memoriserRails(){
+  document.querySelectorAll('[data-rail]').forEach(el=>{
+    memDefil['rail:'+cleDefil(view)+':'+el.dataset.rail] = el.scrollLeft;
+  });
+}
+function restaurerRails(){
+  document.querySelectorAll('[data-rail]').forEach(el=>{
+    const x = memDefil['rail:'+cleDefil(view)+':'+el.dataset.rail];
+    if(x) el.scrollLeft = x;
+  });
+}
 /* Cible du retour selon l'écran courant — utilisée par la flèche et par le balayage */
 function currentBack(){
   if(view==='show' || view==='movie') return params.from || 'follow';
@@ -544,13 +739,11 @@ function currentBack(){
   if(view==='biblio') return params.from || 'abos';
   if(view==='notifs') return params.from || 'settings';
   if(view==='clochettes') return params.from || 'notifs';
-  /* Depuis la création du compte, il n'y a pas de « retour » : l'écran
-     précédent était le choix de l'avatar, déjà validé. On en sort par
-     « C'est parti » ou « Passer ». */
-  if(view==='gouts') return params.from === 'compte' ? null : (params.from || 'settings');
-  /* Même règle pour les plateformes : dernière étape de la création, on n'en
-     revient pas en arrière, on en sort par « C'est parti » ou « Passer ». */
-  if(view==='plates') return params.from === 'compte' ? null : (params.from || 'settings');
+  /* D3 — la branche `from === 'compte'` a disparu avec l'inscription en trois
+     écrans : ces deux-là ne s'ouvrent plus que depuis les Réglages, la feuille
+     de filtres ou la carte d'invitation, et ont donc toujours un retour. */
+  if(view==='gouts') return params.from || 'settings';
+  if(view==='plates') return params.from || 'settings';
   return null;
 }
 function goBack(){
@@ -558,18 +751,78 @@ function goBack(){
      au lieu de quitter la fiche qui est dessous. */
   if(typeof lecteurOuvert === 'function' && lecteurOuvert()) return fermerBande();
   if(document.getElementById('sheet').classList.contains('show')) return closeSheet();
-  const t = currentBack();
+  const t = cibleRetour();
   if(!t) return;
   /* Un deuxième appui pendant que l'écran glisse encore ne doit pas lancer
      un second retour par-dessus le premier. */
   if(typeof glisseRetour !== 'undefined'){
     if(glisseRetour.enCours()) return;
     /* La flèche joue exactement le même mouvement que le doigt : l'app garde
-       un seul langage pour revenir en arrière. */
+       un seul langage pour revenir en arrière. Le geste se charge lui-même de
+       reculer dans l'historique, à la fin de l'animation. */
     if(glisseRetour.jouer()) return;
   }
-  go(t, paramsRetour(t), 'back');
+  reculer();
 }
+
+/* Reculer d'un cran, sans animation. Une seule mécanique pour la flèche, le
+   geste et le bouton matériel : l'historique. */
+function reculer(){
+  if(historiqueInterne() > 0 && miroirJuste()) return history.back();
+  /* Rien derrière : on est entré directement sur cet écran. On remplace
+     l'entrée courante plutôt que d'en empiler une, sinon le retour suivant
+     ramènerait ici. */
+  const t = currentBack();
+  if(t) go(t, paramsRetour(t), 'back', { remplacer:true });
+}
+
+window.addEventListener('popstate', function(e){
+  /* Le lecteur et la feuille modale passent avant : sur iOS comme sur Android,
+     le geste de retour doit d'abord les fermer. Ils ne sont pas dans
+     l'historique, alors on repousse l'entrée qu'on vient de consommer.
+     Motif retenu pour cette livraison ; les mettre DANS l'historique serait
+     plus juste mais toucherait `openSheet`, `closeSheet`, `ouvrirBande`,
+     `fermerBande` et tous leurs appelants — noté comme amélioration. */
+  /* En repoussant l'entrée consommée, on REMET AUSSI l'adresse de l'écran
+     courant. `location.href` porte déjà celle de l'entrée précédente — le
+     navigateur l'a changée avant de nous prévenir — et la repousser telle
+     quelle laissait la barre d'adresse en désaccord avec l'écran. Pire :
+     `history.back()` déclenche `popstate` PUIS `hashchange`, et l'écouteur de
+     `hashchange` (C3) voyait alors un fragment étranger à l'écran affiché et
+     renaviguait par-dessus. Les deux écouteurs se marchaient dessus. */
+  const adresseCourante = ()=> routeVersFragment(view, params) || (location.pathname + location.search);
+  if(typeof lecteurOuvert === 'function' && lecteurOuvert()){
+    fermerBande();
+    try{ history.pushState(etatHisto(view, params, iHisto), '', adresseCourante()); }catch(err){}
+    return;
+  }
+  const feuille = document.getElementById('sheet');
+  if(feuille && feuille.classList.contains('show')){
+    closeSheet();
+    try{ history.pushState(etatHisto(view, params, iHisto), '', adresseCourante()); }catch(err){}
+    return;
+  }
+  /* Retour déjà rendu par le geste de glissement : l'écran est le bon, il ne
+     reste qu'à laisser l'historique se replacer. */
+  if(popstateAAvaler > 0){
+    popstateAAvaler--;
+    const st0 = e.state;
+    if(st0 && st0.msv) iHisto = st0.i;
+    return;
+  }
+  const st = e.state;
+  if(st && st.msv){
+    const sens = st.i < iHisto ? 'back' : 'enter';
+    iHisto = st.i;
+    go(st.view, st.params, sens, { depuisHistorique:true });
+    return;
+  }
+  /* Pas d'état : entrée poussée par un tiers, ou tout premier chargement. On
+     ne devine pas — on reste où on est et on réinscrit notre entrée, plutôt
+     que de renvoyer l'utilisateur sur un écran qu'il n'a pas demandé.
+     C3 lira le fragment ici. */
+  try{ history.replaceState(etatHisto(view, params, iHisto), '', location.href); }catch(err){}
+});
 /* ===================== Retour arrière : deux écrans à l'image =====================
    Comme sur iOS. L'écran quitté glisse vers la droite ; l'écran d'arrivée est
    déjà là, dessous, et remonte depuis la gauche à vitesse réduite (parallaxe),
@@ -585,22 +838,27 @@ let sansAnim = false;         // render() ne doit pas rejouer d'animation par-de
 const glisseRetour = (function(){
   const PARALLAXE = 0.28;                    // part de la largeur dont l'arrivée est décalée
   const VOILE = 0.3;                         // noir posé sur l'arrivée au repos
-  let couche = null, voile = null, cible = null, largeur = 0, frame = 0, d = 0, fini = false;
+  let couche = null, voile = null, cible = null, cibleParams = {}, largeur = 0, frame = 0, d = 0, fini = false;
 
   const app = ()=> document.getElementById('app');
   const enCours = ()=> !!couche;
 
   /* Prépare la couche du dessous avec l'écran d'arrivée. */
   function preparer(){
-    const dest = currentBack();
+    /* La destination vient de l'historique, pas de `currentBack()` : c'est ce
+       qui garantit que l'écran dessiné sous le doigt est bien celui où le
+       relâchement va mener. `currentBack()` déduisait la cible de `params.from`,
+       qui peut désigner un autre écran que celui d'où l'on vient réellement. */
+    const dest = cibleRetour();
     if(!dest || couche) return false;
     cible = dest;
+    cibleParams = paramsCibleRetour() || {};
     largeur = window.innerWidth || 375;
 
     couche = document.createElement('div');
     couche.className = 'souscran';
     /* Le même habillage que l'écran normal, sinon la mise en page ne suit pas. */
-    couche.innerHTML = '<div class="app">'+htmlDeLaVue(dest, paramsRetour(dest))+'</div>';
+    couche.innerHTML = '<div class="app">'+htmlDeLaVue(dest, cibleParams)+'</div>';
     voile = document.createElement('div');
     voile.className = 'sousvoile';
 
@@ -617,7 +875,7 @@ const glisseRetour = (function(){
        dépliée se montrait en haut pendant le geste avant de sauter à la bonne
        position au relâchement. C'est aussi ce qui obligeait `cleDefil` à se
        replier sur `ui.acteurId` pour les filmographies. */
-    const y = LISTES[dest] ? (memDefil[cleDefil(dest, paramsRetour(dest))] || 0) : 0;
+    const y = LISTES[dest] ? (memDefil[cleDefil(dest, cibleParams)] || 0) : 0;
     couche.scrollTop = y;
 
     el.classList.add('glisse');
@@ -655,7 +913,17 @@ const glisseRetour = (function(){
     if(frame){ cancelAnimationFrame(frame); frame = 0; }
     if(el) el.style.transition = 'none';
     sansAnim = true;
-    go(cible, paramsRetour(cible), 'back');
+    /* L'écran est rendu TOUT DE SUITE : la couche du dessous est retirée juste
+       après, et attendre le `popstate` — qui arrive au tour de boucle suivant —
+       laisserait voir un éclair de l'écran qu'on vient de quitter.
+       On rend donc à la main, sans écrire l'historique, puis on recule pour de
+       vrai ; le `popstate` qui en découle n'a plus rien à faire et se fait
+       avaler. C'est la seule entorse au principe « l'historique fait foi », et
+       elle est là pour l'image, pas pour la logique. */
+    const recule = historiqueInterne() > 0 && miroirJuste();
+    if(recule) popstateAAvaler++;
+    go(cible, cibleParams, 'back', recule ? { depuisHistorique:true } : { remplacer:true });
+    if(recule) history.back();
     if(el){
       el.style.transform=''; el.style.opacity=''; el.style.willChange=''; el.style.transition='';
       el.classList.remove('glisse');
@@ -717,6 +985,8 @@ const glisseRetour = (function(){
 })();
 
 /* Balayage depuis le bord gauche pour revenir en arrière */
+const RAILS = '.rangee, .cast, .rattrap, .filmrow, .chips, .souschips, .seasonpill, .aborow, .carr';
+
 (function swipeBack(){
   const SEUIL = 60;
   let x0=null, y0=null, t0=0, actif=false;
@@ -727,7 +997,18 @@ const glisseRetour = (function(){
     const t = e.touches[0];
     actif = false;
     surVideo = typeof lecteurOuvert === 'function' && lecteurOuvert();
-    if(t.clientX <= 28 && (surVideo || currentBack()) &&
+    /* C4.2 — TOUS les rails horizontaux ont `padding-left: 16px`, donc leur
+       premier élément commence DANS la zone d'armement du geste de retour.
+       Ramener un rail vers la droite depuis sa portion gauche déclenchait le
+       glissement de page en même temps que le défilement du rail : les
+       écouteurs sont `{passive:true}`, les deux mouvements jouaient ensemble.
+       Le défaut ne se voyait pas sur Découvrir, qui n'a pas de cible de retour.
+       La liste comprend `.souschips` et `.carr`, que le document oubliait.
+       DETTE : elle est à tenir à jour à la main ; un attribut `data-rail` sur
+       les conteneurs serait plus sûr — c'est ce que fait C4.3, à terme les deux
+       se rejoindront. */
+    if(t.target && t.target.closest && t.target.closest(RAILS)){ x0=null; return; }
+    if(t.clientX <= 28 && (surVideo || cibleRetour()) &&
        !document.getElementById('sheet').classList.contains('show')){
       x0=t.clientX; y0=t.clientY; t0=Date.now();
     } else x0=null;

@@ -1074,7 +1074,7 @@ function diapoVedette(x){
    demandé. */
 function carrouselVedettes(l){
   if(!l.length) return '';
-  return '<div class="carr" id="carr" onscroll="majPointsCarr()">'+
+  return '<div class="carr" id="carr" data-rail="carrousel" onscroll="majPointsCarr()">'+
     l.map(diapoVedette).join('')+'</div>'+
     (l.length > 1 ? '<div class="carrpts" id="carrpts">'+
       l.map((x,i)=>'<i class="'+(i===0?'on':'')+'"></i>').join('')+'</div>' : '');
@@ -1131,6 +1131,13 @@ function vignetteSugg(x, depuis){
 }
 
 function vitrineBody(){
+  /* D5 — sur une bibliothèque vide, la vitrine n'avait rien pour se construire :
+     `famillesVues()` rendait zéro section, `titresAimes()` zéro graine, et il ne
+     restait qu'un carrousel de sorties récentes suivi d'une rangée de sorties
+     récentes. Le tout premier Découvrir ne parlait de personne.
+     On demande donc trois titres, en montrant des affiches plutôt qu'un
+     formulaire — un choix d'images, pas un questionnaire. */
+  if(typeof besoinAmorcage === 'function' && besoinAmorcage()) return amorcageBody();
   const e = suggCourantes().etat;
   if(e === 'froid' || e === 'attente')
     return '<div class="empty"><span class="spin"></span>'+
@@ -1146,14 +1153,163 @@ function vitrineBody(){
       '<p>Ajoute une série ou un film : les suggestions se règlent sur ce que tu regardes.</p>'+
       '<button class="btn ghost" onclick="ouvrirChamp()">Chercher un titre</button></div>';
 
-  let html = carrouselVedettes(suggestions.vedettes) + barreSuggPlates();
+  let html = carteInvitGouts() + carrouselVedettes(suggestions.vedettes) + barreSuggPlates();
   rangees.forEach(r=>{
     html += '<div class="sectitle">'+esc(r.titre)+'</div>'+
-      '<div class="rangee">'+
+      '<div class="rangee" data-rail="rangee-'+esc(r.cle||r.titre)+'">'+
         r.l.slice(0, RANGEE_APERCU).map(x=>vignetteSugg(x,'discover')).join('')+
         finRangee(r)+'</div>';
   });
   return html + '<div style="height:6px"></div>';
+}
+
+/* ===================== D5 — la grille d'amorçage ===================== */
+/* D'OÙ VIENNENT CES TITRES — mesuré en production, pas supposé.
+
+   Première version : `/trending/all/week`, comme le document le proposait.
+   DEUX défauts, tous deux vérifiés en direct sur le relais :
+
+   1. `/trending` n'est PAS dans la liste blanche du relais (`AUTORISES`, dans
+      supabase/functions/tmdb/index.ts) : les trois pages renvoyaient 404. La
+      grille serait tombée sur « Pas de connexion » à chaque ouverture, pour
+      tout le monde, sans que rien ne le signale.
+   2. Même autorisé, « tendances de la semaine » ne répond pas à la question
+      posée. On demande « qu'est-ce que tu as aimé ? » : il faut des titres que
+      les gens RECONNAISSENT, pas le buzz du moment.
+
+   Source retenue : `/discover`, trié par nombre de votes décroissant, avec un
+   plancher élevé. Relevé en production : Interstellar, Inception, Fight Club
+   côté films ; Game of Thrones, Breaking Bad, Squid Game côté séries.
+
+   TROIS familles, pas une. `garderOccident` écarte le japonais : la grille
+   n'aurait proposé aucun animé, alors que c'est le gros de la bibliothèque
+   d'Adrien. Une personne qui regarde surtout des animés n'aurait eu aucun moyen
+   de le dire. On interroge donc explicitement les trois familles et on les
+   entrelace, comme `grainesSuggestions` le fait déjà pour la vitrine. */
+let amorcage = { etat:'froid', l:[] };
+
+const SOURCES_AMORCAGE = [
+  { cle:'film',  chemin:'/discover/movie',
+    p:{ sort_by:'vote_count.desc', 'vote_count.gte':5000 }, media:'movie' },
+  { cle:'serie', chemin:'/discover/tv',
+    p:{ sort_by:'vote_count.desc', 'vote_count.gte':2000 }, media:'tv' },
+  /* Le genre 16 est « Animation » chez TMDB ; la langue d'origine évite les
+     dessins animés occidentaux, qui relèvent d'un autre goût. */
+  { cle:'anime', chemin:'/discover/tv',
+    p:{ sort_by:'vote_count.desc', 'vote_count.gte':300,
+        with_genres:16, with_original_language:'ja' }, media:'tv' }
+];
+
+async function chargerAmorcage(force){
+  if(amorcage.etat === 'attente') return;
+  if(amorcage.etat === 'ok' && !force) return;
+  amorcage.etat = 'attente'; render();
+  /* `allSettled` et non `all` : une famille qui échoue ne doit pas emporter les
+     deux autres. Une grille de films et de séries vaut mieux qu'un écran
+     d'erreur. */
+  const rep = await Promise.allSettled(SOURCES_AMORCAGE.map(src=>
+    tmdb(src.chemin, Object.assign({ page:1 }, src.p))));
+
+  const paniers = {};
+  rep.forEach((r, i)=>{
+    const src = SOURCES_AMORCAGE[i];
+    paniers[src.cle] = (r.status === 'fulfilled' ? ((r.value && r.value.results) || []) : [])
+      .filter(x => x && x.poster_path)
+      .map(x => ({ media:src.media, id:x.id, famille:src.cle, affiche:x.poster_path,
+                   nom: src.media === 'movie' ? (x.title||'') : (x.name||'') }));
+  });
+
+  /* On entrelace : trois familles à parts égales plutôt qu'un bloc de films
+     suivi d'un bloc de séries. Quelqu'un qui ne fait défiler qu'un écran doit
+     voir les trois. */
+  const vus = {}, out = [];
+  for(let tour = 0; out.length < 30; tour++){
+    let pris = 0;
+    SOURCES_AMORCAGE.forEach(src=>{
+      const x = (paniers[src.cle] || [])[tour];
+      if(!x || out.length >= 30) return;
+      const cle = x.media+':'+x.id;
+      if(vus[cle]) return;
+      vus[cle] = 1; out.push(x); pris++;
+    });
+    if(!pris) break;
+  }
+  amorcage = { etat: out.length ? 'ok' : 'erreur', l: out };
+  if(view === 'discover') render();
+}
+
+function amorcageBody(){
+  if(amorcage.etat === 'froid'){ setTimeout(()=>chargerAmorcage(), 0); }
+  if(amorcage.etat === 'froid' || amorcage.etat === 'attente')
+    return '<div class="empty"><span class="spin"></span>'+
+      '<p style="margin-top:12px">On prépare quelques titres…</p></div>';
+  if(amorcage.etat === 'erreur' || !amorcage.l.length)
+    return '<div class="empty">'+I.boussole+'<h3>Pas de connexion</h3>'+
+      '<p>On a besoin du réseau pour te proposer des titres. Vérifie ta connexion, puis réessaie.</p>'+
+      '<button class="btn ghost" onclick="chargerAmorcage(true)">Réessayer</button></div>';
+
+  const n = ((db.gouts && db.gouts.graines) || []).length;
+  const reste = Math.max(0, GRAINES_MINI - n);
+  return '<div class="wrap" style="padding-bottom:2px">'+
+      '<div class="amtitre">Qu\'est-ce que tu as aimé ?</div>'+
+      '<div class="small muted">'+
+        (reste
+          ? 'Touche au moins '+GRAINES_MINI+' titres — '+
+            (n ? 'encore '+reste+'. ' : 'plus tu en mets, mieux ça vise. ')
+          : n+' titre'+(n>1?'s':'')+' choisi'+(n>1?'s':'')+'. Continue tant que tu veux, '+
+            'c\'est ce qui affine le plus. ')+
+        'Ça ne les ajoute pas à ta bibliothèque.</div>'+
+    '</div>'+
+    '<div class="amgrille">'+
+      amorcage.l.map(x=>{
+        const on = aGraine(x.media, x.id);
+        const img = srcImage(x.affiche,'w342');
+        return '<button class="amcase'+(on?' on':'')+'" '+
+          'onclick="poserGraine(\''+escJs(x.media)+'\','+Number(x.id)+',\''+escJs(x.nom)+'\',\''+
+            escJs(x.famille||(x.media==='movie'?'film':'serie'))+'\')" '+
+          'aria-pressed="'+(on?'true':'false')+'" aria-label="'+esc(x.nom)+'">'+
+          (img ? '<img loading="lazy" src="'+img+'" alt="">' : '<span class="amvide">'+esc(x.nom)+'</span>')+
+          (on ? '<span class="amcoche">'+I.check+'</span>' : '')+
+        '</button>';
+      }).join('')+
+    '</div>'+
+    '<div class="wrap">'+
+      '<button class="btn block"'+(reste ? ' disabled' : '')+' onclick="finirAmorcage()">'+
+        (reste ? 'Encore '+reste+' titre'+(reste>1?'s':'') : 'C\'est bon, montre-moi')+'</button>'+
+      '<button class="btn ghost" style="width:100%;margin-top:9px" onclick="ouvrirChamp()">'+
+        'Je préfère chercher un titre</button>'+
+    '</div>'+
+    '<div style="height:14px"></div>';
+}
+
+/* D3 — la carte qui remplace le questionnaire d'inscription.
+   « Mes goûts » ne s'impose plus à quelqu'un dont la bibliothèque est vide : on
+   attend d'avoir de quoi lui montrer que ça sert. Cinq titres aimés, c'est le
+   moment où les suggestions commencent à valoir quelque chose et où les affiner
+   devient une proposition concrète plutôt qu'un formulaire.
+   Elle ne revient pas : refusée ou suivie, `db.invitGoutsVue` la clôt. Et elle
+   ne s'affiche pas du tout si la personne a déjà réglé ses goûts (`gouts.maj`). */
+function carteInvitGouts(){
+  if(db.invitGoutsVue) return '';
+  if(db.gouts && db.gouts.maj) return '';
+  if(typeof titresAimes !== 'function' || titresAimes().length < 5) return '';
+  return '<div class="wrap" style="padding-bottom:0"><div class="card invitg">'+
+    '<div class="itxt">'+
+      '<b>Affiner tes suggestions ?</b>'+
+      '<span class="small muted">Dis-nous ce que tu aimes et ce que tu ne veux jamais voir. '+
+        'Deux minutes, et c\'est modifiable à tout moment.</span>'+
+    '</div>'+
+    '<div class="iact">'+
+      '<button class="btn" onclick="ouvrirGoutsDepuisInvit()">Y aller</button>'+
+      '<button class="btn ghost" onclick="refuserInvitGouts()">Non merci</button>'+
+    '</div></div></div>';
+}
+function ouvrirGoutsDepuisInvit(){
+  db.invitGoutsVue = true; saveDB();
+  go('gouts', {from:'discover'});
+}
+function refuserInvitGouts(){
+  db.invitGoutsVue = true; saveDB(); render();
 }
 
 /* Le rail est un APERÇU, pas la liste. Dix titres : de quoi balayer du pouce
@@ -1262,7 +1418,9 @@ async function chargerRangee(){
    filtre, quelles plateformes font de l'abonnement en France.
 --------------------------------------------------------------------------- */
 function viewPlates(){
-  const depuisCompte = params.from === 'compte';
+  /* D3 — cet écran ne fait plus partie de l'inscription non plus : le même
+     raisonnement que pour « Mes goûts » s'y applique, et Adrien l'a tranché le
+     30/07. Il ne s'ouvre plus que depuis les Réglages ou la feuille de filtres. */
   const toutes = platesToutesMedias();
 
   /* Les listes viennent de TMDB. On les demande une fois, et on ne redessine
@@ -1277,14 +1435,11 @@ function viewPlates(){
     }, 0);
   }
 
-  let html = header('Mes plateformes', depuisCompte ? {} : {back:"goBack()"});
+  let html = header('Mes plateformes', {back:"goBack()"});
 
   html += '<div class="wrap" style="padding-bottom:6px"><div class="small muted">'+
-    (depuisCompte
-      ? 'Dernière question, et elle est facultative. Ce que tu coches ici sert à '+
-        'te proposer en priorité ce que tu peux regarder ce soir sans rien payer de plus.'
-      : 'Ce que tu coches ici passe en tête dans les filtres, et te permet de '+
-        'limiter les suggestions à ce que tu peux regarder sans rien payer de plus.')+
+    'Ce que tu coches ici passe en tête dans les filtres, et te permet de '+
+    'limiter les suggestions à ce que tu peux regarder sans rien payer de plus.'+
     '</div></div>';
 
   /* La liste peut ne jamais arriver — TMDB en panne, ou hors-ligne. La barre du
@@ -1293,7 +1448,7 @@ function viewPlates(){
   if(!toutes.length) return html +
     '<div class="wrap"><div class="empty"><span class="spin"></span>'+
     '<p style="margin-top:12px">On récupère la liste des plateformes…</p></div></div>'+
-    barrePlates(depuisCompte);
+    barrePlates();
 
   const choisies = mesPlates();
   const vues = ui.mesPlatesTout ? toutes : toutes.slice(0, PLATES_VEDETTE);
@@ -1325,21 +1480,17 @@ function viewPlates(){
       : 'Rien de coché : l\'app te proposera tout, sans distinction.')+
   '</div></div>';
 
-  return html + barrePlates(depuisCompte);
+  return html + barrePlates();
 }
 let platesEcranDemande = false;
 
 /* La barre de validation, collée en bas comme celle des goûts. Les choix sont
    enregistrés au fil des appuis ; le bouton ne sert qu'à refermer l'écran. */
-function barrePlates(depuisCompte){
+function barrePlates(){
   return '<div style="height:26px"></div>'+
-    '<div class="gbarre'+(depuisCompte ? ' seul' : '')+'">'+
-    (depuisCompte
-      ? '<button class="btn block" onclick="finirMesPlates()">C\'est parti</button>'+
-        '<button class="tiny muted" style="display:block;width:100%;text-align:center;padding:10px 8px 2px" '+
-          'onclick="finirMesPlates()">Passer cette étape</button>'
-      : '<button class="btn block" onclick="fermerMesPlates()">Terminé</button>'+
-        '<div class="tiny muted center" style="margin-top:7px">Tes choix sont déjà enregistrés.</div>')+
+    '<div class="gbarre">'+
+    '<button class="btn block" onclick="fermerMesPlates()">Terminé</button>'+
+    '<div class="tiny muted center" style="margin-top:7px">Tes choix sont déjà enregistrés.</div>'+
     '</div>';
 }
 

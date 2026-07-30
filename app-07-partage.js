@@ -348,6 +348,9 @@ function viewAccount(){
     /* Les trois arguments de vente et les deux écrans de mise en route ont
        disparu : soit on a un compte, soit on n'en a pas. Il n'y a rien à
        expliquer avant, et le prénom est déjà demandé juste en dessous. */
+    /* D4 — après une création qui exige une confirmation par e-mail, on ne
+       montre pas le formulaire mais l'explication de ce qui se passe. */
+    if(ui.acMode === 'confirme') return html + ecranConfirmation();
     const creer = ui.acMode !== 'connexion';
     const nb = Object.keys(db.shows).length + Object.keys(db.movies).length;
     html += '<div class="wrap" style="padding-top:34px">'+
@@ -455,6 +458,58 @@ function viewAccount(){
 
 function setAcMode(m){ ui.acMode = m; render(); }
 
+/* D4 — l'écran d'attente de confirmation. Il dit trois choses : à quelle
+   adresse le message est parti, quoi faire, et comment revenir. */
+function ecranConfirmation(){
+  const reste = Math.max(0, Math.ceil(((ui.renvoiAt || 0) + 60000 - Date.now()) / 1000));
+  return '<div class="wrap" style="padding-top:34px">'+
+    '<div class="intro" style="margin-bottom:22px">'+
+      '<div class="acclogo">'+I.mail+'</div>'+
+      '<h2>Vérifie tes e-mails</h2>'+
+      '<p>On vient d\'écrire à <b>'+esc(ui.acMail||'')+'</b>. Ouvre le message et touche '+
+        'le lien qu\'il contient, puis reviens ici te connecter.</p>'+
+    '</div>'+
+    '<button class="btn" style="width:100%" onclick="allerConnexion()">Me connecter</button>'+
+    '<button class="btn ghost" id="btnrenvoi" style="width:100%;margin-top:10px" '+
+      (reste ? 'disabled' : '')+' onclick="renvoyerConfirmation()">'+
+      (reste ? 'Renvoyer l\'e-mail ('+reste+' s)' : 'Renvoyer l\'e-mail')+'</button>'+
+    '<p class="tiny muted center" style="margin-top:16px">Rien reçu ? Regarde dans les '+
+      'indésirables — c\'est là que ces messages atterrissent le plus souvent.</p>'+
+  '</div>';
+}
+
+/* Le formulaire de connexion, adresse déjà remplie : personne ne devrait avoir
+   à la retaper alors qu'on vient de la lui demander. */
+function allerConnexion(){
+  ui.acMode = 'connexion';
+  render();
+  const el = document.getElementById('acmail');
+  if(el && ui.acMail) el.value = ui.acMail;
+}
+
+async function renvoyerConfirmation(){
+  /* Une limite côté client, avec le décompte affiché : Supabase refuse les
+     envois rapprochés, et un bouton qui échoue sans rien dire vaut moins qu'un
+     bouton qui dit d'attendre. */
+  if(ui.renvoiAt && Date.now() - ui.renvoiAt < 60000) return;
+  if(!ui.acMail) return;
+  ui.renvoiAt = Date.now(); render();
+  /* Le décompte se rafraîchit tant qu'on reste sur l'écran. */
+  const tic = setInterval(()=>{
+    if(ui.acMode !== 'confirme' || Date.now() - ui.renvoiAt >= 60000){ clearInterval(tic); }
+    if(ui.acMode === 'confirme') render();
+  }, 1000);
+  try{
+    await sbFetch('/auth/v1/resend', { method:'POST',
+      body: JSON.stringify({ type:'signup', email: ui.acMail }) });
+    toast('E-mail renvoyé');
+  }catch(e){
+    /* On ne remet pas le compteur à zéro : réessayer tout de suite échouerait
+       pareil, et le message dit déjà ce qu'il faut faire. */
+    toast('Envoi impossible pour le moment');
+  }
+}
+
 /* Sept appuis sur le logo : le réglage du serveur, rangé hors de vue mais
    jamais perdu. Un tap accidentel ne déclenche rien. */
 let tapsLogo = 0, tapsLogoT = null;
@@ -490,7 +545,21 @@ function lireLienReinit(){
 /* Le lien peut aussi tomber sur une app déjà ouverte : le navigateur change
    alors le fragment sans recharger la page, et le démarrage n'a plus lieu. */
 window.addEventListener('hashchange', ()=>{
-  if(lireLienReinit()) go('motdepasse');
+  /* MÊME ORDRE QU'AU DÉMARRAGE : le lien de réinitialisation d'abord, la route
+     ensuite. Les deux occupent le fragment, et le lien doit être consommé puis
+     effacé avant que quoi que ce soit d'autre le lise. */
+  if(lireLienReinit()) return go('motdepasse');
+  /* C3 — le service worker fait naviguer un onglet DÉJÀ OUVERT vers un nouveau
+     fragment (`c.navigate`) quand on touche une notification alors que l'app
+     tourne en arrière-plan. Sans cet écouteur, l'onglet revenait au premier
+     plan sur l'écran où il était resté. */
+  if(typeof fragmentVersRoute !== 'function') return;
+  const r = fragmentVersRoute(location.hash);
+  if(!r) return;
+  if(r.view === view && String(r.params.id||'') === String(params.id||'')) return;
+  if(!signedIn() && !VUES_SANS_COMPTE[r.view]){ destinationEnAttente = r; return; }
+  const c = preparerEntreeDirecte(r.view, r.params);
+  go(c.view, c.params, 'enter');
 });
 
 function demanderReinit(){
@@ -673,9 +742,14 @@ async function doSignIn(){
   toast('Connexion…');
   try{
     await sbSignIn(email, pass);
+    /* C3 — une notification touchée alors qu'on était déconnecté a mis sa
+       destination de côté : on la rejoue maintenant plutôt que de la perdre.
+       Elle passe avant l'atterrissage par défaut, sinon on ouvrirait « À
+       suivre » sur le dos de la fiche que la personne venait chercher. */
+    if(typeof rejouerDestination === 'function' && rejouerDestination()){ /* rien de plus */ }
     /* Venu de la porte d'entrée : on ouvre l'app plutôt que de laisser la
        personne sur l'écran de compte qu'elle vient de remplir. */
-    if(!params.from) go('follow'); else render();
+    else if(!params.from) go('follow'); else render();
     toast('Connecté');
     await syncNow();
     await majProfil(); await chargerPartage();
@@ -716,7 +790,15 @@ async function doSignUp(){
        pour un compte précédent. Autant inscrire tout de suite. */
     inscrireSiBesoin();
   }catch(e){
-    if(e.message === 'CONFIRM') toast('Compte créé : confirme l\'e-mail reçu, puis connecte-toi');
+    if(e.message === 'CONFIRM'){
+      /* D4 — l'étape la plus fragile du parcours n'avait qu'un toast de 2,2 s
+         pour instruction, et l'écran restait sur le formulaire de création : il
+         fallait deviner qu'on devait basculer sur « J'ai déjà un compte » après
+         avoir cliqué dans son mail. On lui donne un écran à lui. */
+      ui.acMail = email; ui.acNom = nom; ui.acMode = 'confirme';
+      db.pseudo = nom; saveDB();
+      render();
+    }
     else toast('Échec : '+(/already regist|User already/i.test(e.message)
       ? 'un compte existe déjà avec cette adresse' : e.message));
   }

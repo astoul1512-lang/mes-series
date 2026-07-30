@@ -95,7 +95,7 @@ function zoneCasting(type, id){
 
 function castStrip(cast){
   if(!cast || cast === 'attente' || !cast.length) return '';
-  return '<div class="sectitle">Casting</div><div class="cast">'+cast.slice(0,16).map(p=>
+  return '<div class="sectitle">Casting</div><div class="cast" data-rail="cast">'+cast.slice(0,16).map(p=>
     '<button class="cperson" onclick="ouvrirActeur('+p.id+')">'+
       (srcImage(p.profile_path,'w185') ? '<img loading="lazy" src="'+srcImage(p.profile_path,'w185')+'" alt="">'
                       : '<div class="ph2">'+esc((p.name||'?')[0])+'</div>')+
@@ -142,7 +142,7 @@ function zoneRecos(type, id){
 }
 function recoStrip(l, type){
   if(!l || l === 'attente' || !l.length) return '';
-  return '<div class="sectitle">Dans le même esprit</div><div class="filmrow">'+
+  return '<div class="sectitle">Dans le même esprit</div><div class="filmrow" data-rail="similaires">'+
     l.map(r=>'<div class="pcard sortiecarte" onclick="openPreview('+r.id+',\''+type+'\', view)">'+
       '<div class="wrapimg">'+posterEl(r.poster_path,'w342','',r.title||r.name)+'</div>'+
       '<div class="pname">'+esc(r.title||r.name)+'</div>'+

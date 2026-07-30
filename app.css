@@ -838,3 +838,55 @@
   img.avatar{object-fit:cover;padding:0;background:var(--surface2)}
   .avatar.moyen{width:44px;height:44px;font-size:17px}
   .btn.ghost.danger{color:#ff5a5a;border-color:#ff5a5a44}
+
+  /* D7 — « Pas commencé » sur une ligne du calendrier. Discrète : c'est une
+     précision, pas une alerte. Le nom évite `.pastille`, déjà pris par les
+     points de couleur de l'état des notifications. */
+  .pasdeb{display:inline-block;margin-left:7px;padding:1px 6px;border-radius:999px;
+    background:var(--surface2);color:var(--muted);font-size:10px;font-weight:650;
+    vertical-align:1px;letter-spacing:.02em}
+
+  /* D3 — la carte qui propose « Mes goûts » une fois la bibliothèque garnie.
+     Discrète : c'est une proposition, pas une interruption. */
+  .invitg{padding:16px;display:flex;flex-direction:column;gap:13px;margin-bottom:14px}
+  .invitg .itxt{display:flex;flex-direction:column;gap:4px}
+  .invitg .itxt b{font-size:15px;font-weight:650}
+  .invitg .iact{display:flex;gap:9px}
+  .invitg .iact .btn{flex:1;padding:10px 12px;font-size:14px}
+
+  /* D5 — la grille d'amorçage : on demande trois titres en montrant des
+     affiches plutôt qu'un formulaire de 38 puces. */
+  .amtitre{font-size:19px;font-weight:700;letter-spacing:-.01em;margin-bottom:4px}
+  .amgrille{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;padding:14px 16px 10px}
+  .amcase{position:relative;padding:0;border:0;background:var(--surface2);border-radius:11px;
+    overflow:hidden;aspect-ratio:2/3;cursor:pointer;transition:transform .12s ease}
+  .amcase img{width:100%;height:100%;object-fit:cover;display:block}
+  .amcase .amvide{display:grid;place-items:center;height:100%;padding:8px;font-size:11px;
+    color:var(--muted);text-align:center}
+  .amcase.on{outline:2.5px solid var(--accent);outline-offset:-2.5px}
+  .amcase.on img{opacity:.5}
+  .amcoche{position:absolute;inset:0;display:grid;place-items:center;color:var(--accent)}
+  .amcoche svg{width:34px;height:34px}
+  .amcase:active{transform:scale(.97)}
+
+  /* D1 — l'écran de présentation. Il tient dans une hauteur d'écran : c'est
+     une porte, pas une page de vente. */
+  .bienv{display:flex;flex-direction:column;min-height:100dvh;padding-top:40px;padding-bottom:28px}
+  /* Les trois affiches se chevauchent légèrement : à 390 px de large, trois
+     vignettes côte à côte avec leurs marges débordaient de l'écran. */
+  .bvaff{display:flex;justify-content:center;margin-bottom:24px;height:168px}
+  .bva{width:106px;height:159px;object-fit:cover;border-radius:11px;
+    box-shadow:0 10px 26px rgba(0,0,0,.55)}
+  .bva0{transform:rotate(-7deg) translate(14px,9px)}
+  .bva1{transform:translateY(-5px);z-index:2}
+  .bva2{transform:rotate(7deg) translate(-14px,9px)}
+  .bvlogo{display:grid;place-items:center;width:76px;height:76px;margin:0 auto 24px;
+    border-radius:20px;background:var(--surface2);color:var(--accent)}
+  .bvlogo svg{width:38px;height:38px}
+  .bvtitre{font-size:29px;font-weight:750;letter-spacing:-.02em;text-align:center;margin:0 0 18px}
+  .bvlist{list-style:none;padding:0;margin:0 0 20px;display:flex;flex-direction:column;gap:11px}
+  .bvlist li{position:relative;padding-left:24px;font-size:15.5px;line-height:1.42}
+  .bvlist li::before{content:'';position:absolute;left:4px;top:9px;width:7px;height:7px;
+    border-radius:50%;background:var(--accent)}
+  .bvpourquoi{font-size:13.5px;line-height:1.45;color:var(--muted);margin:0}
+  .bvbas{margin-top:auto;padding-top:26px}

@@ -232,10 +232,32 @@ async function boot(){
   nettoyerCloches();
   askPersist();
   document.body.classList.remove('booting');
+
+  /* ===================== C3 — l'entrée directe =====================
+     ORDRE IMPÉRATIF : le lien de réinitialisation se lit AVANT toute route. Il
+     occupe le même fragment sous une autre forme (`access_token=…&type=recovery`),
+     et l'écriture de l'historique réécrit l'adresse — donc l'effacerait avant
+     que quiconque l'ait lu. Le lien ne dure qu'une heure et ne sert qu'une
+     fois : le perdre est irrattrapable. Même ordre dans `hashchange`. */
+  if(typeof lireLienReinit === 'function' && lireLienReinit()){
+    view = 'motdepasse'; params = {};
+    render();
+    amorcerHistorique();
+    return;
+  }
+
+  const depart = typeof fragmentVersRoute === 'function' ? fragmentVersRoute(location.hash) : null;
+  if(depart && !signedIn() && !VUES_SANS_COMPTE[depart.view]){
+    /* Une notification touchée alors qu'on est déconnecté ne doit pas se
+       perdre : on retient la destination et on la rejoue après connexion. */
+    destinationEnAttente = depart;
+  }else if(depart && signedIn()){
+    const c = preparerEntreeDirecte(depart.view, depart.params);
+    view = c.view; params = c.params;
+  }
+
   render();
-  /* Arrivée par un lien de réinitialisation : elle passe avant tout le reste,
-     y compris la mise en route — le lien ne dure qu'une heure. */
-  if(typeof lireLienReinit === 'function' && lireLienReinit()) return go('motdepasse');
+  amorcerHistorique();
   /* Sans session, l'app s'ouvre sur la porte d'entrée, avec l'onglet le plus
      probable selon que l'appareil a déjà connu un compte ou non. */
   if(!signedIn()) demarrerAccueil();

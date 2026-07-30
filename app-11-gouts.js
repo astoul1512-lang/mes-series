@@ -29,6 +29,13 @@ function migrerGouts(){
   if(!Array.isArray(g.acteurs)) g.acteurs = [];
   /* L'écran a-t-il déjà été proposé ? On ne le propose qu'une fois. */
   if(typeof g.propose !== 'boolean') g.propose = false;
+  /* D5 — les graines d'amorçage : {media, id, nom, famille}. Ce sont des titres
+     qu'on dit avoir aimés SANS les mettre dans la bibliothèque — de quoi faire
+     démarrer les suggestions le premier jour, quand rien n'a encore été vu. */
+  if(!Array.isArray(g.graines)) g.graines = [];
+  /* La grille d'amorçage a-t-elle été refermée ? Elle ne se rouvre pas toute
+     seule : on en sort par un bouton, et la bibliothèque prend le relais. */
+  if(typeof g.amorcageFait !== 'boolean') g.amorcageFait = false;
   /* Les plateformes auxquelles la personne est abonnée : {id, nom, logo}.
      C'est la seule chose que l'app ne peut pas deviner — savoir qu'on regarde
      des séries Netflix ne dit pas qu'on paie Netflix. Le déclarer évite en
@@ -122,8 +129,60 @@ function titresAimes(){
   Object.values(db.movies).forEach(m=>{
     if(m.seen) out.push({ media:'movie', id:m.id, nom:m.title, famille:'film', score: 60 });
   });
+  /* D5 — les graines posées à la main sur la grille d'amorçage, quand la
+     bibliothèque était encore vide. Elles comptent comme des titres aimés,
+     avec un score DÉLIBÉRÉMENT BAS : dès que de vrais titres vus arrivent,
+     ils passent devant. Une grille touchée le premier jour ne doit pas
+     gouverner les suggestions six mois plus tard. */
+  ((db.gouts && db.gouts.graines) || []).forEach(g=>{
+    /* Une graine dont le titre est entré dans la bibliothèque ferait doublon. */
+    if(g.media === 'tv' && db.shows[g.id]) return;
+    if(g.media === 'movie' && db.movies[g.id]) return;
+    out.push({ media:g.media, id:g.id, nom:g.nom||'', famille: g.famille||(g.media==='movie'?'film':'serie'),
+               score: 20, graine:true });
+  });
   return out.sort((a,b)=>b.score-a.score);
 }
+
+/* D5 — l'amorçage : vrai tant que la personne n'a rien vu ET n'a pas encore
+   posé trois graines. C'est la seule condition d'affichage de la grille. */
+/* Trois titres, c'est le MINIMUM pour que les suggestions veuillent dire
+   quelque chose — pas une cible. La spec s'arrêtait à trois et faisait
+   disparaître la grille à la seconde où l'on touchait la troisième affiche :
+   on était éjecté d'un écran qu'on était en train d'utiliser, et le profil de
+   goûts se réduisait au plus petit dénominateur possible.
+   Maintenant la grille reste tant qu'on n'a pas dit qu'on avait fini. */
+const GRAINES_MINI = 3;
+
+function besoinAmorcage(){
+  /* Une bibliothèque NON VIDE n'est pas une page blanche, même si rien n'y est
+     encore coché : quelqu'un qui a ajouté vingt séries a déjà dit ce qu'il
+     aime, et lui redemander trois titres serait insultant. La spec ne posait
+     que la condition « aucun titre vu » — trop large. */
+  if(Object.keys(db.shows).length + Object.keys(db.movies).length) return false;
+  if(db.gouts && db.gouts.amorcageFait) return false;
+  return titresAimes().filter(t=>!t.graine).length === 0;
+}
+/* On sort de la grille par une action explicite, jamais par surprise. */
+function finirAmorcage(){
+  db.gouts.amorcageFait = true;
+  toucheGouts();
+  if(typeof oublierSuggestions === 'function') oublierSuggestions();
+  render();
+}
+function poserGraine(media, id, nom, famille){
+  db.gouts.graines = db.gouts.graines || [];
+  const i = db.gouts.graines.findIndex(x=>x.media===media && String(x.id)===String(id));
+  if(i >= 0) db.gouts.graines.splice(i, 1);
+  else db.gouts.graines.push({ media:media, id:id, nom:nom||'', famille:famille||'' });
+  toucheGouts();
+  /* Les suggestions repartent des nouvelles graines : sans ça, la vitrine
+     resterait celle d'avant jusqu'au prochain démarrage. */
+  if(typeof oublierSuggestions === 'function') oublierSuggestions();
+  render();
+}
+const aGraine = (media, id)=>
+  ((db.gouts && db.gouts.graines) || []).some(x=>x.media===media && String(x.id)===String(id));
 
 /* De quelle famille relève un titre de la bibliothèque : film, animé, ou série.
    La langue d'origine n'est pas conservée localement — on se fie donc au genre
@@ -886,7 +945,10 @@ function corpsRechActeur(){
 
 function viewGouts(){
   const g = db.gouts;
-  const depuisCompte = params.from === 'compte';
+  /* D3 — cet écran ne fait plus partie de l'inscription : plus personne
+     n'appelle `go('gouts',{from:'compte'})`. La variante « dernière étape de
+     la création » — en-tête sans flèche, bouton « C'est parti », lien « Passer
+     cette étape » — est retirée avec elle. */
   const genres = tousLesGenres();
   /* Les genres viennent de TMDB. On ne redemande que ce qui n'est pas encore
      en mémoire, et on ne redessine que si la liste a réellement changé :
@@ -901,13 +963,10 @@ function viewGouts(){
     }, 0);
   }
 
-  let html = header('Mes goûts', depuisCompte ? {} : {back:"goBack()"});
+  let html = header('Mes goûts', {back:"goBack()"});
 
   html += '<div class="wrap" style="padding-bottom:6px"><div class="small muted">'+
-    (depuisCompte
-      ? 'Rien n\'est obligatoire : sans réponse, l\'app apprend toute seule de ce que tu regardes. '+
-        'Tu pourras revenir ici quand tu veux depuis les réglages.'
-      : 'Ces réglages passent avant ce que l\'app devine. Laisse tout vide et elle reprend la main.')+
+    'Ces réglages passent avant ce que l\'app devine. Laisse tout vide et elle reprend la main.'+
     '</div></div>';
 
   /* Le raisonnement complet, écrit noir sur blanc. La version courte de ce même
@@ -926,7 +985,7 @@ function viewGouts(){
   p.parFamille.forEach(f=>
     lignes.push('<div><b>Tes '+esc(f.nom)+'</b> '+esc(f.genres.join(', '))+'</div>'));
   if(p.acteurs.length)
-    lignes.push('<div><b>Acteurs suivis</b> '+esc(p.acteurs.join(', '))+'</div>');
+    lignes.push('<div><b>Acteurs surveillés</b> '+esc(p.acteurs.join(', '))+'</div>');
   if(p.exclus.length)
     lignes.push('<div><b>Écartés</b> '+esc(p.exclus.join(', '))+'</div>');
 
@@ -973,13 +1032,9 @@ function viewGouts(){
      Les choix sont enregistrés au fil des appuis ; le bouton ne sert qu'à
      refermer l'écran, et le dit. */
   html += '<div style="height:26px"></div>';
-  html += '<div class="gbarre'+(depuisCompte ? ' seul' : '')+'">'+
-    (depuisCompte
-      ? '<button class="btn block" onclick="finirGouts()">C\'est parti</button>'+
-        '<button class="tiny muted" style="display:block;width:100%;text-align:center;padding:10px 8px 2px" '+
-          'onclick="passerGouts()">Passer cette étape</button>'
-      : '<button class="btn block" onclick="fermerGouts()">Terminé</button>'+
-        '<div class="tiny muted center" style="margin-top:7px">Tes choix sont déjà enregistrés.</div>')+
+  html += '<div class="gbarre">'+
+    '<button class="btn block" onclick="fermerGouts()">Terminé</button>'+
+    '<div class="tiny muted center" style="margin-top:7px">Tes choix sont déjà enregistrés.</div>'+
   '</div>';
   return html;
 }
@@ -990,18 +1045,7 @@ function fermerGouts(){
   toast('Goûts enregistrés');
   goBack();
 }
-/* Après les goûts vient la question des plateformes, une seule fois. Quelqu'un
-   qui y a déjà répondu (nouvel appareil, même compte) file droit à l'app. */
-function apresGouts(){
-  if(db.gouts && !db.gouts.platesDemande) return go('plates', {from:'compte'});
-  go('follow');
-}
-function finirGouts(){
-  db.gouts.propose = true; toucheGouts();
-  oublierSuggestions();                       // le profil a changé : on recalcule
-  apresGouts();
-}
-function passerGouts(){
-  db.gouts.propose = true; toucheGouts();
-  apresGouts();
-}
+/* D3 — `apresGouts`, `finirGouts` et `passerGouts` enchaînaient les écrans de
+   l'inscription. L'inscription s'arrête maintenant à l'avatar : il ne reste
+   que la sortie normale, `fermerGouts`, qui rend la main à l'écran d'où l'on
+   vient. */

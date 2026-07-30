@@ -8,6 +8,11 @@
    en choisissant l'onglet le plus probable. */
 function demarrerAccueil(){
   ui.acMode = premiereFois() ? 'creer' : 'connexion';
+  /* D1 — avant le formulaire, un écran qui dit ce que fait l'app et pourquoi
+     elle demande un compte. Le premier écran était quatre champs et une phrase :
+     neuf gestes et trois écrans séparaient l'ouverture du premier contenu, sans
+     qu'une seule affiche soit montrée. Une fois par appareil, pas plus. */
+  if(!db.vuPresentation) return go('bienvenue');
   go('account');
 }
 /* Cet appareil n'a jamais vu de session : on propose la création plutôt que
@@ -37,6 +42,7 @@ function corpsDeVue(){
   if(view==='notifs')   return viewNotifications();
   if(view==='clochettes') return viewClochettes();
   if(view==='avatar')   return viewAvatar();
+  if(view==='bienvenue') return viewBienvenue();
   if(view==='gouts')    return viewGouts();
   if(view==='plates')   return viewPlates();
   return '';
@@ -54,7 +60,7 @@ function htmlDeLaVue(v, p){
    connexion et la réinitialisation de mot de passe — rien d'autre.
    Le contrôle est posé ici, dans le seul passage obligé du rendu : un `go()`
    oublié quelque part ne peut pas ouvrir une porte dérobée. */
-const VUES_SANS_COMPTE = { account:1, motdepasse:1, avatar:1 };
+const VUES_SANS_COMPTE = { bienvenue:1, account:1, motdepasse:1, avatar:1 };
 /* `db.onboarde` ne veut plus rien dire depuis que la mise en route a disparu :
    la seule question est d'avoir une session ou non. Le champ reste dans la base
    pour ne pas casser la lecture d'une vieille sauvegarde, mais plus personne
@@ -66,14 +72,21 @@ function porteFermee(){
 function render(){
   const app = document.getElementById('app');
   if(porteFermee()){ view = 'account'; params = {}; navDir = 'none'; }
+  /* C4.3 — la position horizontale des rails est relevée avant d'écraser le
+     DOM, et remise juste après. Ici plutôt que dans `go()` seul : la plupart
+     des redessins ne changent pas d'écran (cocher un épisode, ajouter un film)
+     et ce sont eux qui remettaient les rangées à zéro. */
+  if(typeof memoriserRails === 'function') memoriserRails();
   const html = corpsDeVue();
   app.innerHTML = html;
+  if(typeof restaurerRails === 'function') restaurerRails();
   /* Porte d'entrée, mot de passe et choix de l'avatar occupent tout l'écran :
      la barre du bas n'a rien à y faire, il n'y a qu'une chose à faire. */
   document.body.classList.toggle('accueil',
-    view === 'motdepasse' || view === 'avatar' || (view === 'account' && !signedIn())
-    || (view === 'gouts' && params.from === 'compte')
-    || (view === 'plates' && params.from === 'compte'));
+    view === 'bienvenue' || view === 'motdepasse' || view === 'avatar' || (view === 'account' && !signedIn())
+    /* D3 — `from === 'compte'` n'existe plus : ces deux écrans ne font plus
+       partie de l'inscription. La condition est retirée plutôt que laissée à
+       tourner à vide. */);
   app.classList.remove('enter','back');
   /* Le retour à deux couches gère lui-même son mouvement : pas d'animation par-dessus. */
   if(sansAnim){ sansAnim = false; navDir = 'none'; }
@@ -119,7 +132,7 @@ function renderNav(){
      d'À suivre en est restée, elle avait fait ses preuves. */
   const tabs = [
     ['discover','Découvrir',I.boussole],
-    ['follow','À suivre',I.cal],
+    ['follow','En cours',I.cal],
     ['profile','Mon profil',I.user]
   ];
   /* L'onglet à allumer. Chaque écran appartient à une des trois sections, et
@@ -207,29 +220,38 @@ function viewFollow(){
   todo.sort((a,b)=> (b.ep.d||'').localeCompare(a.ep.d||''));   // épisode le plus récent d'abord
 
   /* --- Le calendrier : épisodes futurs ET sorties de films, mêlés --- */
-  /* Les séries pas encore commencées (« À voir ») n'apparaissent pas ici :
-     cet onglet ne parle que de ce qu'on suit réellement. */
+  /* D7 — une série ajoutée mais pas commencée a quand même des dates. Les
+     cacher faisait croire que l'ajout n'avait rien fait : on l'ajoutait, et
+     l'onglet ne mentionnait ni elle ni ses prochains épisodes. C'est de
+     l'information pure, pas du retard.
+     Elle n'entre PAS dans « À rattraper » pour autant — on ne rattrape pas ce
+     qu'on n'a pas commencé, et `statutSerie` garde son sens (P4).
+     « En pause » reste absente des deux : c'est le but de la pause. */
   const cal = [];
   shows.forEach(s=>{
     const st = statutSerie(s);
-    if(st === 'avoir' || st === 'pause') return;
-    allEpisodes(s,false).forEach(ep=>{ if(ep.d && ep.d >= t) cal.push({d:ep.d, show:s, ep:ep}); });
+    if(st === 'pause') return;
+    const pasCommence = st === 'avoir';
+    allEpisodes(s,false).forEach(ep=>{ if(ep.d && ep.d >= t) cal.push({d:ep.d, show:s, ep:ep, neuf:pasCommence}); });
     if(s.next && s.next.d && s.next.d >= t && !(s.seasons[s.next.s]||[]).some(e=>e.e===s.next.e))
-      cal.push({d:s.next.d, show:s, ep:{s:s.next.s, e:s.next.e, n:s.next.n, d:s.next.d}});
+      cal.push({d:s.next.d, show:s, ep:{s:s.next.s, e:s.next.e, n:s.next.n, d:s.next.d}, neuf:pasCommence});
   });
   if(typeof filmsBientot === 'function')
     filmsBientot().forEach(f=> cal.push({d:f.dfr, film:f}));
+  /* Le tri passe AVANT la troncature : avec les séries « À voir » incluses, le
+     calendrier s'allonge, et tronquer une liste non triée pourrait faire
+     disparaître les sept prochains jours au profit de dates lointaines. */
   cal.sort((a,b)=>a.d.localeCompare(b.d));
   const agenda = cal.slice(0,80);
 
-  let html = header('À suivre', {right:'<button class="iconbtn" onclick="go(\'discover\')">'+I.plus+'</button>'});
+  let html = header('En cours', {right:'<button class="iconbtn" onclick="go(\'discover\')">'+I.plus+'</button>'});
   html += needKeyBanner();
 
   /* L'écran vide n'a de sens que si rien n'est suivi du tout : quelqu'un qui
      n'a que des films doit quand même voir son calendrier. */
   const desFilms = (typeof filmsSuivisIds === 'function') && filmsSuivisIds().length;
   if(!shows.length && !desFilms){
-    return html + '<div class="empty">'+I.tv+'<h3>Rien à suivre pour l\'instant</h3>'+
+    return html + '<div class="empty">'+I.tv+'<h3>Rien en cours pour l\'instant</h3>'+
       '<p>Ajoute une série ou un film depuis la recherche : tu retrouveras ici tes prochains épisodes et les dates de diffusion.</p>'+
       '<button class="btn" onclick="go(\'discover\')">Chercher une série</button></div>';
   }
@@ -238,7 +260,11 @@ function viewFollow(){
   html += '<div class="sectitle">À rattraper'+
     (todo.length?'<span class="cnt">'+todo.length+'</span>':'')+'</div>';
   if(!todo.length){
-    const enAttente = shows.filter(x=>statutSerie(x)==='avoir').length;
+    /* D7 — « Rien de commencé » ne se justifie que si le calendrier est vide
+       lui aussi. Depuis que les séries « À voir » y figurent, l'écran n'est
+       plus muet : renvoyer vers l'onglet « À voir » n'a plus lieu d'être quand
+       leurs dates sont déjà affichées juste en dessous. */
+    const enAttente = agenda.length ? 0 : shows.filter(x=>statutSerie(x)==='avoir').length;
     html += '<div class="wrap" style="padding-top:0"><div class="card" style="padding:18px;text-align:center">'+
       (enAttente
         ? '<div style="font-size:15px;font-weight:650">Rien de commencé</div>'+
@@ -249,11 +275,11 @@ function viewFollow(){
           '<div class="small muted" style="margin-top:3px">Plus aucun épisode diffusé en attente.</div>')+
       '</div></div>';
   } else {
-    html += '<div class="rattrap">'+todo.map(x=>carteRattrapage(x.s,x.ep)).join('')+'</div>';
+    html += '<div class="rattrap" data-rail="rattrap">'+todo.map(x=>carteRattrapage(x.s,x.ep)).join('')+'</div>';
   }
 
   /* Section 2 : le calendrier unique */
-  html += '<div class="sectitle">Calendrier</div>';
+  html += '<div class="sectitle">Bientôt</div>';
   if(!agenda.length){
     html += '<div class="wrap" style="padding-top:0"><div class="card" style="padding:18px;text-align:center">'+
       '<div class="small muted">Aucune date annoncée pour tes séries et tes films.</div></div></div>';
@@ -261,7 +287,7 @@ function viewFollow(){
     let cur = '', out = '<div class="day">';
     agenda.forEach(i=>{
       if(i.d !== cur){ cur = i.d; out += '<div class="daylbl">'+fmtDayLabel(i.d)+'</div>'; }
-      out += i.film ? ligneFilmCal(i.film) : ligneEpisodeCal(i.show, i.ep);
+      out += i.film ? ligneFilmCal(i.film) : ligneEpisodeCal(i.show, i.ep, i.neuf);
     });
     out += '</div>';
     html += out;
@@ -270,7 +296,7 @@ function viewFollow(){
 }
 
 /* Une ligne d'épisode dans le calendrier. */
-function ligneEpisodeCal(s, ep){
+function ligneEpisodeCal(s, ep, pasCommence){
   /* `srcImage` : le chemin peut venir de la bibliothèque d'un proche, donc
      d'ailleurs que de TMDB. Voir la frontière de confiance dans app-02. */
   const thumb = srcImage(ep.st,'w300') || srcImage(s.backdrop,'w300') || srcImage(s.poster,'w154');
@@ -278,7 +304,11 @@ function ligneEpisodeCal(s, ep){
     (thumb ? '<img class="cthumb" loading="lazy" src="'+thumb+'" alt="">' : '<div class="cthumb"></div>')+
     '<div class="epinfo">'+
       '<div class="epname">'+esc(s.name)+'</div>'+
-      '<div class="epsub">'+codeEp(ep.s,ep.e)+' · '+esc(ep.n||'')+'</div>'+
+      '<div class="epsub">'+codeEp(ep.s,ep.e)+' · '+esc(ep.n||'')+
+        /* D7 — la pastille distingue ce qui n'est pas commencé de ce qu'on
+           suit vraiment : sans elle, une série ajoutée hier et une série en
+           cours depuis six mois auraient exactement la même ligne. */
+        (pasCommence ? '<span class="pasdeb">Pas commencé</span>' : '')+'</div>'+
     '</div></div>';
 }
 
@@ -629,17 +659,82 @@ function viewAvatar(){
       'onclick="finirAvatar()">Passer cette étape</button>'+
   '</div>';
 }
+/* D2 — un écran vide comme premier écran ne donne rien à faire. Tant qu'il n'y
+   a rien à suivre, on atterrit sur Découvrir, où il y a quelque chose à
+   regarder et à ajouter. */
+const ecranDArrivee = ()=>
+  (Object.keys(db.shows).length + Object.keys(db.movies).length) ? 'follow' : 'discover';
+
 function finirAvatar(){
   saveDB();
   if(signedIn()) majProfil();
-  /* Dernière étape de la création : ses goûts, qu'on peut passer d'un bouton.
-     Quelqu'un qui a déjà répondu une fois (nouvel appareil, même compte) n'y
-     repasse pas — `propose` est synchronisé avec le reste de la base. */
-  if(db.gouts && !db.gouts.propose) return go('gouts',{from:'compte'});
-  /* Les goûts déjà répondus, il reste peut-être la question des plateformes :
-     elle est arrivée après, et les comptes créés avant ne l'ont jamais vue. */
-  if(typeof apresGouts === 'function') return apresGouts();
-  go('follow');
+  /* D3 — l'inscription s'arrête ici. Elle passait par « Mes goûts » (38 puces)
+     puis par « Mes plateformes », soit deux questionnaires posés AVANT d'avoir
+     montré le moindre titre. Le commentaire d'ouverture d'app-11 disait déjà
+     vouloir éviter « un questionnaire à l'inscription [qui] exigerait un effort
+     avant d'avoir rien rendu » : le code contredisait sa propre doctrine.
+     Les deux écrans restent accessibles depuis les Réglages, et une carte les
+     propose sur Découvrir une fois la bibliothèque garnie (`carteInvitGouts`). */
+  go(ecranDArrivee());
+}
+
+/* ===================== D1 — l'écran de présentation ===================== */
+/* Trois lignes sur ce que fait l'app, une phrase sur le pourquoi du compte, et
+   trois affiches. Pas de capture d'écran : montrer l'app dans l'app est une
+   mise en abyme qui n'apprend rien. Sans réseau, l'écran tient sans elles. */
+let presAffiches = { etat:'froid', l:[] };
+async function chargerPresAffiches(){
+  if(presAffiches.etat !== 'froid') return;
+  presAffiches.etat = 'attente';
+  try{
+    /* PAS `/trending` : ce chemin n'est pas dans la liste blanche du relais et
+       renvoie 404 — vérifié en production. Et de toute façon, trois affiches
+       décoratives doivent être RECONNAISSABLES : on prend les films les plus
+       votés de tous les temps, pas le buzz de la semaine. */
+    const d = await tmdb('/discover/movie', { sort_by:'vote_count.desc', 'vote_count.gte':5000, page:1 });
+    const l = ((d && d.results) || []).filter(r=>r.poster_path).slice(0,3)
+                .map(r=>r.poster_path);
+    presAffiches = { etat:'ok', l:l };
+  }catch(e){
+    /* Volontairement muet : l'écran doit rester utilisable sans image, et
+       afficher une erreur pour trois affiches décoratives serait absurde. */
+    presAffiches = { etat:'ok', l:[] };
+  }
+  if(view === 'bienvenue') render();
+}
+
+function viewBienvenue(){
+  if(presAffiches.etat === 'froid') setTimeout(()=>chargerPresAffiches(), 0);
+  const aff = presAffiches.l;
+  return '<div class="wrap bienv">'+
+    (aff.length
+      ? '<div class="bvaff">'+aff.map((a,i)=>{
+          const src = srcImage(a,'w342');
+          return src ? '<img class="bva bva'+i+'" src="'+src+'" alt="">' : '';
+        }).join('')+'</div>'
+      : '<div class="bvlogo">'+I.tv+'</div>')+
+    '<h1 class="bvtitre">Mes Séries</h1>'+
+    '<ul class="bvlist">'+
+      '<li>Sache où tu en es dans chaque série, épisode par épisode.</li>'+
+      '<li>Vois ce qui sort, et quand.</li>'+
+      '<li>Trouve quoi regarder ce soir, sur tes plateformes.</li>'+
+    '</ul>'+
+    '<p class="bvpourquoi">Le compte sert à retrouver ta bibliothèque sur ton '+
+      'téléphone et ton iPad, et à la partager avec tes proches.</p>'+
+    '<div class="bvbas">'+
+      '<button class="btn block" onclick="commencerPresentation(\'creer\')">Commencer</button>'+
+      '<button class="tiny muted" style="display:block;width:100%;text-align:center;padding:12px 8px 2px" '+
+        'onclick="commencerPresentation(\'connexion\')">J\'ai déjà un compte</button>'+
+    '</div>'+
+  '</div>';
+}
+
+function commencerPresentation(mode){
+  /* Une fois vu, jamais revu — y compris si la création est abandonnée en
+     cours de route : la personne sait désormais ce qu'est l'app. */
+  db.vuPresentation = true; saveDB();
+  ui.acMode = mode;
+  go('account', {}, 'enter', { remplacer:true });
 }
 
 function viewMoi(){
