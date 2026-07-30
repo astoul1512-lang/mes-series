@@ -134,7 +134,10 @@ function carteTitre(r, media, from){
     posterEl(r.poster_path,'w342','',name)+ coin +
     (note ? '<div class="gnote">'+I.star+note.toFixed(1)+'</div>' : '')+
     '<div class="gname">'+esc(name)+'</div>'+
-    '<div class="gyear">'+esc(year(date))+(votes?' · '+votes+' vote'+(votes>1?'s':''):'')+'</div>'+
+    /* Pas encore sorti : la date dit quelque chose, l'année seule non. */
+    (estAVenir(date)
+      ? '<div class="gyear"><span class="vgquand">'+esc(dateCourte(date))+'</span></div>'
+      : '<div class="gyear">'+esc(year(date))+(votes?' · '+votes+' vote'+(votes>1?'s':''):'')+'</div>')+
     (st ? '<div class="gstat '+st+'">'+LIB_STATUT[st]+'</div>' : '')+
   '</button>';
 }
@@ -212,6 +215,10 @@ const DISC_PERIMETRES = [
   /* Pas de résumé quand rien n'est choisi : « Toutes » sur la ligne repliée
      laissait croire à un réglage actif. */
   { id:'tout',   label:'Peu importe',       court:'' },
+  /* Pas de période « À venir » ici. Elle a existé une soirée, le 29/07 : Adrien
+     l'a écartée en montrant sa vitrine — « je ne pensais pas aux filtres, je
+     pensais à ça ». Ce qui n'est pas encore sorti se lit dans la rangée
+     « Bientôt », pas dans un réglage qu'il faut aller chercher. */
   { id:'recent', label:'Sorties récentes',  court:'Sorties récentes' },
   { id:'2020s',  label:'Depuis 2020',       court:'depuis 2020', de:'2020-01-01', a:'2099-12-31' },
   { id:'2010s',  label:'Années 2010',       court:'années 2010', de:'2010-01-01', a:'2019-12-31' },
@@ -358,6 +365,7 @@ let discSeq = 0;
 /* Le média TMDB derrière chaque puce : les animés restent des séries. */
 function discMedia(){ return ui.disc.type === 'movie' ? 'movie' : 'tv'; }
 function isoIlYA(jours){ return new Date(Date.now() - jours*86400000).toISOString().slice(0,10); }
+function isoDansN(jours){ return new Date(Date.now() + jours*86400000).toISOString().slice(0,10); }
 
 function genreParNom(media, nom){
   const l = genresTMDB[media] || [];
@@ -377,10 +385,67 @@ function genresAffiches(){
    les catalogues confidentiels. La liste diffère entre séries et films.
    Tant que rien n'a été appris sur l'abonnement, on montre tout — mieux vaut
    une plateforme de trop qu'une liste qui s'évapore sous les doigts. */
+/* ---------- Ce à quoi la personne est abonnée ----------
+   Déclaré à l'inscription, modifiable dans les réglages. C'est la seule chose
+   que l'app ne peut pas déduire : voir quelqu'un regarder des séries Netflix
+   ne dit pas qu'il paie Netflix. */
+function mesPlates(){ return ((db.gouts||{}).plates) || []; }
+function aDeclarePlates(){ return mesPlates().length > 0; }
+/* Restreindre les suggestions n'a de sens qu'une fois la liste donnée : sinon
+   la vitrine se viderait sans que personne comprenne pourquoi. */
+function suggSurMesPlates(){ return !!((db.gouts||{}).suggMesPlates) && aDeclarePlates(); }
+/* Les paramètres TMDB correspondants. Les mêmes que ceux du filtre de la
+   feuille : « ou » entre les plateformes, région obligatoire, abonnement seul. */
+function paramsMesPlates(){
+  const l = mesPlates();
+  if(!l.length) return {};
+  return { with_watch_providers: l.map(p=>p.id).join('|'),
+           watch_region: REGION_PLATO,
+           with_watch_monetization_types: 'flatrate' };
+}
+
+/* Les abonnements déclarés arrivent DÉJÀ COCHÉS dans la feuille de filtres —
+   demande d'Adrien, 30/07 : « il faudrait que les plateformes sélectionnées en
+   amont dans les goûts soient déjà sélectionnées ». Tant qu'on n'y a pas
+   touché, la sélection suit la déclaration : en ajouter une dans les réglages
+   la coche ici aussi, sans qu'on ait à repasser. */
+function semerPlatesFiltres(){
+  const d = ui.disc;
+  if(d.platesTouchees) return;
+  d.plates = mesPlates().map(p => ({ id:p.id, nom:p.nom, logo:p.logo }));
+}
+
 function platesRetenues(){
   const media = discMedia(), l = platesTMDB[media] || [];
+  /* Une déclaration l'emporte sur toute déduction : ce qu'on a coché soi-même
+     passe en tête de la feuille, le reste du catalogue suit. Et le sondage
+     n'a plus lieu d'être — on ne cherche plus à reconnaître les plateformes
+     d'abonnement, on nous les a dites. Dix-neuf requêtes en moins par type. */
+  const mien = mesPlates();
+  if(mien.length){
+    const rang = {};
+    mien.forEach((p,i)=>{ rang[p.id] = i; });
+    return l.slice().sort((a,b)=>
+      (rang[a.id] === undefined ? 9999 : rang[a.id]) -
+      (rang[b.id] === undefined ? 9999 : rang[b.id]));
+  }
   if(!platesAboFait[media]) return l;                 // rien d'appris : on montre tout
   return l.filter(p => platesAbo[media][p.id]);
+}
+
+/* La liste montrée à la question « à quoi es-tu abonné » ne dépend pas du type
+   affiché à l'écran : on est abonné à Netflix, pas à « Netflix pour les
+   séries ». On fusionne donc les deux listes TMDB, en gardant pour chaque
+   plateforme le meilleur rang d'affichage des deux. */
+function platesToutesMedias(){
+  const par = {};
+  ['tv','movie'].forEach(m=>{
+    (platesTMDB[m]||[]).forEach(p=>{
+      if(!par[p.id] || p.rang < par[p.id].rang) par[p.id] = p;
+    });
+  });
+  return Object.keys(par).map(k=>par[k])
+    .sort((a,b)=> (a.rang - b.rang) || a.nom.localeCompare(b.nom));
 }
 function platesAffichees(){
   const l = platesRetenues();
@@ -395,8 +460,14 @@ function platesCachees(){
    ignoré : mieux vaut proposer trop de plateformes que vider la liste. */
 async function sonderPlates(media){
   const cle = media+':'+ui.disc.type;
+  /* Plus rien à deviner dès que la personne a déclaré ses abonnements. */
+  if(aDeclarePlates()) return false;
   if(sondageEnCours || sondagesFaits[cle]) return false;
   sondageEnCours = true;
+  /* Marqué tout de suite, et non à la fin : un échantillon trop pauvre sortait
+     par le `return false` plus bas SANS être noté, et les dix-neuf requêtes
+     repartaient à chaque changement de filtre. */
+  sondagesFaits[cle] = true;
   try{
     /* Même requête que l'écran, sans le filtre plateformes : l'échantillon
        ressemble à ce que l'utilisateur regarde. */
@@ -421,7 +492,6 @@ async function sonderPlates(media){
     ui.disc.plates.forEach(x=> vues[x.id] = true);
     platesAbo[media] = vues;
     platesAboFait[media] = true;
-    sondagesFaits[cle] = true;
   } finally { sondageEnCours = false; }
   return true;
 }
@@ -687,6 +757,10 @@ function viderEnvies(){
 function bascPlate(i){
   const p = platesAffichees()[i];
   if(!p) return;
+  /* À partir d'ici la sélection est la sienne, pas celle héritée de ses
+     abonnements : elle ne suit plus les réglages, et elle compte comme un
+     filtre posé — la grille remplace donc la vitrine. */
+  ui.disc.platesTouchees = true;
   const sel = ui.disc.plates, k = sel.findIndex(x => x.id === p.id);
   if(k < 0) sel.push({ id:p.id, nom:p.nom, logo:p.logo }); else sel.splice(k,1);
   ouvrirFiltres(); chargerDecouverte();
@@ -696,13 +770,18 @@ function voirToutesPlates(){
   ouvrirFiltres();
 }
 function viderPlates(){
+  ui.disc.platesTouchees = true;
   ui.disc.plates = [];
   ouvrirFiltres(); chargerDecouverte();
 }
 function resetFiltres(){
   const d = ui.disc;
-  d.genres = []; d.plates = []; d.envies = [];
+  d.genres = []; d.envies = [];
   d.perimetre = 'tout'; d.tri = 'populaire'; d.noteMin = 0; d.duree = 'tout';
+  /* « Tout effacer » remet l'écran dans son état de départ — et son état de
+     départ, ce sont les abonnements déclarés. Vider jusque-là ferait perdre à
+     chaque fois un réglage qu'on n'a jamais posé à la main. */
+  d.platesTouchees = false; semerPlatesFiltres();
   /* On ne redessine la feuille QUE si elle est ouverte. Cette fonction est
      aussi celle de la croix de la ligne de résumé, feuille fermée — et là,
      effacer ses filtres faisait surgir le panneau sans qu'on ait rien demandé. */
@@ -731,7 +810,10 @@ function resumeFiltres(){
 }
 function filtresActifs(){
   const d = ui.disc;
-  return d.genres.length > 0 || d.plates.length > 0 || d.envies.length > 0 ||
+  /* Les plateformes ne comptent que si on y a touché. Sans ça, une personne
+     ayant déclaré ses abonnements ouvrait Découvrir sur la grille filtrée : sa
+     vitrine avait disparu sans qu'elle ait rien demandé. */
+  return d.genres.length > 0 || (d.platesTouchees && d.plates.length > 0) || d.envies.length > 0 ||
          d.noteMin > 0 || d.perimetre !== 'tout' || d.tri !== 'populaire' ||
          (DISC_DUREE_FIABLE && d.duree && d.duree !== 'tout' && discMedia() === 'movie');
 }
@@ -769,10 +851,16 @@ function blocFiltrePlates(){
   const d = ui.disc;
   const liste = platesAffichees(), reste = platesCachees();
   let h = '<div class="small muted" id="fplates" style="margin-bottom:8px">'+
-          'Uniquement ce qui est inclus dans un abonnement, en France.</div>';
+          (aDeclarePlates()
+            ? 'Les tiennes d\'abord. <button class="lienplus" style="margin:0" '+
+              'onclick="go(\'plates\',{from:\'discover\'})">Modifier mes abonnements</button>'
+            : 'Uniquement ce qui est inclus dans un abonnement, en France.')+
+          '</div>';
   if(!liste.length)
     return h + '<div class="small muted">La liste des plateformes arrive avec les premiers résultats.</div>';
-  /* La feuille peut s'ouvrir avant la fin du sondage : on le termine et on redessine. */
+  /* La feuille peut s'ouvrir avant la fin du sondage : on le termine et on
+     redessine. `sonderPlates` rend la main tout de suite si les abonnements
+     ont été déclarés — il n'y a alors plus rien à deviner. */
   if(!sondageEnCours) sonderPlates(discMedia()).then(ch=>{ if(ch && feuilleFiltresOuverte()) ouvrirFiltres(); });
   h += '<div class="fchips">'+liste.map((p,i)=>{
     const on = d.plates.some(x => x.id === p.id);
@@ -900,7 +988,8 @@ function ouvrirFiltres(){
         'pour les voir aussi.</div>'
       : ''));
 
-  h += blocPliable('note', 'Note minimale', d.noteMin ? d.noteMin+' et +' : '',
+  h += blocPliable('note', 'Note minimale',
+    (d.noteMin ? d.noteMin+' et +' : ''),
     '<div class="fchips">'+DISC_NOTES.map(n=>
       '<button class="chip '+(d.noteMin===n.v?'on':'')+'" onclick="setDiscNote('+n.v+')">'+
         esc(n.label)+'</button>').join('')+'</div>');
@@ -1011,13 +1100,32 @@ function ajouterDepuisVitrine(id, media){
    depuis une rangée dépliée puis revenir en arrière retombait sur Découvrir :
    on perdait la grille qu'on était en train de parcourir. Ce paramètre se passe
    toujours explicitement — `l.map(vignetteSugg)` lui glisserait l'index. */
+/* « le 12 août », ou « août 2027 » quand c'est loin. Sert aux titres qui ne
+   sont pas encore sortis : leur date est la seule chose qu'on sache d'eux. */
+const MOIS_COURT = ['janv.','févr.','mars','avril','mai','juin','juil.',
+                    'août','sept.','oct.','nov.','déc.'];
+function dateCourte(iso){
+  if(!iso || iso.length < 10) return year(iso);
+  const [a,m,j] = iso.split('-').map(Number);
+  if(!a || !m || !j) return year(iso);
+  const cetteAnnee = Number(todayISO().slice(0,4));
+  return a === cetteAnnee ? j+' '+MOIS_COURT[m-1] : MOIS_COURT[m-1]+' '+a;
+}
+function estAVenir(iso){ return !!iso && iso > todayISO(); }
+
 function vignetteSugg(x, depuis){
   const item = x.media === 'tv' ? db.shows[x.id] : db.movies[x.id];
+  /* Un titre à venir n'a ni note ni votes : afficher une étoile vide n'aurait
+     rien dit, alors que sa DATE est précisément ce qu'on vient chercher. */
+  const aVenir = estAVenir(x.date);
+  const tete = aVenir ? '<span class="vgquand">'+esc(dateCourte(x.date))+'</span> '
+             : x.note ? I.star+' '+(Math.round(x.note*10)/10)+' '
+             : '';
   return '<button class="vgn" onclick="openPreview('+x.id+',\''+x.media+'\',\''+(depuis||'discover')+'\')">'+
     '<div class="vgimg">'+posterEl(x.affiche,'w342','',x.nom)+
       (item ? '<span class="vgdeja">'+I.check+'</span>' : '')+'</div>'+
     '<div class="vgnom">'+esc(x.nom)+'</div>'+
-    '<div class="vgnote">'+(x.note ? I.star+' '+(Math.round(x.note*10)/10)+' ' : '')+
+    '<div class="vgnote">'+tete+
       '<span class="vgmed">'+(x.media==='tv'?'Série':'Film')+'</span></div>'+
   '</button>';
 }
@@ -1038,7 +1146,7 @@ function vitrineBody(){
       '<p>Ajoute une série ou un film : les suggestions se règlent sur ce que tu regardes.</p>'+
       '<button class="btn ghost" onclick="ouvrirChamp()">Chercher un titre</button></div>';
 
-  let html = carrouselVedettes(suggestions.vedettes);
+  let html = carrouselVedettes(suggestions.vedettes) + barreSuggPlates();
   rangees.forEach(r=>{
     html += '<div class="sectitle">'+esc(r.titre)+'</div>'+
       '<div class="rangee">'+
@@ -1137,6 +1245,185 @@ async function chargerRangee(){
   }
   st.loading = false;
   if(view === 'rangee') render();
+}
+
+/* ---------------------------------------------------------------------------
+   Écran « Mes plateformes »
+
+   Le même écran sert trois fois : dernière étape de la création du compte
+   (`from:'compte'` — pas de flèche de retour, un bouton « Passer »), entrée des
+   réglages, et raccourci depuis la feuille de filtres. Rien n'est obligatoire.
+
+   Pourquoi demander alors que le reste du profil se déduit : parce que ça ne se
+   déduit pas. Voir quelqu'un regarder trois séries Netflix ne dit pas s'il paie
+   Netflix, s'il les a vues chez un ami ou s'il les a achetées. Et la réponse
+   sert deux fois — elle range la feuille de filtres, et elle remplace le
+   sondage de dix-neuf requêtes qui tentait de deviner, à chaque changement de
+   filtre, quelles plateformes font de l'abonnement en France.
+--------------------------------------------------------------------------- */
+function viewPlates(){
+  const depuisCompte = params.from === 'compte';
+  const toutes = platesToutesMedias();
+
+  /* Les listes viennent de TMDB. On les demande une fois, et on ne redessine
+     que si elles apportent vraiment quelque chose — sans ce garde-fou, une
+     réponse vide relançait le rendu en boucle. */
+  if(!toutes.length && !platesEcranDemande){
+    platesEcranDemande = true;
+    setTimeout(()=>{
+      Promise.all([chargerPlates('tv'), chargerPlates('movie')])
+        .then(()=>{ if(view === 'plates' && platesToutesMedias().length) render(); })
+        .catch(()=>{});
+    }, 0);
+  }
+
+  let html = header('Mes plateformes', depuisCompte ? {} : {back:"goBack()"});
+
+  html += '<div class="wrap" style="padding-bottom:6px"><div class="small muted">'+
+    (depuisCompte
+      ? 'Dernière question, et elle est facultative. Ce que tu coches ici sert à '+
+        'te proposer en priorité ce que tu peux regarder ce soir sans rien payer de plus.'
+      : 'Ce que tu coches ici passe en tête dans les filtres, et te permet de '+
+        'limiter les suggestions à ce que tu peux regarder sans rien payer de plus.')+
+    '</div></div>';
+
+  /* La liste peut ne jamais arriver — TMDB en panne, ou hors-ligne. La barre du
+     bas est ajoutée dans tous les cas : sans elle, on resterait coincé sur un
+     rond qui tourne, au beau milieu de la création du compte. */
+  if(!toutes.length) return html +
+    '<div class="wrap"><div class="empty"><span class="spin"></span>'+
+    '<p style="margin-top:12px">On récupère la liste des plateformes…</p></div></div>'+
+    barrePlates(depuisCompte);
+
+  const choisies = mesPlates();
+  const vues = ui.mesPlatesTout ? toutes : toutes.slice(0, PLATES_VEDETTE);
+  /* Une plateforme cochée reste visible même si elle est loin dans la liste :
+     replier « Voir plus » ne doit pas faire disparaître un choix sous les yeux. */
+  const horsVue = choisies.filter(c => !vues.some(p => p.id === c.id));
+  const liste = vues.concat(horsVue.map(c =>
+    toutes.find(p => p.id === c.id) || { id:c.id, nom:c.nom, logo:c.logo }));
+  const reste = Math.max(0, toutes.length - vues.length - horsVue.length);
+
+  html += '<div class="wrap" style="padding-top:0"><div class="fchips">'+
+    liste.map(p=>{
+      const on = choisies.some(x => x.id === p.id);
+      const logo = p.logo ? '<img loading="lazy" src="'+IMG(p.logo,'w45')+'" alt="">' : '';
+      return '<button class="chip chiplogo '+(on?'on':'')+'" aria-pressed="'+(on?'true':'false')+'" '+
+        'onclick="bascMaPlate('+p.id+')">'+logo+'<span>'+esc(p.nom)+'</span></button>';
+    }).join('')+'</div>';
+
+  if(reste || ui.mesPlatesTout)
+    html += '<button class="lienplus" onclick="voirToutesMesPlates()">'+
+      (ui.mesPlatesTout ? 'Ne montrer que les principales'
+                        : 'Voir les '+reste+' autres plateformes')+'</button>';
+
+  html += '<div class="tiny muted" style="margin-top:14px">'+
+    (choisies.length
+      ? esc(choisies.length > 1 ? choisies.length+' plateformes sélectionnées'
+                                : '1 plateforme sélectionnée')+
+        ' · <button class="lienplus" style="margin:0" onclick="viderMesPlates()">Tout décocher</button>'
+      : 'Rien de coché : l\'app te proposera tout, sans distinction.')+
+  '</div></div>';
+
+  return html + barrePlates(depuisCompte);
+}
+let platesEcranDemande = false;
+
+/* La barre de validation, collée en bas comme celle des goûts. Les choix sont
+   enregistrés au fil des appuis ; le bouton ne sert qu'à refermer l'écran. */
+function barrePlates(depuisCompte){
+  return '<div style="height:26px"></div>'+
+    '<div class="gbarre'+(depuisCompte ? ' seul' : '')+'">'+
+    (depuisCompte
+      ? '<button class="btn block" onclick="finirMesPlates()">C\'est parti</button>'+
+        '<button class="tiny muted" style="display:block;width:100%;text-align:center;padding:10px 8px 2px" '+
+          'onclick="finirMesPlates()">Passer cette étape</button>'
+      : '<button class="btn block" onclick="fermerMesPlates()">Terminé</button>'+
+        '<div class="tiny muted center" style="margin-top:7px">Tes choix sont déjà enregistrés.</div>')+
+    '</div>';
+}
+
+/* Le sous-titre de la ligne des réglages : il doit dire en un coup d'œil si la
+   question a été répondue, et par quoi. */
+function resumePlates(){
+  const l = mesPlates();
+  if(!l.length) return 'Aucune — l\'app propose tout';
+  if(l.length <= 2) return l.map(p=>p.nom).join(' et ');
+  return l.length+' plateformes';
+}
+
+function bascMaPlate(id){
+  const g = db.gouts; if(!g) return;
+  const k = g.plates.findIndex(x => x.id === id);
+  if(k >= 0) g.plates.splice(k, 1);
+  else {
+    const p = platesToutesMedias().find(x => x.id === id);
+    if(!p) return;
+    g.plates.push({ id:p.id, nom:p.nom, logo:p.logo });
+    /* Ce qu'on déclare est une plateforme d'abonnement, par définition : le
+       sondage n'a plus rien à apprendre là-dessus, et le filtre ne doit pas
+       l'écarter au prétexte qu'un échantillon ne l'a pas croisée. */
+    ['tv','movie'].forEach(m=>{ platesAbo[m][p.id] = true; });
+  }
+  /* `saveDB` fait le reste : la signature des goûts a changé, la vitrine se
+     refera d'elle-même sous les yeux. */
+  saveDB();
+  semerPlatesFiltres();
+  render();
+}
+function voirToutesMesPlates(){ ui.mesPlatesTout = !ui.mesPlatesTout; render(); }
+function viderMesPlates(){
+  if(!db.gouts) return;
+  db.gouts.plates = [];
+  saveDB(); semerPlatesFiltres(); render();
+}
+function finirMesPlates(){
+  db.gouts.platesDemande = true; saveDB();
+  go('follow');
+}
+function fermerMesPlates(){
+  db.gouts.platesDemande = true; saveDB();
+  toast('Plateformes enregistrées');
+  goBack();
+}
+
+/* La ligne de choix posée sous le carrousel de la vitrine : toutes les
+   plateformes, ou seulement les siennes. Adrien : « il serait bien que
+   l'utilisateur choisisse ». Tant que rien n'est déclaré, la ligne devient une
+   invitation à le faire — c'est le seul endroit où la question se pose
+   naturellement, l'écran des réglages ne se visite pas tous les jours. */
+function barreSuggPlates(){
+  if(!aDeclarePlates())
+    return '<div class="wrap tiny muted" style="padding:2px 16px 0">'+
+      'Suggestions sur toutes les plateformes · '+
+      '<button class="lienplus" style="margin:0" onclick="go(\'plates\',{from:\'discover\'})">'+
+      'dis-moi à quoi tu es abonné</button></div>';
+  const on = suggSurMesPlates();
+  /* Une seule ligne, en petit : ce réglage ne doit pas prendre la place du
+     premier rang d'affiches. Deux puces pleine taille juste sous le carrousel
+     repoussaient la vitrine d'un tiers d'écran. */
+  const puce = (v, txt) =>
+    '<button class="chip '+(!!v === on ? 'on' : '')+'" aria-pressed="'+(!!v === on)+'" '+
+      'style="font-size:12px;padding:5px 12px" onclick="setSuggPlates('+(v?'true':'false')+')">'+
+      txt+'</button>';
+  return '<div class="wrap" style="padding:8px 16px 0;display:flex;align-items:center;gap:8px">'+
+      '<span class="tiny muted" style="flex:0 0 auto">Suggestions</span>'+
+      puce(false, 'Toutes')+puce(true, 'Les miennes')+
+    '</div>'+
+    (on ? '<div class="wrap tiny muted" style="padding:6px 16px 0">'+
+            'Les acteurs que tu suis et « Bientôt » restent sur tout le catalogue : '+
+            'TMDB ne sait pas y filtrer les plateformes.</div>'
+        : '');
+}
+function setSuggPlates(v){
+  const g = db.gouts; if(!g) return;
+  if(!!g.suggMesPlates === !!v) return;
+  g.suggMesPlates = !!v;
+  /* `saveDB` déclenche la veille : la signature des goûts vient de changer, la
+     vitrine se refait en douceur sans quitter l'écran. On repeint tout de suite
+     pour que la puce touchée s'allume sans attendre le réseau. */
+  saveDB();
+  peindreDisc();
 }
 
 function viewRangee(){

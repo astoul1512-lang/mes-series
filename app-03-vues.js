@@ -38,6 +38,7 @@ function corpsDeVue(){
   if(view==='clochettes') return viewClochettes();
   if(view==='avatar')   return viewAvatar();
   if(view==='gouts')    return viewGouts();
+  if(view==='plates')   return viewPlates();
   return '';
 }
 /* Fabrique le HTML d'un autre écran que celui affiché, puis remet tout en place. */
@@ -71,7 +72,8 @@ function render(){
      la barre du bas n'a rien à y faire, il n'y a qu'une chose à faire. */
   document.body.classList.toggle('accueil',
     view === 'motdepasse' || view === 'avatar' || (view === 'account' && !signedIn())
-    || (view === 'gouts' && params.from === 'compte'));
+    || (view === 'gouts' && params.from === 'compte')
+    || (view === 'plates' && params.from === 'compte'));
   app.classList.remove('enter','back');
   /* Le retour à deux couches gère lui-même son mouvement : pas d'animation par-dessus. */
   if(sansAnim){ sansAnim = false; navDir = 'none'; }
@@ -619,6 +621,9 @@ function finirAvatar(){
      Quelqu'un qui a déjà répondu une fois (nouvel appareil, même compte) n'y
      repasse pas — `propose` est synchronisé avec le reste de la base. */
   if(db.gouts && !db.gouts.propose) return go('gouts',{from:'compte'});
+  /* Les goûts déjà répondus, il reste peut-être la question des plateformes :
+     elle est arrivée après, et les comptes créés avant ne l'ont jamais vue. */
+  if(typeof apresGouts === 'function') return apresGouts();
   go('follow');
 }
 

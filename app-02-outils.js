@@ -278,13 +278,21 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
               ('suivre', 'code'), ou aucun. Les deux formulaires occupaient tout
               l'écran avant les personnes ; ils ne s'ouvrent plus qu'à la demande. */
            aboPanneau:null,
+           /* Écran « Mes plateformes » : la liste complète est-elle dépliée ?
+              On n'en montre qu'une douzaine d'emblée, TMDB en recense plus de
+              cent pour la France. */
+           mesPlatesTout:false,
            /* Découvrir : type affiché, genres cochés, tri, note minimale, page en cours */
            /* Découvrir : type affiché, genres cochés, plateformes cochées, tri,
               note minimale, page en cours */
            /* « Quoi » démarre sur tout le catalogue : les sorties des 90 derniers
               jours sont un sous-ensemble étroit, mauvais point de départ pour
               découvrir quelque chose. */
-           disc:{ type:'tout', genres:[], plates:[], toutesPlates:false,
+           disc:{ type:'tout', genres:[],
+                  /* Les plateformes cochées dans la feuille. Elles démarrent sur
+                     les abonnements déclarés (`semerPlatesFiltres`) ; le drapeau
+                     dit si la personne y a mis la main depuis. */
+                  plates:[], platesTouchees:false, toutesPlates:false,
                   /* Les envies : des identifiants de mots-clés TMDB. Un genre dit
                      « thriller », une envie dit « braquage » — c'est ce qui manquait
                      pour passer de mille titres à une poignée. */
@@ -298,7 +306,7 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
                   perimetre:'tout', tri:'populaire', noteMin:0,
                   page:1, pages:1, res:[], loading:false, err:'', charge:false } };
 
-const DEPTH = { motdepasse:0, avatar:0, discover:0, sorties:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, rangee:1, acteur:2, account:2, biblio:2, notifs:2, gouts:2, clochettes:3 };
+const DEPTH = { motdepasse:0, avatar:0, discover:0, sorties:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, rangee:1, acteur:2, account:2, biblio:2, notifs:2, gouts:2, plates:2, clochettes:3 };
 let navDir = 'none';
 /* Position de défilement mémorisée pour les écrans qui sont des listes.
    Quitter une liste puis y revenir doit rendre la page là où on l'avait laissée ;
@@ -383,6 +391,9 @@ function currentBack(){
      précédent était le choix de l'avatar, déjà validé. On en sort par
      « C'est parti » ou « Passer ». */
   if(view==='gouts') return params.from === 'compte' ? null : (params.from || 'settings');
+  /* Même règle pour les plateformes : dernière étape de la création, on n'en
+     revient pas en arrière, on en sort par « C'est parti » ou « Passer ». */
+  if(view==='plates') return params.from === 'compte' ? null : (params.from || 'settings');
   return null;
 }
 function goBack(){

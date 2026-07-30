@@ -29,6 +29,18 @@ function migrerGouts(){
   if(!Array.isArray(g.acteurs)) g.acteurs = [];
   /* L'écran a-t-il déjà été proposé ? On ne le propose qu'une fois. */
   if(typeof g.propose !== 'boolean') g.propose = false;
+  /* Les plateformes auxquelles la personne est abonnée : {id, nom, logo}.
+     C'est la seule chose que l'app ne peut pas deviner — savoir qu'on regarde
+     des séries Netflix ne dit pas qu'on paie Netflix. Le déclarer évite en
+     prime le sondage à dix-neuf requêtes qui essayait de reconnaître les
+     plateformes d'abonnement parmi les boutiques de location. */
+  if(!Array.isArray(g.plates)) g.plates = [];
+  /* La question a-t-elle été posée ? On ne la repose pas, même sans réponse. */
+  if(typeof g.platesDemande !== 'boolean') g.platesDemande = false;
+  /* Les suggestions se limitent-elles aux plateformes déclarées ? Non par
+     défaut : mieux vaut découvrir un titre et savoir qu'il faut le louer que
+     de ne jamais le croiser. */
+  if(typeof g.suggMesPlates !== 'boolean') g.suggMesPlates = false;
   /* Date du dernier calcul des suggestions, pour ne les refaire qu'une fois
      par jour — chaque source coûte une requête. */
   if(typeof g.jour !== 'string') g.jour = '';
@@ -155,13 +167,32 @@ const SUGG_MAX = 40;                // au-delà, personne ne fait défiler
    sont celles qu'Adrien ne reconnaissait pas — du Batman de 1999 parce qu'il
    regarde des animés d'action. */
 const SUGG_ASSEZ = 20;
+/* « BIENTÔT » NE REGARDE PAS À UNE DATE, MAIS À UN NOMBRE DE TITRES.
+
+   Première version : une fenêtre de trois mois. Adrien, le 29/07 : « on
+   n'applique pas une logique de nombre de mois mais plutôt de nombre de films
+   dans le carrousel ». Une fenêtre fixe se vide en creux de calendrier et
+   déborde en rentrée de septembre — le carrousel, lui, doit toujours être
+   plein, et ne montrer que ce qui vient.
+
+   Donc : on demande à TMDB les titres les plus ATTENDUS à partir de demain,
+   sans borne haute, sur SUGG_AVENIR_PAGES pages. C'est le vivier. On le range
+   ensuite par DATE, le plus proche d'abord — « il faut rester cohérent, on va
+   faire une présentation dans un ordre chronologique ».
+
+   Le vivier est servi tel quel à la grille « Tout voir » : elle ne redemande
+   rien à TMDB. Une page de plus ramènerait des titres moins attendus dont les
+   dates repartiraient en arrière, et la chronologie sauterait sous les yeux. */
+const SUGG_AVENIR_PAGES = 3;        // 3 × 20 titres par média
+const SUGG_AVENIR_MAX = 120;        // ce que la grille dépliée montre au plus
 
 /* Une vitrine par puce, chacune avec son cache : passer de Séries à Animés ne
    doit pas relancer quatre requêtes si on vient d'y aller. */
 const cacheSugg = {};
 function suggVide(){
   return { etat:'froid' /* froid|attente|ok|erreur */, quand:0,
-           vedettes:[], sections:[], esprit:null, acteurs:[], nouveautes:[],
+           enCours:false, perime:false,
+           vedettes:[], sections:[], esprit:null, acteurs:[], nouveautes:[], avenir:[],
            /* Ce sur quoi l'app s'est appuyée, gardé pour pouvoir le montrer :
               « je ne sais pas ce que l'app croit savoir » était le reproche. */
            base:[], genresUtilises:[] };
@@ -181,6 +212,52 @@ function suggCourantes(){
 function oublierSuggestions(){
   Object.keys(cacheSugg).forEach(t => { delete cacheSugg[t]; });
   suggCourantes();
+}
+
+/* ---------------------------------------------------------------------------
+   La vitrine suit la bibliothèque
+
+   Ce que la vitrine sait de toi, réduit à un nombre. Il change quand un titre
+   entre dans la bibliothèque, quand une série se termine, quand un film est
+   marqué vu — PAS quand on coche l'épisode 4 sur 12 d'une série déjà suivie :
+   le profil n'a pas bougé, la sélection n'a aucune raison de bouger, et un
+   recalcul coûte une douzaine de requêtes. Choix d'Adrien.
+--------------------------------------------------------------------------- */
+function signatureGouts(){
+  let h = 0;
+  const mel = n => { h = (h * 31 + (n|0)) | 0; };
+  Object.keys(db.shows || {}).forEach(id=>{
+    const s = db.shows[id];
+    mel(Number(id) || 0);
+    mel(isFinished(s) ? 2 : (progress(s).watched ? 1 : 0));
+  });
+  Object.keys(db.movies || {}).forEach(id=>{
+    mel(Number(id) || 0);
+    mel(db.movies[id].seen ? 2 : 1);
+  });
+  const g = db.gouts || {};
+  mel((g.genres||[]).length); mel((g.exclus||[]).length); mel((g.acteurs||[]).length);
+  /* Les plateformes comptent aussi : changer d'abonnement change ce qu'on peut
+     regarder ce soir, et donc ce que la vitrine doit proposer. Les identifiants
+     entrent dans le calcul, pas seulement leur nombre — échanger Netflix contre
+     Disney+ ne bouge pas la longueur de la liste. */
+  (g.plates||[]).forEach(p=> mel(p && p.id));
+  mel(g.suggMesPlates ? 1 : 0);
+  return h;
+}
+
+/* Appelée après chaque écriture de la base (`saveDB`), donc aussi bien après un
+   geste ici qu'après une synchro venue d'un autre appareil. La vitrine se refait
+   SOUS LES YEUX quand on est dessus, et se contente d'être marquée périmée
+   ailleurs — inutile de recalculer les quatre puces pour celle qu'on regarde. */
+let sigBiblio = null;
+function veilleBiblio(){
+  const s = signatureGouts();
+  if(sigBiblio === null){ sigBiblio = s; return; }   // premier appel : on prend la mesure
+  if(s === sigBiblio) return;
+  sigBiblio = s;
+  Object.keys(cacheSugg).forEach(t => { cacheSugg[t].perime = true; });
+  if(typeof view !== 'undefined' && view === 'discover') chargerSuggestions();
 }
 
 /* Ce que chaque puce accepte. `origine` dit l'intention plutôt qu'un booléen :
@@ -247,6 +324,15 @@ function tamiser(liste, vus, cadre, perso){
     vus[cle] = 1;
     return true;
   });
+}
+
+/* Le plus proche d'abord. Sert à « Bientôt », où la date est le sujet même de
+   la rangée : à date égale, le plus attendu passe devant, l'ordre reçu de TMDB
+   étant déjà celui de la popularité. */
+function trierParDate(liste){
+  return liste.map((x,i)=>({x:x,i:i}))
+    .sort((a,b)=> a.x.date === b.x.date ? a.i - b.i : (a.x.date < b.x.date ? -1 : 1))
+    .map(o=>o.x);
 }
 
 /* Une requête qui ne fait pas tomber tout le moteur si elle échoue : une
@@ -354,16 +440,38 @@ function requeteSection(sec){
     const ids = noms.map(n=>genreParNom(media,n)).filter(x => x != null);
     if(ids.length) p.with_genres = ids.join('|');
   }
+  /* Ici plutôt qu'au point d'appel : cette fonction sert à la fois à bâtir la
+     rangée et à en chercher la suite. La grille dépliée et le rail montrent
+     ainsi la même chose. */
+  Object.assign(p, filtreMesPlates());
   return { media:media, p:p };
+}
+
+/* Les paramètres TMDB qui restreignent aux plateformes déclarées — ou rien du
+   tout si la personne n'a pas demandé cette restriction. Un objet vide se
+   fusionne sans condition, ce qui évite un `if` à chaque appel. */
+function filtreMesPlates(){
+  return (typeof paramsMesPlates === 'function' && suggSurMesPlates())
+    ? paramsMesPlates() : {};
 }
 
 async function chargerSuggestions(force){
   const type = (ui.disc && ui.disc.type) || 'tout';
   const c = suggCourantes();
-  if(c.etat === 'attente') return;
-  if(!force && c.etat === 'ok' && Date.now() - c.quand < SUGG_TTL) return;
-  c.etat = 'attente';
-  if(typeof peindreDisc === 'function') peindreDisc();
+  /* Un calcul déjà en route : on ne le double pas, on note qu'il faudra
+     repasser. Sans ça, cocher deux titres coup sur coup perdait le second. */
+  if(c.enCours){ c.perime = true; return; }
+  if(!force && !c.perime && c.etat === 'ok' && Date.now() - c.quand < SUGG_TTL) return;
+  c.enCours = true; c.perime = false;
+  /* Recalcul EN DOUCEUR quand il y a déjà de quoi remplir l'écran : la vitrine
+     reste lisible pendant qu'on la refait, au lieu de laisser la place à un
+     rond qui tourne. C'est ce qui rend supportable un recalcul déclenché par un
+     geste — cocher un film depuis la vitrine ne doit pas la faire disparaître. */
+  const douce = c.etat === 'ok';
+  if(!douce){
+    c.etat = 'attente';
+    if(typeof peindreDisc === 'function') peindreDisc();
+  }
   try{
     await Promise.all([chargerGenres('tv'), chargerGenres('movie')]);
     /* La feuille de filtres peut s'ouvrir depuis la vitrine, sans qu'aucune
@@ -376,6 +484,7 @@ async function chargerSuggestions(force){
     const vus = {};
     const auj = todayISO();
     const debut = isoIlYA(60);
+    const demain = isoDansN(1);
     const sections = sectionsPourPuce(type);
     const acteurs = ((db.gouts||{}).acteurs || []).slice(0, 3);
 
@@ -413,8 +522,34 @@ async function chargerSuggestions(force){
         const a = genreParNom(m,'Animation');
         if(a != null) p.with_genres = String(a);
       }
+      Object.assign(p, filtreMesPlates());
       demandes.push(sourceDouce(tmdb('/discover/'+m, p))
         .then(d => ({ kind:'nouv', media:m, l:(d&&d.results||[]).map(x=>normaliser(x, m)) })));
+
+      /* Ce qui n'est pas encore sorti : à partir de demain, SANS borne haute.
+         Pas de plancher de votes ni de tri par note — ces titres n'en ont
+         aucun (mesuré le 29/07 : zéro sur 2 005 films à venir). Plusieurs
+         pages, parce que le vivier sera reclassé par date juste après : sur
+         une seule page, « le plus proche » ne serait le plus proche que parmi
+         vingt titres.
+
+         Le filtre « seulement mes plateformes » ne s'applique PAS ici : un
+         titre qui n'est pas sorti n'est encore sur aucune plateforme, et TMDB
+         rendrait donc une rangée vide. « Bientôt » parle de dates, pas de
+         catalogues. Même raison pour les rangées d'acteurs et « Dans l'esprit
+         de » : leurs sources TMDB (filmographie, recommandations) n'acceptent
+         aucun filtre de plateforme. La vitrine le dit sous les puces. */
+      for(let pg = 1; pg <= SUGG_AVENIR_PAGES; pg++){
+        const pa = { include_adult:'false', page:String(pg), sort_by:'popularity.desc',
+                     [champ+'.gte']:demain };
+        if(cadre.origine === 'anime'){
+          pa.with_original_language = 'ja';
+          const a = genreParNom(m,'Animation');
+          if(a != null) pa.with_genres = String(a);
+        }
+        demandes.push(sourceDouce(tmdb('/discover/'+m, pa))
+          .then(d => ({ kind:'avenir', media:m, l:(d&&d.results||[]).map(x=>normaliser(x, m)) })));
+      }
     });
 
     const rep = await Promise.all(demandes);
@@ -445,6 +580,14 @@ async function chargerSuggestions(force){
     });
     const nouv = entrelacerSugg(paqNouv);
 
+    /* « Bientôt » : on ne mélange pas les médias un pour un comme ailleurs —
+       c'est la DATE qui range la rangée. Une affiche est exigée : un titre
+       annoncé sans visuel n'est qu'une ligne de texte dans un carrousel. */
+    const avenir = trierParDate(
+      tamiser([].concat(...parKind('avenir').map(r => r.l || [])), vus, cadre, false)
+        .filter(x => x.affiche && x.date)
+    ).slice(0, SUGG_AVENIR_MAX);
+
     /* Le carrousel du jour : cinq titres pris dans les sections d'abord, dans
        l'ordre où elles s'affichent, puis dans le reste. La rotation vient de la
        date — stable toute la journée, différente demain, jamais tirée au sort. */
@@ -462,11 +605,19 @@ async function chargerSuggestions(force){
     Object.assign(c, { etat:'ok', quand:Date.now(), vedettes:vedettes,
       sections:sectionsPretes, esprit:espritPret, acteurs:parActeur,
       nouveautes:nouv.slice(0, SUGG_MAX),
+      /* Gardé en entier, pas coupé à SUGG_MAX : c'est cette liste-là que la
+         grille « Tout voir » déroule, et elle est déjà dans l'ordre. */
+      avenir:avenir,
       base:sections.map(s=>s.cle), genresUtilises:[] });
   }catch(e){
-    c.etat = 'erreur';
+    /* En douceur, un échec réseau ne doit pas effacer une vitrine qui marchait :
+       on garde l'ancienne à l'écran et on retentera au prochain changement. */
+    if(!douce) c.etat = 'erreur';
   }
+  c.enCours = false;
   suggCourantes();
+  /* La bibliothèque a bougé pendant le calcul : on repasse. */
+  if(c.perime){ chargerSuggestions(); return; }
   if(view === 'discover' && typeof peindreDisc === 'function') peindreDisc();
 }
 
@@ -488,6 +639,11 @@ function rangeesSuggerees(){
     out.push({ cle:'esprit', titre:'Dans l\'esprit de '+suggestions.esprit.titre, l:suggestions.esprit.l });
   if((suggestions.nouveautes || []).length)
     out.push({ cle:'nouv', titre:'Sorties récentes', l:suggestions.nouveautes });
+  /* « Bientôt » vient après « Sorties récentes » : on lit le présent avant
+     l'avenir, et une rangée vide (peu d'animés annoncés, par exemple) ne
+     s'affiche tout simplement pas. */
+  if((suggestions.avenir || []).length)
+    out.push({ cle:'avenir', titre:'Bientôt', l:suggestions.avenir });
   return out;
 }
 
@@ -528,6 +684,17 @@ async function chargerPageRangee(cle, page, vus){
     return { titres: tamiser(l, vus, cadre, true), pages:(d&&d.total_pages)||1 };
   }
 
+  /* « Bientôt » ne va rien rechercher : le vivier a été bâti d'un bloc et
+     rangé par date à la construction de la vitrine. La grille en sert la
+     suite. Redemander une page à TMDB ramènerait des titres moins attendus,
+     dont les dates repartiraient en arrière au milieu de la grille — la
+     chronologie qu'Adrien a demandée sauterait sous les yeux. */
+  if(cle === 'avenir'){
+    if(page > 1) return { titres:[], pages:1 };
+    const tout = suggCourantes().avenir || [];
+    return { titres: tout.filter(x => !vus[x.media+':'+x.id]), pages:1 };
+  }
+
   /* Les nouveautés interrogent chaque média du cadre et s'entrelacent, comme
      dans la vitrine — sinon on lirait vingt séries avant le premier film. */
   if(cle === 'nouv'){
@@ -542,6 +709,7 @@ async function chargerPageRangee(cle, page, vus){
         const a = genreParNom(m,'Animation');
         if(a != null) p.with_genres = String(a);
       }
+      Object.assign(p, filtreMesPlates());
       const d = await sourceDouce(tmdb('/discover/'+m, p));
       totaux.push((d&&d.total_pages)||1);
       paquets.push(tamiser(((d&&d.results)||[]).map(x=>normaliser(x,m)), vus, cadre, false));
@@ -812,12 +980,18 @@ function fermerGouts(){
   toast('Goûts enregistrés');
   goBack();
 }
+/* Après les goûts vient la question des plateformes, une seule fois. Quelqu'un
+   qui y a déjà répondu (nouvel appareil, même compte) file droit à l'app. */
+function apresGouts(){
+  if(db.gouts && !db.gouts.platesDemande) return go('plates', {from:'compte'});
+  go('follow');
+}
 function finirGouts(){
   db.gouts.propose = true; saveDB();
   oublierSuggestions();                       // le profil a changé : on recalcule
-  go('follow');
+  apresGouts();
 }
 function passerGouts(){
   db.gouts.propose = true; saveDB();
-  go('follow');
+  apresGouts();
 }

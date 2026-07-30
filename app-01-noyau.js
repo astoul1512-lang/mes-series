@@ -135,6 +135,9 @@ let saveTimer = null, dirty = false;
 function saveDB(){
   dirty = true;
   if(typeof scheduleSync === 'function') scheduleSync();
+  /* La bibliothèque vient peut-être de bouger : la vitrine doit suivre. Ici
+     plutôt qu'aux dix endroits qui cochent, ajoutent ou synchronisent. */
+  if(typeof veilleBiblio === 'function') veilleBiblio();
   if(memoryOnly) return;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(()=>{ writeNow().catch(()=>{}); }, 150);

@@ -66,6 +66,11 @@ function viewSettings(){
 
   html += '<div class="sectitle">Application</div><div class="wrap" style="padding-top:0">'+
     ligne('Mes goûts', resumeGouts(), "go('gouts',{from:'settings'})", I.coeur)+
+    /* Rangé ici, sous « Application », et NON dans « Mon compte » : le groupe
+       du haut contient déjà « Mes abonnements », qui désigne les proches qu'on
+       suit. Deux lignes voisines nommées presque pareil pour deux choses sans
+       rapport, c'est exactement le désordre que cet écran a fini par ranger. */
+    ligne('Mes plateformes', resumePlates(), "go('plates',{from:'settings'})", I.tv)+
     ligne('Notifications', resumeNotif(), "go('notifs',{from:'settings'})", I.cloche)+
     '<div style="height:14px"></div>'+
     '<div class="tiny muted" style="margin:0 0 12px">Les affiches, les résumés et les dates '+
@@ -199,6 +204,10 @@ async function boot(){
      on les crée avant le premier rendu, sinon l'écran des réglages plante. */
   migrerNotif();
   migrerGouts();
+  /* Les abonnements déclarés arrivent cochés dans la feuille de filtres. Ici,
+     après `migrerGouts` et avant le premier rendu : `ui` est bâti au chargement
+     du script, quand la base n'est pas encore lue. */
+  semerPlatesFiltres();
   nettoyerCloches();
   askPersist();
   document.body.classList.remove('booting');

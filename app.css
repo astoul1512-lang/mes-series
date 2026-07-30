@@ -314,6 +314,8 @@
   .vgnote{font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:3px;
     margin-top:3px}
   .vgnote svg{width:11px;height:11px;color:var(--accent)}
+  /* La date d'un titre pas encore sorti, à la place de la note. */
+  .vgquand{color:var(--accent);font-weight:700}
   /* Séries et films sont mélangés dans les rangées : sans cette étiquette on
      ne sait pas ce qu'on ouvre. */
   .vgmed{font-size:10.5px;font-weight:750;letter-spacing:.03em;color:var(--muted);
