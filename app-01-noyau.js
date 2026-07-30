@@ -271,7 +271,7 @@ async function fetchShowFull(id, onStep){
    ici doit se faire UNE PAR UNE, chacune avec son test : les rapatrier toutes
    dans la même livraison, c'est empiler les risques sur le démarrage.
 --------------------------------------------------------------------------- */
-const SCHEMA = 2;
+const SCHEMA = 3;
 
 const MIGRATIONS = {
   2: function(){
@@ -281,6 +281,32 @@ const MIGRATIONS = {
        clés, ce qu'ils poussent activement à faire. Et la seule issue serait le
        réglage caché derrière sept appuis sur le logo. */
     if(db.sync && /^eyJ/.test(db.sync.key || '')) db.sync = Object.assign({}, DEFAULT_SYNC);
+  },
+  3: function(){
+    /* I8 + I9 — les réglages de notification.
+
+       I9 : « Un résumé le soir » et « Le samedi » étaient proposés à l'écran et
+       jamais implémentés côté serveur, qui saute purement et simplement toute
+       personne dont `quand` ne vaut pas `sortie`. Les choisir n'espaçait pas
+       les notifications, ça les éteignait — en silence, sous un écran qui
+       affichait « Activées · 3 séries, 1 film ». On les ramène donc à `sortie`,
+       et on le DIT une fois : quelqu'un qui a délibérément choisi un résumé
+       doit comprendre pourquoi il reçoit à nouveau des alertes à l'unité.
+
+       I8 : `{cine, stream, vod}` → `{cine, maison}`. Le pliage lui-même vit
+       dans `normaliserFilmsNotif` (app-09) parce qu'il sert aussi à ce qui
+       arrive par la synchro ; ici on ne fait que l'appeler.
+
+       `db.notif` peut être absent : `migrer()` tourne AVANT `migrerNotif()`.
+       Une migration ne doit jamais compter sur ce qui vient après elle. */
+    const n = db.notif;
+    if(!n || typeof n !== 'object') return;
+    if(n.quand && n.quand !== 'sortie'){
+      n.quand = 'sortie';
+      /* Lu et effacé au démarrage suivant, une seule fois. */
+      n.reprisI9 = true;
+    }
+    if(typeof normaliserFilmsNotif === 'function') normaliserFilmsNotif(n.films);
   }
 };
 
@@ -736,7 +762,14 @@ function scheduleSync(){
    s'abonne que par un code que la personne a elle-même généré. Tout est en lecture
    seule : rien de ce qui suit n'écrit dans les données d'autrui. */
 
-let partage = { suivis:[], abonnes:[], charge:false, occupe:false, code:null };
+/* I2 — `code` porte le code ACTIF, `expire` l'instant où il cesse de valoir.
+   Les deux sont relus DEPUIS LE SERVEUR à chaque `chargerPartage`, et non
+   gardés dans `db` comme le proposait la spec : la vérité est la ligne de
+   `codes_partage`, et une copie locale finirait par mentir — code annulé depuis
+   un autre téléphone, réinstallation, vieille sauvegarde réimportée. La policy
+   « je vois mes codes » autorise déjà cette lecture, qui tient dans la requête
+   que l'écran fait de toute façon. */
+let partage = { suivis:[], abonnes:[], charge:false, occupe:false, code:null, expire:null };
 const biblios = {};                       // caches mémoire, jamais enregistrés localement
 
 async function majProfil(){
@@ -790,26 +823,70 @@ async function chargerPartage(){
     partage.suivis  = idsSuivis.map(fiche);
     partage.abonnes = idsAbonnes.map(fiche);
     partage.charge = true;
+    /* Une lecture d'agrément : si elle échoue, l'écran des abonnements — qui
+       est l'essentiel — ne doit pas échouer avec elle. */
+    try{ await chargerCodeActif(); }
+    catch(e){ console.warn('code de partage illisible', e); }
+    /* I6 — même règle : ce qui s'ajoute à cet écran ne doit pas pouvoir le
+       faire échouer. Les recommandations viennent après les personnes. */
+    try{ await chargerConseils(); }
+    catch(e){ console.warn('recommandations illisibles', e); }
   }catch(e){ partage.erreur = e.message; }
   partage.occupe = false;
   if(view==='abos') render();
 }
 
+/* Le code encore valide et non consommé, s'il y en a un. Il ne peut y en avoir
+   qu'un depuis I2 ; on prend malgré tout le plus récent, pour qu'une base
+   antérieure à la correction — où plusieurs codes coexistent — affiche celui
+   que la personne a vu en dernier plutôt qu'un oublié. */
+async function chargerCodeActif(){
+  if(!signedIn()) return;
+  const r = await sbFetch('/rest/v1/codes_partage?select=code,expire_le'+
+    '&proprio=eq.'+encodeURIComponent(db.auth.uid)+
+    '&utilise_le=is.null&expire_le=gt.'+encodeURIComponent(new Date().toISOString())+
+    '&order=cree_le.desc&limit=1', {});
+  const c = Array.isArray(r) && r[0];
+  partage.code   = c ? c.code : null;
+  partage.expire = c ? Date.parse(c.expire_le) : null;
+}
+
+/* I2 — générer, c'est REMPLACER. Le tirage et la suppression des codes
+   précédents se font côté serveur, dans une seule transaction : un DELETE puis
+   un INSERT depuis le téléphone laisserait, en cas de coupure entre les deux,
+   une personne sans aucun code devant un écran qui en affiche un.
+   Voir `/supabase/migrations/007_nouveau_code.sql`. */
 async function genererCode(){
   if(!signedIn()) return;
-  const lettres = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   // sans I, O, 0, 1 pour éviter les confusions
-  let code = '';
-  const buf = new Uint32Array(6);
-  (self.crypto || window.crypto).getRandomValues(buf);
-  for(let i=0;i<6;i++) code += lettres[buf[i] % lettres.length];
   try{
     await majProfil();
-    await sbFetch('/rest/v1/codes_partage', { method:'POST',
-      headers:{ Prefer:'return=minimal' },
-      body: JSON.stringify({ code: code, proprio: db.auth.uid }) });
-    partage.code = code;
+    const r = await sbFetch('/rest/v1/rpc/nouveau_code', { method:'POST', body:'{}' });
+    const c = Array.isArray(r) ? r[0] : r;
+    if(!c || !c.code) throw new Error('reponse vide');
+    partage.code   = c.code;
+    partage.expire = Date.parse(c.expire_le);
     render();
-  }catch(e){ toast('Impossible de créer le code'); }
+  }catch(e){
+    console.warn('creation du code impossible', e);
+    toast('Impossible de créer le code');
+  }
+}
+
+/* Annuler ne demande aucune fonction serveur : la policy « je supprime mes
+   codes » couvre déjà ses propres lignes, et rien ne se recrée derrière — donc
+   aucune fenêtre où l'on se retrouverait sans code en croyant en avoir un. */
+async function annulerCode(){
+  if(!signedIn() || !partage.code) return;
+  try{
+    await sbFetch('/rest/v1/codes_partage?proprio=eq.'+encodeURIComponent(db.auth.uid),
+      { method:'DELETE', headers:{ Prefer:'return=minimal' } });
+    partage.code = null; partage.expire = null;
+    render();
+    toast('Code annulé');
+  }catch(e){
+    console.warn('annulation du code impossible', e);
+    toast('Impossible d\'annuler le code');
+  }
 }
 
 async function utiliserCode(saisi){
@@ -842,6 +919,76 @@ async function rompre(id, jeSuis){
     render();
     toast(jeSuis === 'suiveur' ? 'Désabonné' : 'Abonné retiré');
   }catch(e){ toast('Échec : '+e.message); }
+}
+
+/* ---------------------------------------------------------------------------
+   I6 — recommander un titre
+
+   Le partage était à sens unique : on regardait la bibliothèque d'un proche
+   sans jamais pouvoir lui dire « regarde ça ». Ces quatre fonctions sont tout
+   ce que l'app fait ; les règles, elles, sont côté base
+   (`/supabase/migrations/009_recommandations.sql`) : on ne peut recommander
+   qu'à quelqu'un du cercle, et le serveur le refuse même si l'interface le
+   proposait par erreur.
+
+   `conseils.recues` alimente l'écran ; `conseils.envoyees` sert à savoir ce qu'on a
+   déjà conseillé, pour ne pas le reproposer.
+--------------------------------------------------------------------------- */
+let conseils = { recues:[], envoyees:[], charge:false };
+
+async function chargerConseils(){
+  if(!signedIn()) return;
+  try{
+    const r = await sbFetch('/rest/v1/recommandations'+
+      '?select=id,de,vers,type,tmdb_id,titre,cree,vu,ecarte&order=cree.desc&limit=100', {});
+    const moi = db.auth.uid;
+    const tout = Array.isArray(r) ? r : [];
+    /* La policy ne renvoie déjà que mes lignes : le tri ci-dessous range,
+       il ne protège rien. */
+    conseils.recues   = tout.filter(x=> x.vers === moi && !x.ecarte);
+    conseils.envoyees = tout.filter(x=> x.de === moi);
+    conseils.charge = true;
+  }catch(e){
+    /* P2 — pas de `catch` nu : l'écran doit pouvoir dire qu'il n'a pas pu lire. */
+    conseils.erreur = (typeof motifSynchro === 'function') ? motifSynchro(e) : String(e && e.message || e);
+    console.warn('recommandations illisibles', e);
+  }
+  if(view === 'abos' || view === 'follow') render();
+}
+
+/* Le titre est recopié à l'envoi : sans lui, afficher la liste reçue
+   demanderait un appel TMDB par ligne avant même de savoir si ça intéresse. */
+async function recommander(type, id, titre, vers){
+  if(!signedIn()) return;
+  try{
+    await sbFetch('/rest/v1/recommandations', { method:'POST',
+      headers:{ Prefer:'resolution=ignore-duplicates,return=minimal' },
+      body: JSON.stringify({ de: db.auth.uid, vers: vers, type: type,
+                             tmdb_id: Number(id), titre: String(titre||'').slice(0,200) }) });
+    await chargerConseils();
+    toast('Recommandation envoyée');
+  }catch(e){
+    console.warn('recommandation impossible', e);
+    /* 403 : la personne n'est plus dans le cercle. C'est le serveur qui tranche,
+       et le message doit dire la vraie raison plutôt qu'« échec ». */
+    toast(e && e.status === 403 ? 'Cette personne n\'est plus dans ton cercle'
+                                : 'Envoi impossible');
+  }
+}
+
+/* Écarter : le destinataire seul en a le droit, et la ligne reste en base pour
+   que la même recommandation ne revienne pas au prochain chargement. */
+async function ecarterConseil(idReco){
+  try{
+    await sbFetch('/rest/v1/recommandations?id=eq.'+encodeURIComponent(idReco),
+      { method:'PATCH', headers:{ Prefer:'return=minimal' },
+        body: JSON.stringify({ ecarte: new Date().toISOString() }) });
+    conseils.recues = conseils.recues.filter(x=> x.id !== idReco);
+    render();
+  }catch(e){
+    console.warn('impossible d\'écarter la recommandation', e);
+    toast('Échec');
+  }
 }
 
 /* Récupère la bibliothèque d'une personne suivie — lecture seule, gardée en mémoire */
