@@ -58,7 +58,18 @@
 <div id="bilan" class="bilan">…</div>
 <div id="out"></div>
 
-<script>window.MODE_TEST = true;</script>
+<script>
+/* `MODE_TEST` fait DEUX choses, et la seconde est la plus importante :
+   1. elle empêche `boot()` et l'enregistrement du service worker ;
+   2. elle force `memoryOnly`, donc AUCUNE écriture dans IndexedDB ni dans
+      localStorage. Cette page charge les vrais scripts et partage l'origine de
+      l'app : sans ce verrou, `migrer()` — appelé par les cas de migration —
+      se termine par `saveDB()` et écrase la bibliothèque de la personne par la
+      base vierge des tests. C'est arrivé en production le 30/07.
+   NE JAMAIS retirer cette ligne, ni la déplacer après le chargement des
+   scripts : `memoryOnly` est fixé au moment où app-01 s'évalue. */
+window.MODE_TEST = true;
+</script>
 <script src="./app-01-noyau.js"></script>
 <script src="./app-02-outils.js"></script>
 <script src="./app-03-vues.js"></script>

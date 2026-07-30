@@ -50,7 +50,17 @@ const I = {
    miroir localStorage en secours, et écriture forcée dès que l'app passe en arrière-plan. */
 const KEY = 'mesSeries.v1';
 const IDB_NAME = 'mesSeries', IDB_STORE = 'kv', IDB_KEY = 'db';
-let memoryOnly = false, storageMode = 'idb', storageKO = false;
+/* `MODE_TEST` FORCE LE MODE MÉMOIRE. Sans ça, `test.html` — qui charge les
+   VRAIS scripts — écrit dans la VRAIE base : ses cas appellent `migrer()`, qui
+   se termine par `saveDB()`, et la base vierge des tests écrase celle de la
+   personne. Constaté le 30/07 en production : ouvrir la page de tests sur le
+   domaine de l'app a vidé la bibliothèque locale et fermé la session. Rien
+   n'était perdu — le serveur avait tout — mais il fallait se reconnecter, et
+   une modification pas encore synchronisée aurait disparu.
+   La page de tests et l'app partagent l'origine, donc le même IndexedDB : le
+   seul verrou sûr est de ne jamais écrire du tout. */
+let memoryOnly = (typeof window !== 'undefined' && window.MODE_TEST === true);
+let storageMode = 'idb', storageKO = false;
 /* Serveur de sauvegarde pré-configuré (clé publiable : conçue pour être dans le client,
    les données sont protégées par les règles RLS côté base). Modifiable dans l'écran Compte. */
 const DEFAULT_SYNC = { url:'https://mqwryzopmtykjidabqfv.supabase.co',
