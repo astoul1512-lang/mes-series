@@ -54,9 +54,17 @@ function viewSettings(){
   html += '<div class="sectitle">Mes données</div><div class="wrap" style="padding-top:0">'+
     (memoryOnly ? '<div class="banner" style="margin:0 0 14px">Le stockage du navigateur est indisponible ici : '+
       '<b>tes données seront perdues à la fermeture</b>. Ouvre l\'app depuis une vraie adresse (https) pour la sauvegarde automatique, ou exporte régulièrement.</div>'
+     /* F4 — le basculement sur IndexedDB seul était silencieux. Il n'est pas
+        grave : rien n'est perdu tant que l'app se ferme normalement. Mais sans
+        le second canal, une terminaison brutale d'iOS peut coûter les dernières
+        secondes de cochage — et ça, ça se dit. */
+     : (db.miroirSature ? '<div class="banner" style="margin:0 0 14px">La copie de secours rapide '+
+        'ne tient plus dans ce navigateur : tes données sont enregistrées, mais '+
+        '<b>les toutes dernières secondes pourraient se perdre</b> si le téléphone coupe l\'app brutalement. '+
+        'Un export de temps en temps met à l\'abri.</div>'
      : (nbShows && oldExport ? '<div class="banner" style="margin:0 0 14px">'+
         (db.lastExport ? 'Dernière sauvegarde il y a plus d\'un mois.' : 'Tu n\'as jamais fait de sauvegarde.')+
-        ' <b>Exporte ton fichier de temps en temps</b> : c\'est ta seule copie de secours si tu changes de téléphone.</div>' : ''))+
+        ' <b>Exporte ton fichier de temps en temps</b> : c\'est ta seule copie de secours si tu changes de téléphone.</div>' : '')))+
     '<div class="tiny muted" style="margin:0 0 12px">Le fichier contient ta bibliothèque et tes '+
       'réglages. Il ne contient aucun mot de passe ni identifiant de connexion.</div>'+
     ligne('Exporter une sauvegarde',
