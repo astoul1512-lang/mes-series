@@ -450,13 +450,15 @@ function marquerCascade(id, n, e){
                nb+' épisodes marqués vus');
 }
 
+/* B5 — le rond de la carte « À rattraper ». C'est le geste le plus exposé de
+   l'app : un rond au milieu d'un rail qui défile sous le pouce. Il passe donc
+   par `applyWatched` comme tout le reste, et devient annulable. Le toast
+   disparaît : la barre Annuler dit déjà ce qui s'est passé, et les deux se
+   recouvrent à l'écran (voir G10). */
 function quickWatch(id, ev){
   if(ev) ev.stopPropagation();
   const s = db.shows[id], nx = nextToWatch(s);
   if(!nx) return;
-  const avant = Object.assign({}, s.watched);
-  s.watched[key(nx.s,nx.e)] = Date.now();
-  noterDecoches(s, avant);
-  saveDB(); render();
-  toast(codeEp(nx.s,nx.e)+' vu ✓');
+  applyWatched(id, x=>{ x.watched[key(nx.s,nx.e)] = Date.now(); },
+               codeEp(nx.s,nx.e)+' vu');
 }

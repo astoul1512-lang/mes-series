@@ -165,6 +165,19 @@ function appliquerImport(){
   });
   db.shows = neufs.shows; db.movies = neufs.movies;
   if(d.lang) db.lang = d.lang;
+  /* B8 — l'export contient les goûts, le profil et les cloches depuis A2 :
+     les ignorer à l'import, c'était promettre une sauvegarde qui n'en était
+     pas une. On les reprend, puis on remet les champs manquants d'une version
+     antérieure à leur place. */
+  if(d.gouts && typeof d.gouts === 'object'){
+    db.gouts = d.gouts;
+    if(typeof migrerGouts === 'function') migrerGouts();
+  }
+  if(d.profil && typeof d.profil === 'object') db.profil = d.profil;
+  if(d.notif && typeof d.notif === 'object'){
+    db.notif = d.notif;
+    if(typeof migrerNotif === 'function') migrerNotif();
+  }
   saveDB(); render(); toast('Données importées');
 }
 async function refreshAll(){
@@ -201,20 +214,13 @@ function doWipe(){
 /* ============================ Démarrage ============================ */
 async function boot(){
   await loadDB();
-  // migration douce : garantir la présence des champs
-  Object.values(db.shows).forEach(s=>{
-    if(!s.watched) s.watched={};
-    if(!s.seasons) s.seasons={};
-    /* Les toutes premières versions nommaient l'image d'épisode « s » au lieu de « st ». */
-    Object.values(s.seasons).forEach(eps=>{
-      if(!Array.isArray(eps)) return;
-      eps.forEach(ep=>{
-        if(ep && ep.st === undefined && typeof ep.s === 'string' && ep.s.charAt(0) === '/'){
-          ep.st = ep.s; delete ep.s;
-        }
-      });
-    });
-  });
+  /* B7 — le registre de migrations, AVANT le premier rendu et après la lecture
+     de la base. Il porte désormais aussi la remise en forme douce (présence de
+     `watched`/`seasons`, renommage `ep.s → ep.st`), rapatriée depuis ici avec
+     son test : `migrer()` seul doit suffire à rendre la base exploitable.
+     `migrerNotif` et `migrerGouts` restent dehors — un par un, chacun avec son
+     test, sinon on déplace du code sans filet. */
+  if(typeof migrer === 'function') migrer();
   /* Les préférences de notification n'existent pas dans les bases d'avant :
      on les crée avant le premier rendu, sinon l'écran des réglages plante. */
   migrerNotif();
@@ -236,10 +242,16 @@ async function boot(){
   if(memoryOnly) toast('Stockage indisponible : pense à exporter tes données');
   if(syncReady() && signedIn()){ syncNow(true); majProfil(); chargerPartage(); inscrireSiBesoin(); }
 }
-boot();
+/* `test.html` charge les mêmes fichiers dans le même ordre, pour éprouver le
+   VRAI code et non une copie. Il pose `MODE_TEST` avant de les charger : sans
+   ce garde-fou, `boot()` démarrerait l'app pour de bon au milieu des tests —
+   IndexedDB, synchro et tout le reste. */
+if(!window.MODE_TEST) boot();
 
-/* Service worker : démarrage instantané et fonctionnement hors-ligne */
-if('serviceWorker' in navigator && location.protocol.startsWith('http')){
+/* Service worker : démarrage instantané et fonctionnement hors-ligne.
+   Pas en mode test : la page de tests n'a rien à mettre en cache, et un SW
+   enregistré depuis elle servirait l'app par-dessus. */
+if(!window.MODE_TEST && 'serviceWorker' in navigator && location.protocol.startsWith('http')){
   window.addEventListener('load', ()=>{
     navigator.serviceWorker.register('./sw.js').catch(()=>{});
   });

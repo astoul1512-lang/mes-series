@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="fr">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tests — Mes Séries</title>
+<!--
+  Ouvre ce fichier dans un navigateur : le titre de l'onglet dit tout de suite
+  si quelque chose est cassé, et la page détaille lequel.
+
+  Ce ne sont PAS des tests d'écran. Ils portent sur les fonctions pures — celles
+  dont personne ne peut valider le comportement à la lecture, et dont une
+  régression est invisible :
+
+    · `mergeRemote` et `noterDecoches` — la fusion entre deux appareils. Un CRDT
+      artisanal de quatre-vingt-dix lignes d'arbitrage par horodatage. C'est le
+      seul endroit du projet où une erreur peut RESSUSCITER ou EFFACER des
+      épisodes vus sans que rien ne s'affiche.
+    · `progress`, `isFinished`, `nextToWatch`, `statutSerie` — tout l'affichage
+      en dépend.
+    · `esc` et `escJs` — l'échappement. Le bug des acteurs à apostrophe aurait
+      été attrapé par trois lignes ici.
+    · `migrer` — il tourne au démarrage : une erreur empêche l'app de s'ouvrir.
+
+  Les fichiers chargés sont les VRAIS, dans l'ordre d'`index.html`. `MODE_TEST`
+  empêche `boot()` de démarrer l'app pour de bon.
+
+  Ce fichier ne doit pas entrer dans le SHELL du service worker.
+-->
+<style>
+  body{font:14px/1.5 system-ui,-apple-system,sans-serif;margin:0;padding:22px 18px 60px;
+       background:#0b0d11;color:#e8eaee}
+  h1{font-size:18px;margin:0 0 4px}
+  .bilan{font-size:15px;font-weight:700;margin:0 0 18px;padding:10px 14px;border-radius:10px}
+  .bilan.vert{background:#12301f;color:#5fe0a0}
+  .bilan.rouge{background:#3a1418;color:#ff8a8a}
+  .grp{margin:20px 0 6px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#8b93a3}
+  .t{padding:3px 0 3px 22px;position:relative;border-bottom:1px solid #171a21}
+  .t::before{position:absolute;left:0;top:3px}
+  .ok::before{content:'✓';color:#3ecf8e}
+  .ko::before{content:'✗';color:#ff6b6b}
+  .ko{color:#ff9b9b}
+  .ko em{display:block;color:#ff6b6b;font-style:normal;font-size:12.5px;padding-left:2px}
+</style>
+
+<!-- Le même squelette qu'`index.html`. Les scripts s'y accrochent au
+     chargement (`#sheet` notamment) : sans lui, app-02 s'interrompt en pleine
+     initialisation et la moitié du fichier ne s'exécute jamais. Masqué : on
+     teste des fonctions, pas des écrans. -->
+<div style="display:none">
+  <div class="app" id="app"></div>
+  <nav><div class="navin" id="nav"></div></nav>
+  <div class="toast" id="toast"></div>
+  <div class="undobar" id="undo"></div>
+  <div class="sheet" id="sheet"><div class="sheetin" id="sheetin"></div></div>
+</div>
+
+<h1>Tests — Mes Séries</h1>
+<div id="bilan" class="bilan">…</div>
+<div id="out"></div>
+
+<script>window.MODE_TEST = true;</script>
+<script src="./app-01-noyau.js"></script>
+<script src="./app-02-outils.js"></script>
+<script src="./app-03-vues.js"></script>
+<script src="./app-04-decouvrir.js"></script>
+<script src="./app-05-plateformes.js"></script>
+<script src="./app-06-serie.js"></script>
+<script src="./app-07-partage.js"></script>
+<script src="./app-09-notifications.js"></script>
+<script src="./app-10-sorties.js"></script>
+<script src="./app-11-gouts.js"></script>
+<script src="./app-08-reglages.js"></script>
+
+<script>
+(function(){
+  let n = 0, ko = 0;
+  const sortie = document.getElementById('out');
+
+  function groupe(titre){
+    const d = document.createElement('div');
+    d.className = 'grp'; d.textContent = titre;
+    sortie.appendChild(d);
+  }
+  function test(nom, fn){
+    n++;
+    const d = document.createElement('div');
+    try{
+      fn();
+      d.className = 't ok'; d.textContent = nom;
+    }catch(e){
+      ko++;
+      d.className = 't ko'; d.textContent = nom;
+      const em = document.createElement('em'); em.textContent = e.message;
+      d.appendChild(em);
+    }
+    sortie.appendChild(d);
+  }
+  function egal(a, b, msg){
+    const sa = JSON.stringify(a), sb = JSON.stringify(b);
+    if(sa !== sb) throw new Error((msg ? msg+' : ' : '')+'attendu '+sb+', obtenu '+sa);
+  }
+  function vrai(c, msg){ if(!c) throw new Error(msg || 'faux'); }
+
+  /* Une base neuve à chaque test : les fonctions écrivent dans `db`, il ne
+     faut pas qu'un test hérite de l'état du précédent. */
+  function baseVierge(){
+    db.shows = {}; db.movies = {};
+    db.deleted = { shows:{}, movies:{} };
+    db.gouts = { genres:[], exclus:[], acteurs:[], propose:true, jour:'',
+                 plates:[], platesDemande:true, suggMesPlates:false };
+    db.profil = { couleur:'corail', embleme:'lettre' };
+    db.pseudo = ''; db.auth = null; db.v = 2;
+  }
+  const ep = (e, jour, st) => ({ e:e, n:'E'+e, d:jour, r:42, st:st||null });
+  function serie(id, eps, vus, extra){
+    return Object.assign({ id:id, name:'S'+id, status:'Ended', seasons:{1:eps},
+                           watched:vus||{}, addedAt:1, updated:1 }, extra||{});
+  }
+  const HIER = new Date(Date.now()-86400000).toISOString().slice(0,10);
+  const DEMAIN = new Date(Date.now()+86400000).toISOString().slice(0,10);
+
+  /* ==================== Échappement ==================== */
+  groupe('Échappement');
+
+  test('esc neutralise les cinq caractères dangereux', ()=>{
+    egal(esc('<a href="x">&\'</a>'),
+         '&lt;a href=&quot;x&quot;&gt;&amp;&#39;&lt;/a&gt;');
+  });
+
+  test("escJs survit à une apostrophe une fois posé dans un onclick", ()=>{
+    /* Le vrai parcours : le parseur HTML décode, puis JavaScript lit. C'est
+       exactement ce que `esc(...).replace()` ne faisait PAS. */
+    window.__recu = null;
+    const d = document.createElement('div');
+    d.innerHTML = '<b onclick="window.__recu = \'' + escJs("O'Brien") + '\'"></b>';
+    d.firstChild.click();
+    egal(window.__recu, "O'Brien");
+  });
+
+  test('escJs survit aussi à une barre oblique inverse et à un guillemet', ()=>{
+    window.__recu = null;
+    const nom = 'A\\B"C\'D';
+    const d = document.createElement('div');
+    d.innerHTML = '<b onclick="window.__recu = \'' + escJs(nom) + '\'"></b>';
+    d.firstChild.click();
+    egal(window.__recu, nom);
+  });
+
+  test('cheminImage refuse ce qui n\'est pas un chemin TMDB', ()=>{
+    ['https://x.fr/p.gif', '//evil.example/x.jpg', 'javascript:alert(1)',
+     '/a.jpg" onerror="x', '/a//b.jpg', '', null, 42].forEach(c=>{
+      if(cheminImage(c) !== null) throw new Error('accepté : '+JSON.stringify(c));
+    });
+  });
+  test('cheminImage accepte les vrais chemins TMDB', ()=>{
+    ['/8Gxv8gSFCU0XGDykEGv7zR1n2ua.jpg', '/a-b_c.1.png', '/t/p/w342/abc.jpg']
+      .forEach(c=>{ if(cheminImage(c) !== c) throw new Error('refusé : '+c); });
+  });
+
+  /* ==================== Statut d'un titre ==================== */
+  groupe('Statut d\'un titre');
+
+  test('progress ne compte que ce qui est diffusé', ()=>{
+    const s = serie(1, [ep(1,HIER), ep(2,HIER), ep(3,DEMAIN)], {'1x1':1});
+    egal(progress(s), { watched:1, total:2, pct:50 });
+  });
+
+  test('nextToWatch SAUTE un épisode sans date au lieu de s\'arrêter dessus', ()=>{
+    /* B4 : c'est le bug qui faisait disparaître une série entière du rail
+       « À rattraper », sans que rien ne le signale. */
+    const s = serie(1, [ep(1,HIER), ep(2,null), ep(3,HIER), ep(4,HIER)], {'1x1':1});
+    const nx = nextToWatch(s);
+    vrai(nx, 'aucun épisode proposé : la série disparaîtrait du rail');
+    egal(nx.e, 3, 'épisode proposé');
+  });
+
+  test('nextToWatch s\'arrête bien sur une date future', ()=>{
+    const s = serie(1, [ep(1,HIER), ep(2,DEMAIN), ep(3,HIER)], {'1x1':1});
+    egal(nextToWatch(s), null, 'un épisode à venir a été proposé');
+  });
+
+  test('nextToWatch rend null quand tout est vu', ()=>{
+    const s = serie(1, [ep(1,HIER), ep(2,HIER)], {'1x1':1,'1x2':1});
+    egal(nextToWatch(s), null);
+  });
+
+  test('isFinished exige une série terminée ET intégralement vue', ()=>{
+    const eps = [ep(1,HIER), ep(2,HIER)];
+    vrai(!isFinished(serie(1, eps, {'1x1':1})), 'partiellement vue');
+    vrai(!isFinished(serie(1, eps, {'1x1':1,'1x2':1}, {status:'Returning Series'})),
+         'série non terminée');
+    vrai(isFinished(serie(1, eps, {'1x1':1,'1x2':1})), 'terminée et tout vu');
+  });
+
+  test('statutSerie : les trois états, et la pause qui prime', ()=>{
+    const eps = [ep(1,HIER), ep(2,HIER)];
+    egal(statutSerie(serie(1, eps, {})), 'avoir');
+    egal(statutSerie(serie(1, eps, {'1x1':1}, {status:'Returning Series'})), 'asuivre');
+    egal(statutSerie(serie(1, eps, {'1x1':1,'1x2':1})), 'vu');
+    egal(statutSerie(serie(1, eps, {'1x1':1}, {pause:true})), 'pause');
+  });
+
+  test('les hors-série ne comptent jamais dans la progression', ()=>{
+    const s = serie(1, [ep(1,HIER)], {'1x1':1});
+    s.seasons[0] = [ep(1,HIER), ep(2,HIER)];
+    egal(progress(s).total, 1, 'la saison 0 a été comptée');
+  });
+
+  /* ==================== Fusion entre appareils ==================== */
+  groupe('Fusion entre appareils — mergeRemote');
+
+  test('une série inconnue arrive', ()=>{
+    baseVierge();
+    mergeRemote({ shows:{ 7: serie(7, [ep(1,HIER)], {'1x1':1}) }, movies:{} });
+    vrai(db.shows[7], 'la série n\'est pas arrivée');
+    egal(progress(db.shows[7]).watched, 1);
+  });
+
+  test('les épisodes vus des deux côtés fusionnent, aucun n\'est perdu', ()=>{
+    baseVierge();
+    db.shows[7] = serie(7, [ep(1,HIER),ep(2,HIER),ep(3,HIER)], {'1x1':1});
+    mergeRemote({ shows:{ 7: serie(7, [ep(1,HIER),ep(2,HIER),ep(3,HIER)], {'1x3':1}) },
+                  movies:{} });
+    egal(Object.keys(db.shows[7].watched).sort(), ['1x1','1x3']);
+  });
+
+  test('un décochage RÉCENT gagne sur un vu ancien venu d\'ailleurs', ()=>{
+    baseVierge();
+    const local = serie(7, [ep(1,HIER)], {});
+    local.unwatched = { '1x1': Date.now() };          // décoché ici, à l'instant
+    db.shows[7] = local;
+    const distant = serie(7, [ep(1,HIER)], { '1x1': Date.now() - 3600000 });
+    mergeRemote({ shows:{ 7: distant }, movies:{} });
+    vrai(!db.shows[7].watched['1x1'],
+         'l\'épisode décoché est revenu : le décochage se perd à chaque synchro');
+  });
+
+  test('un vu RÉCENT gagne sur un décochage ancien', ()=>{
+    baseVierge();
+    const local = serie(7, [ep(1,HIER)], {});
+    local.unwatched = { '1x1': Date.now() - 3600000 };
+    db.shows[7] = local;
+    const distant = serie(7, [ep(1,HIER)], { '1x1': Date.now() });
+    mergeRemote({ shows:{ 7: distant }, movies:{} });
+    vrai(db.shows[7].watched['1x1'], 'le recochage n\'a pas pris');
+  });
+
+  test('une série supprimée ici ne revient pas de l\'autre appareil', ()=>{
+    baseVierge();
+    markDeleted('shows', 7);
+    mergeRemote({ shows:{ 7: serie(7, [ep(1,HIER)], {'1x1':1}) }, movies:{},
+                  deleted:{shows:{},movies:{}} });
+    vrai(!db.shows[7], 'une série supprimée est ressuscitée par la synchro');
+  });
+
+  test('une série supprimée AILLEURS disparaît ici', ()=>{
+    baseVierge();
+    db.shows[7] = serie(7, [ep(1,HIER)], {'1x1':1});
+    mergeRemote({ shows:{}, movies:{}, deleted:{ shows:{ 7: Date.now() }, movies:{} } });
+    vrai(!db.shows[7], 'la suppression ne s\'est pas propagée');
+  });
+
+  test('une série RAJOUTÉE après sa suppression survit', ()=>{
+    baseVierge();
+    markDeleted('shows', 7);
+    const rajoutee = serie(7, [ep(1,HIER)], {'1x1':1});
+    rajoutee.addedAt = Date.now() + 1000;             // rajoutée après la suppression
+    mergeRemote({ shows:{ 7: rajoutee }, movies:{}, deleted:{shows:{},movies:{}} });
+    vrai(db.shows[7], 'une série rajoutée volontairement a été effacée');
+  });
+
+  test('un film vu plus récemment l\'emporte', ()=>{
+    baseVierge();
+    db.movies[3] = { id:3, title:'F', seen:false, watchedAt:1000 };
+    mergeRemote({ shows:{}, movies:{ 3:{ id:3, title:'F', seen:true, watchedAt:2000 } } });
+    vrai(db.movies[3].seen, 'le film vu ailleurs n\'est pas remonté');
+  });
+
+  test('normaliserSerie garantit watched et seasons', ()=>{
+    const s = normaliserSerie({ id:9, name:'X' });
+    egal(s.watched, {}); egal(s.seasons, {});
+    egal(normaliserSerie(null), null);
+    egal(normaliserSerie('bidon'), null);
+  });
+
+  test('une vignette locale n\'est pas effacée par une absence distante', ()=>{
+    /* Ce que la normalisation existe pour garantir : le jour où les vignettes
+       sortiront du payload (F5), un appareil à jour ne doit pas les perdre. */
+    const local = serie(7, [ep(1,HIER,'/vignette.jpg')], {});
+    const distant = serie(7, [ep(1,HIER,null)], {});
+    const s = normaliserSerie(distant, local);
+    egal(s.seasons[1][0].st, '/vignette.jpg');
+  });
+
+  test('un objet distant vide ou cassé ne casse pas la fusion', ()=>{
+    baseVierge();
+    mergeRemote({ shows:{ 1:null, 2:'bidon', 3:{} }, movies:{ 1:null } });
+    egal(Object.keys(db.shows).length, 0);
+    egal(Object.keys(db.movies).length, 0);
+  });
+
+  /* ==================== Préférences ==================== */
+  groupe('Préférences — la plus récente gagne');
+
+  test('des goûts plus récents s\'imposent en bloc', ()=>{
+    baseVierge();
+    db.gouts.genres = ['Drame']; db.gouts.maj = 1000;
+    mergeRemote({ shows:{}, movies:{},
+                  gouts:{ genres:['Comédie','Action'], exclus:[], acteurs:[],
+                          plates:[], maj:2000 } });
+    egal(db.gouts.genres, ['Comédie','Action']);
+  });
+
+  test('des goûts plus anciens ne remplacent rien', ()=>{
+    baseVierge();
+    db.gouts.genres = ['Drame']; db.gouts.maj = 3000;
+    mergeRemote({ shows:{}, movies:{},
+                  gouts:{ genres:['Comédie'], exclus:[], acteurs:[], plates:[], maj:2000 } });
+    egal(db.gouts.genres, ['Drame']);
+  });
+
+  test('un avatar plus récent s\'impose', ()=>{
+    baseVierge();
+    db.profil = { couleur:'corail', maj:1000 };
+    mergeRemote({ shows:{}, movies:{}, profil:{ couleur:'menthe', maj:2000 } });
+    egal(db.profil.couleur, 'menthe');
+  });
+
+  test('payload emporte les préférences et AUCUN secret', ()=>{
+    baseVierge();
+    db.auth = { token:'JETON', refresh:'REFRESH', uid:'u', email:'a@b.fr' };
+    db.syncDernierEchec = { quand:1, motif:'x' };
+    const p = payload(), t = JSON.stringify(p);
+    vrai(p.gouts !== undefined && p.profil !== undefined, 'préférences absentes');
+    vrai(p.auth === undefined && p.sync === undefined, 'auth ou sync présents');
+    vrai(p.syncDernierEchec === undefined, 'un état local part au serveur');
+    vrai(p.v === undefined && p.proprio === undefined, 'schéma ou propriétaire envoyés');
+    vrai(t.indexOf('JETON') < 0 && t.indexOf('REFRESH') < 0, 'UN JETON PART AU SERVEUR');
+  });
+
+  /* ==================== Migrations ==================== */
+  groupe('Migrations — B7');
+
+  test('une base sans version et avec l\'ancienne clé JWT est réparée', ()=>{
+    baseVierge();
+    delete db.v;
+    db.sync = { url:'https://x.supabase.co', key:'eyJhbGciOiJIUzI1NiJ9.abc' };
+    migrer();
+    egal(db.v, SCHEMA, 'version');
+    vrai(!/^eyJ/.test(db.sync.key), 'la clé héritée n\'a pas été remplacée');
+  });
+
+  test('une base déjà à jour n\'est pas retouchée', ()=>{
+    baseVierge();
+    db.v = SCHEMA;
+    db.sync = { url:'https://x.supabase.co', key:'sb_publishable_abc' };
+    migrer();
+    egal(db.v, SCHEMA);
+    egal(db.sync.key, 'sb_publishable_abc', 'la clé a été écrasée sans raison');
+  });
+
+  test('une base plus récente que le code est signalée, pas dégradée', ()=>{
+    baseVierge();
+    db.v = 99;
+    db.sync = { url:'https://x.supabase.co', key:'eyJdonc_ancienne' };
+    migrer();
+    egal(db.v, 99, 'la version a été rétrogradée');
+    vrai(db.schemaTropRecent, 'aucun signalement');
+    egal(db.sync.key, 'eyJdonc_ancienne', 'une migration a tourné quand même');
+  });
+
+  test('une migration qui échoue ne bloque pas le démarrage', ()=>{
+    baseVierge();
+    delete db.v;
+    const vraie = MIGRATIONS[2];
+    MIGRATIONS[2] = function(){ throw new Error('boum'); };
+    try{ migrer(); } finally { MIGRATIONS[2] = vraie; }
+    egal(db.v, 1, 'la version a avancé malgré l\'échec');
+  });
+
+  /* ==================== Routes — C1 ==================== */
+  groupe('Routes — C1');
+
+  test('un écran simple se sérialise', ()=>{
+    egal(routeVersFragment('discover', {}), '#/decouvrir');
+    egal(routeVersFragment('follow', {}), '#/a-suivre');
+  });
+
+  test('un écran à identité porte son identité', ()=>{
+    egal(routeVersFragment('show', {id:1399}), '#/serie/1399');
+    egal(routeVersFragment('movie', {id:550}), '#/film/550');
+    egal(routeVersFragment('acteur', {id:287}), '#/personne/287');
+    egal(routeVersFragment('preview', {id:1399, type:'tv'}), '#/apercu/1399/tv');
+  });
+
+  test('se relit dans l\'autre sens', ()=>{
+    egal(fragmentVersRoute('#/decouvrir'), {view:'discover', params:{}});
+    egal(fragmentVersRoute('#/serie/1399'), {view:'show', params:{id:'1399'}});
+    egal(fragmentVersRoute('#/apercu/550/movie'), {view:'preview', params:{id:'550', type:'movie'}});
+    /* L'identifiant revient en CHAÎNE — une adresse ne transporte que du texte.
+       `db.shows[params.id]` marche dans les deux cas (les clés d'objet sont des
+       chaînes), mais un `===` sur un nombre, non. À retenir pour C3. */
+    egal(typeof fragmentVersRoute('#/serie/1399').params.id, 'string');
+  });
+
+  test('l\'ancienne forme des notifications marche encore', ()=>{
+    egal(fragmentVersRoute('#show-1399'), {view:'show', params:{id:'1399'}});
+    egal(fragmentVersRoute('#movie-550'), {view:'movie', params:{id:'550'}});
+    /* Sans le dièse non plus : le service worker manipule les deux formes. */
+    egal(fragmentVersRoute('show-1399'), {view:'show', params:{id:'1399'}});
+  });
+
+  test('un identifiant qui n\'est pas un nombre est refusé', ()=>{
+    egal(fragmentVersRoute('#/serie/abc'), null);
+    egal(fragmentVersRoute('#/serie/'), null, 'identifiant vide accepté');
+    egal(fragmentVersRoute('#/serie'), null, 'identifiant absent accepté');
+    egal(fragmentVersRoute('#/serie/1399bis'), null);
+  });
+
+  test('un écran non partageable n\'a pas d\'adresse, dans les deux sens', ()=>{
+    ['rangee','biblio','account','avatar','motdepasse'].forEach(v=>{
+      vrai(routeVersFragment(v, {id:1}) === null, v+' se sérialise alors qu\'il ne devrait pas');
+    });
+    egal(fragmentVersRoute('#/compte'), null);
+    egal(fragmentVersRoute('#/avatar'), null);
+    egal(fragmentVersRoute('#/motdepasse'), null);
+    egal(fragmentVersRoute('#/bibliotheque/abc'), null);
+  });
+
+  test('le lien de réinitialisation n\'est pas pris pour une route', ()=>{
+    egal(fragmentVersRoute('#access_token=xyz&type=recovery'), null);
+    egal(fragmentVersRoute('#error_description=Lien+expire'), null);
+  });
+
+  test('une route inventée ne renvoie rien', ()=>{
+    egal(fragmentVersRoute('#/nimportequoi'), null);
+    egal(fragmentVersRoute('#/'), null);
+    egal(fragmentVersRoute('#'), null);
+    egal(fragmentVersRoute(''), null);
+    egal(fragmentVersRoute(null), null);
+    egal(fragmentVersRoute(undefined), null);
+  });
+
+  test('un type d\'aperçu inconnu est refusé', ()=>{
+    /* `loadPreview` colle ce type dans un chemin d'API : « #/apercu/1/person »
+       enverrait le relais TMDB demander /person/1. On ne laisse passer que les
+       deux types que l'app sait rendre. */
+    egal(fragmentVersRoute('#/apercu/1399/person'), null);
+    egal(fragmentVersRoute('#/apercu/1399/../../secret'), null);
+    egal(fragmentVersRoute('#/apercu/1399'), null, 'type absent accepté');
+    egal(fragmentVersRoute('#/apercu/1399/tv'), {view:'preview', params:{id:'1399', type:'tv'}});
+  });
+
+  test('un fragment mal encodé ne fait pas jeter', ()=>{
+    egal(fragmentVersRoute('#/%E0%A4%A'), null);
+    egal(fragmentVersRoute('#/serie/%'), null);
+  });
+
+  test('aller-retour sur toutes les routes partageables', ()=>{
+    const echantillon = { id:1399, type:'tv' };
+    let vues = 0;
+    for(const v in ROUTES){
+      if(!ROUTES[v].partageable) continue;
+      vues++;
+      const p = {};
+      (ROUTES[v].cles||[]).forEach(k=>{ p[k] = echantillon[k]; });
+      const frag = routeVersFragment(v, p);
+      vrai(frag, v+' ne se sérialise pas');
+      const r = fragmentVersRoute(frag);
+      vrai(r, v+' : '+frag+' ne se relit pas');
+      egal(r.view, v, 'aller-retour sur '+v);
+      (ROUTES[v].cles||[]).forEach(k=>{
+        egal(r.params[k], String(echantillon[k]), v+' a perdu '+k);
+      });
+    }
+    vrai(vues >= 14, 'seulement '+vues+' routes partageables éprouvées');
+  });
+
+  test('deux routes ne partagent pas le même segment', ()=>{
+    const vus = {};
+    for(const v in ROUTES){
+      const s = ROUTES[v].seg;
+      vrai(!vus[s], 'le segment « '+s+' » sert à la fois à '+vus[s]+' et à '+v);
+      vus[s] = v;
+    }
+  });
+
+  test('tout écran réel a une route, et réciproquement', ()=>{
+    /* Un écran ajouté à DEPTH sans route serait silencieusement absent de
+       l'historique une fois C2 posé : le test le dira au lieu de le laisser
+       passer. `sorties` est exclu — onglet retiré le 28/07, sort tranché en H8. */
+    for(const v in DEPTH){
+      if(v === 'sorties') continue;
+      vrai(ROUTES[v], 'l\'écran « '+v+' » n\'a pas de route');
+    }
+    for(const v in ROUTES) vrai(DEPTH[v] != null, 'la route « '+v+' » ne désigne aucun écran');
+  });
+
+  test('un écran à identité SANS identité ne se sérialise pas', ()=>{
+    /* Mieux vaut pas d'adresse du tout qu'une adresse tronquée : « #/serie »
+       ne se relit pas, et poussée dans l'historique par C2 elle donnerait un
+       retour vers un écran vide. */
+    egal(routeVersFragment('show', {}), null);
+    egal(routeVersFragment('show', {id:null}), null);
+    egal(routeVersFragment('show', {id:''}), null);
+    egal(routeVersFragment('preview', {id:1399}), null, 'type manquant accepté');
+    egal(routeVersFragment('preview', {type:'tv'}), null, 'identifiant manquant accepté');
+  });
+
+  test('une route à clé libre exige quand même toutes ses clés', ()=>{
+    /* Les contrôles de `id` et de `type` couvrent aujourd'hui tous les cas.
+       Ce test éprouve le mécanisme GÉNÉRIQUE, celui qui servira à la première
+       route dont la clé n'est ni l'un ni l'autre — sinon on ne s'apercevrait
+       de son absence qu'en production. */
+    ROUTES.__essai = { seg:'essai', partageable:true, cles:['a','b'] };
+    try{
+      egal(routeVersFragment('__essai', {a:'x', b:'y'}), '#/essai/x/y');
+      egal(routeVersFragment('__essai', {a:'x'}), null, 'clé manquante sérialisée');
+      egal(fragmentVersRoute('#/essai/x/y'), {view:'__essai', params:{a:'x', b:'y'}});
+      egal(fragmentVersRoute('#/essai/x'), null, 'route incomplète acceptée');
+      /* Et l'encodage tient sur des valeurs qui ne sont pas des identifiants. */
+      egal(routeVersFragment('__essai', {a:'a/b', b:'é ?'}), '#/essai/a%2Fb/%C3%A9%20%3F');
+      egal(fragmentVersRoute('#/essai/a%2Fb/%C3%A9%20%3F'),
+           {view:'__essai', params:{a:'a/b', b:'é ?'}});
+    } finally { delete ROUTES.__essai; }
+  });
+
+  test('`from` ne rentre jamais dans l\'adresse', ()=>{
+    egal(routeVersFragment('show', {id:1399, from:'discover'}), '#/serie/1399');
+    egal(routeVersFragment('gouts', {from:'compte'}), '#/gouts');
+  });
+
+  test('les fonctions de route ne touchent pas à l\'état', ()=>{
+    baseVierge();
+    const vueAvant = view, parAvant = JSON.stringify(params), dbAvant = JSON.stringify(db);
+    routeVersFragment('show', {id:1399});
+    fragmentVersRoute('#/serie/1399');
+    fragmentVersRoute('#show-1399');
+    fragmentVersRoute('#/nimportequoi');
+    egal(view, vueAvant, 'l\'écran courant a bougé');
+    egal(JSON.stringify(params), parAvant, 'les paramètres ont bougé');
+    egal(JSON.stringify(db), dbAvant, 'la base a bougé');
+  });
+
+  /* ==================== Bilan ==================== */
+  const b = document.getElementById('bilan');
+  b.className = 'bilan ' + (ko ? 'rouge' : 'vert');
+  b.textContent = ko ? (ko + ' échec' + (ko>1?'s':'') + ' sur ' + n + ' tests')
+                     : ('Tout passe — ' + n + ' tests');
+  document.title = ko ? (ko + ' échec(s) — Mes Séries') : (n + ' tests OK — Mes Séries');
+})();
+</script>
+</html>

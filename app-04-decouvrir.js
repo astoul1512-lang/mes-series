@@ -1365,9 +1365,10 @@ function bascMaPlate(id){
        l'écarter au prétexte qu'un échantillon ne l'a pas croisée. */
     ['tv','movie'].forEach(m=>{ platesAbo[m][p.id] = true; });
   }
-  /* `saveDB` fait le reste : la signature des goûts a changé, la vitrine se
-     refera d'elle-même sous les yeux. */
-  saveDB();
+  /* `toucheGouts` date et enregistre : la signature des goûts a changé, la
+     vitrine se refera d'elle-même sous les yeux, et la modification saura
+     s'imposer sur l'autre appareil. */
+  toucheGouts();
   semerPlatesFiltres();
   render();
 }
@@ -1375,14 +1376,14 @@ function voirToutesMesPlates(){ ui.mesPlatesTout = !ui.mesPlatesTout; render(); 
 function viderMesPlates(){
   if(!db.gouts) return;
   db.gouts.plates = [];
-  saveDB(); semerPlatesFiltres(); render();
+  toucheGouts(); semerPlatesFiltres(); render();
 }
 function finirMesPlates(){
-  db.gouts.platesDemande = true; saveDB();
+  db.gouts.platesDemande = true; toucheGouts();
   go('follow');
 }
 function fermerMesPlates(){
-  db.gouts.platesDemande = true; saveDB();
+  db.gouts.platesDemande = true; toucheGouts();
   toast('Plateformes enregistrées');
   goBack();
 }
@@ -1419,10 +1420,10 @@ function setSuggPlates(v){
   const g = db.gouts; if(!g) return;
   if(!!g.suggMesPlates === !!v) return;
   g.suggMesPlates = !!v;
-  /* `saveDB` déclenche la veille : la signature des goûts vient de changer, la
-     vitrine se refait en douceur sans quitter l'écran. On repeint tout de suite
-     pour que la puce touchée s'allume sans attendre le réseau. */
-  saveDB();
+  /* `toucheGouts` déclenche la veille : la signature des goûts vient de
+     changer, la vitrine se refait en douceur sans quitter l'écran. On repeint
+     tout de suite pour que la puce touchée s'allume sans attendre le réseau. */
+  toucheGouts();
   peindreDisc();
 }
 

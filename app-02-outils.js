@@ -38,11 +38,21 @@ function progress(show){
   const w = eps.filter(ep => show.watched[key(ep.s,ep.e)]).length;
   return { watched:w, total:eps.length, pct: eps.length ? Math.round(w/eps.length*100) : 0 };
 }
+/* B4 — un épisode SANS DATE n'est pas « à venir » : c'est une lacune de TMDB,
+   fréquente sur les vieux épisodes et les hors-série. L'ancienne boucle
+   s'arrêtait dessus comme sur un épisode futur, `nextToWatch` rendait `null`,
+   et la série entière s'évaporait du rail « À rattraper » — pendant que
+   `retardSerie` continuait de compter des épisodes en retard et que
+   `statutSerie` la classait toujours « à suivre ». Aucun écran ne signalait
+   l'incohérence, et le bug ne se voyait que sur certaines séries.
+
+   Règle retenue, explicitement : une lacune se saute, une date future arrête. */
 function nextToWatch(show){
   const eps = allEpisodes(show,false);
   for(const ep of eps){
-    if(show.watched[key(ep.s,ep.e)]) continue;   // déjà vu : on passe, même sans date de diffusion
-    if(!aired(ep)) break;                        // premier épisode non vu et pas encore diffusé : plus rien à rattraper
+    if(show.watched[key(ep.s,ep.e)]) continue;   // déjà vu : on passe
+    if(!ep.d) continue;                          // lacune TMDB : on saute, on ne s'arrête pas
+    if(ep.d > todayISO()) break;                 // vraiment à venir : plus rien à rattraper
     return ep;
   }
   return null;
@@ -300,6 +310,116 @@ function closeSheet(){
   if(el){ el.style.transition = ''; el.style.transform = ''; }
 }
 document.getElementById('sheet').addEventListener('click', e=>{ if(e.target.id==='sheet') closeSheet(); });
+
+/* ================================ Routes ================================= */
+/* C1 — un écran = une chaîne, et réciproquement.
+   Deux fonctions PURES, sans effet de bord, volontairement pas encore
+   branchées : c'est ce qui rend C1 livrable seul, sans toucher à la
+   navigation. C2 posera `pushState`/`popstate` par-dessus.
+
+   Le fragment (`#…`) est le seul endroit possible : GitHub Pages sert un
+   fichier statique, il ne sait pas router `/serie/1399`.
+
+   `partageable:false` marque un écran qui n'a aucun sens hors contexte — on ne
+   le met pas dans une adresse et on refuse de le restaurer au démarrage. Trois
+   raisons distinctes de le poser :
+     · il porte un secret de passage (motdepasse) ;
+     · il n'existe que dans un parcours (avatar, pendant l'inscription) ;
+     · il dépend d'un état mémoire qu'une adresse ne transporte pas
+       (rangee : une clé de rangée n'a de sens que dans la session qui l'a
+       construite ; biblio : l'identité d'une personne suivie).
+   `account` est non partageable parce que l'écran de compte contient l'adresse
+   e-mail : une adresse qu'on colle dans une conversation ne doit pas y mener. */
+const ROUTES = {
+  discover:   { seg:'decouvrir',     partageable:true  },
+  follow:     { seg:'a-suivre',      partageable:true  },
+  profile:    { seg:'profil',        partageable:true  },
+  show:       { seg:'serie',         partageable:true,  cles:['id'] },
+  movie:      { seg:'film',          partageable:true,  cles:['id'] },
+  preview:    { seg:'apercu',        partageable:true,  cles:['id','type'] },
+  acteur:     { seg:'personne',      partageable:true,  cles:['id'] },
+  settings:   { seg:'reglages',      partageable:true  },
+  abos:       { seg:'abonnements',   partageable:true  },
+  moi:        { seg:'moi',           partageable:true  },
+  gouts:      { seg:'gouts',         partageable:true  },
+  plates:     { seg:'plateformes',   partageable:true  },
+  notifs:     { seg:'notifications', partageable:true  },
+  clochettes: { seg:'cloches',       partageable:true  },
+  rangee:     { seg:'rangee',        partageable:false },
+  biblio:     { seg:'bibliotheque',  partageable:false },
+  account:    { seg:'compte',        partageable:false },
+  avatar:     { seg:'avatar',        partageable:false },
+  motdepasse: { seg:'motdepasse',    partageable:false }
+};
+/* `sorties` existe dans DEPTH et a encore sa fonction de rendu, mais son onglet
+   a été retiré le 28/07 : aucun `go('sorties')` ne subsiste. Lui donner une
+   route ouvrirait par une adresse un écran qu'on ne peut plus atteindre
+   autrement. Le sort de ce code mort est tranché en H8, pas ici. */
+
+/* Les seuls types que TMDB connaît, et les seuls que `loadPreview` sait mettre
+   dans un chemin d'API. Une route qui en propose un autre est inventée : on la
+   refuse, plutôt que d'aller demander `/nimporte-quoi/1399` au relais. */
+const TYPES_APERCU = { tv:1, movie:1 };
+
+/* `from` ne fait pas partie de l'identité d'un écran : c'est une béquille de
+   l'ancienne navigation, que l'historique remplacera (C4.4). On ne le
+   sérialise pas — sinon deux adresses désigneraient le même écran. */
+function routeVersFragment(v, p){
+  const r = ROUTES[v];
+  if(!r || !r.partageable) return null;
+  const bouts = [r.seg];
+  let complet = true;
+  (r.cles||[]).forEach(k=>{
+    const val = p ? p[k] : null;
+    if(val == null || val === '') complet = false;
+    else bouts.push(encodeURIComponent(val));
+  });
+  /* Un écran à identité dont on n'a pas l'identité ne se sérialise pas : mieux
+     vaut pas d'adresse du tout qu'une adresse tronquée qui ne se relit pas. */
+  if(!complet) return null;
+  return '#/' + bouts.join('/');
+}
+
+function fragmentVersRoute(frag){
+  const s = String(frag || '');
+
+  /* Ancienne forme émise par le serveur avant la refonte : `#show-1399`. Les
+     notifications déjà parties peuvent dormir plusieurs jours dans le centre de
+     notifications — à garder au moins un mois après le passage de `notifier` à
+     la nouvelle forme. */
+  const vieux = /^#?(show|movie)-(\d+)$/.exec(s);
+  if(vieux) return { view: vieux[1], params: { id: vieux[2] } };
+
+  /* Le lien de réinitialisation de mot de passe occupe le MÊME fragment sous une
+     autre forme (`access_token=…&type=recovery`). Il ne commence pas par « / »,
+     donc il tombe ici, et c'est voulu : au démarrage comme au `hashchange`, on
+     lit le mot de passe d'abord et la route ensuite (C3). */
+  if(!/^#?\//.test(s)) return null;
+
+  const bouts = s.replace(/^#?\//, '').split('/').filter(Boolean);
+  let seg;
+  try{ seg = decodeURIComponent(bouts.shift() || ''); }
+  catch(e){ return null; }        // « %E0 » seul fait jeter decodeURIComponent
+  if(!seg) return null;
+
+  for(const v in ROUTES){
+    const r = ROUTES[v];
+    if(r.seg !== seg || !r.partageable) continue;
+    const cles = r.cles || [];
+    const p = {};
+    for(let i = 0; i < cles.length; i++){
+      if(bouts[i] == null) return null;              // route incomplète
+      try{ p[cles[i]] = decodeURIComponent(bouts[i]); }
+      catch(e){ return null; }
+    }
+    /* Les identifiants TMDB sont numériques : une route qui n'en fournit pas un
+       est inventée, on la refuse plutôt que d'ouvrir un écran vide. */
+    if(cles.indexOf('id') >= 0 && !/^\d+$/.test(String(p.id || ''))) return null;
+    if(cles.indexOf('type') >= 0 && !TYPES_APERCU[p.type]) return null;
+    return { view: v, params: p };
+  }
+  return null;
+}
 
 /* ============================ État de navigation ============================ */
 let view = 'follow';

@@ -242,6 +242,140 @@ async function fetchShowFull(id, onStep){
   };
 }
 
+/* ---------------------------------------------------------------------------
+   Le registre de migrations — B7
+
+   `db.v` existait depuis le début et n'était JAMAIS relu : les migrations
+   étaient des contrôles de présence dispersés (ici, dans `migrerNotif`, dans
+   `migrerGouts`, dans `boot`). Ça suffit pour AJOUTER un champ. Ça ne permet
+   aucune transformation ponctuelle — et c'est ce qui bloquait l'allègement du
+   format d'épisode (F5) autant que la réparation de la clé héritée.
+
+   Deux règles à ne jamais enfreindre :
+     — une migration livrée ne se modifie plus, on en ajoute une nouvelle ;
+     — une base plus récente que le code n'est pas dégradée, elle est signalée.
+
+   Les migrations dispersées restent où elles sont pour l'instant. Les déplacer
+   ici doit se faire UNE PAR UNE, chacune avec son test : les rapatrier toutes
+   dans la même livraison, c'est empiler les risques sur le démarrage.
+--------------------------------------------------------------------------- */
+const SCHEMA = 2;
+
+const MIGRATIONS = {
+  2: function(){
+    /* La clé publiable a remplacé l'ancienne clé anon au format JWT. Une base
+       qui a mémorisé l'ancienne (`eyJ…`) tombera en 401 sur TOUT — synchro,
+       abonnements, notifications — le jour où Supabase coupe les anciennes
+       clés, ce qu'ils poussent activement à faire. Et la seule issue serait le
+       réglage caché derrière sept appuis sur le logo. */
+    if(db.sync && /^eyJ/.test(db.sync.key || '')) db.sync = Object.assign({}, DEFAULT_SYNC);
+  }
+};
+
+/* Remise en forme de la base LOCALE. Distincte des migrations numérotées : une
+   migration corrige un passage de version, ceci répare des anomalies qui
+   peuvent apparaître à n'importe quelle version — un export bricolé à la main,
+   une écriture interrompue, une vieille sauvegarde réimportée bien plus tard.
+   Elle tourne donc à CHAQUE lancement, et elle doit rester idempotente et
+   sans allocation inutile : elle passe sur toute la base d'Adrien (103 séries,
+   8 600 épisodes) avant le premier rendu.
+   `normaliserSerie` fait le même travail pour ce qui ARRIVE du distant ; ici
+   c'est pour ce qui SORT du stockage local, que rien ne normalisait avant. */
+function reparerBase(){
+  let n = 0;
+  if(!db.shows || typeof db.shows !== 'object'){ db.shows = {}; n++; }
+  if(!db.movies || typeof db.movies !== 'object'){ db.movies = {}; n++; }
+  Object.values(db.shows).forEach(s=>{
+    if(!s || typeof s !== 'object') return;
+    if(!s.watched || typeof s.watched !== 'object'){ s.watched = {}; n++; }
+    if(!s.seasons || typeof s.seasons !== 'object'){ s.seasons = {}; n++; }
+    /* Les toutes premières versions nommaient l'image d'épisode « s » au lieu de « st ». */
+    Object.values(s.seasons).forEach(eps=>{
+      if(!Array.isArray(eps)) return;
+      eps.forEach(ep=>{
+        if(ep && ep.st === undefined && typeof ep.s === 'string' && ep.s.charAt(0) === '/'){
+          ep.st = ep.s; delete ep.s; n++;
+        }
+      });
+    });
+  });
+  return n;
+}
+
+function migrer(){
+  let v = Number(db.v) || 1;
+  if(v > SCHEMA){
+    /* Base écrite par une version plus récente de l'app — deux appareils, un
+       seul mis à jour. On ne touche à rien et on le dit, plutôt que de
+       dégrader en silence des données qu'on ne sait pas lire. */
+    db.schemaTropRecent = true;
+    return;
+  }
+  db.schemaTropRecent = false;
+  /* Avant les migrations, pas après : une migration doit pouvoir compter sur
+     une base de forme correcte. */
+  const repare = reparerBase();
+  if(v === SCHEMA){
+    if(db.v !== SCHEMA){ db.v = SCHEMA; saveDB(); }   // version implicite, on l'écrit
+    else if(repare) saveDB();                        // rien à migrer, mais on a réparé
+    return;
+  }
+  /* On inscrit la version de départ AVANT de tenter quoi que ce soit : si la
+     première migration échoue, `db.v` doit valoir la dernière version réussie
+     et non rester absent — sinon on retenterait depuis le début à chaque
+     lancement, indéfiniment. */
+  db.v = v;
+  while(v < SCHEMA){
+    v++;
+    try{ if(MIGRATIONS[v]) MIGRATIONS[v](); }
+    catch(e){
+      /* Une migration qui échoue ne doit pas empêcher l'app de s'ouvrir. On
+         s'arrête à la dernière version réussie ; la suivante retentera. */
+      console.error('migration ' + v + ' en échec', e);
+      break;
+    }
+    db.v = v;
+  }
+  saveDB();
+}
+
+/* ---------------------------------------------------------------------------
+   Normalisation de ce qui entre par la synchro
+
+   `mergeRemote` recopiait les objets distants tels quels : confiance totale
+   dans ce qu'un autre appareil a écrit. Tant que tout le monde a le même
+   format, ça marche. Le jour où le format change (F5), un appareil resté en
+   arrière resynchroniserait l'ancien format par-dessus, indéfiniment.
+
+   Pour l'instant ces deux fonctions ne font que garantir la présence des clés
+   attendues. Elles existent pour être LE point d'accroche du jour où le format
+   bougera : tout ce qui entre passe par ici, et par ici seulement.
+--------------------------------------------------------------------------- */
+function normaliserSerie(rs, local){
+  if(!rs || typeof rs !== 'object') return null;
+  const s = Object.assign({}, rs);
+  if(!s.watched || typeof s.watched !== 'object') s.watched = {};
+  if(!s.seasons || typeof s.seasons !== 'object') s.seasons = {};
+  /* Les vignettes d'épisode sont retéléchargeables : le jour où elles sortiront
+     du payload (F5), l'absence côté distant ne doit pas effacer ce qu'on a. */
+  if(local && local.seasons){
+    Object.keys(s.seasons).forEach(n=>{
+      const ici = local.seasons[n];
+      if(!Array.isArray(ici) || !Array.isArray(s.seasons[n])) return;
+      s.seasons[n] = s.seasons[n].map(ep=>{
+        if(ep && ep.st) return ep;
+        const jumeau = ici.find(x=> x && x.e === ep.e);
+        return (jumeau && jumeau.st) ? Object.assign({}, ep, { st: jumeau.st }) : ep;
+      });
+    });
+  }
+  return s;
+}
+function normaliserFilm(rm){
+  if(!rm || typeof rm !== 'object') return null;
+  return Object.assign({}, rm);
+}
+
 /* ============================ Synchronisation ============================ */
 /* Sauvegarde en ligne via Supabase : chaque utilisateur possède une ligne unique
    contenant l'ensemble de ses données. Les appareils fusionnent au lieu d'écraser. */
@@ -253,11 +387,37 @@ const syncReady = ()=> !!(db.sync && db.sync.url && db.sync.key);
 const signedIn  = ()=> !!(db.auth && db.auth.token && db.auth.uid);
 const sbBase    = ()=> String(db.sync.url).replace(/\/+$/,'');
 
+/* B3 — sans délai maximal, un réseau qui répond « peut-être » (portail captif,
+   wifi d'hôtel, 4G qui s'effondre) laisse la requête pendante POUR TOUJOURS.
+   `syncing` reste vrai, `scheduleSync` sort immédiatement, et il n'y a plus
+   une seule synchronisation pour le reste de la session — pendant que l'écran
+   Compte affiche un rond qui tourne. Le même garde-fou existait déjà côté
+   TMDB depuis le début ; il manquait ici.
+
+   45 s et non 20 : une synchro transporte aujourd'hui environ 1,4 Mo dans
+   chaque sens, et 20 s ferait échouer des transferts parfaitement sains sur un
+   réseau lent. À redescendre à 20 s une fois le payload allégé (F5). */
+const SB_TIMEOUT = 45000;
+
 async function sbFetch(path, opt, retry){
   opt = opt || {};
   const h = Object.assign({ apikey: db.sync.key, 'Content-Type':'application/json' }, opt.headers||{});
   if(signedIn() && !opt.noAuth) h.Authorization = 'Bearer ' + db.auth.token;
-  const r = await fetch(sbBase()+path, Object.assign({}, opt, {headers:h}));
+  const ctrl = new AbortController();
+  const minuteur = setTimeout(()=>ctrl.abort(), SB_TIMEOUT);
+  let r;
+  try{
+    r = await fetch(sbBase()+path, Object.assign({}, opt, {headers:h, signal:ctrl.signal}));
+  }catch(e){
+    /* `AbortError` ne dit rien à personne : on nomme la cause ici, une fois,
+       pour que l'écran n'ait pas à la deviner. */
+    if(e && e.name === 'AbortError'){
+      const err = new Error('DELAI'); err.delai = true; throw err;
+    }
+    throw e;
+  }finally{
+    clearTimeout(minuteur);
+  }
   if(r.status === 401 && signedIn() && !retry){
     if(await sbRefresh()) return sbFetch(path, opt, true);
   }
@@ -385,14 +545,33 @@ function noterDecoches(sh, avant){
 }
 
 /* --- Fusion : on ne perd jamais un épisode coché, et les suppressions se propagent --- */
+/* Ce qui monte au serveur — LISTE BLANCHE, et rien d'autre.
+   Chaque exclusion a une raison, écrite ici : c'est ce qui doit empêcher le
+   prochain champ ajouté à `db` d'y atterrir au hasard.
+
+   Exclus volontairement :
+     `auth`   — jetons de session. Ils n'ont rien à faire ailleurs que sur
+                l'appareil qui les a obtenus, et ils sont déjà bannis de
+                l'export pour la même raison (A2).
+     `sync`   — adresse et clé du projet. Publiables, mais propres à
+                l'installation ; les envoyer n'a aucun sens.
+     `v`, `schemaTropRecent` — état du schéma LOCAL. Chaque appareil migre le
+                sien ; recevoir la version d'un autre le ferait mentir.
+     `syncDernierEchec`, `lastExport`, `astuceGlis`, `astuceCloche`
+              — mémoire d'écran, propre à l'appareil.
+     `proprio` — à quel compte appartient CETTE base. Local par définition. */
 function payload(){
-  /* La clé n'est plus synchronisée : elle vit côté serveur, et l'envoyer
-     exposait celle des gens qui en ont une à leurs abonnés. */
   return { lang: db.lang, pseudo: db.pseudo, shows: db.shows, movies: db.movies,
            deleted: db.deleted || {shows:{},movies:{}},
            /* Les cloches suivent la bibliothèque : changer de téléphone ne
               doit pas obliger à les rallumer une par une. */
-           notif: (typeof notifPourSynchro === 'function') ? notifPourSynchro() : null };
+           notif: (typeof notifPourSynchro === 'function') ? notifPourSynchro() : null,
+           /* B8 — les goûts et l'avatar suivaient l'appareil et non le compte :
+              changer de téléphone perdait genres, acteurs et couleur, pendant
+              que les proches continuaient de voir l'ancien avatar (il vit dans
+              la table `profils`, lui). Arbitrés par `maj` à la réception. */
+           gouts:  db.gouts  || null,
+           profil: db.profil || null };
 }
 function mergeRemote(rem){
   if(!rem || typeof rem !== 'object') return false;
@@ -406,9 +585,14 @@ function mergeRemote(rem){
 
   let changed = false;
   /* séries */
-  Object.values(rem.shows||{}).forEach(rs=>{
-    if(del.shows[rs.id] && del.shows[rs.id] > (rs.addedAt||0)) return;   // supprimée ici après coup
-    const ls = db.shows[rs.id];
+  Object.values(rem.shows||{}).forEach(brut=>{
+    if(!brut || brut.id == null) return;
+    if(del.shows[brut.id] && del.shows[brut.id] > (brut.addedAt||0)) return;   // supprimée ici après coup
+    const ls = db.shows[brut.id];
+    /* TOUT ce qui entre passe par le normaliseur, jamais directement dans `db` :
+       c'est le seul point où l'on peut réparer un format qui aura changé. */
+    const rs = normaliserSerie(brut, ls);
+    if(!rs) return;
     if(!ls){ db.shows[rs.id] = rs; changed = true; return; }
     /* fiche la plus récente, union des épisodes vus — sauf ceux décochés depuis */
     const base = (rs.updated||0) > (ls.updated||0) ? Object.assign({}, rs) : Object.assign({}, ls);
@@ -431,8 +615,11 @@ function mergeRemote(rem){
     db.shows[rs.id] = base;
   });
   /* films */
-  Object.values(rem.movies||{}).forEach(rm=>{
-    if(del.movies[rm.id] && del.movies[rm.id] > (rm.addedAt||0)) return;
+  Object.values(rem.movies||{}).forEach(brut=>{
+    if(!brut || brut.id == null) return;
+    if(del.movies[brut.id] && del.movies[brut.id] > (brut.addedAt||0)) return;
+    const rm = normaliserFilm(brut);
+    if(!rm) return;
     const lm = db.movies[rm.id];
     if(!lm){ db.movies[rm.id] = rm; changed = true; return; }
     if((rm.watchedAt||0) > (lm.watchedAt||0)){ db.movies[rm.id] = rm; changed = true; }
@@ -445,6 +632,18 @@ function mergeRemote(rem){
     });
   });
   if(!db.pseudo && rem.pseudo){ db.pseudo = rem.pseudo; changed = true; }
+  /* B8 — les préférences suivent le compte, pas l'appareil. Elles ne se
+     fusionnent PAS champ par champ : la plus récente gagne en bloc. Ce sont des
+     réglages, pas du patrimoine — perdre le dernier genre coché n'est pas du
+     même ordre que perdre un épisode. */
+  if(rem.gouts && (rem.gouts.maj||0) > ((db.gouts||{}).maj||0)){
+    db.gouts = rem.gouts;
+    if(typeof migrerGouts === 'function') migrerGouts();   // champs manquants d'une version d'avant
+    changed = true;
+  }
+  if(rem.profil && (rem.profil.maj||0) > ((db.profil||{}).maj||0)){
+    db.profil = rem.profil; changed = true;
+  }
   /* Les cloches arrivées d'un autre appareil : la liste côté serveur a été
      écrite par lui, elle ignore donc les nôtres. On la refait au complet. */
   if(typeof fusionnerNotif === 'function' && fusionnerNotif(rem.notif)){
@@ -461,8 +660,30 @@ function markDeleted(kind, id){
   db.deleted[kind][id] = Date.now();
 }
 
+/* Pourquoi la synchro a échoué, en une phrase lisible. La cause exacte importe
+   moins que la seule chose qu'on veut vraiment savoir en la lisant : est-ce que
+   je viens de perdre ma soirée de cochage ? Non — et c'est ça qui est écrit.
+   Une cause qu'on ne sait pas nommer est rendue telle quelle plutôt que noyée
+   dans un « une erreur est survenue » qui n'apprend rien. */
+function motifSynchro(e){
+  const brut = (e && (e.message || e)) || '';
+  if(e && e.delai) return 'Délai dépassé — rien n\'est perdu, ça repartira.';
+  if(!navigator.onLine || /Failed to fetch|NetworkError|Load failed/i.test(brut))
+    return 'Pas de connexion — rien n\'est perdu, ça repartira.';
+  return String(brut).slice(0, 120);
+}
+
 async function syncNow(silent){
-  if(!syncReady() || !signedIn() || syncing) return;
+  if(!syncReady() || !signedIn()) return;
+  if(syncing){
+    /* B9 — une synchro est en vol. On ne la double pas, mais on ne laisse
+       SURTOUT pas tomber : sans cette replanification, une modification faite
+       pendant un aller-retour de 1,4 Mo attendait le changement suivant ou le
+       redémarrage de l'app pour partir. */
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(()=> syncNow(true), 2000);
+    return;
+  }
   syncing = true; syncState = 'busy'; syncError = ''; if(!silent) render();
   try{
     const got = await sbFetch('/rest/v1/'+TABLE+'?select=data&user_id=eq.'+encodeURIComponent(db.auth.uid), {});
@@ -472,16 +693,25 @@ async function syncNow(silent){
       headers:{ Prefer:'resolution=merge-duplicates,return=minimal' },
       body: JSON.stringify({ user_id: db.auth.uid, data: payload(), updated_at: new Date().toISOString() })
     });
-    db.syncedAt = Date.now(); syncState = 'ok';
+    db.syncedAt = Date.now(); syncState = 'ok'; syncError = '';
+    delete db.syncDernierEchec;
     await writeNow().catch(()=>{});
     if(!silent) toast('Synchronisé');
     render();
   }catch(e){
-    syncState = 'err'; syncError = e.message || 'échec';
+    syncState = 'err'; syncError = motifSynchro(e);
+    /* Retenu en base pour survivre à un rechargement : l'échec doit rester
+       visible tant qu'une synchro n'a pas réussi. Exclu de `payload` — c'est
+       un état local. */
+    db.syncDernierEchec = { quand: Date.now(), motif: syncError };
     if(!silent) toast('Synchro impossible : '+syncError);
     render();
+  }finally{
+    /* Dans un `finally` : une exception jetée HORS du try — dans `payload()`
+       par exemple — laissait `syncing` latché à vrai, et plus rien ne
+       synchronisait jusqu'au redémarrage. */
+    syncing = false;
   }
-  syncing = false;
 }
 function scheduleSync(){
   if(!syncReady() || !signedIn()) return;

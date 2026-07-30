@@ -82,11 +82,19 @@ function render(){
     const sens = navDir;
     app.classList.add(sens);
     /* On retire la classe dès la fin de l'animation : la laisser en place
-       maintenait une couche graphique qui déréglait les barres fixes. */
-    app.addEventListener('animationend', function fini(){
+       maintenait une couche graphique qui déréglait les barres fixes.
+
+       B10 — avec « Réduire les animations » (réglage iOS courant), la règle
+       CSS met `animation:none` et `animationend` NE SE DÉCLENCHE JAMAIS :
+       l'écouteur restait posé à chaque navigation, sur un `#app` qui, lui, ne
+       disparaît pas. Cent navigations, cent closures retenues. La minuterie de
+       secours est le même garde-fou que dans le geste de retour. */
+    const fini = ()=>{
       app.classList.remove(sens);
       app.removeEventListener('animationend', fini);
-    });
+    };
+    app.addEventListener('animationend', fini);
+    setTimeout(fini, 400);
   }
   navDir = 'none';
   renderNav();
@@ -590,6 +598,7 @@ async function choisirPhoto(input){
   try{
     const donnee = await photoVersAvatar(f);
     db.profil = Object.assign({}, db.profil, { photo: donnee });
+    toucheProfil();
     ui.avatarOnglet = 'photo';
     saveDB(); render();
     if(signedIn()) majProfil();
@@ -597,6 +606,7 @@ async function choisirPhoto(input){
 }
 function retirerPhoto(){
   db.profil = Object.assign({}, db.profil, { photo: null });
+  toucheProfil();
   ui.avatarOnglet = 'embleme';
   saveDB(); render();
   if(signedIn()) majProfil();
@@ -660,13 +670,22 @@ function apercuPseudo(v){
     if(av) av.textContent = (v.trim().charAt(0) || '?').toUpperCase();
   }
 }
+/* B8 — l'avatar suit le compte, pas l'appareil : il est daté comme les goûts.
+   Sans ça, changer de téléphone rendait la couleur par défaut à l'écran pendant
+   que les proches continuaient de voir l'ancienne — elle vit dans la table
+   `profils`, elle, et n'était donc pas revenue en arrière. */
+function toucheProfil(){
+  db.profil = Object.assign({}, db.profil, { maj: Date.now() });
+  saveDB();
+}
+
 function choisirCouleur(id){
   db.profil = Object.assign({}, db.profil, { couleur:id });
-  gardePseudoSaisi(); render();
+  toucheProfil(); gardePseudoSaisi(); render();
 }
 function choisirEmbleme(id){
   db.profil = Object.assign({}, db.profil, { embleme:id });
-  gardePseudoSaisi(); render();
+  toucheProfil(); gardePseudoSaisi(); render();
 }
 /* Choisir une couleur redessine l'écran : on n'y perd pas le prénom en cours de saisie. */
 function gardePseudoSaisi(){

@@ -262,19 +262,39 @@ async function pousserCloches(){
       body: JSON.stringify({ user_id: db.auth.uid, quand: db.notif.quand,
                              films: db.notif.films, maj: new Date().toISOString() })
     });
-    await sbFetch('/rest/v1/push_cloches?user_id=eq.'+encodeURIComponent(db.auth.uid),
-                  { method:'DELETE', headers:{ Prefer:'return=minimal' } });
-    if(cles.length){
-      await sbFetch('/rest/v1/push_cloches', {
-        method:'POST', headers:{ Prefer:'return=minimal' },
-        body: JSON.stringify(cles.map(k=>({
-          user_id: db.auth.uid,
-          type: k.slice(0, k.indexOf(':')),
-          tmdb_id: Number(k.slice(k.indexOf(':')+1))
-        })))
-      });
-    }
-  }catch(e){ /* on retentera au prochain changement */ }
+    /* B6 — UN SEUL appel, transactionnel. L'ancien code effaçait toutes les
+       cloches puis réenvoyait la liste : si le réseau tombait entre les deux —
+       cas ordinaire sur mobile — le serveur restait à zéro cloche, le `catch`
+       était vide, et l'écran continuait d'afficher « Activées · 3 séries ».
+       « On retentera au prochain changement » : sauf qu'il n'y en avait pas.
+       Désormais la base voit soit l'ancienne liste, soit la nouvelle. */
+    await sbFetch('/rest/v1/rpc/remplacer_cloches', {
+      method:'POST',
+      body: JSON.stringify({ p_cloches: cles.map(k=>({
+        type: k.slice(0, k.indexOf(':')),
+        tmdb_id: Number(k.slice(k.indexOf(':')+1))
+      })) })
+    });
+    /* Tout est passé : le drapeau de désynchronisation tombe. */
+    if(db.notif.desyncAt){ delete db.notif.desyncAt; delete db.notif.desyncMotif; saveDB(); }
+  }catch(e){
+    /* Et si malgré tout ça rate, on le DIT. Un drapeau que l'écran sait lire,
+       plutôt qu'un `catch` vide — c'est la règle que l'auteur applique partout
+       ailleurs (P2 du document de specs). */
+    db.notif.desyncAt = Date.now();
+    db.notif.desyncMotif = (typeof motifSynchro === 'function') ? motifSynchro(e)
+                                                               : String(e && e.message || e);
+    saveDB();
+    if(typeof view !== 'undefined' && view === 'notifs') render();
+  }
+}
+
+/* Réessayer depuis l'écran des notifications. */
+async function reessayerCloches(){
+  if(ui.busy) return;
+  ui.busy = true; render();
+  try{ await pousserCloches(); } finally { ui.busy = false; render(); }
+  if(!db.notif.desyncAt) toast('Réglages enregistrés');
 }
 
 /* Un seul point d'entrée : à appeler après tout changement de cloche ou de
@@ -477,6 +497,22 @@ function viewNotifications(){
       '<div><div class="etitre">'+esc(e.titre)+'</div>'+
       '<div class="small muted">'+esc(e.sous)+'</div></div>'+
     '</div></div>';
+
+  /* B6 — l'aveu. Tant que le serveur n'a pas la dernière version des cloches,
+     l'écran le dit ; sans ça il affichait « Activées · 3 séries » au-dessus
+     d'un serveur vide. */
+  if(db.notif.desyncAt){
+    html += '<div class="wrap" style="padding-top:10px;padding-bottom:0">'+
+      '<div class="banner" style="margin:0;display:flex;align-items:center;gap:12px">'+
+        '<div style="flex:1"><b>Réglages non enregistrés</b><br>'+
+          '<span class="small">'+esc(db.notif.desyncMotif || 'La connexion a été perdue '+
+          'en cours d\'enregistrement.')+' Le serveur n\'a pas la dernière version '+
+          'de tes alertes.</span></div>'+
+        '<button class="btn" style="flex:0 0 auto;padding:9px 16px" '+
+          (ui.busy ? 'disabled ' : '')+'onclick="reessayerCloches()">'+
+          (ui.busy ? '…' : 'Réessayer')+'</button>'+
+      '</div></div>';
+  }
 
   if(notifPossibles() && notifAutorisees() && !db.notif.abo){
     html += '<div class="wrap" style="padding-top:0">'+

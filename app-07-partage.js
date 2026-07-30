@@ -406,11 +406,21 @@ function viewAccount(){
   }
 
   /* --- Connecté : l'état d'abord, les actions ensuite --- */
+  /* B3 — trois états, et un seul qui peut durer. « Synchronisation en cours… »
+     restait affiché POUR TOUJOURS quand la requête pendait ; elle est désormais
+     abandonnée au bout de 45 s et l'écran bascule ici.
+
+     Deux lignes, pas quatre : l'état dit qu'on a échoué et quand ça marchait
+     encore, la ligne grise dit la cause ET que rien n'est perdu. Le motif est
+     retenu en base, donc il survit à un rechargement. */
+  const echec = db.syncDernierEchec || null;
+  const enEchec = syncState === 'err' || (!!echec && syncState !== 'busy' && syncState !== 'ok');
   const etat = syncState==='busy' ? 'Synchronisation en cours…'
-             : syncState==='err'  ? 'Dernière tentative en échec : '+esc(syncError)
+             : enEchec ? ('Échec' + (db.syncedAt ? ' · dernière synchro '+fmtQuand(db.syncedAt) : ''))
              : db.syncedAt ? 'À jour · '+fmtQuand(db.syncedAt)
              : 'Jamais synchronisé';
-  const col = syncState==='err' ? 'var(--warn)' : syncState==='ok' ? 'var(--ok)' : 'var(--muted)';
+  const motif = enEchec ? (syncError || (echec && echec.motif) || '') : '';
+  const col = enEchec ? 'var(--warn)' : syncState === 'ok' ? 'var(--ok)' : 'var(--muted)';
   const mail = (db.auth.email||'—');
   const nb = Object.keys(db.shows).length, nf = Object.keys(db.movies).length;
 
@@ -421,6 +431,7 @@ function viewAccount(){
       '<div class="cetat" style="color:'+col+'">'+
         (syncState==='busy' ? '<span class="spin"></span> ' : '<i class="pastille" style="background:'+col+'"></i>')+
         etat+'</div>'+
+      (motif ? '<div class="tiny muted" style="margin-top:4px">'+esc(motif)+'</div>' : '')+
       '<div class="cchiffres">'+
         '<div><b>'+nb+'</b><span>série'+(nb>1?'s':'')+'</span></div>'+
         '<div><b>'+nf+'</b><span>film'+(nf>1?'s':'')+'</span></div>'+
@@ -428,7 +439,8 @@ function viewAccount(){
           (((partage.suivis||[]).length + (partage.abonnes||[]).length)>1?'s':'')+'</span></div>'+
       '</div>'+
     '</div>'+
-    '<button class="btn block" style="margin-bottom:10px" onclick="syncNow()">Synchroniser maintenant</button>'+
+    '<button class="btn block" style="margin-bottom:10px" onclick="syncNow()">'+
+      (enEchec ? 'Réessayer maintenant' : 'Synchroniser maintenant')+'</button>'+
     '<button class="btn ghost block" style="margin-bottom:10px" onclick="go(\'abos\',{from:\'account\'})">'+
       I.user+' Partage et abonnements</button>'+
     '<div class="tiny muted" style="margin:14px 0 18px">La synchro part toute seule quelques secondes après '+

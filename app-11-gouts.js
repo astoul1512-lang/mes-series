@@ -46,6 +46,16 @@ function migrerGouts(){
   if(typeof g.jour !== 'string') g.jour = '';
 }
 
+/* B8 — toute modification des goûts est datée. C'est cet horodatage, et lui
+   seul, qui départage deux appareils à la synchro : les préférences ne se
+   fusionnent pas champ par champ, la plus récente gagne en bloc. Passer par
+   une fonction plutôt que de le poser à la main dans les sept endroits qui
+   modifient : le huitième aurait été oublié. */
+function toucheGouts(){
+  if(db.gouts) db.gouts.maj = Date.now();
+  saveDB();
+}
+
 /* Le sous-titre de la ligne « Mes goûts » dans les réglages : il doit dire en
    un coup d'œil si l'app devine toute seule ou si on lui a donné des consignes. */
 function resumeGouts(){
@@ -808,7 +818,7 @@ function bascGoutGenre(nom){
   const g = db.gouts;
   const i = g.genres.indexOf(nom);
   if(i >= 0) g.genres.splice(i,1); else { g.genres.push(nom); retirerExclu(nom); }
-  oublierSuggestions(); saveDB(); render();
+  oublierSuggestions(); toucheGouts(); render();
 }
 function bascGoutExclu(nom){
   const g = db.gouts;
@@ -819,7 +829,7 @@ function bascGoutExclu(nom){
     const j = g.genres.indexOf(nom);
     if(j >= 0) g.genres.splice(j,1);          // aimer et écarter à la fois n'a pas de sens
   }
-  oublierSuggestions(); saveDB(); render();
+  oublierSuggestions(); toucheGouts(); render();
 }
 function retirerExclu(nom){
   const g = db.gouts, i = g.exclus.indexOf(nom);
@@ -827,13 +837,13 @@ function retirerExclu(nom){
 }
 function retirerActeur(id){
   db.gouts.acteurs = db.gouts.acteurs.filter(a=>String(a.id) !== String(id));
-  oublierSuggestions(); saveDB(); render();
+  oublierSuggestions(); toucheGouts(); render();
 }
 function ajouterActeur(id, nom){
   if(db.gouts.acteurs.some(a=>String(a.id) === String(id))) return;
   db.gouts.acteurs.push({ id:id, nom:nom });
   rechActeur = { q:'', res:null, occupe:false, seq:rechActeur.seq };
-  oublierSuggestions(); saveDB(); render();
+  oublierSuggestions(); toucheGouts(); render();
 }
 
 async function chercherActeur(q){
@@ -987,11 +997,11 @@ function apresGouts(){
   go('follow');
 }
 function finirGouts(){
-  db.gouts.propose = true; saveDB();
+  db.gouts.propose = true; toucheGouts();
   oublierSuggestions();                       // le profil a changé : on recalcule
   apresGouts();
 }
 function passerGouts(){
-  db.gouts.propose = true; saveDB();
+  db.gouts.propose = true; toucheGouts();
   apresGouts();
 }
