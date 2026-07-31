@@ -2,8 +2,26 @@
    Stratégie : network-first sur les fichiers de l'app (pour recevoir les mises à jour),
    repli sur le cache quand le réseau est absent. Les appels TMDB ne sont jamais mis en cache. */
 const CACHE = 'mes-series-v84';
+
+/* Au-delà de ce délai, on sert le cache sans attendre la réponse du réseau.
+   Sans lui, un réseau qui PEND — portail captif d'hôtel qui ne répond ni oui
+   ni non, 3G morte — laissait l'app sur un écran vide indéfiniment : `fetch`
+   ne rejette pas, il attend. Le repli sur le cache n'arrivait donc jamais,
+   alors que tout était là.
+
+   4 secondes : au-dessus du temps de réponse normal de GitHub Pages, même sur
+   un réseau mobile lent, et en dessous du seuil où l'on croit que l'app est
+   cassée. Le fetch n'est pas annulé pour autant — il continue en arrière-plan
+   et met le cache à jour s'il finit par répondre. */
+const DELAI_RESEAU = 4000;
+
 const SHELL = ['./', './index.html', './app.css', './manifest.json',
-               './icon-192.png', './icon-512.png', './apple-touch-icon.png',
+               './icon-192.png', './icon-512.png',
+               /* Déclarée dans `manifest.json` mais absente d'ici : à la
+                  première installation depuis un réseau coupé, Android n'avait
+                  pas d'icône adaptative à découper. */
+               './icon-512-maskable.png',
+               './apple-touch-icon.png',
                './app-01-noyau.js',
                './app-02-outils.js',
                './app-03-vues.js',
@@ -42,22 +60,38 @@ self.addEventListener('fetch', e => {
 
   // Ressources de l'app : réseau d'abord, cache en secours
   if (url.origin === location.origin) {
-    e.respondWith(
-      /* {cache:'reload'} : sans ça, ce fetch repassait par le cache HTTP du
-         navigateur, et GitHub Pages y pose un max-age. Une nouvelle version
-         pouvait mettre une dizaine de minutes à arriver, même en rechargeant. */
-      fetch(req, { cache: 'reload' })
-        .then(res => {
-          /* On ne met en cache qu'une vraie réponse : une page d'erreur 404 gardée
-             en secours rendrait l'app inutilisable hors-ligne. */
-          if (res && res.ok && res.type === 'basic') {
-            const copy = res.clone();
-            caches.open(CACHE).then(c => c.put(req, copy)).catch(()=>{});
-          }
-          return res;
-        })
-        .catch(() => caches.match(req).then(m => m || caches.match('./index.html')))
-    );
+    /* {cache:'reload'} : sans ça, ce fetch repassait par le cache HTTP du
+       navigateur, et GitHub Pages y pose un max-age. Une nouvelle version
+       pouvait mettre une dizaine de minutes à arriver, même en rechargeant. */
+    const reseau = fetch(req, { cache: 'reload' })
+      .then(res => {
+        /* On ne met en cache qu'une vraie réponse : une page d'erreur 404 gardée
+           en secours rendrait l'app inutilisable hors-ligne. */
+        if (res && res.ok && res.type === 'basic') {
+          const copy = res.clone();
+          caches.open(CACHE).then(c => c.put(req, copy)).catch(()=>{});
+        }
+        return res;
+      });
+
+    const secours = () => caches.match(req).then(m => m || caches.match('./index.html'));
+
+    e.respondWith(new Promise(resolve => {
+      let rendu = false;
+      const servir = r => { if (!rendu) { rendu = true; resolve(r); } };
+
+      /* Le réseau gagne s'il répond à temps ; s'il échoue, on sert le cache. */
+      reseau.then(servir, () => { if (!rendu) servir(secours()); });
+
+      /* Le délai ne sert le cache que si le cache A la ressource. Sinon on
+         continue d'attendre le réseau : mieux vaut une attente qu'un échec
+         certain. Le fetch, lui, n'est jamais annulé — il finira de remplir le
+         cache pour la fois d'après. */
+      setTimeout(() => {
+        if (rendu) return;
+        caches.match(req).then(m => { if (m) servir(m); }).catch(()=>{});
+      }, DELAI_RESEAU);
+    }));
     return;
   }
 
