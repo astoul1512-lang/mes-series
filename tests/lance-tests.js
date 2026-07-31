@@ -33,10 +33,15 @@ const BASE = process.env.BASE || 'http://localhost:8099';
    qui échoue ne bloque pas le démarrage, et elle journalise. */
 const CONSOLE_ATTENDUE = [/migration \d+ en échec/];
 
+/* `app-12-recherche.js` avait été ajouté en v83 SANS être inscrit ici : une
+   collision de noms dans ce fichier — le douzième d'une portée globale unique,
+   donc le plus exposé — serait passée inaperçue. Signalé par le lot 0, réparé
+   par le lot B, qui est celui qui y travaille. */
 const FICHIERS = [
   'app-01-noyau.js','app-02-outils.js','app-03-vues.js','app-04-decouvrir.js',
   'app-05-plateformes.js','app-06-serie.js','app-07-partage.js',
-  'app-08-reglages.js','app-09-notifications.js','app-10-sorties.js','app-11-gouts.js'
+  'app-08-reglages.js','app-09-notifications.js','app-10-sorties.js','app-11-gouts.js',
+  'app-12-recherche.js'
 ];
 
 /* Déclarations de PREMIER NIVEAU seulement : une colonne 0 pour `function`,
