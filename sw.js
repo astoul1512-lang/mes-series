@@ -33,7 +33,8 @@ const SHELL = ['./', './index.html', './app.css', './manifest.json',
                './app-09-notifications.js',
                './app-10-sorties.js',
                './app-11-gouts.js',
-               './app-12-recherche.js'];
+               './app-12-recherche.js',
+               './app-13-inscription.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil(
