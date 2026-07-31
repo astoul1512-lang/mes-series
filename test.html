@@ -80,6 +80,10 @@ window.MODE_TEST = true;
 <script src="./app-09-notifications.js"></script>
 <script src="./app-10-sorties.js"></script>
 <script src="./app-11-gouts.js"></script>
+<!-- Manquait depuis la v83 : les fonctions de l'onglet Recherche n'étaient pas
+     testables, et une erreur d'évaluation dans ce fichier ne se voyait pas ici.
+     app-08 reste EN DERNIER, il porte `boot()`. -->
+<script src="./app-12-recherche.js"></script>
 <script src="./app-08-reglages.js"></script>
 
 <script>
@@ -817,6 +821,227 @@ window.MODE_TEST = true;
     const b2 = document.createElement('div');
     b2.innerHTML = blocConseilsRecus();
     vrai(b2.textContent.indexOf('déjà chez toi') >= 0, 'mention manquante');
+  });
+
+  /* ==================== Recherche — lot B ====================
+     Ce qui est vérifié ici, ce sont les trois choses qu'une régression casse
+     en silence : la règle « le profil trie, il ne filtre jamais », les
+     recettes mesurées (qu'un ajustement au jugé rendrait simplement moins
+     bonnes, sans erreur), et la lecture DÉFENSIVE du contrat de données du
+     lot A, qui est écrit en parallèle et peut très bien ne pas être là. */
+  groupe('Recherche — la phrase et les recettes');
+
+  /* Une base de recherche neuve : `ui.rech` est un état d'écran, il traîne
+     d'un test à l'autre si on ne le remet pas. */
+  function rechVierge(fam){
+    baseVierge();
+    delete db.avis; delete db.podium;
+    ui.rech = null;
+    const r = etatRech();
+    r.fam = fam || 'film';
+    return r;
+  }
+
+  test('les dix recettes tiennent les trois règles du §4.6', ()=>{
+    RECH_AMBIANCES.forEach(a=>{
+      const clés = {};
+      (a.ing||[]).forEach(i => Object.keys(i.p).forEach(k => { clés[k] = 1; }));
+      Object.keys(a.fond||{}).forEach(k => { clés[k] = 1; });
+      vrai(Object.keys(clés).length >= 3, a.id+' : moins de trois ingrédients');
+      vrai(a.mesure >= 50 && a.mesure <= 500, a.id+' : mesuré hors de la fourchette 50–500');
+    });
+    /* Règle 3 : « Pour regarder à deux » a été écartée, elle ne doit pas
+       réapparaître par la petite porte. */
+    vrai(!RECH_AMBIANCES.some(a=>/deux/i.test(a.t)), 'une ambiance écartée est revenue');
+  });
+
+  test('« shonen » demande bien ses deux orthographes', ()=>{
+    const s = RECH_ANIMES.find(a=>a.id==='shonen');
+    vrai(s && s.mots.indexOf('207826') >= 0 && s.mots.indexOf('378884') >= 0,
+         'une des deux orthographes manque : la moitié du catalogue avec');
+    vrai(s.mots.indexOf('|') >= 0, 'les deux mots-clés ne sont pas demandés en OU');
+  });
+
+  test('une recette part telle qu\'elle a été mesurée', ()=>{
+    const r = rechVierge('film');
+    r.amb = 'famille';
+    const p = paramsRech('movie');
+    egal(p.with_genres, '10751', 'genre');
+    egal(p.without_genres, '27,53,80,18', 'genres écartés');
+    egal(p['with_runtime.lte'], '115', 'durée');
+    egal(p['vote_average.gte'], '6.3', 'note');
+    egal(p['vote_count.gte'], '500', 'plancher de votes');
+  });
+
+  test('retirer un mot retire son ingrédient, et lui seul', ()=>{
+    const r = rechVierge('film');
+    r.amb = 'famille'; r.sans = ['duree'];
+    const p = paramsRech('movie');
+    vrai(p['with_runtime.lte'] === undefined, 'la durée est restée');
+    egal(p.with_genres, '10751', 'le genre a été emporté avec la durée');
+    egal(p['vote_count.gte'], '500', 'le plancher invisible a bougé');
+  });
+
+  test('un mot posé à la main l\'emporte sur l\'ingrédient qu\'il recouvre', ()=>{
+    const r = rechVierge('film');
+    r.amb = 'famille'; r.sans = ['note']; r.note = '8';
+    const p = paramsRech('movie');
+    egal(p['vote_average.gte'], '7.5', 'la note de la recette a gagné');
+  });
+
+  test('la phrase n\'est jamais vide à l\'ouverture', ()=>{
+    rechVierge('film');
+    nouvelleOuvertureRech();
+    const mots = motsPhraseRech();
+    vrai(mots.length >= 1, 'la phrase est vide : personne ne sait par où commencer');
+    vrai(phraseTexte().indexOf('Je veux') === 0, 'la phrase ne se lit pas');
+  });
+
+  test('changer de famille ne laisse pas traîner une recette de film', ()=>{
+    const r = rechVierge('film');
+    r.amb = 'rigoler';
+    /* `setFamRech` relance l'écran ; on rejoue seulement sa décision, qui est
+       la partie qu'une régression casserait. */
+    r.fam = 'serie';
+    if(r.amb && !ambianceRech(r.amb)){ r.amb = null; r.sans = []; }
+    vrai(r.amb === null, 'une ambiance de film a survécu au passage aux séries');
+  });
+
+  test('la durée ne s\'expédie que sur les films', ()=>{
+    const r = rechVierge('serie');
+    r.duree = 'court';
+    const p = paramsRech('tv');
+    vrai(p['with_runtime.lte'] === undefined,
+         'une borne de durée est partie sur une série : elle ne veut rien dire');
+  });
+
+  test('le nom d\'un genre à apostrophe ne devient pas exécutable', ()=>{
+    rechVierge('film');
+    /* Exactement la forme du bug déjà corrigé une fois sur les acteurs :
+       apostrophe, antislash, et une tentative de sortir de l'attribut. */
+    const nom = "L'\\ 'x' onclick='alert(1)";
+    genresTMDB.movie = [{ id:99, nom:nom }];
+    ouvrirMotRech('genre');
+    const bouton = document.getElementById('sheetin').querySelector('[onclick*="poserMotRech"]');
+    vrai(bouton, 'aucun choix de genre rendu');
+    /* LE SEUL TEST QUI VAILLE : on déclenche vraiment le gestionnaire et on
+       regarde ce qui arrive de l'autre côté. Un échappement qui fuit se voit
+       là, jamais à la lecture. `poserMotRech` est remplacée le temps du clic —
+       la vraie partirait sur le réseau. */
+    const recu = [];
+    const vraiePose = window.poserMotRech;
+    window.poserMotRech = function(c, v){ recu.push([c, v]); };
+    try{ bouton.click(); } finally { window.poserMotRech = vraiePose; }
+    egal(recu, [['genre', nom]], 'le nom n\'est pas revenu intact : l\'échappement fuit');
+    closeSheet();
+    genresTMDB.movie = null;
+  });
+
+  groupe('Recherche — le profil trie, il ne filtre jamais');
+
+  const t_ = (id, media, genres) => ({ id:id, __media:media, genre_ids:genres||[],
+                                       title:'T'+id, name:'T'+id, poster_path:'/p.jpg' });
+
+  test('sans profil, l\'ordre de TMDB est laissé intact', ()=>{
+    rechVierge('film');
+    const l = [t_(1,'movie',[35]), t_(2,'movie',[18]), t_(3,'movie',[27])];
+    egal(trierParGout(l).map(x=>x.id), [1,2,3]);
+  });
+
+  test('db.avis et db.podium absents ne cassent rien', ()=>{
+    rechVierge('film');
+    egal(poidsAvisRech('movie', 42), 1, 'un titre inconnu doit peser 1');
+    egal(avisRech('movie', 42), 0);
+    egal(profilGenresRech(), {}, 'un profil vide doit être vide');
+    egal(departJeuRech(), null, 'sans rien, le jeu ne part de nulle part');
+  });
+
+  test('les poids sont ceux du contrat : 👍 = 2, rien = 1, 👎 = 0', ()=>{
+    rechVierge('film');
+    db.avis = { movie:{ '7':{v:1,quand:1}, '8':{v:-1,quand:1} }, tv:{} };
+    egal(poidsAvisRech('movie',7), 2, '👍');
+    egal(poidsAvisRech('movie',9), 1, 'non qualifié');
+    egal(poidsAvisRech('movie',8), 0, '👎');
+  });
+
+  test('le profil REMONTE ce qui lui ressemble, sans rien retirer', ()=>{
+    rechVierge('film');
+    genresTMDB.movie = [{id:35,nom:'Comédie'},{id:18,nom:'Drame'},{id:27,nom:'Horreur'}];
+    db.movies[7] = { id:7, title:'Aimé', genres:['Horreur'], seen:true };
+    db.avis = { movie:{ '7':{v:1,quand:1} }, tv:{} };
+    const l = [t_(1,'movie',[35]), t_(2,'movie',[18]), t_(3,'movie',[27])];
+    const out = trierParGout(l);
+    egal(out.length, 3, 'LE PROFIL A FILTRÉ — c\'est la faute capitale de cet écran');
+    egal(out[0].id, 3, 'le titre qui ressemble aux goûts n\'est pas remonté');
+    egal(out.map(x=>x.id).sort(), [1,2,3], 'un titre a disparu du résultat');
+    genresTMDB.movie = null;
+  });
+
+  test('un 👎 descend dans la grille, il n\'en sort pas', ()=>{
+    rechVierge('film');
+    genresTMDB.movie = [{id:35,nom:'Comédie'}];
+    db.movies[9] = { id:9, title:'Détesté', genres:['Comédie'], seen:true };
+    db.gouts.genres = ['Comédie'];
+    db.avis = { movie:{ '1':{v:-1,quand:1} }, tv:{} };
+    const l = [t_(1,'movie',[35]), t_(2,'movie',[35])];
+    const out = trierParGout(l);
+    egal(out.length, 2, 'un titre demandé a été retiré');
+    egal(out[out.length-1].id, 1, 'le titre marqué 👎 n\'est pas descendu');
+    genresTMDB.movie = null;
+  });
+
+  groupe('Recherche — le jeu');
+
+  test('jamais deux cartes de la même source à la suite', ()=>{
+    const r = rechVierge('film');
+    r.jeu = { pool:{ coeur:[t_(1,'movie')], genres:[t_(2,'movie')] }, precedente:'coeur',
+              ecartes:{}, page:{} };
+    egal(sourceSuivanteRech(), 'genres',
+         'le paquet redevient une liste triée dès qu\'il se répète');
+  });
+
+  test('une source épuisée est sautée, jamais bloquante', ()=>{
+    const r = rechVierge('film');
+    r.jeu = { pool:{ coeur:[], genres:[], joker:[t_(5,'movie')] }, precedente:null,
+              ecartes:{}, page:{} };
+    egal(sourceSuivanteRech(), 'joker');
+    r.jeu.pool = { coeur:[], genres:[] };
+    egal(sourceSuivanteRech(), null, 'sans rien à donner, il faut le dire');
+  });
+
+  test('le jeu écarte ce qu\'on a déjà, ce qu\'on vient de voir et un 👎', ()=>{
+    const r = rechVierge('film');
+    r.jeu = { pool:{}, precedente:null, ecartes:{ 'movie:3':1 }, page:{} };
+    db.movies[2] = { id:2, title:'Déjà là', genres:[], seen:false };
+    db.avis = { movie:{ '4':{v:-1,quand:1} }, tv:{} };
+    vrai(jouableRech(t_(1,'movie')), 'un titre neuf doit être jouable');
+    vrai(!jouableRech(t_(2,'movie')), 'un titre de la bibliothèque est proposé');
+    vrai(!jouableRech(t_(3,'movie')), 'une carte de la session revient');
+    vrai(!jouableRech(t_(4,'movie')), 'un titre marqué 👎 est proposé');
+  });
+
+  test('sans critère, le jeu pose ses trois filtres implicites', ()=>{
+    const r = rechVierge('film');
+    genresTMDB.movie = [{id:27,nom:'Horreur'}];
+    db.gouts.plates = [{ id:8, nom:'Netflix', logo:null }];
+    db.gouts.exclus = ['Horreur'];
+    const p = paramsJeuRech('movie');
+    egal(p.with_watch_providers, '8', 'la plateforme déclarée n\'est pas demandée');
+    egal(p.watch_region, 'FR');
+    vrai(String(p.without_genres||'').indexOf('27') >= 0, 'un genre écarté est proposé');
+    genresTMDB.movie = null;
+  });
+
+  test('les genres exclus complètent la recette, ils ne l\'écrasent pas', ()=>{
+    const r = rechVierge('film');
+    genresTMDB.movie = [{id:99,nom:'Documentaire'}];
+    r.amb = 'famille';                       // sa recette pose déjà without_genres
+    db.gouts.exclus = ['Documentaire'];
+    const p = paramsJeuRech('movie');
+    vrai(p.without_genres.indexOf('27,53,80,18') === 0,
+         'les genres écartés de la recette mesurée ont été effacés');
+    vrai(p.without_genres.indexOf('99') >= 0, 'le genre exclu n\'a pas été ajouté');
+    genresTMDB.movie = null;
   });
 
   /* ==================== Bilan ==================== */
