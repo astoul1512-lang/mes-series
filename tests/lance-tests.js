@@ -33,10 +33,18 @@ const BASE = process.env.BASE || 'http://localhost:8099';
    qui échoue ne bloque pas le démarrage, et elle journalise. */
 const CONSOLE_ATTENDUE = [/migration \d+ en échec/];
 
+/* ATTENTION — cette liste doit contenir TOUS les fichiers chargés par
+   `index.html`, sinon ce contrôle regarde à côté sans jamais le dire.
+   `app-12-recherche.js` y manquait depuis la v83 : le lot 0 l'a signalé sans
+   pouvoir le corriger (hors de son périmètre), c'est réparé ici en même temps
+   qu'on inscrit `app-13-inscription.js`. Le fichier a été ajouté à la liste
+   AVANT d'écrire une ligne du lot C, pour que le contrôle serve à quelque
+   chose pendant l'écriture et pas seulement après. */
 const FICHIERS = [
   'app-01-noyau.js','app-02-outils.js','app-03-vues.js','app-04-decouvrir.js',
   'app-05-plateformes.js','app-06-serie.js','app-07-partage.js',
-  'app-08-reglages.js','app-09-notifications.js','app-10-sorties.js','app-11-gouts.js'
+  'app-08-reglages.js','app-09-notifications.js','app-10-sorties.js','app-11-gouts.js',
+  'app-12-recherche.js','app-13-inscription.js'
 ];
 
 /* Déclarations de PREMIER NIVEAU seulement : une colonne 0 pour `function`,
