@@ -676,7 +676,7 @@ function vitrineVisible(){
 /* Une diapositive du carrousel : grande image, la raison de sa présence,
    le titre, et les deux actions. Cinq d'affilée, que l'on balaie du pouce. */
 function diapoVedette(x){
-  const bouts = [year(x.date), x.note ? '\\u2605 '+(Math.round(x.note*10)/10) : ''].filter(Boolean);
+  const bouts = [year(x.date), x.note ? '★ '+(Math.round(x.note*10)/10) : ''].filter(Boolean);
   const img = srcImage(x.bandeau,'w780') || srcImage(x.affiche,'w342');
   const item = x.media === 'tv' ? db.shows[x.id] : db.movies[x.id];
   return '<div class="diapo">'+
