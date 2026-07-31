@@ -383,7 +383,7 @@ function poserAmbianceRech(id){
 }
 /* Retirer un ingrédient d'une recette. C'est le point qui rend l'ambiance
    honnête : ce n'est pas une boîte noire, c'est un raccourci, et on sait quel
-   mot enlever si le résultat deplaît. */
+   mot enlever si le résultat déplaît. */
 function retirerIngredientRech(cle){
   const r = etatRech();
   if(r.sans.indexOf(cle) < 0) r.sans.push(cle);
