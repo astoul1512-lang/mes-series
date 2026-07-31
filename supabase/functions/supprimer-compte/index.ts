@@ -49,7 +49,18 @@ Deno.serve(async (req: Request) => {
 
   /* Les données d'abord, le compte en dernier : si quelque chose casse en
      route, il reste un compte capable de réessayer plutôt que des données
-     orphelines que plus personne ne peut atteindre. */
+     orphelines que plus personne ne peut atteindre.
+
+     Toutes ces tables sont en `on delete cascade` sur `auth.users` : en marche
+     nominale, la suppression du compte les emporterait de toute façon. Mais
+     c'est justement le chemin d'erreur que cette fonction documente elle-même
+     — « données effacées mais compte conservé » — qui rend la liste
+     nécessaire : si la suppression du compte échoue, tout ce qui n'a pas été
+     effacé ici SURVIT, et la personne à qui on vient de répondre croit être
+     partie. La liste doit donc rester complète.
+
+     À jour des migrations 001 à 010. TOUTE nouvelle table portant un
+     `user_id` doit être ajoutée ici en même temps qu'elle est créée. */
   const efface = async (chemin: string) => {
     const r = await fetch(`${URL_SB}/rest/v1/${chemin}`, { method: "DELETE", headers: admin });
     if (!r.ok) throw new Error(`${chemin} : ${r.status} ${await r.text()}`);
@@ -60,6 +71,21 @@ Deno.serve(async (req: Request) => {
     await efface(`abonnements?suiveur=eq.${uid}`);
     await efface(`abonnements?suivi=eq.${uid}`);
     await efface(`codes_partage?proprio=eq.${uid}`);
+
+    /* Les notifications (migration 003). `push_appareils` porte l'abonnement
+       du téléphone : oublié ici, il resterait dans le balayage de `notifier`
+       et continuerait de recevoir des notifications pour un compte disparu. */
+    await efface(`push_appareils?user_id=eq.${uid}`);
+    await efface(`push_cloches?user_id=eq.${uid}`);
+    await efface(`push_reglages?user_id=eq.${uid}`);
+    await efface(`push_envois?user_id=eq.${uid}`);
+
+    /* Les recommandations (migration 009), des DEUX côtés : celles que la
+       personne a envoyées, et celles qu'elle a reçues. Les premières restent
+       affichées chez le destinataire tant qu'elles existent. */
+    await efface(`recommandations?de=eq.${uid}`);
+    await efface(`recommandations?vers=eq.${uid}`);
+
     await efface(`profils?user_id=eq.${uid}`);
 
     const rDel = await fetch(`${URL_SB}/auth/v1/admin/users/${uid}`, {

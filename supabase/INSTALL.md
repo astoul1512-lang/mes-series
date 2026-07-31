@@ -45,6 +45,11 @@ Dans *SQL Editor*, exécuter les fichiers de `migrations/` **dans l'ordre**.
 | `003_push.sql` | appareils, cloches, réglages et historique des notifications |
 | `004_dans_mon_cercle.sql` | **la règle de lecture des profils** — lire l'avertissement en tête |
 | `005_cron_notifier.sql` | le secret du planificateur, la fonction SQL et la tâche |
+| `006_photo_contrainte.sql` | la photo de profil doit être une image embarquée, et petite |
+| `007_nouveau_code.sql` | générer un code côté serveur, et tuer le précédent |
+| `008_notifications_films.sql` | les réglages de notification : `{cine, maison}`, et `quand` neutralisé |
+| `009_recommandations.sql` | recommander un titre à quelqu'un de son cercle |
+| `010_remise_en_phase.sql` | ce qui tournait en production sans exister dans le dépôt |
 
 Avant d'exécuter `005`, y remplacer deux marques :
 
@@ -55,9 +60,13 @@ Il n'y a **aucun autre secret à saisir**. Celui du planificateur est tiré par
 la base elle-même et lu au même endroit par la fonction SQL et par l'Edge
 Function : personne n'a besoin de le connaître.
 
-Les cinq fichiers sont **rejouables**. Les exécuter deux fois d'affilée ne doit
-produire aucune erreur et ne changer aucune règle. Après le premier passage,
-vérifier :
+Les dix fichiers sont **rejouables**. Les exécuter deux fois d'affilée ne doit
+produire aucune erreur et ne changer aucune règle. Vérifié le 31/07/2026 sur un
+Postgres vierge : les dix passent dans l'ordre, trois fois de suite, et la base
+obtenue porte exactement les mêmes vingt policies et les mêmes droits de
+fonction que la production.
+
+Après le premier passage, vérifier :
 
 ```sql
 select tablename, policyname, cmd from pg_policies
@@ -67,6 +76,18 @@ select tablename, policyname, cmd from pg_policies
 `profils` doit avoir **exactement une** policy `SELECT`, et son expression doit
 être `dans_mon_cercle(user_id)`. Si une seconde apparaît, quelque chose a
 rejoué un vieux fichier : voir l'avertissement de `004`.
+
+Et les droits d'exécution, que `010` met en phase avec la production :
+
+```sql
+select proname, proacl::text from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public' order by 1;
+```
+
+`declencher_notifier` ne doit être exécutable que par `postgres` et
+`service_role` — surtout pas par `anon`, qui est le rôle que porte la clé
+publiable, en clair dans le dépôt.
 
 ## 4. Les secrets des fonctions
 
@@ -126,8 +147,22 @@ Attendu : `200` et un bilan JSON. Deux réponses à savoir lire :
   `notifier/index.ts`).
 
 Puis, depuis l'app : créer un compte, ajouter une série, vérifier que l'affiche
-s'affiche (c'est `tmdb` qui répond), générer un code de partage, et déclencher
-une notification d'essai depuis les réglages.
+s'affiche (c'est `tmdb` qui répond), générer un code de partage, et activer une
+cloche sur une série depuis les réglages — puis vérifier en base qu'elle est
+bien arrivée :
+
+```sql
+select user_id, type, tmdb_id from public.push_cloches;
+```
+
+C'est le chemin qui passe par `remplacer_cloches()` (migration `010`) : s'il
+répond `404`, c'est que `010` n'a pas été exécuté.
+
+> **Il n'y a pas de « notification d'essai ».** Une version précédente de ce
+> fichier en promettait une depuis les réglages : elle n'existe nulle part côté
+> client. La seule façon de provoquer un envoi à la demande est le
+> `select public.declencher_notifier();` ci-dessus, et il n'envoie que ce qui
+> sort réellement aujourd'hui.
 
 ## 7. Côté client
 
