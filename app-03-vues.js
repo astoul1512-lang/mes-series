@@ -24,7 +24,16 @@ function premiereFois(){
 
 /* Le HTML de l'écran courant. Isolé du reste pour pouvoir aussi fabriquer
    l'écran d'arrivée pendant le geste de retour, sans toucher à l'état. */
+/* Les bornes du mémo de rendu (F3). `corpsDeVue` est le passage obligé des
+   deux chemins — le rendu réel et `htmlDeLaVue` — donc le seul endroit où les
+   poser. Le `finally` n'est pas décoratif : une vue qui lèverait laisserait
+   sinon le mémo ouvert pour toujours, et l'app servirait des compteurs figés
+   sans que rien ne le signale. */
 function corpsDeVue(){
+  entrerRendu();
+  try{ return corpsDeVueBrut(); } finally { sortirRendu(); }
+}
+function corpsDeVueBrut(){
   if(view==='follow')   return viewFollow();
   if(view==='discover') return viewDiscover();
   if(view==='search')   return viewRecherche();
@@ -73,6 +82,11 @@ function porteFermee(){
 function render(){
   const app = document.getElementById('app');
   if(porteFermee()){ view = 'account'; params = {}; navDir = 'none'; }
+  /* F1 — le classement de « À rattraper » ne vaut que pour le temps où l'on
+     reste sur l'écran. Dès qu'on en dessine un autre, il est oublié et sera
+     recalculé au retour. C'est ici et pas dans `go()` : la plupart des
+     redessins ne changent pas d'écran, et ce sont eux qu'il faut ignorer. */
+  if(view !== 'follow') oublierOrdreRattrapage();
   /* C4.3 — la position horizontale des rails est relevée avant d'écraser le
      DOM, et remise juste après. Ici plutôt que dans `go()` seul : la plupart
      des redessins ne changent pas d'écran (cocher un épisode, ajouter un film)
@@ -207,10 +221,35 @@ function needKeyBanner(){ return ''; }
 
 /* Combien d'épisodes diffusés attendent d'être vus. */
 function retardSerie(s){
-  const t = todayISO();
-  return allEpisodes(s, false)
-    .filter(ep => ep.d && ep.d <= t && !s.watched[key(ep.s, ep.e)]).length;
+  return memo('r'+s.id, ()=>{
+    const t = todayISO();
+    return allEpisodes(s, false)
+      .filter(ep => ep.d && ep.d <= t && !s.watched[key(ep.s, ep.e)]).length;
+  });
 }
+
+/* F1 — l'ordre de « À rattraper », figé le temps qu'on reste sur l'écran.
+
+   Le tri portait sur la date du PROCHAIN épisode. Cocher S1E1 faisait passer
+   la clé de tri à la date de S1E2, plus récente : la carte remontait dans le
+   classement, sur le geste le plus fréquent de l'app. On défile jusqu'à la
+   sixième carte, on coche, et elle n'est plus là.
+
+   Trier sur le retard plutôt que sur la date corrige le pire, mais pas tout :
+   le retard baisse d'une unité au cochage, et la carte double alors celle qui
+   la suivait à égalité. La spec anticipe le cas et tranche : ordre ÉTABLI À
+   L'ENTRÉE sur l'écran, et plus rien ne bouge tant qu'on y reste.
+
+   Le repère est donc l'entrée sur l'écran, pas le rendu — cocher redessine
+   sans changer d'écran, et c'est exactement ce qu'on veut ignorer. `render()`
+   remet ce classement à zéro dès qu'il dessine autre chose que « En cours ».
+
+   Une série qui devient en retard pendant qu'on est sur l'écran (on décoche,
+   on ajoute) n'est pas dans le classement mémorisé : elle passe en fin de
+   liste plutôt que de tout réordonner sous le doigt. Elle reprendra sa vraie
+   place au prochain passage sur l'écran. */
+let ordreRattrapage = null;
+function oublierOrdreRattrapage(){ ordreRattrapage = null; }
 
 function viewFollow(){
   const shows = Object.values(db.shows);
@@ -221,9 +260,28 @@ function viewFollow(){
   shows.forEach(s=>{
     if(statutSerie(s) !== 'asuivre') return;   // ni les non commencées, ni les terminées
     const nx = nextToWatch(s);
-    if(nx) todo.push({s:s, ep:nx});
+    /* Le retard est relevé ici et transporté dans l'entrée : `carteRattrapage`
+       le redemandait juste après, ce qui refaisait tout le calcul une deuxième
+       fois par série et par rendu. */
+    if(nx) todo.push({s:s, ep:nx, retard: retardSerie(s)});
   });
-  todo.sort((a,b)=> (b.ep.d||'').localeCompare(a.ep.d||''));   // épisode le plus récent d'abord
+  /* L'ordre de référence : les plus en retard d'abord, puis les plus
+     anciennement ajoutées, puis l'identifiant. Les deux derniers critères ne
+     changent JAMAIS — sans eux, deux séries à égalité de retard permutent d'un
+     rendu à l'autre au gré de l'ordre des clés de `db.shows`. */
+  todo.sort((a,b)=>
+    (b.retard - a.retard) || ((a.s.addedAt||0) - (b.s.addedAt||0)) || (a.s.id - b.s.id));
+  if(!ordreRattrapage) ordreRattrapage = todo.map(x=> x.s.id);
+  else {
+    const rang = {};
+    ordreRattrapage.forEach((id,i)=>{ rang[id] = i; });
+    /* Les inconnues du classement passent après toutes les connues, dans leur
+       ordre naturel : `todo` est déjà trié, un tri stable les laisse entre
+       elles dans cet ordre-là. */
+    const apres = ordreRattrapage.length;
+    todo.sort((a,b)=> (rang[a.s.id] === undefined ? apres : rang[a.s.id])
+                    - (rang[b.s.id] === undefined ? apres : rang[b.s.id]));
+  }
 
   /* --- Le calendrier : épisodes futurs ET sorties de films, mêlés --- */
   /* D7 — une série ajoutée mais pas commencée a quand même des dates. Les
@@ -281,7 +339,7 @@ function viewFollow(){
           '<div class="small muted" style="margin-top:3px">Plus aucun épisode diffusé en attente.</div>')+
       '</div></div>';
   } else {
-    html += '<div class="rattrap" data-rail="rattrap">'+todo.map(x=>carteRattrapage(x.s,x.ep)).join('')+'</div>';
+    html += '<div class="rattrap" data-rail="rattrap">'+todo.map(x=>carteRattrapage(x.s,x.ep,x.retard)).join('')+'</div>';
   }
 
   /* Section 2 : le calendrier unique */
@@ -368,8 +426,11 @@ function menuPause(id){
    pose dessus dans un dégradé — c'est la même grammaire que le héros d'une
    fiche. Le badge dit combien d'épisodes attendent, le rond bleu en coche un
    d'un seul geste, l'appui long ouvre la mise en pause (comme avant). */
-function carteRattrapage(s, nx){
-  const n = retardSerie(s);
+/* `retard` est passé par l'appelant, qui vient de le calculer pour trier :
+   le redemander ici doublait le coût. Il reste facultatif pour que la fonction
+   survive à un appel isolé. */
+function carteRattrapage(s, nx, retard){
+  const n = (retard === undefined) ? retardSerie(s) : retard;
   const img = srcImage(s.backdrop,'w780') || srcImage(s.poster,'w342');
   return '<div class="rcarte">'+
     '<div class="rfond" onclick="pressClic('+s.id+',event)"'+
@@ -394,9 +455,11 @@ function carteRattrapage(s, nx){
 
 /* ---------- Vue : Mon profil ---------- */
 function lastWatchedAt(s){
-  let m = 0;
-  for(const k in s.watched){ if(s.watched[k] > m) m = s.watched[k]; }
-  return m;
+  return memo('l'+s.id, ()=>{
+    let m = 0;
+    for(const k in s.watched){ if(s.watched[k] > m) m = s.watched[k]; }
+    return m;
+  });
 }
 
 function viewProfile(){
