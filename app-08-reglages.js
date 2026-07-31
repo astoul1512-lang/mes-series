@@ -339,6 +339,10 @@ async function boot(){
      on les crée avant le premier rendu, sinon l'écran des réglages plante. */
   migrerNotif();
   migrerGouts();
+  /* LOT C — la forme de `db.avis`, garantie avant le premier rendu comme les
+     deux migrations ci-dessus. Elle ne transforme rien : elle crée les deux
+     seaux `tv` et `movie` s'ils manquent, et c'est tout. */
+  if(typeof inscMigrerAvis === 'function') inscMigrerAvis();
   /* Les abonnements déclarés arrivent cochés dans la feuille de filtres. Ici,
      après `migrerGouts` et avant le premier rendu : `ui` est bâti au chargement
      du script, quand la base n'est pas encore lue. */
@@ -377,6 +381,15 @@ async function boot(){
   /* Sans session, l'app s'ouvre sur la porte d'entrée, avec l'onglet le plus
      probable selon que l'appareil a déjà connu un compte ou non. */
   if(!signedIn()) demarrerAccueil();
+  /* LOT C — une inscription abandonnée en cours de route reprend là où elle
+     s'est arrêtée. `db.inscription` n'existe QUE pendant le parcours et n'est
+     posée que par `demarrerInscription` : un compte déjà en service n'a pas
+     cette clé et n'est donc jamais dérouté ici.
+     Après `amorcerHistorique` pour que l'entrée reprise remplace la première
+     plutôt que d'en empiler une. Et jamais par-dessus une entrée directe
+     (`depart`) : quelqu'un qui touche une notification veut la fiche, pas la
+     suite de son inscription — elle l'attendra à la prochaine ouverture. */
+  else if(!depart && typeof reprendreInscription === 'function') reprendreInscription();
   if(memoryOnly) toast('Stockage indisponible : pense à exporter tes données');
   /* I9 — quelqu'un avait choisi « un résumé le soir » ou « le samedi », donc
      ne recevait plus rien du tout. La migration 3 l'a remis sur « dès la
