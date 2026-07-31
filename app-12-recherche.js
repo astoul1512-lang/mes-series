@@ -1,310 +1,442 @@
 "use strict";
 /* =========================== L'ONGLET RECHERCHE ===========================
 
-   POURQUOI CET ÉCRAN EXISTE.
+   POURQUOI CET ÉCRAN A ÉTÉ REFAIT (lot B, chapitre 4 de la spec).
 
-   Découvrir portait deux métiers contradictoires. « Montre-moi quelque
-   chose » — aucune intention en tête, c'est la vitrine personnalisée qui
-   répond. Et « je veux trouver mon film de ce soir » — une intention, et là
-   il faut un constructeur de requête. Le second vivait dans une feuille posée
-   PAR-DESSUS le premier, et toute la difficulté du lot E vient de là : un
-   filtre détruisait la vitrine (§E1), il a fallu un brouillon parce qu'on ne
-   voit pas les résultats pendant qu'on compose (§E5), et §E3 voulait ramener
-   les envies dans la vitrine à la main.
+   La première version de cet onglet posait trois questions dans l'abstrait —
+   un cadre, une humeur, « combien de temps t'as ? » — et ne montrait des
+   jaquettes qu'après. C'est un formulaire déguisé : personne ne sait répondre
+   à « quelle durée ? » avant d'avoir vu ce que ça change.
 
-   Le découpage n'est pas « parcourir contre filtrer », qui est une distinction
-   d'interface, mais « ai-je déjà une intention », qui est une distinction
-   d'état d'esprit. Celle-là ne bouge pas avec les modes.
+   Trois idées la remplacent, et elles tiennent toutes sur le même écran :
+
+     · UNE GRILLE DE JAQUETTES qui est la matière de l'écran, pas sa
+       conséquence. On peut y descendre et fouiller sans jamais rien remplir.
+     · UNE PHRASE qu'on complète en tapant sur des mots. « Je veux un film
+       comique français des années 90. » Elle n'est jamais vide : à l'ouverture
+       elle porte déjà une proposition, parce que corriger est infiniment plus
+       facile que créer — et ça enseigne la grammaire de l'écran en une seconde,
+       sans un mot d'explication.
+     · UN COMPTEUR VIVANT sous la phrase. 132 000 → 38 → 11. Voir son intention
+       se resserrer sous ses yeux est le seul élément de jeu dont cette porte a
+       besoin ; il n'y a pas de bouton « voir les résultats », ils sont déjà là.
+
+   Plus une quatrième porte pour les soirs sans idée : LE JEU, une affiche à la
+   fois, trois gestes.
 
    ------------------------------------------------------------------------
-   LE CADRE N'EST PAS UN FILTRE.
+   LA RÈGLE CAPITALE DE CET ÉCRAN (§4.1).
 
-   Film, série ou animé, ce n'est pas restreindre une liste : c'est décider si
-   on s'engage pour 1 h 50 ou pour vingt heures. Et ça change les questions qui
-   suivent. Pour un film ce qui compte est la durée ; pour une série, « elle est
-   finie ? » et « combien de saisons » — personne ne commence neuf saisons un
-   mardi soir ; pour un animé le vocabulaire n'est même pas le même.
-   D'où `CADRES`, `HUMEURS`, `TEMPS` et `REGLAGES` indexés par cadre : on ne
-   pose que les questions qui ont un sens pour ce qu'on vient de choisir.
+   Découvrir sert à découvrir, Recherche sert à trouver. Ici c'est
+   l'utilisateur qui commande, et LE PROFIL DE GOÛT TRIE LES RÉSULTATS, IL NE
+   LES RETIRE JAMAIS. Qui demande des comédies françaises des années 90 les a
+   toutes, y compris celles qui ne lui ressemblent pas. Le profil décide
+   seulement laquelle remonte en premier. C'est vrai partout dans ce fichier —
+   `trierParGout` réordonne, il ne filtre pas, et il rend la liste inchangée
+   quand le profil est vide.
 
-   DEUX PROFONDEURS, ET DEUX SORTIES DIFFÉRENTES.
+   Le jeu, lui, a le droit de filtrer : on lui demande UNE carte, pas une
+   liste. Ses trois filtres implicites sont écrits au §4.7 et repris tels quels
+   plus bas.
 
-   · Grossier — le cadre, une humeur, le temps qu'on a. Trois gestes. La sortie
-     est une SÉLECTION : quatre petites rangées de trois jaquettes, chacune
-     avec un intitulé qui dit POURQUOI elle est là. Douze titres, quatre petites
-     décisions, au lieu d'une grille de cent où rien ne distingue rien.
-   · Précis — « Régler plus finement ». La sortie est la GRILLE, la même que
-     celle de Découvrir (`carteTitre`), parce que là on parcourt.
+   ------------------------------------------------------------------------
+   CE QU'ON EXPÉDIE À TMDB, ET POURQUOI SEULEMENT ÇA.
 
-   LES HUMEURS SONT DES PAQUETS, PAS DES GENRES.
+   Règle permanente du projet : on n'expédie jamais un paramètre dont le
+   comportement n'a pas été mesuré en direct. Ce fichier n'utilise donc que
+   `with_genres`, `without_genres`, `with_keywords`, `with_original_language`,
+   `vote_average.gte`, `vote_count.gte`, les bornes de date, les plateformes —
+   tous mesurés en production — et `with_runtime`, qui vient des recettes
+   mesurées le 31/07 (voir le pavé de `RECH_AMBIANCES`).
 
-   Mesuré sur TMDB : « comédie » seul rend 173 456 titres, « comédie » +
-   « enquête policière » 379. L'axe genre ne retranche rien tout seul — il ne
-   doit donc pas être exposé brut. Une humeur est un paquet : des genres en OU,
-   parfois des mots-clés, et un plancher de votes. Le genre redevient un
-   ingrédient au lieu d'être une question posée à quelqu'un qui veut juste
-   passer une soirée.
+   DEUX MOTS DE LA PHRASE MANQUENT VOLONTAIREMENT, et c'est signalé à Adrien
+   plutôt que bricolé :
 
-   CE QUI N'EST PAS FILTRÉ ICI, ET POURQUOI.
-
-   `origineAdmise` n'est jamais appelée sur cet écran. La règle d'origine existe
-   pour empêcher le classement par popularité de TMDB de noyer la VITRINE sous
-   la production asiatique — un écran où personne n'a rien demandé. Ici
-   quelqu'un a demandé quelque chose : écarter les titres japonais de
-   « samouraï » contredirait en silence l'intention qu'on vient de recueillir.
-   L'interrupteur « Toutes les origines » de Mes goûts (§E7) ne concerne donc
-   que Découvrir.
-
-   LE COÛT RÉSEAU, ASSUMÉ ET BORNÉ.
-
-   La durée d'un film n'est PAS filtrable de façon fiable chez TMDB — mesuré le
-   29/07, la borne « moins de 95 min » ramenait Les Infiltrés (151 min) ; c'est
-   pour ça que `DISC_DUREE_FIABLE` vaut `false`. La vraie durée n'existe que sur
-   la fiche. On va donc la chercher, mais SEULEMENT pour les seize titres qui
-   peuvent entrer dans la sélection, par paquets de six. La grille « Tout voir »,
-   elle, ne demande aucune fiche : elle coûte exactement ce que coûte Découvrir
-   aujourd'hui.
-   C'est le renversement intéressant : le mode simple est le plus honnête,
-   parce qu'il est le plus petit.
+     · « pays » — `with_origin_country` n'a jamais été mesuré sur ce projet. On
+       propose à la place la LANGUE D'ORIGINE (`with_original_language`), qui
+       est mesurée et qui tourne en production depuis des semaines sur la puce
+       Animés. Le mot dit donc « en français », pas « français » : c'est une
+       langue, on ne fait pas semblant que c'est un pays.
+     · « avec [acteur] » — `with_cast` n'a jamais été mesuré non plus. Le
+       chemin acteur existe déjà et il est mesuré : on tape le nom dans le
+       champ, la section « Personnes » ouvre sa filmographie (§4.3). Le mot
+       reviendra dans la phrase le jour où `with_cast` aura été mesuré.
 --------------------------------------------------------------------------- */
 
-const RECH_MIN = 2;                  // caractères avant de partir chercher
-const RECH_ATTENTE = 320;            // frappe au repos avant la requête
-const RECH_MAX = 40;                 // résultats de titre affichés
-const RECH_CIBLE = 40;               // taille d'une fournée de critères
-const RECH_PAGES_MAX = 3;            // jamais plus de 3 requêtes pour remplir
-const RECH_VOTES_MINI = 80;          // plancher de votes des paquets d'humeur
-const RECH_SEL = 12;                 // titres de la sélection : 4 rangées de 3
-const RECH_FICHES = 16;              // fiches demandées : les 12 montrés + la marge
-const RECH_FICHES_MAX = 22;          // plafond dur, deuxième passe comprise
-const RECH_LOT_FICHES = 6;           // fiches demandées en parallèle
+const RECH_MIN = 2;              // caractères avant de partir chercher
+const RECH_ATTENTE = 320;        // frappe au repos avant la requête
+const RECH_TITRES = 18;          // titres montrés sur un nom tapé
+const RECH_GENS = 8;             // personnes montrées sur un nom tapé
+const RECH_CIBLE = 42;           // taille d'une fournée de grille
+const RECH_PAGES_MAX = 3;        // jamais plus de 3 requêtes pour remplir
+const RECH_VOTES_MINI = 80;      // plancher de votes de la grille
+const RECH_JEU_STOCK = 6;        // en dessous, une source va chercher la suite
 
-let rechTimer = null, rechSeq = 0, rechAbort = null, critSeq = 0, ficheSeq = 0;
+let rechTimer = null, rechSeq = 0, rechAbort = null, grilleSeq = 0, jeuSeq = 0;
 
-/* ------------------------------- Le cadre ------------------------------- */
-const CADRES = [
-  { id:'film',  label:'Film',  media:'movie' },
-  { id:'serie', label:'Série', media:'tv' },
-  { id:'anime', label:'Animé', media:'tv', anime:true }
+/* ============================== Les familles =============================
+   Les quatre puces restent en haut, collantes (§4.4). Ce ne sont pas des
+   filtres parmi d'autres : c'est le premier mot de la phrase, et c'est lui qui
+   décide à quel point de terminaison de TMDB on parle. */
+const RECH_FAMILLES = [
+  { id:'tout',  label:'Tout',   art:'quelque chose', nom:'titres' },
+  { id:'film',  label:'Films',  art:'un film',  media:'movie', nom:'films' },
+  { id:'serie', label:'Séries', art:'une série', media:'tv',   nom:'séries' },
+  { id:'anime', label:'Animés', art:'un animé', media:'tv', anime:true, nom:'animés' }
 ];
-function cadreCourant(){ return CADRES.find(c => c.id === etatRech().cadre) || CADRES[0]; }
-function rechMedia(){ return cadreCourant().media; }
+function familleRech(){ return RECH_FAMILLES.find(f => f.id === etatRech().fam) || RECH_FAMILLES[0]; }
+/* « Tout » interroge les deux points de terminaison et entrelace. Partout
+   ailleurs, un seul. */
+function mediasRech(){ const f = familleRech(); return f.media ? [f.media] : ['movie','tv']; }
+function mediaRech(){ return mediasRech()[0]; }
 
-/* ------------------------------ Les humeurs -----------------------------
-   Chaque humeur est un paquet de genres (en OU) et parfois de mots-clés. Les
-   noms de genres diffèrent entre films et séries chez TMDB — « Action » d'un
-   côté, « Action & Adventure » de l'autre — d'où deux listes plutôt qu'une
-   traduction à la volée. `genreParNom` rend `null` sur un nom inconnu et on
-   filtre : une liste de genres pas encore chargée ne casse rien. */
-const HUMEURS = {
-  film: [
-    { id:'marrant',  t:'Marrant',       s:'pour décompresser', genres:['Comédie'] },
-    { id:'peur',     t:'Qui fait peur', s:'frissons, tension', genres:['Horreur','Thriller'] },
-    { id:'bouge',    t:'Ça bouge',      s:'action, poursuite', genres:['Action','Aventure'] },
-    { id:'remue',    t:'Ça remue',      s:'émotion, tripes',   genres:['Drame'] },
-    { id:'enquete',  t:'Une enquête',   s:'polar, mystère',    genres:['Crime','Mystère'] },
-    { id:'ailleurs', t:'Ailleurs',      s:'SF, autre monde',   genres:['Science-Fiction','Fantastique'] }
-  ],
-  serie: [
-    { id:'marrant',  t:'Marrant',       s:'à picorer le soir', genres:['Comédie'] },
-    { id:'enquete',  t:'Une enquête',   s:'une affaire à suivre', genres:['Crime','Mystère'] },
-    { id:'remue',    t:'Ça remue',      s:'drame, famille',    genres:['Drame'] },
-    { id:'bouge',    t:'Ça bouge',      s:'action, survie',    genres:['Action & Adventure'] },
-    { id:'ailleurs', t:'Ailleurs',      s:'SF, fantastique',   genres:['Sci-Fi & Fantasy'] },
-    { id:'vrai',     t:'Du vrai',       s:'documentaire',      genres:['Documentaire'] }
-  ],
-  /* Les animés se disent en mots-clés, pas en genres : « shōnen » et « isekai »
-     n'ont aucun équivalent dans la taxonomie de TMDB. Ces identifiants sont
-     ceux d'`ENVIES`, déjà éprouvés en production. */
-  anime: [
-    { id:'shonen',  t:'Shōnen',         s:'combats, progression', mots:[207826] },
-    { id:'tranche', t:'Tranche de vie', s:'doux, quotidien',      mots:[9914] },
-    { id:'isekai',  t:'Isekai',         s:'autre monde',          mots:[237451] },
-    { id:'sombre',  t:'Sombre',         s:'dark fantasy',         mots:[177895] },
-    { id:'sport',   t:'Sport',          s:'équipe, tournoi',      mots:[6075, 12380] },
-    { id:'magie',   t:'Magie',          s:'pouvoirs, démons',     mots:[2343, 15001] }
-  ]
-};
-function humeursCadre(){ return HUMEURS[etatRech().cadre] || HUMEURS.film; }
-function humeurCourante(){
-  const h = etatRech().humeur;
-  return h ? humeursCadre().find(x => x.id === h) || null : null;
-}
+/* ======================= LES RECETTES, MESURÉES =======================
 
-/* ------------------------------- Le temps -------------------------------
-   La même question ne veut pas dire la même chose selon le cadre : pour un
-   film c'est « combien de temps j'ai », pour une série « combien je m'engage ».
-   AUCUN de ces réglages ne part dans la requête — ni la durée d'un film ni le
-   nombre de saisons ne sont filtrables chez TMDB. Ils sont vérifiés titre par
-   titre sur la sélection, à partir des fiches. C'est pour ça que la sélection
-   est petite. */
-const TEMPS = {
-  film:  [ { id:'court',     t:"Moins d'1h30", max:95 },
-           { id:'soiree',    t:'Une soirée',   min:95, max:160 },
-           { id:'peu',       t:'Peu importe' } ],
-  serie: [ { id:'une',       t:'Une saison',   maxS:1 },
-           { id:'plusieurs', t:'Plusieurs',    minS:2 },
-           { id:'peu',       t:'Peu importe' } ],
-  anime: [ { id:'une',       t:'Une saison',   maxS:1 },
-           { id:'longue',    t:'Une longue',   minS:2 },
-           { id:'peu',       t:'Peu importe' } ]
-};
-function tempsCadre(){ return TEMPS[etatRech().cadre] || TEMPS.film; }
-function tempsCourant(){
-  const t = etatRech().temps;
-  return t ? tempsCadre().find(x => x.id === t) || null : null;
-}
+   Ces recettes ne sont PAS écrites ici : elles viennent de `recettes.md`, où
+   chacune a été écrite puis mesurée contre le vrai catalogue le 31/07/2026,
+   une par une. Le nombre en commentaire est le `total_results` relevé ce
+   jour-là. Elles respectent les trois règles du §4.6 : au moins trois
+   ingrédients, entre 50 et 500 titres, et si on ne sait pas l'écrire elle
+   n'existe pas — c'est pour ça que « Pour regarder à deux » ne figure pas
+   dans cette liste.
 
-/* ----------------------------- Le réglage fin ---------------------------
-   N'ENTRENT ICI QUE DES CRITÈRES DONT LE COMPORTEMENT EST MESURÉ. Époque,
-   plateformes, note et genre tournent en production depuis des semaines.
-   Ce qui manque volontairement, et qu'il faudra mesurer avant de l'ajouter :
-   la durée d'un film (`with_runtime` faux trois fois sur dix), le nombre de
-   saisons et la longueur d'un épisode (pas filtrables du tout), et le statut
-   d'une série (`with_status`, jamais essayé sur ce projet). Les promettre à
-   l'écran sans les tenir serait pire que de ne pas les proposer. */
-function reglagesCadre(){
-  const c = etatRech().cadre;
-  const communs = [
-    { cle:'epoque', lab:'Époque' },
-    { cle:'plates', lab:'Où tu regardes' },
-    { cle:'note',   lab:'Note minimale' }
-  ];
-  return c === 'anime' ? communs : communs.concat([{ cle:'genres', lab:'Genre' }]);
-}
+   NE PAS LES MODIFIER SANS LES REMESURER. Une recette ajustée « au jugé » ne
+   se voit pas : elle rend simplement un écran moins bon, sans erreur.
+
+   LA FORME, ET POURQUOI ELLE EST DÉCOUPÉE EN INGRÉDIENTS.
+
+   §4.6 : « l'ambiance se déplie en phrase ». L'utilisateur doit VOIR la
+   recette, en français, et pouvoir corriger. Chaque ingrédient porte donc son
+   mot, et retirer le mot retire l'ingrédient de la requête. Ce qui n'a pas de
+   mot — un plancher de votes, par exemple — vit dans `fond` : il reste
+   invisible, il ne se déplie pas, et il ne doit jamais être le critère qui
+   décide du résultat.
+
+   `with_runtime` — LE POINT DOUTEUX, ET IL EST ASSUMÉ ICI PLUTÔT QUE CACHÉ.
+   Ce paramètre a été mesuré FAUX le 29/07 sur les titres rendus (« moins de
+   95 min » ramenait Les Infiltrés, 151 min), c'est ce qui a mis
+   `DISC_DUREE_FIABLE` à `false` dans Découvrir. Les recettes du 31/07 s'en
+   servent malgré tout, et leurs volumes ont été mesurés. Les deux mesures ne
+   portent pas sur la même chose : l'une sur le nombre rendu, l'autre sur la
+   justesse des titres. On expédie la recette telle qu'elle a été écrite —
+   c'est la consigne — et le point est signalé dans le compte rendu. */
+const RECH_AMBIANCES = [
+  { id:'famille', t:'Un film en famille', mesure:490,
+    ing:[ { cle:'genre', mot:'familial', p:{ with_genres:'10751', without_genres:'27,53,80,18' } },
+          { cle:'duree', mot:'de moins de 2 h', p:{ 'with_runtime.lte':'115' } },
+          { cle:'note',  mot:'bien noté', p:{ 'vote_average.gte':'6.3' } } ],
+    fond:{ 'vote_count.gte':'500' }, genresProfil:['Familial','Aventure','Animation'] },
+
+  { id:'rigoler', t:'Envie de rigoler', mesure:456,
+    /* La comédie dramatique est écartée : sans ça elle remonte en masse, et
+       ce n'est pas ce qu'on demande quand on veut rigoler. */
+    ing:[ { cle:'genre', mot:'comique', p:{ with_genres:'35', without_genres:'18' } },
+          { cle:'duree', mot:'de moins de 2 h 05', p:{ 'with_runtime.lte':'125' } },
+          { cle:'note',  mot:'bien noté', p:{ 'vote_average.gte':'6.5' } } ],
+    fond:{ 'vote_count.gte':'1500' }, genresProfil:['Comédie'] },
+
+  { id:'action', t:"De l'action sans prise de tête", mesure:331,
+    /* SEUL CAS SANS CONTRAINTE DE NOTE, et c'est délibéré : demander un film
+       sans prise de tête en exigeant 7,5 de moyenne est contradictoire. Ici le
+       critère de qualité, c'est la notoriété. */
+    ing:[ { cle:'genre', mot:"plein d'action", p:{ with_genres:'28,12' } },
+          { cle:'duree', mot:'de moins de 2 h 05', p:{ 'with_runtime.lte':'125' } } ],
+    fond:{ 'vote_count.gte':'1500' }, genresProfil:['Action','Aventure'] },
+
+  { id:'peur', t:'Ça fait peur', mesure:366,
+    ing:[ { cle:'genre', mot:'qui fait peur', p:{ with_genres:'27,53' } },
+          { cle:'note',  mot:'bien noté', p:{ 'vote_average.gte':'6' } } ],
+    fond:{ 'vote_count.gte':'500' }, genresProfil:['Horreur','Thriller'] },
+
+  { id:'classique', t:"Un classique que j'ai raté", mesure:195,
+    /* En années glissantes, jamais en date fixe : sinon la recette vieillit
+       toute seule. `dateMoins` est calculée à l'appel. */
+    ing:[ { cle:'epoque', mot:'sorti il y a plus de 15 ans', p:{ __ansAvant:15 } },
+          { cle:'note',   mot:'très bien noté', p:{ 'vote_average.gte':'7.5' } } ],
+    fond:{ 'vote_count.gte':'5000' }, genresProfil:[] },
+
+  { id:'long', t:'Long et prenant', mesure:256,
+    ing:[ { cle:'duree', mot:'de plus de 2 h 15', p:{ 'with_runtime.gte':'135' } },
+          { cle:'note',  mot:'très bien noté', p:{ 'vote_average.gte':'7.5' } } ],
+    fond:{ 'vote_count.gte':'1000' }, genresProfil:[] },
+
+  { id:'court', t:"Court, moins d'1 h 35", mesure:434,
+    ing:[ { cle:'duree', mot:"de moins d'1 h 35", p:{ 'with_runtime.gte':'60', 'with_runtime.lte':'95' } },
+          { cle:'note',  mot:'bien noté', p:{ 'vote_average.gte':'6.8' } } ],
+    fond:{ 'vote_count.gte':'1500' }, genresProfil:[] },
+
+  { id:'reflechir', t:'Ça fait réfléchir', mesure:325,
+    ing:[ { cle:'genre', mot:'qui fait réfléchir', p:{ with_genres:'18|878' } },
+          { cle:'note',  mot:'très bien noté', p:{ 'vote_average.gte':'7.5' } } ],
+    fond:{ 'vote_count.gte':'3000' }, genresProfil:['Drame','Science-Fiction'] },
+
+  { id:'vraie', t:'Une histoire vraie', mesure:278,
+    ing:[ { cle:'genre', mot:'tiré du réel', p:{ with_keywords:'9672' } },
+          { cle:'note',  mot:'bien noté', p:{ 'vote_average.gte':'6.8' } } ],
+    fond:{ 'vote_count.gte':'800' }, genresProfil:['Histoire','Drame'] },
+
+  { id:'docu', t:'Du vrai (documentaire)', mesure:302,
+    ing:[ { cle:'genre', mot:'documentaire', p:{ with_genres:'99' } },
+          { cle:'note',  mot:'bien noté', p:{ 'vote_average.gte':'7' } } ],
+    fond:{ 'vote_count.gte':'150' }, genresProfil:['Documentaire'] }
+];
+
+/* Les sous-genres d'animé, mesurés le 31/07 eux aussi. `recettes.md` les avait
+   écrits pour l'étape « style » de l'inscription (§5.6) ; ils servent ici de
+   mot « genre ou ambiance » quand la famille Animés est choisie, parce que
+   c'est exactement le même besoin : le genre TMDB ne dit littéralement rien
+   d'un animé, tout y est étiqueté « Animation + Action & Aventure ».
+
+   « shonen » a DEUX orthographes dans TMDB (`shounen` et `shonen`) : les deux
+   sont demandées en OU, sinon on perd la moitié du catalogue. Ça ne se devine
+   pas, c'est mesuré.
+
+   Les volumes ci-dessous ont été relevés sur `with_original_language=ja` seul.
+   La famille Animés ajoute par-dessus le genre Animation (c'est sa
+   définition) : les nombres réels sont donc un peu plus bas. */
+const RECH_ANIMES = [
+  { id:'shonen',   mot:'shōnen',         mots:'207826|378884', mesure:542 },
+  { id:'seinen',   mot:'seinen',         mots:'195668',        mesure:389 },
+  { id:'shoujo',   mot:'shōjo',          mots:'206437',        mesure:194 },
+  { id:'isekai',   mot:'isekai',         mots:'237451',        mesure:188 },
+  { id:'mecha',    mot:'mecha',          mots:'10046',         mesure:376 },
+  { id:'tranche',  mot:'tranche de vie', mots:'9914',          mesure:841 },
+  { id:'psy',      mot:'psychologique',  mots:'272553|12565',  mesure:190 },
+  { id:'dark',     mot:'dark fantasy',   mots:'177895',        mesure:66  },
+  { id:'sport',    mot:'sport',          mots:'6075',          mesure:174 }
+];
+
+/* ========================= LES MOTS DE LA PHRASE =========================
+   Chaque mot est une puce. On tape, une courte liste s'ouvre, on choisit — ou
+   « peu importe » pour le retirer. L'ordre est libre, rien n'est obligatoire,
+   et on ne voit jamais sept champs vides : seulement la phrase qui marche
+   déjà, et un « + préciser » pour l'affiner. */
+
+/* La langue d'origine, pas le pays — voir le pavé d'en-tête. Les libellés
+   disent « en français » et pas « français » pour ne pas faire croire à une
+   nationalité. */
+const RECH_LANGUES = [
+  { id:'fr', mot:'en français' }, { id:'en', mot:'en anglais' },
+  { id:'ko', mot:'en coréen' },   { id:'ja', mot:'en japonais' },
+  { id:'es', mot:'en espagnol' }, { id:'it', mot:'en italien' },
+  { id:'de', mot:'en allemand' }, { id:'da', mot:'en danois' }
+];
 const RECH_EPOQUES = [
-  { id:'tout',  court:'',            label:'Peu importe' },
-  { id:'2020s', court:'depuis 2020', label:'Depuis 2020', de:'2020-01-01', a:'2099-12-31' },
-  { id:'2010s', court:'années 2010', label:'Années 2010', de:'2010-01-01', a:'2019-12-31' },
-  { id:'2000s', court:'années 2000', label:'Années 2000', de:'2000-01-01', a:'2009-12-31' },
-  { id:'1990s', court:'années 90',   label:'Années 90',   de:'1990-01-01', a:'1999-12-31' },
-  { id:'avant', court:'avant 1990',  label:'Avant 1990',  de:'1900-01-01', a:'1989-12-31' }
+  { id:'2020s', mot:'depuis 2020',      de:'2020-01-01', a:'2099-12-31' },
+  { id:'2010s', mot:'des années 2010',  de:'2010-01-01', a:'2019-12-31' },
+  { id:'2000s', mot:'des années 2000',  de:'2000-01-01', a:'2009-12-31' },
+  { id:'1990s', mot:'des années 90',    de:'1990-01-01', a:'1999-12-31' },
+  { id:'1980s', mot:'des années 80',    de:'1980-01-01', a:'1989-12-31' },
+  { id:'avant', mot:"d'avant 1980",     de:'1900-01-01', a:'1979-12-31' }
 ];
-const RECH_NOTES = [ { v:0, label:'Peu importe' }, { v:6, label:'6 et +' },
-                     { v:7, label:'7 et +' }, { v:8, label:'8 et +' } ];
+/* La durée n'a de sens que pour un film : celle d'une série, c'est celle d'un
+   épisode, et personne ne cherche « une série de moins d'1 h 30 ». */
+const RECH_DUREES = [
+  { id:'court',  mot:"de moins d'1 h 30", p:{ 'with_runtime.gte':'1', 'with_runtime.lte':'90' } },
+  { id:'moyen',  mot:'de moins de 2 h',   p:{ 'with_runtime.gte':'1', 'with_runtime.lte':'120' } },
+  { id:'long',   mot:'de plus de 2 h',    p:{ 'with_runtime.gte':'120' } }
+];
+const RECH_NOTES = [
+  { id:'6', mot:'correct',         v:6   },
+  { id:'7', mot:'bien noté',       v:7   },
+  { id:'8', mot:'très bien noté',  v:7.5 }
+];
+
+/* L'ordre dans lequel les mots s'écrivent dans la phrase. Il n'est pas l'ordre
+   dans lequel on les pose — ça, c'est libre — mais l'ordre dans lequel ils se
+   LISENT : « un film comique français des années 90 de moins de 2 h ». */
+const RECH_MOTS = [
+  { cle:'genre',  titre:'Genre ou ambiance' },
+  { cle:'langue', titre:"En quelle langue ?" },
+  { cle:'epoque', titre:'De quand ?' },
+  { cle:'duree',  titre:'Combien de temps ?' },
+  { cle:'note',   titre:'Exigeant ?' },
+  { cle:'plate',  titre:'Où tu regardes ?' }
+];
 
 /* ================================ L'état ================================
-   Volontairement SÉPARÉ de `ui.disc` : la vitrine et la recherche sont deux
-   moteurs, et mélanger leurs états est exactement la faute que §E1 a réparée.
-   Passer d'un onglet à l'autre ne doit rien emporter. */
+   Séparé de `ui.disc` : la vitrine et la recherche sont deux moteurs, et
+   mélanger leurs états est la faute que §E1 avait déjà réparée une fois. */
 function etatRech(){
   if(!ui.rech) ui.rech = {
-    cadre:'film',
-    q:'',                 // le titre tapé
-    humeur:null, temps:null,
-    epoque:'tout', plates:[], noteMin:0, genres:[],
-    vue:'selection',      // selection | grille
-    regle:false, ouvert:null,
-    res:[], page:1, pages:1, charge:false, loading:false, err:'', decal:0,
-    fiches:{}             // 'media:id' -> { duree, saisons, resume, plates }
+    fam:'film',
+    q:'', qtitres:[], qgens:[], qloading:false, qerr:'',
+    /* La phrase. `amb` est une ambiance mesurée ; `sans` liste les ingrédients
+       qu'on lui a retirés à la main. Les autres clés sont les mots explicites. */
+    amb:null, sans:[], genre:null, langue:null, epoque:null, duree:null, note:null, plate:null,
+    total:null, res:[], page:1, pages:1, loading:false, err:'', charge:false,
+    reprise:null,
+    jeu:null
   };
   return ui.rech;
 }
 function rechTexte(){ return (etatRech().q || '').trim(); }
 function enRechercheTitre(){ return rechTexte().length >= RECH_MIN; }
-function criteresPosés(){
-  const r = etatRech();
-  return !!r.humeur || r.plates.length > 0 || r.epoque !== 'tout' || r.noteMin > 0 || r.genres.length > 0;
+
+/* ---------------- La phrase entre deux sessions (§4.8) ----------------
+   REMISE À ZÉRO À CHAQUE OUVERTURE. Un filtre qu'on a oublié avoir posé est
+   l'une des pires sources de confusion : on rouvre Recherche trois jours plus
+   tard, la grille est presque vide, et on ne comprend pas pourquoi — parce que
+   « des années 90 » traîne encore.
+
+   Comment on reconnaît une ouverture SANS toucher à `go()`, qui n'est pas dans
+   le périmètre de ce lot : `params` est remplacé par un objet NEUF à chaque
+   `go()`, et jamais pendant les redessins d'un même écran. Comparer son
+   IDENTITÉ suffit donc, et n'écrit nulle part. Revenir d'une fiche repasse par
+   l'objet mémorisé : la phrase survit, ce qui est bien ce qu'on veut. */
+let rechDernierPassage = null;
+function ouvertureRech(){
+  if(rechDernierPassage === params) return false;
+  rechDernierPassage = params;
+  return true;
 }
-function modeRech(){
-  if(enRechercheTitre()) return 'titre';
-  return criteresPosés() ? 'criteres' : 'repos';
+function nouvelleOuvertureRech(){
+  const r = etatRech();
+  /* Rien n'est perdu : le travail précédent reste sous la main, une puce
+     discrète propose de le reprendre. */
+  const avant = phraseTexte();
+  if(avant && (r.amb || r.genre || r.langue || r.epoque || r.duree || r.note || r.plate))
+    r.reprise = { texte:avant, fam:r.fam, amb:r.amb, sans:r.sans.slice(), genre:r.genre,
+                  langue:r.langue, epoque:r.epoque, duree:r.duree, note:r.note, plate:r.plate };
+  r.q = ''; r.qtitres = []; r.qgens = []; r.qerr = '';
+  r.amb = null; r.sans = []; r.genre = null; r.langue = null;
+  r.epoque = null; r.duree = null; r.note = null; r.plate = null;
+  r.jeu = null;
+  phraseDuJour();
+  r.res = []; r.total = null; r.page = 1; r.pages = 1; r.charge = false; r.err = '';
+}
+function reprendreRech(){
+  const r = etatRech(), v = r.reprise;
+  if(!v) return;
+  r.fam = v.fam; r.amb = v.amb; r.sans = v.sans.slice(); r.genre = v.genre;
+  r.langue = v.langue; r.epoque = v.epoque; r.duree = v.duree; r.note = v.note; r.plate = v.plate;
+  r.reprise = null;
+  relancerRech();
+}
+
+/* LA PHRASE N'EST JAMAIS VIDE (§4.5). À l'ouverture elle porte déjà une
+   proposition plausible. On prend une AMBIANCE mesurée plutôt qu'un assemblage
+   improvisé : elle est garantie de rendre entre 195 et 490 titres, et elle
+   montre d'un coup d'œil que les mots bleus se tapent.
+
+   Elle change chaque jour, comme le reste de l'app (§3.9) : la graine est la
+   date, donc stable dans la journée et différente demain. Et elle penche vers
+   les genres retenus du profil quand il y en a — sans jamais s'y enfermer. */
+function grainePhraseRech(){
+  const s = todayISO();
+  let h = 0;
+  for(let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h;
+}
+function phraseDuJour(){
+  const r = etatRech();
+  const gouts = (typeof genresRetenus === 'function') ? genresRetenus() : [];
+  const proches = RECH_AMBIANCES.filter(a => (a.genresProfil||[]).some(g => gouts.indexOf(g) >= 0));
+  const source = proches.length ? proches : RECH_AMBIANCES;
+  const a = source[grainePhraseRech() % source.length];
+  r.fam = 'film';                       // toutes les recettes mesurées sont des films
+  r.amb = a.id; r.sans = [];
 }
 
 /* ============================== Les gestes ============================== */
 
-function setCadre(id){
+function setFamRech(id){
   const r = etatRech();
-  if(r.cadre === id) return;
-  r.cadre = id;
-  /* Une humeur, un temps et des genres n'ont pas d'équivalent d'un cadre à
-     l'autre. On les remet à zéro plutôt que de traîner des réglages invisibles
-     qui filtreraient la grille sans que rien ne le dise. */
-  r.humeur = null; r.temps = null; r.genres = []; r.ouvert = null;
-  r.res = []; r.charge = false;
-  render();
-  if(enRechercheTitre()) lancerTitre();
-  else if(criteresPosés()) chargerCriteres();
-}
-function setHumeur(id){
-  const r = etatRech();
-  r.humeur = (r.humeur === id) ? null : id;
+  if(r.fam === id) return;
+  r.fam = id;
+  /* Une ambiance de film n'a aucun sens sur les séries, un sous-genre d'animé
+     aucun sur les films : plutôt que de traîner un réglage invisible qui
+     filtrerait la grille sans que rien ne le dise, on le retire. Le reste de
+     la phrase — langue, époque, note, plateforme — vaut pour toutes les
+     familles et survit. */
+  if(r.amb && !ambianceRech(r.amb)){ r.amb = null; r.sans = []; }
+  r.genre = null;
+  if(id !== 'film') r.duree = null;     // la durée ne veut rien dire hors du film
   relancerRech();
 }
-function setTemps(id){
-  const r = etatRech();
-  r.temps = (r.temps === id) ? null : id;
-  /* Le temps ne part PAS dans la requête — ni la durée d'un film ni le nombre
-     de saisons ne sont filtrables chez TMDB. Il vérifie la sélection à partir
-     des fiches. Inutile de redemander la liste ; il faut en revanche compléter
-     les fiches, puisque le vivier à vérifier vient de doubler. */
-  if(r.res.length){ peindreRech(); chargerFiches(); } else relancerRech();
-}
-function setEpoqueRech(id){ etatRech().epoque = id; relancerRech(); }
-function setNoteRech(v){ etatRech().noteMin = v; relancerRech(); }
-function bascGenreRech(nom){
-  const sel = etatRech().genres, k = sel.indexOf(nom);
-  if(k < 0) sel.push(nom); else sel.splice(k,1);
-  relancerRech();
-}
-function bascPlateRech(i){
-  const p = platesRech()[i];
-  if(!p) return;
-  const sel = etatRech().plates, k = sel.findIndex(x => x.id === p.id);
-  if(k < 0) sel.push({ id:p.id, nom:p.nom, logo:p.logo }); else sel.splice(k,1);
-  relancerRech();
-}
-function viderPlatesRech(){ etatRech().plates = []; relancerRech(); }
-function ouvrirReglage(v){ const r = etatRech(); r.regle = v; if(v && r.ouvert === null) r.ouvert = 'epoque'; render(); }
-function deplier(cle){ const r = etatRech(); r.ouvert = (r.ouvert === cle) ? null : cle; render(); }
-function setVueRech(v){ etatRech().vue = v; render(); }
 
+/* La liste des ambiances disponibles pour la famille en cours. Séries et
+   « Tout » n'en ont aucune : aucune recette n'a été mesurée pour elles, et la
+   règle 3 du §4.6 est formelle — si on ne sait pas l'écrire, ça n'existe pas.
+   Ces deux familles se règlent au genre TMDB, qui est mesuré. */
+function ambiancesRech(){
+  const f = familleRech();
+  if(f.anime) return RECH_ANIMES;
+  if(f.id === 'film') return RECH_AMBIANCES;
+  return [];
+}
+function ambianceRech(id){ return ambiancesRech().find(a => a.id === id) || null; }
+
+/* Poser une ambiance remplit plusieurs mots d'un coup, puis reste modifiable :
+   on n'est jamais enfermé dedans. Elle prend la place du genre explicite —
+   deux façons de dire le genre en même temps ne veut rien dire. */
+function poserAmbianceRech(id){
+  const r = etatRech();
+  const f = familleRech();
+  /* Toutes les ambiances mesurées sont des films : taper « Envie de rigoler »
+     depuis « Séries » bascule sur Films plutôt que de ne rien faire. */
+  if(!f.anime && RECH_AMBIANCES.some(a => a.id === id)) r.fam = 'film';
+  r.amb = (r.amb === id) ? null : id;
+  r.sans = []; r.genre = null;
+  if(r.amb) r.duree = r.note = null;    // l'ambiance les porte déjà
+  relancerRech();
+}
+/* Retirer un ingrédient d'une recette. C'est le point qui rend l'ambiance
+   honnête : ce n'est pas une boîte noire, c'est un raccourci, et on sait quel
+   mot enlever si le résultat deplaît. */
+function retirerIngredientRech(cle){
+  const r = etatRech();
+  if(r.sans.indexOf(cle) < 0) r.sans.push(cle);
+  /* Une recette dont on a retiré tous les mots n'est plus une recette. */
+  const a = ambianceRech(r.amb);
+  if(a && (a.ing||[]).every(i => r.sans.indexOf(i.cle) >= 0)){ r.amb = null; r.sans = []; }
+  relancerRech();
+}
+function poserMotRech(cle, val){
+  const r = etatRech();
+  r[cle] = val;
+  /* Un mot explicite l'emporte sur l'ingrédient de même nature : on ne peut
+     pas demander « bien noté » et « très bien noté » à la fois. */
+  if(val != null && r.amb && r.sans.indexOf(cle) < 0){
+    const a = ambianceRech(r.amb);
+    if(a && (a.ing||[]).some(i => i.cle === cle)) r.sans.push(cle);
+  }
+  if(cle === 'genre' && val != null){ r.amb = null; r.sans = []; }
+  closeSheet();
+  relancerRech();
+}
 function viderRech(){
   const r = etatRech();
   clearTimeout(rechTimer); avorterRech();
-  r.q = ''; r.humeur = null; r.temps = null;
-  r.epoque = 'tout'; r.plates = []; r.noteMin = 0; r.genres = [];
-  r.res = []; r.page = 1; r.pages = 1; r.charge = false; r.loading = false; r.err = '';
-  r.regle = false; r.vue = 'selection';
-  render();
+  r.q = ''; r.qtitres = []; r.qgens = [];
+  r.amb = null; r.sans = []; r.genre = null; r.langue = null;
+  r.epoque = null; r.duree = null; r.note = null; r.plate = null;
+  relancerRech();
 }
 function relancerRech(){
+  const r = etatRech();
+  r.res = []; r.total = null; r.page = 1; r.pages = 1; r.charge = false; r.err = '';
+  oublierDefil('search');
   render();
-  if(enRechercheTitre()) lancerTitre();
-  else if(criteresPosés()) chargerCriteres();
+  chargerGrilleRech();
 }
 
-/* --------------------------- Les plateformes ---------------------------- */
-function platesRech(){
-  const dites = mesPlates();
-  if(dites.length) return dites;
-  const l = platesTMDB[rechMedia()] || [];
-  return l.slice(0, 8);
-}
-
-/* --------------------------- Les genres du cadre ------------------------ */
-function genresRech(){
-  const l = genresTMDB[rechMedia()] || [];
-  /* Sur la puce Animés, « Animation » est la définition du cadre et non une
-     préférence : le proposer une seconde fois n'apprendrait rien. */
-  return l.filter(g => !(cadreCourant().anime && /animation/i.test(g.nom)));
-}
-
-/* ============================ Le moteur TITRE ============================ */
-
+/* ====================== Le champ : titres ET personnes ======================
+   Deux sections SÉPARÉES (§4.3), parce que taper sur un titre et taper sur une
+   personne ne font pas la même chose : le titre ouvre une fiche, la personne
+   ouvre sa filmographie. Mélangés, on ne sait jamais ce qui va se passer.
+   Ordre fixe : les titres d'abord, c'est le cas le plus fréquent. */
 function saisieRech(v){
   const r = etatRech();
-  const avant = modeRech();
+  const avant = enRechercheTitre();
   r.q = v;
   clearTimeout(rechTimer); avorterRech();
-  if(modeRech() !== avant){ oublierDefil('search'); window.scrollTo(0,0); }
+  if(enRechercheTitre() !== avant){ oublierDefil('search'); window.scrollTo(0,0); }
   if(!enRechercheTitre()){
-    r.res = []; r.loading = false; r.err = ''; r.charge = !criteresPosés();
-    peindreRech();
-    if(criteresPosés()) chargerCriteres();
-    return;
+    r.qtitres = []; r.qgens = []; r.qloading = false; r.qerr = '';
+    peindreRech(); return;
   }
-  r.loading = true; r.err = '';
+  r.qloading = true; r.qerr = '';
   peindreRech();
   rechTimer = setTimeout(lancerTitre, RECH_ATTENTE);
 }
@@ -312,254 +444,285 @@ function lancerTitre(){
   clearTimeout(rechTimer);
   if(!enRechercheTitre()) return;
   const r = etatRech();
-  r.loading = true; r.err = ''; peindreRech();
+  r.qloading = true; r.qerr = ''; peindreRech();
   chercherTitre(rechTexte());
 }
 function avorterRech(){
   if(rechAbort){ try{ rechAbort.abort(); }catch(e){} rechAbort = null; }
 }
-
 async function chercherTitre(q){
   const r = etatRech();
   const seq = ++rechSeq;
   const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
   rechAbort = ctrl;
+  const sig = ctrl ? { signal:ctrl.signal } : null;
   try{
-    if(cadreCourant().anime) await chargerGenres('tv');   // il faut l'id du genre Animation
+    if(familleRech().anime) await chargerGenres('tv');
     if(seq !== rechSeq) return;
-    const d = await tmdb('/search/'+rechMedia(), { query:q, include_adult:'false' },
-                         ctrl ? {signal:ctrl.signal} : null);
+    /* UNE SEULE REQUÊTE pour les deux sections. `/search/multi` rend les
+       titres ET les personnes, et c'est le seul chemin de recherche de
+       personnes que le relais accepte (`/search/person` n'est pas dans sa
+       liste blanche, et cette liste vit dans une fonction déployée qui n'est
+       pas dans ce dépôt). Une requête au lieu de trois, en prime. */
+    const d = await tmdb('/search/multi', { query:q, include_adult:'false' }, sig);
     if(seq !== rechSeq) return;
-    let res = (d.results || []).filter(x => x && x.poster_path && (x.title || x.name));
-    r.res = garderAnimesRech(res).slice(0, RECH_MAX);
-    r.loading = false; r.err = ''; r.charge = true;
+    const brut = d.results || [];
+    const médias = mediasRech();
+    let titres = brut
+      .filter(x => x && x.poster_path && (x.title || x.name) &&
+                   médias.indexOf(x.media_type) >= 0)
+      .map(x => Object.assign({ __media:x.media_type }, x))
+      .sort((a,b)=>(b.popularity||0)-(a.popularity||0));
+    r.qtitres = garderAnimesRech(titres).slice(0, RECH_TITRES);
+    r.qgens = brut
+      .filter(x => x && x.media_type === 'person' && x.name && x.profile_path)
+      .slice(0, RECH_GENS);
+    r.qloading = false; r.qerr = '';
     peindreRech();
   }catch(e){
     if((e && e.name === 'AbortError') || seq !== rechSeq) return;
-    r.loading = false; r.res = []; r.charge = true;
-    r.err = (e.message === 'BADKEY') ? 'Service indisponible' : 'Pas de connexion';
+    r.qloading = false; r.qtitres = []; r.qgens = [];
+    r.qerr = (e.message === 'BADKEY') ? 'Service indisponible' : 'Pas de connexion';
     peindreRech();
   }
 }
-
-/* Le cadre Animé est japonais ET animé par définition : ce tamis reste, même
-   sur un titre tapé. TMDB ne sait pas filtrer /search, on le fait chez nous —
-   et si les résultats ne portent pas l'information, on ne filtre pas à
-   l'aveugle plutôt que de vider l'écran. */
+/* La famille Animés est japonaise ET animée par définition : TMDB ne sait pas
+   filtrer `/search`, on le fait chez nous. Et si les résultats ne portent pas
+   l'information, on ne filtre pas à l'aveugle plutôt que de vider l'écran. */
 function garderAnimesRech(res){
-  if(!cadreCourant().anime) return res;
+  if(!familleRech().anime) return res;
   const anim = genreParNom('tv','Animation');
   if(anim == null) return res;
   const utilisables = res.every(x => x && typeof x.original_language === 'string' && Array.isArray(x.genre_ids));
   if(!utilisables) return res;
   return res.filter(x => x.original_language === 'ja' && x.genre_ids.indexOf(anim) >= 0);
 }
-
-/* Ce qu'on a déjà, séparé du reste. C'est la vraie question qu'on se pose en
-   tapant un nom — « est-ce que je l'ai déjà ? » — et jusqu'ici il fallait
-   ouvrir la fiche pour le savoir. Absorbe §E9. */
-function chezSoiRech(x){
-  const item = rechMedia() === 'tv' ? db.shows[x.id] : db.movies[x.id];
-  return !!item;
+function chezSoiRech(x, media){
+  const m = media || x.__media || mediaRech();
+  return !!(m === 'tv' ? db.shows[x.id] : db.movies[x.id]);
+}
+/* Une personne ouvre sa filmographie — le chemin existe déjà et il est mesuré
+   (`/person/{id}/combined_credits`). */
+function ouvrirPersonneRech(id){
+  if(typeof ouvrirActeur === 'function') ouvrirActeur(id);
 }
 
-/* =========================== Le moteur CRITÈRES =========================== */
-
-function paramsRech(){
-  const r = etatRech(), media = rechMedia(), cadre = cadreCourant();
-  const p = { include_adult:'false', page:String(r.page), sort_by:'popularity.desc' };
+/* ========================= La requête de la grille =========================
+   Un seul assemblage sert au compteur et à la grille : ils doivent dire la
+   même chose, sinon le compteur ment. */
+function dateMoinsRech(ans){
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - ans);
+  return d.toISOString().slice(0,10);
+}
+/* Les ingrédients d'ambiance encore actifs — c'est-à-dire non retirés à la
+   main, et non recouverts par un mot explicite. */
+function ingredientsRech(){
+  const r = etatRech(), a = ambianceRech(r.amb);
+  if(!a) return [];
+  return (a.ing||[]).filter(i => r.sans.indexOf(i.cle) < 0);
+}
+function paramsRech(media){
+  const r = etatRech(), f = familleRech();
+  const p = { include_adult:'false', page:'1', sort_by:'popularity.desc' };
   p['vote_count.gte'] = String(RECH_VOTES_MINI);
+  const champDate = media === 'movie' ? 'primary_release_date' : 'first_air_date';
 
-  const h = humeurCourante();
-  const noms = ((h && h.genres) || []).concat(r.genres);
-  const ids = noms.map(n => genreParNom(media, n)).filter(x => x != null);
-  const mots = (h && h.mots) || [];
-
-  if(cadre.anime){
+  /* 1. La famille. Pour les animés, la langue et le genre Animation sont la
+     DÉFINITION du cadre, pas une préférence. Le genre reste un ET (une seule
+     valeur, sans barre) : mélanger virgule et barre dans `with_genres` fait
+     ignorer en silence tout ce qui suit la barre — mesuré le 29/07. */
+  if(f.anime){
     p.with_original_language = 'ja';
-    const anim = genreParNom(media, 'Animation');
-    /* Le genre Animation est la DÉFINITION du cadre : il doit rester un ET, et
-       mélanger un ET et un OU dans `with_genres` ne marche pas — mesuré le
-       29/07, tout ce qui suit la barre verticale est ignoré en silence. On
-       s'appuie donc sur la langue dans la requête et on vérifie l'animation
-       chez nous. */
-    if(ids.length) p.with_genres = ids.join('|');
-    else if(anim != null) p.with_genres = String(anim);
-  }else if(ids.length){
-    /* Les genres partent en OU : cocher « Horreur » et « Thriller » dans une
-       même humeur veut dire l'un OU l'autre, pas les deux à la fois. */
-    p.with_genres = ids.join('|');
+    const anim = genreParNom('tv','Animation');
+    if(anim != null) p.with_genres = String(anim);
   }
-  if(mots.length) p.with_keywords = mots.join('|');
 
-  if(r.plates.length){
-    p.with_watch_providers = r.plates.map(x => x.id).join('|');
-    p.watch_region = REGION_PLATO;
-    p.with_watch_monetization_types = 'flatrate';
+  /* 2. L'ambiance mesurée. Ses paramètres sont recopiés tels quels. */
+  const a = ambianceRech(r.amb);
+  if(a){
+    if(a.mots){                                   // sous-genre d'animé
+      p.with_keywords = a.mots;
+    }else{
+      ingredientsRech().forEach(i => {
+        Object.keys(i.p).forEach(k => {
+          if(k === '__ansAvant') p[champDate+'.lte'] = dateMoinsRech(i.p[k]);
+          else p[k] = i.p[k];
+        });
+      });
+      Object.assign(p, a.fond || {});
+    }
   }
+
+  /* 3. Les mots explicites. Ils passent APRÈS l'ambiance : un mot posé à la
+     main l'emporte toujours sur l'ingrédient qu'il recouvre. */
+  if(r.genre){
+    const id = genreParNom(media, r.genre);
+    /* Les genres n'ont pas les mêmes noms côté films et côté séries. Quand le
+       genre demandé n'existe pas pour ce média, on ne l'expédie pas — et
+       l'écran le dit plutôt que de rendre une grille vide sans raison. */
+    if(id != null) p.with_genres = f.anime && p.with_genres ? p.with_genres : String(id);
+  }
+  if(r.langue) p.with_original_language = r.langue;
   const ep = RECH_EPOQUES.find(x => x.id === r.epoque);
-  if(ep && ep.de){
-    const champ = media === 'movie' ? 'primary_release_date' : 'first_air_date';
-    p[champ+'.gte'] = ep.de; p[champ+'.lte'] = ep.a;
-  }
-  if(r.noteMin){
-    p['vote_average.gte'] = String(r.noteMin);
+  if(ep){ p[champDate+'.gte'] = ep.de; p[champDate+'.lte'] = ep.a; }
+  const du = RECH_DUREES.find(x => x.id === r.duree);
+  if(du && media === 'movie') Object.assign(p, du.p);
+  const no = RECH_NOTES.find(x => x.id === r.note);
+  if(no){
+    p['vote_average.gte'] = String(no.v);
+    /* Trier ou filtrer par la note EXIGE un plancher de votes, sinon un 10/10
+       à trois voix passe devant tout. C'est la même constante que Découvrir. */
     p['vote_count.gte'] = String(Math.max(RECH_VOTES_MINI, DISC_VOTES_MINI));
+  }
+  if(r.plate){
+    const ids = platesChoisiesRech();
+    if(ids.length){
+      p.with_watch_providers = ids.join('|');
+      p.watch_region = REGION_PLATO;
+      p.with_watch_monetization_types = 'flatrate';
+    }
   }
   return p;
 }
+function platesChoisiesRech(){
+  const r = etatRech(), mes = (typeof mesPlates === 'function') ? mesPlates() : [];
+  if(r.plate === 'mes') return mes.map(x => x.id);
+  const un = mes.find(x => String(x.id) === String(r.plate));
+  return un ? [un.id] : [];
+}
 
-async function chargerCriteres(suite){
+async function chargerGrilleRech(suite){
   const r = etatRech();
-  const seq = ++critSeq;
-  r.page = suite ? r.page + 1 : 1;
-  if(!suite){
-    r.res = []; r.pages = 1; r.decal = 0;
-    oublierDefil('search');
-    if(view === 'search') window.scrollTo(0,0);
-  }
+  const seq = ++grilleSeq;
+  if(!suite){ r.res = []; r.page = 1; r.total = null; }
+  else r.page = r.page + 1;
   r.loading = true; r.err = '';
   peindreRech();
   try{
-    const media = rechMedia();
-    await chargerGenres(media);
-    chargerPlates(media).then(()=>{ if(view === 'search') peindreRech(); });
-    let trouves = [], pagesTotal = 1, pageLue = r.page;
-    for(let tour = 0; tour < RECH_PAGES_MAX; tour++){
-      const p = paramsRech();
-      p.page = String(pageLue);
-      const d = await tmdb('/discover/'+media, p);
-      if(seq !== critSeq) return;
-      pagesTotal = d.total_pages || 1;
-      trouves = trouves.concat(garderAnimesRech((d.results||[]).filter(x => x && x.poster_path)));
-      if(trouves.length >= RECH_CIBLE || pageLue >= pagesTotal) break;
-      pageLue++;
+    const médias = mediasRech();
+    await Promise.all(médias.map(m => chargerGenres(m).catch(()=>null)));
+    if(seq !== grilleSeq) return;
+    let trouves = [], total = 0, pages = 1;
+    for(const m of médias){
+      let pris = [], pageLue = r.page, pagesTotal = 1;
+      for(let tour = 0; tour < RECH_PAGES_MAX; tour++){
+        const p = paramsRech(m);
+        p.page = String(pageLue);
+        const d = await tmdb('/discover/'+m, p);
+        if(seq !== grilleSeq) return;
+        pagesTotal = d.total_pages || 1;
+        if(tour === 0) total += (d.total_results || 0);
+        pris = pris.concat((d.results||[]).filter(x => x && x.poster_path)
+                                          .map(x => Object.assign({ __media:m }, x)));
+        if(pris.length >= RECH_CIBLE / médias.length || pageLue >= pagesTotal) break;
+        pageLue++;
+      }
+      pages = Math.max(pages, pagesTotal);
+      trouves = trouves.concat(garderAnimesRech(pris));
     }
-    r.page = pageLue;
-    /* Le classement TMDB bouge entre deux requêtes : un même titre peut figurer
-       sur deux pages voisines. Sans ce tamis il apparaîtrait deux fois. */
+    /* Le classement de TMDB bouge entre deux requêtes : un même titre peut
+       figurer sur deux pages voisines. Sans ce tamis il apparaîtrait deux fois. */
     const vus = {};
-    (suite ? r.res : []).forEach(x => { vus[x.id] = 1; });
-    trouves = trouves.filter(x => vus[x.id] ? false : (vus[x.id] = 1));
-    /* « Rien que tu n'aies déjà vu » : sur une recherche par critères, ce qu'on
-       a déjà est du bruit. Sur un titre tapé c'est l'inverse — voir plus haut. */
-    trouves = trouves.filter(x => !chezSoiRech(x));
+    (suite ? r.res : []).forEach(x => { vus[x.__media+':'+x.id] = 1; });
+    trouves = trouves.filter(x => vus[x.__media+':'+x.id] ? false : (vus[x.__media+':'+x.id] = 1));
+    /* §4.1 — LE PROFIL TRIE, IL NE RETIRE JAMAIS. Rien n'est écarté ici : ni ce
+       qu'on a déjà (marqué d'une coche, pas caché), ni ce qui ne ressemble pas
+       aux goûts. On demande des comédies des années 90 : on les a toutes. */
+    trouves = trierParGout(trouves);
     r.res = suite ? r.res.concat(trouves) : trouves;
-    r.pages = pagesTotal; r.loading = false; r.err = ''; r.charge = true;
+    r.total = total; r.pages = pages;
+    r.loading = false; r.charge = true; r.err = '';
     peindreRech();
-    if(r.vue === 'selection') chargerFiches();
   }catch(e){
-    if(seq !== critSeq) return;
+    if(seq !== grilleSeq) return;
     if(suite) r.page = Math.max(1, r.page - 1);
     r.loading = false; r.charge = true;
-    r.err = (e.message === 'BADKEY') ? 'Service indisponible' : 'Pas de connexion';
+    r.err = (e && e.message === 'BADKEY') ? 'Service indisponible' : 'Pas de connexion';
     peindreRech();
   }
 }
 
-/* ===================== Les fiches de la sélection =====================
-   La durée d'un film et le nombre de saisons d'une série n'existent QUE sur la
-   fiche. On va les chercher — mais seulement pour les douze titres montrés, et
-   par paquets de six. Douze requêtes par recherche, jamais plus, et zéro sur la
-   grille « Tout voir ». C'est ce plafond qui rend la promesse « j'ai 1 h 30 »
-   tenable ; sur cent titres elle ne le serait pas. */
-function cleFiche(x){ return rechMedia()+':'+x.id; }
-/* QUELLES FICHES ALLER CHERCHER. Piège corrigé : demander celles des douze
-   PREMIERS de la liste ne marche pas, parce que les rangées sont bâties sur
-   des tris différents — les trois « plus vus » ne sont presque jamais les trois
-   premiers du vivier, et leur badge de durée restait vide. On demande donc les
-   fiches des titres que les tris DÉTERMINISTES vont retenir : les plus vus, les
-   mieux notés, et les mieux notés parmi les moins connus. La rangée des durées,
-   elle, puise dans ce même vivier une fois les fiches arrivées. */
-function pourFiches(l){
-  /* Seize, pas douze. Trois rangées se calculent sans fiche (les plus vus, les
-     mieux notés, les moins connus) : neuf titres, plus le jeu du dédoublonnage.
-     La quatrième — « les plus courts » — puise dans le MÊME vivier une fois les
-     durées connues, et il lui faut donc de quoi choisir. Seize fiches, jamais
-     plus, et zéro sur la grille « Tout voir ». */
-  const combien = (tempsCourant() && tempsCourant().id !== 'peu') ? RECH_FICHES * 2 : RECH_FICHES;
-  const saut = ((etatRech().decal || 0) * 3);
-  const tourner = a => (saut && a.length > saut) ? a.slice(saut).concat(a.slice(0, saut)) : a;
-  const parVotes = tourner([...l].sort((a,b)=>(b.vote_count||0)-(a.vote_count||0)));
-  const parNote  = tourner([...l].sort((a,b)=>(b.vote_average||0)-(a.vote_average||0)));
-  const discrets = tourner(parNote.filter(x=>(x.vote_count||0) < 3000));
-  /* À TOUR DE RÔLE, une par liste. Piège corrigé : servir la première liste
-     jusqu'au quota la remplissait à elle seule, et les rangées « mieux notés »
-     et « à découvrir » n'avaient aucune fiche — donc aucune durée. */
-  const sources = [parVotes, parNote, discrets, l];
-  const vus = {}, out = [];
-  for(let i = 0; out.length < combien && i < 40; i++){
-    let avance = false;
-    for(const src of sources){
-      const x = src[i];
-      if(!x || vus[x.id]) continue;
-      vus[x.id] = 1; out.push(x); avance = true;
-      if(out.length >= combien) break;
-    }
-    if(!avance && i >= l.length) break;
-  }
-  return out;
-}
-async function chargerFiches(){
-  const r = etatRech(), media = rechMedia();
-  const seq = ++ficheSeq;
-  const manquants = pourFiches(r.res).filter(x => r.fiches[cleFiche(x)] === undefined);
-  for(let i = 0; i < manquants.length; i += RECH_LOT_FICHES){
-    const lot = manquants.slice(i, i + RECH_LOT_FICHES);
-    await Promise.all(lot.map(x => remplirFiche(media, x.id)));
-    if(seq !== ficheSeq || view !== 'search') return;
-    peindreRech();
-  }
-  /* Deuxième passe : ce que le rendu a réellement affiché et dont la fiche
-     manque encore. Bornée par `RECH_FICHES_MAX`, et une seule fois — les
-     titres traités portent désormais une entrée, fût-elle `null`. */
-  const restants = (r.montres || [])
-    .filter(id => r.fiches[media+':'+id] === undefined)
-    .slice(0, RECH_FICHES_MAX - Object.keys(r.fiches).length);
-  if(!restants.length || seq !== ficheSeq) return;
-  await Promise.all(restants.map(id => remplirFiche(media, id)));
-  if(seq !== ficheSeq || view !== 'search') return;
-  peindreRech();
-}
-/* Une fiche, une entrée — même en cas d'échec, pour ne jamais la redemander
-   en boucle depuis la deuxième passe. */
-async function remplirFiche(media, id){
-  const r = etatRech();
-  try{
-    const d = await tmdb('/'+media+'/'+id);
-    r.fiches[media+':'+id] = {
-      duree: media === 'movie' ? (d.runtime || null) : ((d.episode_run_time||[])[0] || null),
-      saisons: d.number_of_seasons || null, resume: d.overview || '', statut: d.status || ''
-    };
-  }catch(e){ r.fiches[media+':'+id] = null; }
-}
-function ficheDe(x){ const f = etatRech().fiches[cleFiche(x)]; return f || null; }
+/* ======================= LE PROFIL DE GOÛT — LECTURE =======================
 
-/* Le temps demandé est vérifié TITRE PAR TITRE, sur la fiche. Un titre dont on
-   n'a pas encore la fiche passe : mieux vaut le montrer et corriger que faire
-   clignoter la grille. */
-function tientDansLeTemps(x){
-  const t = tempsCourant();
-  if(!t || t.id === 'peu') return true;
-  const f = ficheDe(x);
-  if(!f) return true;
-  if(rechMedia() === 'movie'){
-    if(!f.duree) return true;
-    if(t.max != null && f.duree > t.max) return false;
-    if(t.min != null && f.duree < t.min) return false;
-    return true;
-  }
-  if(!f.saisons) return true;
-  if(t.maxS != null && f.saisons > t.maxS) return false;
-  if(t.minS != null && f.saisons < t.minS) return false;
-  return true;
+   Ce lot ne CONSTRUIT pas le profil : c'est le travail du lot A, écrit en même
+   temps, sur une autre branche, sans qu'on puisse se parler. On lit donc le
+   contrat de données, et RIEN D'AUTRE :
+
+     db.avis   = { tv:{ "<tmdbId>":{v:1|-1, quand} }, movie:{ … } }
+     db.podium = { film:[ids], serie:[ids], anime:[ids], maj }
+
+   Ces deux clés peuvent être ABSENTES OU VIDES : ce n'est pas une précaution,
+   c'est la règle. Dans ce cas le tri est celui de TMDB, la popularité, et
+   l'écran ne s'en porte pas plus mal.
+
+   Le poids d'un titre est celui du contrat, commun aux trois lots :
+       v:1 → 2   ·   aucun avis → 1   ·   v:-1 → 0 (exclu). */
+function avisRech(media, id){
+  const a = db.avis && db.avis[media];
+  const e = a && a[id];
+  return (e && (e.v === 1 || e.v === -1)) ? e.v : 0;
+}
+function poidsAvisRech(media, id){
+  const v = avisRech(media, id);
+  return v === 1 ? 2 : v === -1 ? 0 : 1;
+}
+function genresDuTitreRech(media, id){
+  const o = media === 'tv' ? db.shows[id] : db.movies[id];
+  return (o && Array.isArray(o.genres)) ? o.genres : [];
+}
+/* Le poids de chaque nom de genre, tel que le profil le dit. Trois sources,
+   du plus déclaratif au plus tiède — le podium est un choix explicite, un 👍
+   aussi, la bibliothèque n'est qu'une habitude. */
+function profilGenresRech(){
+  const poids = {};
+  const ajoute = (l, n) => (l||[]).forEach(g => { poids[g] = (poids[g]||0) + n; });
+  const pod = db.podium || {};
+  ['film','serie','anime'].forEach(k => (pod[k]||[]).forEach(id =>
+    ajoute(genresDuTitreRech(k === 'film' ? 'movie' : 'tv', id), 4)));
+  ['tv','movie'].forEach(m => {
+    const a = (db.avis && db.avis[m]) || {};
+    Object.keys(a).forEach(id => { if(a[id] && a[id].v === 1) ajoute(genresDuTitreRech(m, id), 3); });
+  });
+  /* La bibliothèque, pondérée par l'avis : un titre marqué 👎 ne compte pas,
+     un titre non qualifié compte à moitié — c'est le tableau du contrat. */
+  Object.values(db.shows||{}).forEach(s => ajoute(s.genres, poidsAvisRech('tv', s.id)));
+  Object.values(db.movies||{}).forEach(m => ajoute(m.genres, poidsAvisRech('movie', m.id)));
+  /* Et ce qui a été coché à la main dans Mes goûts : c'est une déclaration,
+     pas une déduction. */
+  if(typeof genresRetenus === 'function') ajoute(genresRetenus(), 3);
+  return poids;
+}
+/* TRIE, NE FILTRE JAMAIS. La liste rendue a exactement la même longueur que
+   celle reçue : c'est vérifié par un cas de test, parce que c'est le genre de
+   règle qu'un « petit filtre bien pratique » casse six mois plus tard. */
+function trierParGout(liste){
+  const poids = profilGenresRech();
+  if(!Object.keys(poids).length) return liste;
+  const noms = {};
+  ['tv','movie'].forEach(m => (genresTMDB[m]||[]).forEach(g => { noms[m+':'+g.id] = g.nom; }));
+  const score = x => {
+    const m = x.__media || 'movie';
+    let s = 0;
+    (x.genre_ids||[]).forEach(id => { s += poids[noms[m+':'+id]] || 0; });
+    /* Un titre marqué 👎 descend, il ne disparaît pas : on l'a demandé. */
+    if(avisRech(m, x.id) === -1) s -= 100;
+    return s;
+  };
+  return liste
+    .map((x, i) => ({ x:x, s:score(x), i:i }))
+    .sort((a,b)=> (b.s - a.s) || (a.i - b.i))
+    .map(o => o.x);
 }
 
 /* ================================ L'écran ================================ */
 
 function viewRecherche(){
+  if(ouvertureRech()) nouvelleOuvertureRech();
   const r = etatRech();
-  const sub = champRech() + barreCriteres();
+  if(r.jeu) return viewJeuRech();
+  const sub = champRech() + puceFamillesRech();
+  if(!r.charge && !r.loading && !r.res.length && !enRechercheTitre()) chargerGrilleRech();
   return header('Recherche', {sub:sub}) +
     '<div id="rres">'+corpsRech()+'</div>' +
     '<div style="height:20px"></div>';
@@ -568,32 +731,17 @@ function champRech(){
   const r = etatRech();
   return '<div class="qbar">'+I.search+
     '<input type="search" id="q" enterkeyhint="search" autocomplete="off" autocorrect="off" '+
-      'placeholder="Chercher un titre précis…" value="'+esc(r.q)+'" oninput="saisieRech(this.value)" '+
+      'placeholder="Un titre, une personne…" value="'+esc(r.q)+'" oninput="saisieRech(this.value)" '+
       'onkeydown="if(event.key===\'Enter\'){this.blur();lancerTitre()}">'+
     '<button class="qclear'+(r.q?'':' masque')+'" onclick="saisieRech(\'\')" '+
       'aria-label="Effacer">'+I.close+'</button></div>';
 }
-/* Une fois les critères posés, ils se replient sur UNE ligne qui défile. Étalés
-   sur toute la hauteur comme au repos, ils repoussaient la première jaquette
-   sous le pli — et toute la promesse de cet écran est que les critères et leurs
-   résultats tiennent ensemble. */
-function barreCriteres(){
+function puceFamillesRech(){
   const r = etatRech();
-  if(modeRech() !== 'criteres') return '';
-  const h = humeurCourante(), t = tempsCourant();
-  let l = '<button class="chip on" onclick="viderRech()">'+esc(cadreCourant().label)+'</button>';
-  if(h) l += '<button class="chip on" onclick="setHumeur(\''+h.id+'\')">'+esc(h.t)+'</button>';
-  if(t && t.id !== 'peu') l += '<button class="chip on" onclick="setTemps(\''+t.id+'\')">'+esc(t.t)+'</button>';
-  const ep = RECH_EPOQUES.find(x=>x.id===r.epoque);
-  if(ep && ep.court) l += '<button class="chip on" onclick="setEpoqueRech(\'tout\')">'+esc(ep.court)+'</button>';
-  if(r.noteMin) l += '<button class="chip on" onclick="setNoteRech(0)">'+r.noteMin+' et +</button>';
-  r.genres.forEach(n=> l += '<button class="chip on" onclick="bascGenreRech(\''+escJs(n)+'\')">'+esc(n)+'</button>');
-  if(r.plates.length) l += '<button class="chip on" onclick="viderPlatesRech()">'+
-    esc(r.plates.length > 2 ? r.plates.length+' plateformes' : r.plates.map(p=>p.nom).join(' ou '))+'</button>';
-  l += '<button class="chip'+(r.regle?' on':'')+'" onclick="ouvrirReglage('+(!r.regle)+')">Régler</button>';
-  return '<div class="chips" data-rail="crit-rech">'+l+'</div>';
+  return '<div class="chips types" data-rail="fam-rech">'+RECH_FAMILLES.map(f=>
+    '<button class="chip '+(r.fam===f.id?'on':'')+'" onclick="setFamRech(\''+f.id+'\')">'+
+      esc(f.label)+'</button>').join('')+'</div>';
 }
-
 function peindreRech(){
   if(view !== 'search') return;
   const el = document.getElementById('rres');
@@ -602,220 +750,295 @@ function peindreRech(){
   const c = document.querySelector('.qclear');
   if(c) c.classList.toggle('masque', !etatRech().q);
 }
-
 function corpsRech(){
-  const r = etatRech(), mode = modeRech();
-  if(r.regle) return panneauReglage();
-  if(mode === 'repos') return corpsReposRech();
-  if(r.loading && !r.res.length)
-    return '<div class="empty"><span class="spin"></span>'+
-      '<p style="margin-top:12px">On cherche…</p></div>';
-  if(r.err)
-    return '<div class="empty">'+I.search+'<h3>'+esc(r.err)+'</h3>'+
-      '<p>Vérifie ta connexion, puis réessaie.</p>'+
-      '<button class="btn ghost" onclick="'+(mode==='titre'?'lancerTitre()':'chargerCriteres()')+'">'+
-      'Réessayer</button></div>';
-  return mode === 'titre' ? corpsTitreRech() : corpsCriteresRech();
+  if(enRechercheTitre()) return corpsTitreRech();
+  return blocPhraseRech() + blocEnviesRech() + grilleRech();
 }
 
-/* ---------------- Au repos : une question, pas un formulaire ------------- */
-function corpsReposRech(){
-  const r = etatRech();
-  return '<div class="qgros">Ce soir, tu regardes quoi&nbsp;?</div>'+
-    '<div class="seg">'+CADRES.map(c=>
-      '<button class="'+(r.cadre===c.id?'on':'')+'" onclick="setCadre(\''+c.id+'\')">'+
-        esc(c.label)+'</button>').join('')+'</div>'+
-    '<div class="sectitle">De quoi t\'as envie&nbsp;?</div>'+
-    '<div class="tuiles">'+humeursCadre().map(h=>
-      '<button class="'+(r.humeur===h.id?'on':'')+'" onclick="setHumeur(\''+h.id+'\')">'+
-        '<b>'+esc(h.t)+'</b><span>'+esc(h.s)+'</span></button>').join('')+'</div>'+
-    '<div class="sectitle">'+(r.cadre==='film' ? 'Combien de temps t\'as&nbsp;?'
-                                               : 'Tu veux t\'engager combien&nbsp;?')+'</div>'+
-    '<div class="chips ochips" style="margin:0 16px 4px">'+tempsCadre().map(t=>
-      '<button class="chip '+(r.temps===t.id?'on':'')+'" onclick="setTemps(\''+t.id+'\')">'+
-        esc(t.t)+'</button>').join('')+'</div>'+
-    '<div class="wrap tiny muted" style="padding-top:16px">Rien que tu aies déjà vu. '+
-      '<button class="lienplus" style="margin:0" onclick="ouvrirReglage(true)">Régler plus finement</button></div>';
-}
-
-/* --------------- Un titre tapé : ta bibliothèque d'abord ---------------- */
+/* ------------------ Un nom tapé : titres, puis personnes ------------------ */
 function corpsTitreRech(){
   const r = etatRech();
-  if(!r.res.length)
+  if(r.qloading && !r.qtitres.length)
+    return '<div class="empty"><span class="spin"></span>'+
+           '<p style="margin-top:12px">On cherche…</p></div>';
+  if(r.qerr)
+    return '<div class="empty">'+I.search+'<h3>'+esc(r.qerr)+'</h3>'+
+      '<p>Vérifie ta connexion, puis réessaie.</p>'+
+      '<button class="btn ghost" onclick="lancerTitre()">Réessayer</button></div>';
+  if(!r.qtitres.length && !r.qgens.length)
     return '<div class="empty"><h3>Rien trouvé pour « '+esc(rechTexte())+' »</h3>'+
-      '<p>Essaie une autre orthographe, ou change de type juste au-dessus.</p></div>';
-  const chezSoi = r.res.filter(chezSoiRech), ailleurs = r.res.filter(x=>!chezSoiRech(x));
+      '<p>Essaie une autre orthographe, ou change de famille juste au-dessus.</p></div>';
   let h = '';
-  if(chezSoi.length)
-    h += '<div class="sectitle">Déjà chez toi</div>'+
-      '<div class="grid">'+chezSoi.map(x=>carteTitre(x, rechMedia(), 'search')).join('')+'</div>';
-  if(ailleurs.length)
-    h += '<div class="sectitle">'+(chezSoi.length ? 'Dans le catalogue' : 'Résultats')+'</div>'+
-      '<div class="grid">'+ailleurs.map(x=>carteTitre(x, rechMedia(), 'search')).join('')+'</div>';
+  if(r.qtitres.length)
+    h += '<div class="sectitle">Titres</div>'+
+      '<div class="rang3">'+r.qtitres.map(x=>jaquetteRech(x)).join('')+'</div>';
+  if(r.qgens.length)
+    h += '<div class="sectitle">Personnes<span class="pq">leur filmographie</span></div>'+
+      '<div class="rgens" data-rail="gens-rech">'+r.qgens.map(g=>
+        '<button class="rgen" onclick="ouvrirPersonneRech('+g.id+')">'+
+          '<div class="rgenph">'+posterEl(g.profile_path,'w185','',g.name)+'</div>'+
+          '<div class="rgennom">'+esc(g.name)+'</div>'+
+        '</button>').join('')+'</div>';
   return h;
 }
 
-/* ================= LA SÉLECTION — quatre rangées de trois =================
-   Quarante affiches d'affilée, c'est la paralysie qu'on essaie justement de
-   défaire : rien ne distingue rien, et on referme l'app. Douze titres répartis
-   en quatre rangées dont l'intitulé dit POURQUOI elles sont là, ce sont quatre
-   petites décisions au lieu d'une grosse — et on sait d'avance si une rangée
-   nous concerne. La grille complète reste à un bouton, pour les soirs où l'on
-   veut vraiment parcourir. */
-function corpsCriteresRech(){
+/* ====================== LA PHRASE, ET SON COMPTEUR ======================
+   La phrase n'est pas un formulaire à part : c'est elle qui commande la grille
+   en dessous. Chaque mot souligné est une puce ; on tape, une courte liste
+   s'ouvre, on choisit — ou « peu importe » pour le retirer. */
+function motsPhraseRech(){
+  const r = etatRech(), out = [];
+  const ing = ingredientsRech();
+  const a = ambianceRech(r.amb);
+  /* Un sous-genre d'animé n'a qu'un mot : lui-même. */
+  if(a && a.mots) out.push({ cle:'genre', mot:a.mot, amb:true });
+  else ing.forEach(i => out.push({ cle:i.cle, mot:i.mot, amb:true }));
+  RECH_MOTS.forEach(m=>{
+    if(out.some(o => o.cle === m.cle && o.amb)) return;   // déjà dit par l'ambiance
+    if(m.cle === 'genre' && r.genre) out.push({ cle:'genre', mot:r.genre.toLowerCase() });
+    if(m.cle === 'langue' && r.langue){
+      const l = RECH_LANGUES.find(x=>x.id===r.langue); if(l) out.push({ cle:'langue', mot:l.mot });
+    }
+    if(m.cle === 'epoque' && r.epoque){
+      const e = RECH_EPOQUES.find(x=>x.id===r.epoque); if(e) out.push({ cle:'epoque', mot:e.mot });
+    }
+    if(m.cle === 'duree' && r.duree && r.fam === 'film'){
+      const d = RECH_DUREES.find(x=>x.id===r.duree); if(d) out.push({ cle:'duree', mot:d.mot });
+    }
+    if(m.cle === 'note' && r.note){
+      const n = RECH_NOTES.find(x=>x.id===r.note); if(n) out.push({ cle:'note', mot:n.mot });
+    }
+    if(m.cle === 'plate' && r.plate) out.push({ cle:'plate', mot:libellePlateRech() });
+  });
+  /* L'ordre de LECTURE, pas l'ordre de pose : « un film comique français des
+     années 90 de moins de 2 h » se lit tout seul. */
+  /* `rang[cle] || 9` serait faux : le rang du genre vaut ZÉRO, et zéro est
+     faux en JavaScript — le genre se retrouvait en fin de phrase, « un film
+     bien noté documentaire ». Attrapé par la vérification d'écran. */
+  const rang = { genre:0, langue:1, epoque:2, duree:3, note:4, plate:5 };
+  const rg = c => (rang[c] == null ? 9 : rang[c]);
+  return out.sort((a2,b)=> rg(a2.cle) - rg(b.cle));
+}
+function libellePlateRech(){
   const r = etatRech();
-  if(r.vue === 'grille') return grilleRech();
-  const dispo = r.res.filter(tientDansLeTemps);
-  if(!dispo.length && r.charge)
-    return '<div class="empty">'+I.boussole+'<h3>Rien avec ces critères</h3>'+
-      '<p>Retire une plateforme, ou choisis une autre envie.</p>'+
-      '<button class="btn ghost" onclick="viderRech()">Tout effacer</button></div>';
-
-  const parNote  = [...dispo].sort((a,b)=>(b.vote_average||0)-(a.vote_average||0));
-  const parVotes = [...dispo].sort((a,b)=>(b.vote_count||0)-(a.vote_count||0));
-  const courts   = [...dispo].filter(x=>{ const f=ficheDe(x); return f && f.duree; })
-                             .sort((a,b)=>ficheDe(a).duree - ficheDe(b).duree);
-  const pris = {};
-  const saut = ((etatRech().decal || 0) * 3);
-  const prendre = (l, n)=>{
-    const out = [];
-    /* Le décalage tourne DANS le tri : « montre-m'en d'autres » descend de
-       trois rangs dans chaque classement plutôt que de rejouer les mêmes. */
-    const src = saut && l.length > saut ? l.slice(saut).concat(l.slice(0, saut)) : l;
-    for(const x of src){ if(pris[x.id]) continue; pris[x.id] = 1; out.push(x); if(out.length === n) break; }
-    return out;
-  };
-  const rangees = [
-    ['Les valeurs sûres', 'les plus vus', prendre(parVotes, 3)],
-    [ rechMedia()==='movie' ? 'Les plus courts' : 'Les épisodes les plus courts',
-      'durée vérifiée', prendre(courts, 3)],
-    ['Les mieux notés', '', prendre(parNote, 3)],
-    ['À découvrir', 'moins connus, bien notés',
-      prendre(parNote.filter(x=>(x.vote_count||0) < 3000), 3)]
-  ].filter(g => g[2].length);
-
-  /* Le rendu note ce qu'il montre VRAIMENT. Le dédoublonnage entre rangées peut
-     descendre plus loin dans un tri que ce que le pré-calcul avait prévu : sans
-     ce relevé, une ou deux jaquettes restaient sans durée. `chargerFiches` s'en
-     sert pour compléter, une seule fois, et sans dépasser son plafond. */
-  etatRech().montres = rangees.reduce((a,g)=>a.concat(g[2].map(x=>x.id)), []);
-  let h = '<div class="wrap" style="padding-top:12px">'+
-      '<b style="font-size:18px">Pour ce soir</b>'+
-      '<div class="tiny muted" style="margin-top:2px">'+esc(introSelection(dispo.length))+'</div></div>';
-  h += rangees.map(g=>
-    '<div class="sectitle">'+esc(g[0])+(g[1]?'<span class="pq">'+esc(g[1])+'</span>':'')+'</div>'+
-    '<div class="rang3">'+g[2].map(x=>jaquetteRech(x)).join('')+'</div>').join('');
-  h += '<div class="wrap" style="padding-top:18px;display:flex;gap:9px">'+
-      '<button class="btn ghost" style="flex:1" onclick="rebattreRech()">Montre-m\'en d\'autres</button>'+
-      '<button class="btn ghost" style="flex:1" onclick="setVueRech(\'grille\')">Tout voir</button></div>';
+  if(r.plate === 'mes') return 'sur mes plateformes';
+  const un = ((typeof mesPlates === 'function') ? mesPlates() : []).find(x => String(x.id) === String(r.plate));
+  return un ? 'sur '+un.nom : 'sur mes plateformes';
+}
+/* La phrase en texte simple — pour la puce « Reprendre » et pour les tests. */
+function phraseTexte(){
+  return ('Je veux '+familleRech().art+' '+motsPhraseRech().map(m=>m.mot).join(' ')).trim();
+}
+function blocPhraseRech(){
+  const r = etatRech();
+  const mots = motsPhraseRech();
+  let h = '<div class="rphrase"><div class="rp">'+
+    'Je veux <span class="rmot fixe">'+esc(familleRech().art)+'</span> ';
+  mots.forEach(m=>{
+    h += '<button class="rmot" onclick="ouvrirMotRech(\''+escJs(m.cle)+'\')">'+esc(m.mot)+'</button> ';
+  });
+  /* On ne voit jamais sept champs vides : seulement la phrase qui marche déjà,
+     et une seule invitation à l'affiner. */
+  const reste = RECH_MOTS.filter(m => !mots.some(x => x.cle === m.cle) &&
+                                      !(m.cle === 'duree' && r.fam !== 'film'));
+  if(reste.length)
+    h += '<button class="rmot vide" onclick="ouvrirMotRech(\''+escJs(reste[0].cle)+'\')">+ préciser</button>';
+  h += '</div>'+ barreCompteurRech() +'</div>';
+  if(r.reprise)
+    h += '<div class="wrap" style="padding-top:8px">'+
+      '<button class="chip" onclick="reprendreRech()">↩ Reprendre : '+
+        esc(resumeRepriseRech())+'</button></div>';
   return h;
 }
-function introSelection(n){
-  const c = etatRech().cadre;
-  const quoi = c === 'film' ? 'films' : c === 'serie' ? 'séries' : 'animés';
-  const ou = etatRech().plates.length ? ' sur tes plateformes' : '';
-  return 'Des '+quoi+' que tu n\'as pas vus'+ou+'. '+n+' correspondent.';
+function resumeRepriseRech(){
+  const t = etatRech().reprise;
+  if(!t) return '';
+  const s = String(t.texte||'').replace(/^Je veux /,'');
+  return s.length > 46 ? s.slice(0,44)+'…' : s;
 }
-/* Rebattre : on avance d'un cran DANS CHAQUE TRI, pas dans le vivier brut.
-   Faire tourner la liste d'origine ne changeait rien à l'écran — les rangées
-   sont bâties sur des tris, et décaler la source d'un rang laissait les mêmes
-   trois têtes. Gratuit : la fournée ramène une quarantaine de titres pour
-   douze montrés, il y a de quoi tourner. */
-function rebattreRech(){
+/* LE COMPTEUR VIVANT. C'est le seul élément de jeu nécessaire sur cette porte :
+   voir son intention se resserrer sous ses yeux est ce qui rend l'exercice
+   satisfaisant. Il n'y a pas de bouton « voir les résultats » — ils sont déjà
+   à l'écran. Il ne reste que « Jouer », qui hérite de la sélection courante. */
+function barreCompteurRech(){
   const r = etatRech();
-  const tours = Math.max(1, Math.floor(r.res.length / 3));
-  r.decal = ((r.decal || 0) + 1) % tours;
-  peindreRech();
-  chargerFiches();
+  const n = r.total;
+  const txt = r.loading && n === null ? '<span class="spin"></span>'
+            : n === null ? '—'
+            : '<b id="rnb">'+n.toLocaleString('fr-FR')+'</b> '+esc(familleRech().nom);
+  return '<div class="rbarre"><div class="rnb">'+txt+'</div>'+
+    '<button class="btn mini" onclick="ouvrirJeuRech()">🎲 Jouer</button></div>';
 }
 
-/* La jaquette porte la DURÉE, parce que c'est le seul fait qui décide vraiment
-   à 21 h, et qu'on doit pouvoir le lire en balayant trois colonnes sans rien
-   ouvrir. Elle vient de la fiche, jamais de la liste : `/discover` ne la donne
-   pas, et l'index de recherche de TMDB s'en écarte trois fois sur dix. */
-function jaquetteRech(x){
-  const media = rechMedia();
-  const nom = media === 'tv' ? x.name : x.title;
-  const date = media === 'tv' ? x.first_air_date : x.release_date;
-  const f = ficheDe(x);
-  const n = x.vote_average ? Math.round(x.vote_average*10)/10 : null;
-  let badge = '';
-  if(f && f.duree) badge = media === 'movie' ? dureeCourte(f.duree) : f.duree+' min';
-  else if(f && f.saisons) badge = f.saisons+' saison'+(f.saisons>1?'s':'');
-  return '<button class="jq" onclick="ouvrirDetailRech('+x.id+')">'+
-    '<div class="jqaff">'+posterEl(x.poster_path,'w342','',nom)+
-      (badge ? '<span class="jqduree">'+esc(badge)+'</span>' : '')+
-    '</div>'+
-    '<div class="jqnom">'+esc(nom)+'</div>'+
-    '<div class="jqmeta">'+esc(year(date))+(n?' · <span class="jqnote">'+I.star+n.toFixed(1)+'</span>':'')+'</div>'+
-  '</button>';
+/* La feuille d'un mot. Une courte liste, et « peu importe » toujours en bas :
+   un mot qu'on ne peut pas retirer n'est pas un mot, c'est un piège. */
+function ouvrirMotRech(cle){
+  const r = etatRech();
+  const def = RECH_MOTS.find(m => m.cle === cle) || { titre:'' };
+  let choix = '';
+  const bouton = (lab, action, on)=>
+    '<button class="ch'+(on?' on':'')+'" onclick="'+action+'">'+esc(lab)+'</button>';
+
+  if(cle === 'genre'){
+    const amb = ambiancesRech();
+    if(amb.length)
+      choix += '<div class="fgrp">'+(familleRech().anime ? "Les sous-genres" : 'Les ambiances')+'</div>'+
+        '<div class="choix">'+amb.map(a=>
+          bouton(a.mot || a.t, 'poserAmbianceRech(\''+escJs(a.id)+'\')', r.amb === a.id)).join('')+'</div>';
+    const l = genresRech();
+    if(l.length)
+      choix += '<div class="fgrp" style="margin-top:12px">Les genres</div>'+
+        '<div class="choix">'+l.map(g=>
+          bouton(g.nom, 'poserMotRech(\'genre\',\''+escJs(g.nom)+'\')', r.genre === g.nom)).join('')+'</div>';
+  }
+  else if(cle === 'langue')
+    choix = '<div class="choix">'+RECH_LANGUES.map(l=>
+      bouton(l.mot, 'poserMotRech(\'langue\',\''+escJs(l.id)+'\')', r.langue === l.id)).join('')+'</div>';
+  else if(cle === 'epoque')
+    choix = '<div class="choix">'+RECH_EPOQUES.map(e=>
+      bouton(e.mot, 'poserMotRech(\'epoque\',\''+escJs(e.id)+'\')', r.epoque === e.id)).join('')+'</div>';
+  else if(cle === 'duree')
+    choix = '<div class="choix">'+RECH_DUREES.map(d=>
+      bouton(d.mot, 'poserMotRech(\'duree\',\''+escJs(d.id)+'\')', r.duree === d.id)).join('')+'</div>'+
+      '<div class="small muted" style="margin-top:10px">La durée ne vaut que pour les films.</div>';
+  else if(cle === 'note')
+    choix = '<div class="choix">'+RECH_NOTES.map(n=>
+      bouton(n.mot, 'poserMotRech(\'note\',\''+escJs(n.id)+'\')', r.note === n.id)).join('')+'</div>';
+  else if(cle === 'plate'){
+    const mes = (typeof mesPlates === 'function') ? mesPlates() : [];
+    if(!mes.length)
+      choix = '<div class="small muted">Tu n\'as déclaré aucun abonnement. '+
+        '<button class="lienplus" style="margin:0" onclick="closeSheet();go(\'plates\',{from:\'discover\'})">'+
+        'Les déclarer</button></div>';
+    else
+      choix = '<div class="choix">'+
+        bouton('sur mes plateformes', 'poserMotRech(\'plate\',\'mes\')', r.plate === 'mes')+
+        mes.map(p => bouton('sur '+p.nom, 'poserMotRech(\'plate\',\''+escJs(String(p.id))+'\')',
+                            String(r.plate) === String(p.id))).join('')+'</div>';
+  }
+  /* La sortie. Sur un ingrédient d'ambiance, retirer le mot retire
+     l'ingrédient de la recette — c'est ce qui rend la recette corrigible. */
+  const surAmbiance = motsPhraseRech().some(m => m.cle === cle && m.amb);
+  choix += '<div class="choix" style="margin-top:14px">'+
+    '<button class="ch raz" onclick="'+(surAmbiance
+      ? 'closeSheet();retirerIngredientRech(\''+escJs(cle)+'\')'
+      : 'poserMotRech(\''+escJs(cle)+'\',null)')+'">Peu importe</button></div>';
+  openSheet('<h3>'+esc(def.titre)+'</h3>'+choix, 'mot-rech');
 }
-function dureeCourte(m){
-  if(!m) return '';
-  return m >= 60 ? Math.floor(m/60)+'h'+String(m%60).padStart(2,'0') : m+' min';
+/* Les genres du média courant. Sur la famille Animés, « Animation » est la
+   définition du cadre : le proposer une seconde fois n'apprendrait rien. */
+function genresRech(){
+  const l = genresTMDB[mediaRech()] || [];
+  return l.filter(g => !(familleRech().anime && /animation/i.test(g.nom)));
 }
 
-/* -------- La grille : EXACTEMENT celle de Découvrir, `carteTitre` --------
-   C'est la vue qu'Adrien a filmée et qu'il veut garder. On ne la réinvente pas,
-   on appelle le même composant : trois jaquettes par rangée, la note, l'année,
-   le nombre de votes, et « Voir plus ». */
+/* ============================== Les envies ==============================
+   Des tuiles qui SONT des phrases toutes faites. Leur valeur propre : elles
+   disent des choses que la phrase ne sait pas dire. « En famille » et « sans
+   prise de tête » ne sont pas des genres, ce sont des contextes. Personne ne
+   composera jamais « un film tous publics, de moins de 2 h, plutôt léger » —
+   mais tout le monde sait dire « ce soir, en famille ». */
+function blocEnviesRech(){
+  const r = etatRech();
+  const l = ambiancesRech();
+  if(!l.length) return '';
+  return '<div class="amb" data-rail="amb-rech">'+l.map(a=>
+    '<button class="tuile'+(r.amb===a.id?' on':'')+'" onclick="poserAmbianceRech(\''+escJs(a.id)+'\')">'+
+      esc(a.t || a.mot)+'</button>').join('')+'</div>';
+}
+
+/* ============================== La grille ==============================
+   La matière de l'écran, pas sa conséquence : on peut y descendre et fouiller
+   sans jamais toucher à la phrase. */
 function grilleRech(){
   const r = etatRech();
-  let h = '<div class="wrap" style="padding-top:12px;display:flex;justify-content:space-between;align-items:baseline">'+
-      '<b style="font-size:16px">'+r.res.length+' titre'+(r.res.length>1?'s':'')+'</b>'+
-      '<button class="lienplus" style="margin:0" onclick="setVueRech(\'selection\')">Revenir à la sélection</button></div>'+
-    '<div class="grid">'+r.res.map(x=>carteTitre(x, rechMedia(), 'search')).join('')+'</div>';
+  if(r.err)
+    return '<div class="empty">'+I.boussole+'<h3>'+esc(r.err)+'</h3>'+
+      '<p>Vérifie ta connexion, puis réessaie.</p>'+
+      '<button class="btn ghost" onclick="chargerGrilleRech()">Réessayer</button></div>';
+  if(r.loading && !r.res.length)
+    return '<div class="empty"><span class="spin"></span>'+
+           '<p style="margin-top:12px">On cherche…</p></div>';
+  if(!r.res.length && r.charge)
+    return '<div class="empty">'+I.boussole+'<h3>Rien avec cette phrase</h3>'+
+      '<p>Retire un mot — le compteur remontera tout de suite.</p>'+
+      '<button class="btn ghost" onclick="viderRech()">Repartir de zéro</button></div>';
+  let h = '<div class="gtitre">'+(r.total != null
+      ? r.total.toLocaleString('fr-FR')+' résultat'+(r.total>1?'s':'')
+      : 'Résultats')+'</div>'+
+    '<div class="rang3">'+r.res.map(x=>jaquetteRech(x)).join('')+'</div>';
   if(r.page < r.pages)
-    h += '<div class="wrap" style="padding-top:12px"><button class="btn ghost" style="width:100%" '+
-         'onclick="chargerCriteres(true)">'+
-         (r.loading ? '<span class="spin"></span> Chargement…' : 'Voir plus')+'</button></div>';
+    h += '<div class="plus"><button class="btn ghost" onclick="chargerGrilleRech(true)"'+
+         (r.loading?' disabled':'')+'>'+
+         (r.loading?'<span class="spin"></span> Chargement…':'Voir plus')+'</button></div>';
   return h;
 }
+function jaquetteRech(x){
+  const media = x.__media || mediaRech();
+  const nom = media === 'tv' ? x.name : x.title;
+  const date = media === 'tv' ? x.first_air_date : x.release_date;
+  const n = x.vote_average ? Math.round(x.vote_average*10)/10 : null;
+  /* Ce qu'on a déjà n'est pas caché — §4.1 : on demande, on a tout. Il est
+     marqué, ce qui répond à la vraie question qu'on se pose en cherchant. */
+  const chez = chezSoiRech(x, media)
+    ? '<span class="jqchez" aria-label="dans ta bibliothèque">'+I.check+'</span>' : '';
+  return '<button class="jq" onclick="ouvrirDetailRech('+x.id+',\''+media+'\')">'+
+    '<div class="jqaff">'+posterEl(x.poster_path,'w342','',nom)+chez+'</div>'+
+    '<div class="jqnom">'+esc(nom)+'</div>'+
+    '<div class="jqmeta">'+esc(year(date))+
+      (n?' · <span class="jqnote">'+I.star+n.toFixed(1)+'</span>':'')+'</div>'+
+  '</button>';
+}
+function dureeCourteRech(m){
+  if(!m) return '';
+  return m >= 60 ? Math.floor(m/60)+' h '+String(m%60).padStart(2,'0') : m+' min';
+}
 
-/* ====================== La feuille de détail ======================
-   Le synopsis n'a pas disparu en passant aux rangées de trois : il est à un
-   appui au lieu d'être toujours là. Les plateformes ne sont demandées QU'ICI,
-   à l'ouverture — une requête sur un titre qu'on regarde, plutôt que douze sur
-   des titres qu'on survole. */
-let detailRech = { id:null, plates:null };
-function ouvrirDetailRech(id){
-  const r = etatRech(), media = rechMedia();
-  const x = r.res.find(y => y.id === id);
+/* ========================== La feuille de détail ==========================
+   Le synopsis est à un appui plutôt que toujours là. Les plateformes ne sont
+   demandées QU'ICI, à l'ouverture : une requête sur un titre qu'on regarde,
+   plutôt que soixante sur des titres qu'on survole. */
+let detailRech = { id:null, media:null, fiche:null, plates:null };
+function ouvrirDetailRech(id, media){
+  const r = etatRech();
+  const x = (r.res.concat(r.qtitres)).find(y => y.id === id && (y.__media||media) === media);
   if(!x) return;
-  detailRech = { id:id, plates:null };
-  peindreDetail(x);
-  if(!ficheDe(x)) chargerUneFiche(x).then(()=>{ if(detailRech.id === id) peindreDetail(x); });
-  chargerPlatesTitre(id, media).then(l=>{
+  detailRech = { id:id, media:media, fiche:null, plates:null };
+  peindreDetailRech(x);
+  chargerUneFicheRech(media, id).then(f=>{
     if(detailRech.id !== id) return;
-    detailRech.plates = l; peindreDetail(x);
+    detailRech.fiche = f; peindreDetailRech(x);
+  });
+  chargerPlatesTitreRech(id, media).then(l=>{
+    if(detailRech.id !== id) return;
+    detailRech.plates = l; peindreDetailRech(x);
   });
 }
-async function chargerUneFiche(x){
-  const media = rechMedia();
+async function chargerUneFicheRech(media, id){
   try{
-    const d = await tmdb('/'+media+'/'+x.id);
-    etatRech().fiches[media+':'+x.id] = {
-      duree: media === 'movie' ? (d.runtime||null) : ((d.episode_run_time||[])[0]||null),
-      saisons: d.number_of_seasons || null, resume: d.overview || '', statut: d.status || ''
-    };
-  }catch(e){ etatRech().fiches[media+':'+x.id] = null; }
+    const d = await tmdb('/'+media+'/'+id);
+    return { duree: media === 'movie' ? (d.runtime||null) : ((d.episode_run_time||[])[0]||null),
+             saisons: d.number_of_seasons || null, resume: d.overview || '',
+             genres: (d.genres||[]).map(g=>g.name) };
+  }catch(e){ return null; }
 }
-async function chargerPlatesTitre(id, media){
+async function chargerPlatesTitreRech(id, media){
   try{
     const d = await tmdb('/'+media+'/'+id+'/watch/providers');
     const fr = ((d.results||{})[REGION_PLATO]) || {};
     return (fr.flatrate || []).map(p=>p.provider_name);
   }catch(e){ return []; }
 }
-function peindreDetail(x){
-  const media = rechMedia();
+function peindreDetailRech(x){
+  const media = detailRech.media;
   const nom = media === 'tv' ? x.name : x.title;
   const date = media === 'tv' ? x.first_air_date : x.release_date;
-  const f = ficheDe(x);
+  const f = detailRech.fiche;
   const n = x.vote_average ? Math.round(x.vote_average*10)/10 : null;
   const bouts = [year(date)];
-  if(f && f.duree) bouts.push(media === 'movie' ? dureeCourte(f.duree) : f.duree+' min par épisode');
+  if(f && f.duree) bouts.push(media === 'movie' ? dureeCourteRech(f.duree) : f.duree+' min par épisode');
   if(f && f.saisons) bouts.push(f.saisons+' saison'+(f.saisons>1?'s':''));
+  if(f && f.genres && f.genres.length) bouts.push(f.genres.slice(0,2).join(', '));
   const ou = detailRech.plates === null ? ''
     : detailRech.plates.length
       ? '<div class="dou">Inclus dans '+esc(detailRech.plates.slice(0,3).join(', '))+'</div>'
@@ -826,89 +1049,410 @@ function peindreDetail(x){
         '<div class="tiny muted">'+esc(bouts.filter(Boolean).join(' · '))+
           (n?' · <span style="color:var(--warn);font-weight:700">'+I.star+n.toFixed(1)+'</span>':'')+'</div>'+
         ou+'</div></div>'+
-    (f && f.resume ? '<div class="dsyn">'+esc(f.resume)+'</div>'
-                   : '<div class="dsyn muted"><span class="spin"></span></div>')+
+    (f ? '<div class="dsyn">'+esc(f.resume || 'Pas de résumé.')+'</div>'
+       : '<div class="dsyn muted"><span class="spin"></span></div>')+
     '<div class="dact">'+
-      '<button class="btn" onclick="closeSheet();ouvrirTitre('+x.id+',\''+media+'\',\'search\')">Voir la fiche</button>'+
-    '</div>';
+      '<button class="btn" onclick="closeSheet();ouvrirTitre('+x.id+',\''+media+'\',\'search\')">'+
+      'Voir la fiche</button></div>';
   openSheet(h, 'detail-rech');
 }
-FERMETURES['detail-rech'] = function(){ detailRech = { id:null, plates:null }; };
+FERMETURES['detail-rech'] = function(){ detailRech = { id:null, media:null, fiche:null, plates:null }; };
+FERMETURES['mot-rech'] = function(){};
 
-/* ========================== Le réglage fin ==========================
-   Une rubrique par ligne, la valeur en cours à droite, une seule dépliée à la
-   fois. RIEN N'EST ALLUMÉ tant qu'on n'a pas choisi : six pastilles bleues
-   disant toutes « peu importe » se liraient comme six filtres actifs. */
-function panneauReglage(){
+/* ================================= LE JEU =================================
+
+   Une affiche à la fois, on décide. C'est la porte pour les soirs sans
+   inspiration — et la sortie naturelle d'une recherche par critères : au lieu
+   de lire une liste de onze, on la balaie.
+
+   IL NE SE CONFOND JAMAIS AVEC LE DUEL (chapitre 1). Le duel vit dans Mes
+   goûts, il compare deux affiches et il classe ce qu'on a DÉJÀ vu. Le jeu vit
+   ici, il montre une affiche, et il choisit ce qu'on va voir CE SOIR.
+   Comparer le passé, décider le présent.
+
+   LE PAQUET NE S'ÉPUISE PAS, ET IL EST COMPOSÉ, JAMAIS TRIÉ. Empiler les
+   meilleurs résultats du profil donne vingt thrillers d'affilée. D'où le
+   mélange ci-dessous — et surtout d'où LE JOKER, qui est obligatoire : sans
+   lui le jeu ne surprend jamais, c'est le reflet de l'utilisateur, en plus
+   lent.
+
+   Le jeu vit DANS l'écran Recherche et non dans une route à lui : une route
+   nouvelle demanderait de toucher `ROUTES`, `DEPTH` et la table de la barre du
+   bas, qui vit dans app-03 et n'est pas dans le périmètre de ce lot. Une barre
+   du bas éteinte se lit comme une panne — c'est un défaut déjà corrigé une
+   fois, on ne le rouvre pas pour une commodité. La sortie est donc un bouton
+   explicite, en haut à gauche. */
+const RECH_JEU_SOURCES = [
+  { cle:'coeur',   part:40 },
+  { cle:'genres',  part:25 },
+  { cle:'proches', part:15 },
+  { cle:'incont',  part:10 },
+  { cle:'joker',   part:10 }
+];
+function ouvrirJeuRech(){
   const r = etatRech();
-  let h = '<div class="wrap" style="padding-top:14px;display:flex;justify-content:space-between;align-items:baseline">'+
-      '<b style="font-size:16px">Régler plus finement</b>'+
-      '<button class="lienplus" style="margin:0" onclick="ouvrirReglage(false)">Fermer</button></div>'+
-    '<div class="wrap">';
-  reglagesCadre().forEach(sec=>{ h += ligneReglage(sec.cle, sec.lab); });
-  h += '</div><div class="wrap" style="padding-top:16px">'+
-      '<button class="btn block" onclick="ouvrirReglage(false)">'+esc(libelleVoir())+'</button>'+
-      '<div class="tiny muted center" style="margin-top:7px">Rien que tu aies déjà vu.</div></div>';
+  r.jeu = { carte:null, media:null, source:null, precedente:null,
+            pool:{}, page:{}, ecartes:{}, fiche:null, plates:null,
+            loading:true, err:'', anim:'' };
+  render();
+  tirerCarteRech();
+}
+function fermerJeuRech(){ etatRech().jeu = null; jeuSeq++; render(); }
+
+/* Les trois filtres implicites du §4.7, appliqués quand on lance le jeu SANS
+   aucun critère. Ils ne s'appliquent qu'au jeu : c'est lui qui doit rendre UNE
+   carte jouable ce soir, pas une liste exhaustive.
+     1. pas vu ;
+     2. disponible sur les plateformes déclarées — le filtre le plus important
+        et le plus oublié : proposer à 21 h un film qu'on ne peut pas lancer
+        est la pire frustration possible. Recherche, c'est maintenant ;
+     3. pas de genre exclu. */
+function paramsJeuRech(media){
+  const r = etatRech();
+  const p = paramsRech(media);
+  const critères = !!(r.amb || r.genre || r.langue || r.epoque || r.duree || r.note || r.plate);
+  if(!critères){
+    const mes = (typeof mesPlates === 'function') ? mesPlates() : [];
+    if(mes.length){
+      p.with_watch_providers = mes.map(x=>x.id).join('|');
+      p.watch_region = REGION_PLATO;
+      p.with_watch_monetization_types = 'flatrate';
+    }
+  }
+  const exclus = (db.gouts && db.gouts.exclus) || [];
+  const ids = exclus.map(n => genreParNom(media, n)).filter(x => x != null);
+  /* `without_genres` peut déjà être posé par une recette : on complète au lieu
+     d'écraser, sinon on annule silencieusement un ingrédient mesuré. */
+  if(ids.length) p.without_genres = (p.without_genres ? p.without_genres+',' : '') + ids.join(',');
+  return p;
+}
+/* Chaque source remplit son propre tas. Un tas vide est sauté ; le joker, lui,
+   est toujours tenté — c'est la seule source obligatoire. */
+async function remplirSourceRech(cle){
+  const r = etatRech(), j = r.jeu;
+  if(!j) return [];
+  const media = mediaRech();
+  j.page[cle] = (j.page[cle] || 0) + 1;
+  try{
+    if(cle === 'coeur'){
+      /* Les voisins des titres préférés. Le point de départ vient du podium
+         quand il existe, d'un 👍 sinon, de la bibliothèque en dernier recours —
+         c'est l'échelle de dégradation du §2.4, et elle ne bloque rien. */
+      const dep = departJeuRech();
+      if(!dep) return [];
+      const d = await tmdb('/'+dep.media+'/'+dep.id+'/recommendations', { page:String(j.page[cle]) });
+      j.raison = j.raison || {};
+      return (d.results||[]).map(x => Object.assign({ __media:dep.media, __pourquoi:'Parce que tu as aimé '+dep.nom }, x));
+    }
+    if(cle === 'genres'){
+      const p = paramsJeuRech(media);
+      p.page = String(j.page[cle]);
+      const gs = (typeof genresRetenus === 'function') ? genresRetenus() : [];
+      const ids = gs.map(n => genreParNom(media, n)).filter(x => x != null);
+      if(ids.length && !familleRech().anime) p.with_genres = ids.join('|');
+      const d = await tmdb('/discover/'+media, p);
+      const lib = gs.length ? gs.slice(0,2).join(' et ') : 'ce que tu regardes';
+      return (d.results||[]).map(x => Object.assign({ __media:media, __pourquoi:'Dans tes genres : '+lib }, x));
+    }
+    if(cle === 'proches') return await vusParProchesRech(media);
+    if(cle === 'incont'){
+      /* Les incontournables ratés : très forte reconnaissance, et pas dans la
+         bibliothèque. On respecte les genres explicitement exclus — c'est une
+         consigne donnée par l'utilisateur, pas une borne de genre. */
+      const p = paramsJeuRech(media);
+      p.page = String(j.page[cle]);
+      p['vote_count.gte'] = '5000'; p['vote_average.gte'] = '7.5';
+      p.sort_by = 'vote_count.desc';
+      const d = await tmdb('/discover/'+media, p);
+      return (d.results||[]).map(x => Object.assign({ __media:media, __pourquoi:"Un incontournable que tu n'as pas vu" }, x));
+    }
+    /* LE JOKER. Hors profil, assumé : aucun genre du profil, aucune ambiance,
+       aucun tri par le goût. Seuls les genres exclus et les plateformes
+       restent — un joker qu'on ne peut pas lancer n'est pas un joker. */
+    const p = { include_adult:'false', sort_by:'popularity.desc',
+                'vote_count.gte':'300', page:String(1 + (j.page.joker || 1) * 3) };
+    if(familleRech().anime){
+      p.with_original_language = 'ja';
+      const anim = genreParNom(media,'Animation');
+      if(anim != null) p.with_genres = String(anim);
+    }
+    const mes = (typeof mesPlates === 'function') ? mesPlates() : [];
+    if(mes.length){
+      p.with_watch_providers = mes.map(x=>x.id).join('|');
+      p.watch_region = REGION_PLATO;
+      p.with_watch_monetization_types = 'flatrate';
+    }
+    const exclus = ((db.gouts && db.gouts.exclus) || [])
+      .map(n => genreParNom(media, n)).filter(x => x != null);
+    if(exclus.length) p.without_genres = exclus.join(',');
+    const d = await tmdb('/discover/'+media, p);
+    return (d.results||[]).map(x => Object.assign({ __media:media, __pourquoi:'Hors de tes habitudes' }, x));
+  }catch(e){ return []; }
+}
+/* D'où part « dans l'esprit de ». Le podium en premier — c'est un choix
+   explicite —, un 👍 ensuite, la bibliothèque en dernier. Aucune de ces
+   sources n'est obligatoire : sans rien, la source rend un tas vide et le
+   paquet se compose des quatre autres. */
+function departJeuRech(){
+  const pod = db.podium || {};
+  const parFam = { film:'movie', serie:'tv', anime:'tv' };
+  for(const k of ['film','serie','anime']){
+    const id = (pod[k]||[])[0];
+    if(id == null) continue;
+    const m = parFam[k];
+    const o = m === 'tv' ? db.shows[id] : db.movies[id];
+    if(o) return { media:m, id:id, nom:(o.name||o.title||'') };
+  }
+  for(const m of ['movie','tv']){
+    const a = (db.avis && db.avis[m]) || {};
+    const id = Object.keys(a).find(k => a[k] && a[k].v === 1);
+    if(id){
+      const o = m === 'tv' ? db.shows[id] : db.movies[id];
+      if(o) return { media:m, id:Number(id), nom:(o.name||o.title||'') };
+    }
+  }
+  const aimés = (typeof titresAimes === 'function') ? titresAimes() : [];
+  const t = aimés.find(x => x && x.nom);
+  return t ? { media:t.media, id:t.id, nom:t.nom } : null;
+}
+/* Vu par les proches. Aucune donnée nouvelle à collecter : le partage existe
+   déjà. Sans cercle, pas de source — et surtout aucune invitation ici. Les
+   bibliothèques déjà en mémoire sont utilisées telles quelles ; une seule est
+   demandée au serveur par partie, pour ne pas faire payer une cascade réseau
+   à quelqu'un qui voulait juste une affiche. */
+async function vusParProchesRech(media){
+  const suivis = (typeof partage === 'object' && partage && partage.suivis) || [];
+  if(!suivis.length) return [];
+  const cle = media === 'tv' ? 'shows' : 'movies';
+  let dispo = suivis.filter(p => biblios[p.id]);
+  if(!dispo.length){
+    try{ await chargerBiblio(suivis[0].id); }catch(e){}
+    dispo = suivis.filter(p => biblios[p.id]);
+  }
+  const compte = {};
+  dispo.forEach(p=>{
+    const b = biblios[p.id] || {};
+    Object.values(b[cle] || {}).forEach(o=>{
+      if(!o || o.id == null) return;
+      const k = String(o.id);
+      if(!compte[k]) compte[k] = { n:0, o:o };
+      compte[k].n++;
+    });
+  });
+  /* L'ordre fait toute la valeur de la rangée, puisqu'elle est unique :
+     d'abord combien de proches l'ont — c'est le principe de corroboration. */
+  return Object.values(compte)
+    .sort((a,b)=> b.n - a.n)
+    .map(e => ({ __media:media, __pourquoi: e.n > 1 ? e.n+' de tes proches l\'ont' : 'Vu par un proche',
+                 id:e.o.id, title:e.o.title, name:e.o.name,
+                 poster_path:e.o.poster, release_date:e.o.date, first_air_date:e.o.first,
+                 vote_average:e.o.note, genre_ids:[] }))
+    .slice(0, 30);
+}
+/* Le choix de la source suivante : à la part, mais JAMAIS DEUX CARTES DE LA
+   MÊME SOURCE À LA SUITE. C'est ce qui empêche le paquet de redevenir une
+   liste triée. */
+function sourceSuivanteRech(){
+  const j = etatRech().jeu;
+  const libres = RECH_JEU_SOURCES.filter(s => s.cle !== j.precedente &&
+                                              (j.pool[s.cle]||[]).length);
+  const l = libres.length ? libres
+          : RECH_JEU_SOURCES.filter(s => (j.pool[s.cle]||[]).length);
+  if(!l.length) return null;
+  const total = l.reduce((a,s)=>a+s.part, 0);
+  let t = Math.random() * total;
+  for(const s of l){ t -= s.part; if(t <= 0) return s.cle; }
+  return l[l.length-1].cle;
+}
+async function tirerCarteRech(){
+  const r = etatRech(), j = r.jeu;
+  if(!j) return;
+  const seq = ++jeuSeq;
+  j.loading = true; j.err = ''; j.fiche = null; j.plates = null;
+  peindreJeuRech();
+  /* On garnit les tas qui s'épuisent — le paquet ne s'épuise pas, il n'y a pas
+     de « 20 cartes », on rejoue tant qu'on veut. */
+  const àRemplir = RECH_JEU_SOURCES.filter(s => (j.pool[s.cle]||[]).length < RECH_JEU_STOCK);
+  if(àRemplir.length){
+    const lots = await Promise.all(àRemplir.map(s => remplirSourceRech(s.cle)));
+    if(seq !== jeuSeq || !r.jeu) return;
+    àRemplir.forEach((s,i)=>{
+      const propre = (lots[i]||[]).filter(x => x && x.poster_path && jouableRech(x));
+      j.pool[s.cle] = (j.pool[s.cle]||[]).concat(propre);
+    });
+  }
+  const cle = sourceSuivanteRech();
+  if(!cle){
+    j.loading = false;
+    j.err = 'Plus rien à proposer avec cette phrase.';
+    peindreJeuRech(); return;
+  }
+  const x = j.pool[cle].shift();
+  j.carte = x; j.media = x.__media; j.source = cle; j.precedente = cle;
+  j.ecartes[x.__media+':'+x.id] = 1;
+  j.loading = false;
+  peindreJeuRech();
+  /* La carte doit donner de quoi décider : trancher sur une affiche seule ne
+     marche que pour les visages. Fiche et plateformes arrivent après coup, la
+     carte s'affiche sans les attendre. */
+  const id = x.id, media = x.__media;
+  chargerUneFicheRech(media, id).then(f=>{
+    if(seq !== jeuSeq || !r.jeu || r.jeu.carte !== x) return;
+    r.jeu.fiche = f; peindreJeuRech();
+  });
+  chargerPlatesTitreRech(id, media).then(l=>{
+    if(seq !== jeuSeq || !r.jeu || r.jeu.carte !== x) return;
+    r.jeu.plates = l; peindreJeuRech();
+  });
+  /* La bande-annonce passe par le chemin déjà en place (app-05) : il gère le
+     repli anglais et le lecteur plein écran. */
+  if(typeof chargerFiche === 'function') chargerFiche(media, id);
+}
+/* Un titre jouable : pas déjà sorti de la session, pas dans la bibliothèque,
+   pas marqué 👎. Le 👎 est le seul avis qui retire quelque chose, et c'est le
+   contrat qui le dit : poids 0, exclu. */
+function jouableRech(x){
+  const j = etatRech().jeu;
+  const m = x.__media || mediaRech();
+  if(j && j.ecartes[m+':'+x.id]) return false;
+  if(chezSoiRech(x, m)) return false;
+  if(avisRech(m, x.id) === -1) return false;
+  return true;
+}
+
+/* Les trois gestes (§4.7). Trois boutons VISIBLES, le balayage en raccourci :
+   le geste vers le haut a été écarté, personne ne le découvre. Ceux qui
+   débutent tapent, ceux qui prennent le pli balaient. */
+function jeuNonRech(){                       // « Pas ce soir »
+  /* LE POINT DÉLICAT. S'il valait « pas pour moi » définitivement, le catalogue
+     serait brûlé en trois sessions. Ici il veut dire « pas d'humeur, là,
+     maintenant », et rien de plus : le titre sort de la session, il n'est pas
+     condamné, et rien n'est écrit dans le profil. */
+  const j = etatRech().jeu; if(!j) return;
+  j.anim = 'gauche'; peindreJeuRech();
+  setTimeout(()=>{ if(etatRech().jeu){ etatRech().jeu.anim=''; tirerCarteRech(); } }, 160);
+}
+function jeuPlusTardRech(){                  // « Plus tard » → la liste à voir
+  const j = etatRech().jeu; if(!j || !j.carte) return;
+  const x = j.carte, media = j.media;
+  if(media === 'movie'){ if(typeof addMovie === 'function') addMovie(x.id, false); }
+  else if(typeof addOrOpenShow === 'function'){ addOrOpenShow(x.id); return; }
+  j.anim = 'haut'; peindreJeuRech();
+  setTimeout(()=>{ if(etatRech().jeu){ etatRech().jeu.anim=''; tirerCarteRech(); } }, 160);
+}
+function jeuOuiRech(){                       // « Ce soir, c'est lui »
+  /* La décision se conclut par le lancement, pas par un ajout à une liste de
+     plus : on ouvre la fiche, qui porte « où le regarder ». */
+  const j = etatRech().jeu; if(!j || !j.carte) return;
+  const x = j.carte, media = j.media;
+  etatRech().jeu = null;
+  if(typeof ouvrirTitre === 'function') ouvrirTitre(x.id, media, 'search');
+  else render();
+}
+/* « Déjà vu » — l'occasion cachée. Tomber sur un titre déjà vu n'est pas une
+   erreur du moteur, c'est une occasion : un tap et il entre dans la
+   bibliothèque. Le jeu enrichit le profil pendant qu'on cherche.
+   Pour un film, l'ajout est immédiat. Pour une série, il faut choisir où l'on
+   en est : on ouvre sa fiche plutôt que de cocher soixante épisodes à sa
+   place. */
+function jeuDejaVuRech(){
+  const j = etatRech().jeu; if(!j || !j.carte) return;
+  const x = j.carte, media = j.media;
+  if(media === 'movie'){
+    if(typeof addMovie === 'function') addMovie(x.id, true);
+    tirerCarteRech();
+  }else{
+    etatRech().jeu = null;
+    if(typeof ouvrirTitre === 'function') ouvrirTitre(x.id, media, 'search');
+  }
+}
+
+function viewJeuRech(){
+  return header('🎲 Le jeu', { back:'fermerJeuRech()', sub: puceFamillesRech() }) +
+    '<div id="rjeu">'+corpsJeuRech()+'</div>'+
+    '<div style="height:20px"></div>';
+}
+function peindreJeuRech(){
+  if(view !== 'search') return;
+  const el = document.getElementById('rjeu');
+  if(!el) return render();
+  el.innerHTML = corpsJeuRech();
+  armerBalayageJeuRech();
+}
+function corpsJeuRech(){
+  const j = etatRech().jeu;
+  if(!j) return '';
+  if(j.err)
+    return '<div class="empty">'+I.boussole+'<h3>'+esc(j.err)+'</h3>'+
+      '<p>Retire un mot de la phrase, ou change de famille.</p>'+
+      '<button class="btn ghost" onclick="fermerJeuRech()">Revenir à la grille</button></div>';
+  if(!j.carte)
+    return '<div class="empty"><span class="spin"></span>'+
+           '<p style="margin-top:12px">On bat le paquet…</p></div>';
+  const x = j.carte, media = j.media;
+  const nom = media === 'tv' ? x.name : x.title;
+  const date = media === 'tv' ? x.first_air_date : x.release_date;
+  const f = j.fiche;
+  const n = x.vote_average ? Math.round(x.vote_average*10)/10 : null;
+  const meta = [year(date)];
+  if(f && f.duree) meta.push(media === 'movie' ? dureeCourteRech(f.duree) : f.duree+' min');
+  if(f && f.genres && f.genres.length) meta.push(f.genres[0]);
+  if(n) meta.push(n.toFixed(1));
+  if(j.plates && j.plates.length) meta.push(j.plates[0]);
+
+  /* La barre de critères reste sous la main pendant la partie : on oriente sa
+     sélection sans jamais sortir du jeu (§4.7). */
+  let h = '<div class="wrap" style="padding-top:10px;display:flex;gap:8px;align-items:center">'+
+      '<div class="tiny muted" style="flex:1">'+esc(phraseTexte())+'</div>'+
+      '<button class="chip" onclick="ouvrirMotRech(\'genre\')">Critères ⚙</button></div>';
+
+  h += '<div class="jcarte'+(j.anim?' part-'+j.anim:'')+'" id="jcarte">'+
+      '<div class="jaff">'+posterEl(x.poster_path,'w780','',nom)+'</div>'+
+      /* La raison, en haut à gauche. Même règle qu'au chapitre 3 : jamais de
+         titre sans explication lisible. */
+      '<div class="jsrc">'+esc(x.__pourquoi || '')+'</div>'+
+      '<button class="jdeja" onclick="event.stopPropagation();jeuDejaVuRech()">'+I.check+' Déjà vu</button>'+
+      '<div class="jtxt">'+
+        '<h3>'+esc(nom)+'</h3>'+
+        '<div class="jmeta">'+esc(meta.filter(Boolean).join(' · '))+'</div>'+
+        '<div class="jsyn">'+esc(f ? (f.resume || '') : '')+'</div>'+
+        '<div class="jmini">'+
+          (typeof zoneBande === 'function' ? zoneBande(media, x.id) : '')+
+          '<button class="btn ghost mini" onclick="ouvrirTitre('+x.id+',\''+media+'\',\'search\')">'+
+          'ⓘ La fiche</button>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+
+  h += '<div class="jgestes">'+
+      '<button class="jg non" onclick="jeuNonRech()"><span class="ic">'+I.close+'</span>Pas ce soir</button>'+
+      '<button class="jg tard" onclick="jeuPlusTardRech()"><span class="ic">'+I.bookmark+'</span>Plus tard</button>'+
+      '<button class="jg oui" onclick="jeuOuiRech()"><span class="ic">'+I.play+'</span>Ce soir, c\'est lui</button>'+
+    '</div>'+
+    '<div class="jastuce">Balaie à gauche ou à droite pour aller plus vite · le paquet ne s\'épuise pas</div>';
   return h;
 }
-function libelleVoir(){
-  const r = etatRech();
-  const quoi = r.cadre === 'film' ? 'films' : r.cadre === 'serie' ? 'séries' : 'animés';
-  return r.charge && r.res.length ? 'Voir les '+r.res.length+' '+quoi : 'Voir les résultats';
-}
-function ligneReglage(cle, lab){
-  const r = etatRech();
-  const ouvert = r.ouvert === cle;
-  return '<button class="fpli'+(ouvert?' ouvert':'')+'" onclick="deplier(\''+cle+'\')">'+
-      '<span class="fplititre">'+esc(lab)+'</span>'+
-      '<span class="fpliresume">'+esc(valeurReglage(cle))+'</span>'+
-      '<span class="fplicaret">'+I.caret+'</span></button>'+
-    (ouvert ? '<div class="fplicorps">'+choixReglage(cle)+'</div>' : '');
-}
-function valeurReglage(cle){
-  const r = etatRech();
-  if(cle === 'epoque'){ const e = RECH_EPOQUES.find(x=>x.id===r.epoque); return (e && e.court) || ''; }
-  if(cle === 'note')   return r.noteMin ? r.noteMin+' et +' : '';
-  if(cle === 'genres') return r.genres.join(', ').toLowerCase();
-  if(cle === 'plates') return r.plates.length
-    ? (r.plates.length > 2 ? r.plates.length+' plateformes' : r.plates.map(p=>p.nom).join(' ou ')) : '';
-  return '';
-}
-function choixReglage(cle){
-  const r = etatRech();
-  /* RIEN N'EST ALLUMÉ TANT QU'ON N'A PAS CHOISI. « Peu importe » en bleu dans
-     chaque rubrique, ça se lit comme quatre filtres actifs — l'inverse exact de
-     ce qu'on veut dire. L'absence de réglage doit ressembler à une absence. */
-  if(cle === 'epoque')
-    return '<div class="fchips">'+RECH_EPOQUES.map(e=>
-      '<button class="chip '+(r.epoque!=='tout' && r.epoque===e.id?'on':'')+'" '+
-        'onclick="setEpoqueRech(\''+e.id+'\')">'+esc(e.label)+'</button>').join('')+'</div>';
-  if(cle === 'note')
-    return '<div class="fchips">'+RECH_NOTES.map(n=>
-      '<button class="chip '+(r.noteMin>0 && r.noteMin===n.v?'on':'')+'" '+
-        'onclick="setNoteRech('+n.v+')">'+esc(n.label)+'</button>').join('')+'</div>';
-  if(cle === 'genres'){
-    const l = genresRech();
-    if(!l.length) return '<div class="small muted">Les genres arrivent avec les premiers résultats.</div>';
-    return '<div class="fchips">'+l.map(g=>
-      '<button class="chip '+(r.genres.indexOf(g.nom)>=0?'on':'')+'" '+
-        'onclick="bascGenreRech(\''+escJs(g.nom)+'\')">'+esc(g.nom)+'</button>').join('')+'</div>';
-  }
-  if(cle === 'plates'){
-    const l = platesRech();
-    if(!l.length){
-      if(!platesTMDB[rechMedia()]) chargerPlates(rechMedia()).then(()=>{ if(view==='search') render(); });
-      return '<div class="small muted">La liste des plateformes arrive.</div>';
-    }
-    return '<div class="fchips">'+l.map((p,i)=>{
-        const on = r.plates.some(x => x.id === p.id);
-        const logo = srcImage(p.logo,'w45') ? '<img loading="lazy" src="'+srcImage(p.logo,'w45')+'" alt="">' : '';
-        return '<button class="chip chiplogo '+(on?'on':'')+'" onclick="bascPlateRech('+i+')">'+
-          logo+'<span>'+esc(p.nom)+'</span></button>';
-      }).join('')+'</div>'+
-      (r.plates.length ? '<div class="small muted" style="margin-top:8px">'+
-        'Il suffit qu\'un titre soit sur <b>une</b> de ces plateformes. '+
-        '<button class="lienplus" style="margin:0" onclick="viderPlatesRech()">Tout décocher</button></div>' : '');
-  }
-  return '';
+
+/* Le balayage, en RACCOURCI seulement — les trois boutons restent la voie
+   principale. Le geste ne s'arme pas depuis le bord gauche : c'est la zone du
+   geste de retour d'app-02, et les deux se marcheraient dessus. */
+function armerBalayageJeuRech(){
+  const el = document.getElementById('jcarte');
+  if(!el || el.dataset.arme) return;
+  el.dataset.arme = '1';
+  let x0 = null, y0 = 0, t0 = 0;
+  el.addEventListener('touchstart', e=>{
+    const t = e.touches[0];
+    if(t.clientX <= 40){ x0 = null; return; }
+    x0 = t.clientX; y0 = t.clientY; t0 = Date.now();
+  }, {passive:true});
+  el.addEventListener('touchend', e=>{
+    if(x0 === null) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - x0, dy = Math.abs(t.clientY - y0);
+    x0 = null;
+    if(dy > 60 || Date.now() - t0 > 900) return;
+    if(dx < -70) jeuNonRech();
+    else if(dx > 70) jeuOuiRech();
+  }, {passive:true});
 }
