@@ -26,17 +26,113 @@ function seasonNums(show, withSpecials){
   return Object.keys(show.seasons||{}).map(Number)
     .filter(n => withSpecials ? true : n > 0).sort((a,b)=>a-b);
 }
+/* F3 — `allEpisodes` alloue un objet par épisode, et les écrans l'appellent
+   sept à onze fois par série et par rendu (mesuré le 31/07 sur une base de
+   103 séries et 9 436 épisodes : 66 000 objets pour « En cours », 103 000 pour
+   « Mon profil », à CHAQUE tap). D'où ce cache.
+
+   L'invalidation est le seul endroit qui compte, alors elle est verrouillée
+   par trois choses à la fois, et il faut qu'elles soient toutes d'accord :
+
+     · l'identité de l'objet `seasons` — la fusion distante (`normaliserSerie`)
+       et le rechargement TMDB (`fetchShow`) en produisent un neuf ;
+     · l'empreinte des tailles — elle attrape un épisode ajouté ou retiré à
+       l'intérieur d'une saison déjà connue ; elle coûte un tour de boucle par
+       saison, soit une dizaine, pas par épisode ;
+     · `updated` — il change à chaque modification de la série.
+
+   Sous-invalider, c'est servir une liste périmée : un épisode neuf resterait
+   invisible jusqu'au rechargement de l'app. Sur-invalider ne coûte qu'un
+   recalcul. Le doute penche donc toujours du même côté.
+
+   Ce que le cache ne surveille PAS, volontairement : `watched`. La liste des
+   épisodes ne dépend pas de ceux qui sont vus — cocher n'a rien à invalider. */
+const cacheEpisodes = new Map();
+/* Au-delà de deux entrées par série, c'est qu'on garde des séries retirées.
+   On vide plutôt que de tenir une comptabilité : le recalcul suivant coûte un
+   rendu, la comptabilité coûterait un point d'accroche dans chaque suppression. */
+const CACHE_EPISODES_MAX = 400;
+function empreinteSaisons(sa){
+  let t = '';
+  for(const n in sa) t += n + ':' + ((sa[n] && sa[n].length) || 0) + ',';
+  return t;
+}
+function oublierEpisodes(id){
+  cacheEpisodes.delete(id + '|0');
+  cacheEpisodes.delete(id + '|1');
+}
 function allEpisodes(show, withSpecials){
+  const sa = show.seasons || {};
+  const cle = show.id + '|' + (withSpecials ? 1 : 0);
+  const marque = show.updated || 0;
+  const taille = empreinteSaisons(sa);
+  const e = cacheEpisodes.get(cle);
+  if(e && e.saisons === sa && e.marque === marque && e.taille === taille) return e.liste;
   const out = [];
   seasonNums(show, withSpecials).forEach(s=>{
-    (show.seasons[s]||[]).forEach(ep=> out.push(Object.assign({}, ep, {s:s})));
+    (sa[s]||[]).forEach(ep=> out.push(Object.assign({}, ep, {s:s})));
   });
+  if(cacheEpisodes.size >= CACHE_EPISODES_MAX) cacheEpisodes.clear();
+  cacheEpisodes.set(cle, { saisons:sa, marque:marque, taille:taille, liste:out });
   return out;
 }
+/* F3 (2/2) — le mémo d'un rendu.
+
+   Mémoïser `allEpisodes` n'a presque rien rendu : mesuré le 31/07, la liste ne
+   pesait que 2 à 3 % du rendu. Le coût était dans ce que les appelants font de
+   cette liste — `progress` la reparcourt entièrement, en construisant une clé
+   de chaîne par épisode, et elle est appelée 4 fois par série sur « En cours »
+   et 10 fois sur « Mon profil ». Sur 103 séries : 43 ms sur 48, et 99 ms
+   sur 111.
+
+   La difficulté d'un cache sur `progress`, c'est qu'il dépend de `watched`, et
+   qu'on n'a aucun repère fiable et bon marché pour savoir si `watched` a
+   changé — `Object.keys(watched).length` alloue un tableau de plusieurs
+   milliers de chaînes, ce qui coûterait ce qu'on essaie d'économiser.
+
+   D'où le choix : le mémo ne vit QUE pendant un rendu. Pendant un rendu, rien
+   ne modifie la base — c'est une construction de chaîne, de bout en bout
+   synchrone. Hors rendu, `memo` s'efface devant le calcul réel : le
+   comportement est alors exactement celui d'avant, à l'octet près. Il n'y a
+   donc aucune fenêtre où une valeur périmée puisse être servie.
+
+   Résultat mesuré le 31/07, même base et même graine, médiane de neuf passes :
+   « En cours » 48,4 ms -> 14,5 ms, « Mon profil » 116,1 ms -> 14,3 ms. Le
+   nombre d'appels à `allEpisodes` tombe de 7 à 4 par série sur le premier
+   écran, de 11 à 2 sur le second. Le fichier `mesure-lot-f.js` de l'atelier
+   rejoue la mesure à l'identique.
+
+   Le compteur de profondeur, plutôt qu'un booléen : `htmlDeLaVue` peut être
+   appelée à l'intérieur d'un rendu (le geste de retour prépare l'écran de
+   destination), et un booléen remis à faux par le rendu imbriqué éteindrait le
+   mémo du rendu principal pour tout le reste de son parcours. */
+let profondeurRendu = 0;
+const memoRendu = new Map();
+/* Le vidage à l'entrée fait doublon avec celui de la sortie, et aucun test ne
+   peut le prendre en défaut : `sortirRendu` est appelée depuis un `finally`,
+   donc la table est toujours déjà vide ici. Il reste quand même, comme filet
+   pour le jour où quelqu'un ajoutera un appel à `entrerRendu` ailleurs. C'est
+   dit ici pour qu'on ne cherche pas le test qui le protège : il n'y en a pas,
+   et le mutation testing du 31/07 le confirme. */
+function entrerRendu(){ if(profondeurRendu === 0) memoRendu.clear(); profondeurRendu++; }
+function sortirRendu(){
+  if(profondeurRendu > 0) profondeurRendu--;
+  if(profondeurRendu === 0) memoRendu.clear();
+}
+function memo(cle, calcul){
+  if(!profondeurRendu) return calcul();
+  if(memoRendu.has(cle)) return memoRendu.get(cle);
+  const r = calcul();
+  memoRendu.set(cle, r);
+  return r;
+}
+
 function progress(show){
-  const eps = allEpisodes(show,false).filter(aired);
-  const w = eps.filter(ep => show.watched[key(ep.s,ep.e)]).length;
-  return { watched:w, total:eps.length, pct: eps.length ? Math.round(w/eps.length*100) : 0 };
+  return memo('p'+show.id, ()=>{
+    const eps = allEpisodes(show,false).filter(aired);
+    const w = eps.filter(ep => show.watched[key(ep.s,ep.e)]).length;
+    return { watched:w, total:eps.length, pct: eps.length ? Math.round(w/eps.length*100) : 0 };
+  });
 }
 /* B4 — un épisode SANS DATE n'est pas « à venir » : c'est une lacune de TMDB,
    fréquente sur les vieux épisodes et les hors-série. L'ancienne boucle
@@ -48,19 +144,23 @@ function progress(show){
 
    Règle retenue, explicitement : une lacune se saute, une date future arrête. */
 function nextToWatch(show){
-  const eps = allEpisodes(show,false);
-  for(const ep of eps){
-    if(show.watched[key(ep.s,ep.e)]) continue;   // déjà vu : on passe
-    if(!ep.d) continue;                          // lacune TMDB : on saute, on ne s'arrête pas
-    if(ep.d > todayISO()) break;                 // vraiment à venir : plus rien à rattraper
-    return ep;
-  }
-  return null;
+  return memo('n'+show.id, ()=>{
+    const eps = allEpisodes(show,false);
+    for(const ep of eps){
+      if(show.watched[key(ep.s,ep.e)]) continue;   // déjà vu : on passe
+      if(!ep.d) continue;                          // lacune TMDB : on saute, on ne s'arrête pas
+      if(ep.d > todayISO()) break;                 // vraiment à venir : plus rien à rattraper
+      return ep;
+    }
+    return null;
+  });
 }
 function isFinished(show){
-  const p = progress(show);
-  const ended = show.status==='Ended' || show.status==='Canceled';
-  return p.total>0 && p.watched===p.total && ended && !show.next;
+  return memo('f'+show.id, ()=>{
+    const p = progress(show);
+    const ended = show.status==='Ended' || show.status==='Canceled';
+    return p.total>0 && p.watched===p.total && ended && !show.next;
+  });
 }
 
 /* ===== STATUT D'UN TITRE — source unique de vérité =====
@@ -74,9 +174,11 @@ function statutSerie(s){
   /* Seule exception au calcul : une mise en pause posée à la main l'emporte.
      Les épisodes cochés sont conservés, la série reprendra où elle en était. */
   if(s && s.pause) return 'pause';
-  if(progress(s).watched === 0) return 'avoir';
-  if(isFinished(s)) return 'vu';
-  return 'asuivre';
+  return memo('s'+s.id, ()=>{
+    if(progress(s).watched === 0) return 'avoir';
+    if(isFinished(s)) return 'vu';
+    return 'asuivre';
+  });
 }
 function statutFilm(m){ return m.seen ? 'vu' : 'avoir'; }
 function statut(o){ return o && o.seasons !== undefined ? statutSerie(o) : statutFilm(o); }
