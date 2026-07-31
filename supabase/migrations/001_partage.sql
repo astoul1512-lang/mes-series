@@ -9,6 +9,39 @@
 -- s'ajouter à côté, et deux policies permissives se combinent en OU.
 -- =============================================================================
 
+-- L'ORDRE DES BLOCS COMPTE. Postgres analyse l'expression d'une policy au
+-- moment où il la crée : la policy de lecture de `mes_series` cite
+-- `public.abonnements`, donc `abonnements` doit exister AVANT. Tant que ce
+-- bloc était en second, le fichier s'arrêtait en erreur `42P01` sur une base
+-- vierge — il ne passait que sur la production, où la table était déjà là.
+-- Corrigé le 31/07/2026 (lot 0) : `abonnements` est remonté en tête. Rien
+-- d'autre n'a changé, et rejouer le fichier sur la production reste sans effet.
+
+-- --- Les abonnements ---------------------------------------------------------
+create table if not exists public.abonnements (
+  suiveur uuid        not null references auth.users(id) on delete cascade,
+  suivi   uuid        not null references auth.users(id) on delete cascade,
+  depuis  timestamptz not null default now(),
+  primary key (suiveur, suivi),
+  constraint pas_soi_meme check (suiveur <> suivi)
+);
+alter table public.abonnements enable row level security;
+
+drop policy if exists "je vois mes abonnements et mes abonnes" on public.abonnements;
+create policy "je vois mes abonnements et mes abonnes"
+  on public.abonnements for select to authenticated
+  using (auth.uid() = suiveur or auth.uid() = suivi);
+
+drop policy if exists "je me desabonne ou je retire un abonne" on public.abonnements;
+-- Des deux côtés : on peut se désabonner de quelqu'un, et on peut retirer
+-- quelqu'un qui nous suit.
+create policy "je me desabonne ou je retire un abonne"
+  on public.abonnements for delete to authenticated
+  using (auth.uid() = suiveur or auth.uid() = suivi);
+
+-- Aucune policy INSERT : on ne s'abonne QUE par `utiliser_code()`, plus bas.
+-- C'est ce qui empêche de s'abonner à quelqu'un dont on connaîtrait l'uid.
+
 -- --- La bibliothèque ---------------------------------------------------------
 create table if not exists public.mes_series (
   user_id    uuid primary key references auth.users(id) on delete cascade,
@@ -57,31 +90,6 @@ drop policy if exists "je modifie mon profil" on public.profils;
 create policy "je modifie mon profil"
   on public.profils for update to authenticated
   using (auth.uid() = user_id) with check (auth.uid() = user_id);
-
--- --- Les abonnements ---------------------------------------------------------
-create table if not exists public.abonnements (
-  suiveur uuid        not null references auth.users(id) on delete cascade,
-  suivi   uuid        not null references auth.users(id) on delete cascade,
-  depuis  timestamptz not null default now(),
-  primary key (suiveur, suivi),
-  constraint pas_soi_meme check (suiveur <> suivi)
-);
-alter table public.abonnements enable row level security;
-
-drop policy if exists "je vois mes abonnements et mes abonnes" on public.abonnements;
-create policy "je vois mes abonnements et mes abonnes"
-  on public.abonnements for select to authenticated
-  using (auth.uid() = suiveur or auth.uid() = suivi);
-
-drop policy if exists "je me desabonne ou je retire un abonne" on public.abonnements;
--- Des deux côtés : on peut se désabonner de quelqu'un, et on peut retirer
--- quelqu'un qui nous suit.
-create policy "je me desabonne ou je retire un abonne"
-  on public.abonnements for delete to authenticated
-  using (auth.uid() = suiveur or auth.uid() = suivi);
-
--- Aucune policy INSERT : on ne s'abonne QUE par `utiliser_code()`, ci-dessous.
--- C'est ce qui empêche de s'abonner à quelqu'un dont on connaîtrait l'uid.
 
 -- --- Les codes de partage ----------------------------------------------------
 create table if not exists public.codes_partage (
