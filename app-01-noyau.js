@@ -345,6 +345,32 @@ function reparerAvis(){
     else if(db.podium[f].length > PODIUM_MAX){ db.podium[f] = db.podium[f].slice(0, PODIUM_MAX); n++; }
   });
   if(typeof db.podium.maj !== 'number'){ db.podium.maj = 0; n++; }
+  /* R1 · point 11 — LA MIGRATION DU CLASSEMENT GLOBAL.
+     `db.classement` est la nouvelle source de vérité du duel : le score de
+     chaque titre (`s`) et le nombre de duels qu'il a réellement joués (`n`).
+     `db.podium` en devient une projection, mais il N'EST JAMAIS DÉTRUIT ici :
+     quelqu'un qui a déjà un podium le garde tel quel, son classement démarre
+     vide et se remplit à sa prochaine partie.
+     Posée dans `reparerAvis` et non dans une migration numérotée, pour la même
+     raison que les trois clés du lot A : ce sont des clés AJOUTÉES, et ceci
+     tourne à chaque lancement — donc aussi sur une base arrivée d'un autre
+     appareil, où la clé peut manquer sans que `db.v` l'avoue. */
+  if(!db.classement || typeof db.classement !== 'object'){ db.classement = {}; n++; }
+  ['film','serie','anime'].forEach(f=>{
+    if(!db.classement[f] || typeof db.classement[f] !== 'object'){ db.classement[f] = {}; n++; return; }
+    Object.keys(db.classement[f]).forEach(id=>{
+      const e = db.classement[f][id];
+      /* Une entrée sans score n'est pas réparable : on ne devine pas un
+         classement. Un compteur de duels absent ou aberrant, si — il vaut zéro,
+         et le titre reste simplement hors du podium jusqu'à ce qu'il joue. */
+      if(!e || typeof e !== 'object' || typeof e.s !== 'number' || !isFinite(e.s)){
+        delete db.classement[f][id]; n++; return;
+      }
+      if(typeof e.n !== 'number' || !isFinite(e.n) || e.n < 0){ e.n = 0; n++; }
+      else if(e.n !== Math.floor(e.n)){ e.n = Math.floor(e.n); n++; }
+    });
+  });
+  if(typeof db.classement.maj !== 'number'){ db.classement.maj = 0; n++; }
   /* Les avis effacés. Même mécanique que `unwatched` pour les épisodes : sans
      trace, un 👎 repris ici reviendrait à la première synchro avec un appareil
      resté en arrière, qui le croit toujours posé. Elles s'effacent seules au
@@ -662,7 +688,13 @@ function payload(){
               remplacent pas en bloc — voir `mergeRemote`. */
            avis:        db.avis        || { tv:{}, movie:{} },
            avisRetires: db.avisRetires || { tv:{}, movie:{} },
-           podium:      db.podium      || null };
+           podium:      db.podium      || null,
+           /* R1 · point 11 — le classement global. C'est du patrimoine au sens
+              le plus strict : il accumule le travail de plusieurs mois de
+              duels, alors que le podium n'en est que le sommet recalculé. Il
+              monte donc au serveur, et il se fusionne titre par titre — voir
+              `fusionnerClassement`. */
+           classement:  db.classement  || null };
 }
 function mergeRemote(rem){
   if(!rem || typeof rem !== 'object') return false;
@@ -736,6 +768,7 @@ function mergeRemote(rem){
     db.profil = rem.profil; changed = true;
   }
   if(fusionnerAvis(rem)) changed = true;
+  if(fusionnerClassement(rem)) changed = true;
   /* Les cloches arrivées d'un autre appareil : la liste côté serveur a été
      écrite par lui, elle ignore donc les nôtres. On la refait au complet. */
   if(typeof fusionnerNotif === 'function' && fusionnerNotif(rem.notif)){
@@ -832,6 +865,65 @@ function fusionnerAvis(rem){
     if(distantGagne){ db.podium.maj = rem.podium.maj; bouge = true; }
     if(typeof reparerAvis === 'function') reparerAvis();   // forme garantie, même venue d'ailleurs
   }
+  return bouge;
+}
+
+/* ---------------------------------------------------------------------------
+   R1 · point 11 — LA FUSION DU CLASSEMENT
+
+   LA FUSION NE DOIT JAMAIS FAIRE PERDRE DE DUELS. C'est la seule chose que
+   cette fonction a à garantir, et tout le reste en découle.
+
+   Titre par titre : on garde l'entrée dont le `n` est le plus grand — ce
+   côté-là a strictement plus d'information, il a vu plus de confrontations. À
+   `n` égal, on garde l'entrée locale. Les clés présentes d'un seul côté sont
+   conservées telles quelles. `maj` prend le plus grand des deux.
+
+   N'IMITE PAS LA FUSION DE `db.podium`, juste au-dessus, qui remplace en bloc
+   sur la date. C'était acceptable pour une liste de dix identifiants qu'une
+   partie réécrit d'un coup ; ça ne l'est plus pour un classement qui accumule
+   le travail de plusieurs mois. Jouer les films sur le téléphone puis rouvrir
+   la tablette effacerait des dizaines de duels, définitivement et sans un mot.
+
+   La règle est IDEMPOTENTE — refusionner le même paquet ne change plus rien —
+   et le `n` de chaque titre finit au maximum des deux côtés quel que soit
+   l'ordre des appareils. Une réserve honnête sur le mot « commutative » : à `n`
+   égal, c'est le score LOCAL qui est retenu, donc deux appareils qui ont joué
+   autant de duels sur un même titre gardent chacun le leur. Aucun duel n'est
+   perdu, mais le score peut différer d'un cheveu le temps qu'un duel de plus
+   les départage. C'est le prix de la règle « à `n` égal, le local gagne », qui
+   est celle qui a été décidée.
+--------------------------------------------------------------------------- */
+function fusionnerClassement(rem){
+  if(!rem || typeof rem !== 'object') return false;
+  const rc = rem.classement;
+  if(!rc || typeof rc !== 'object') return false;
+  let bouge = false;
+  if(!db.classement || typeof db.classement !== 'object')
+    db.classement = { film:{}, serie:{}, anime:{}, maj:0 };
+
+  ['film','serie','anime'].forEach(f=>{
+    if(!db.classement[f] || typeof db.classement[f] !== 'object') db.classement[f] = {};
+    const la = (rc[f] && typeof rc[f] === 'object') ? rc[f] : {};
+    Object.keys(la).forEach(id=>{
+      const e = la[id];
+      if(!e || typeof e !== 'object' || typeof e.s !== 'number' || !isFinite(e.s)) return;
+      const nLa = (typeof e.n === 'number' && isFinite(e.n) && e.n > 0) ? Math.floor(e.n) : 0;
+      const ici = db.classement[f][id];
+      const nIci = (ici && typeof ici.n === 'number' && isFinite(ici.n) && ici.n > 0)
+                 ? Math.floor(ici.n) : 0;
+      /* `ici` absent : la clé n'existe que là-bas, on la prend telle quelle.
+         Sinon, seul un `n` STRICTEMENT plus grand fait gagner le distant. */
+      if(ici && nLa <= nIci) return;
+      db.classement[f][id] = { s:e.s, n:nLa };
+      bouge = true;
+    });
+  });
+  const maj = Number(rc.maj) || 0;
+  if(maj > (db.classement.maj || 0)){ db.classement.maj = maj; bouge = true; }
+  /* Forme garantie, même venue d'ailleurs — exactement ce que la fusion du
+     podium fait juste au-dessus. */
+  if(bouge && typeof reparerAvis === 'function') reparerAvis();
   return bouge;
 }
 
