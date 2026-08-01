@@ -307,8 +307,15 @@ function ouvertureRech(){
   if(typeof glisseRetour === 'object' && glisseRetour && typeof glisseRetour.enCours === 'function'
      && glisseRetour.enCours()) return false;
   if(params && params.rechOuvert) return false;
+  /* ON ÉTAIT DÉJÀ SUR RECHERCHE. `go()` ne reconnaît plus l'écran comme
+     identique dès que le marqueur est posé — il compare `params` à `{}` — et
+     réappuyer machinalement sur l'onglet où l'on se trouve jetait donc la
+     phrase composée. Le DOM le dit sans qu'on ait à tenir un état de plus :
+     quand cette fonction s'exécute, `render()` n'a pas encore remplacé
+     l'écran, et l'ancien porte toujours son marqueur. */
+  const dejaLa = !!(document.getElementById('rres') || document.getElementById('rjeu'));
   if(params) params.rechOuvert = 1;
-  return true;
+  return !dejaLa;
 }
 function nouvelleOuvertureRech(){
   const r = etatRech();
@@ -790,9 +797,13 @@ function champRech(){
 }
 function puceFamillesRech(){
   const r = etatRech();
+  /* Pendant un ajout de série, elles sont grisées elles aussi : changer de
+     famille vide les paquets et retire une carte, ce qui laisserait le
+     téléchargement en cours se terminer sur un écran qui a changé de sujet. */
+  const fige = !!(r.jeu && r.jeu.occupe);
   return '<div class="chips types" data-rail="fam-rech">'+RECH_FAMILLES.map(f=>
-    '<button class="chip '+(r.fam===f.id?'on':'')+'" onclick="setFamRech(\''+f.id+'\')">'+
-      esc(f.label)+'</button>').join('')+'</div>';
+    '<button class="chip '+(r.fam===f.id?'on':'')+'"'+(fige?' disabled':'')+
+      ' onclick="setFamRech(\''+f.id+'\')">'+esc(f.label)+'</button>').join('')+'</div>';
 }
 function peindreRech(){
   if(view !== 'search') return;
@@ -1456,21 +1467,55 @@ function jeuPlusTardRech(){
     return suivante();
   }
   j.occupe = 'Ajout de la série…';
-  peindreJeuRech();
+  /* `render()` et pas `peindreJeuRech()` : les puces de famille vivent dans
+     l'en-tête, qui n'est pas repeint par le rendu partiel. Elles doivent se
+     griser elles aussi — voir `poserSerieJeuRech`. */
+  render();
   fetchShowFull(x.id, (a,b)=>{
     if(!etatRech().jeu) return;
     etatRech().jeu.occupe = 'Saisons '+a+'/'+b+'…';
     peindreJeuRech();
   }).then(s=>{
-    s.watched = {}; s.addedAt = Date.now();
-    db.shows[x.id] = s; saveDB();
-    toast('« '+s.name+' » ajoutée');
-    if(etatRech().jeu){ etatRech().jeu.occupe = false; suivante(); }
+    const pose = poserSerieJeuRech(x.id, s);
+    if(!etatRech().jeu) return;
+    etatRech().jeu.occupe = false;
+    render();
+    if(pose) toast('« '+s.name+' » ajoutée');
+    suivante();
   }).catch(()=>{
     if(!etatRech().jeu) return;
-    etatRech().jeu.occupe = false; peindreJeuRech();
+    etatRech().jeu.occupe = false; render();
     toast("Impossible d'ajouter cette série");
   });
+}
+/* L'ÉCRITURE EN BASE, ISOLÉE ET GARDÉE.
+
+   Un téléchargement de saisons dure plusieurs secondes, et l'utilisateur ne
+   reste pas immobile pendant ce temps-là. Cette écriture partait sans rien
+   revérifier : c'est exactement la faute qu'on venait de corriger sur « Plus
+   tard », réintroduite trois lignes plus bas. Le scénario, reproduit en
+   relecture — on appuie sur « Plus tard », puis sur « Déjà vu » pendant le
+   téléchargement, on arrive sur la fiche, on coche la saison 1, et le
+   téléchargement se termine en écrasant la série avec `watched = {}` : quatre
+   épisodes cochés deviennent zéro, sans message et sans retour possible.
+
+   Deux conditions, et il faut les deux :
+     · le jeu n'est plus à l'écran → on a quitté la partie, l'ajout n'a plus
+       de raison d'être et personne ne l'attend ;
+     · la série est déjà en bibliothèque → elle y est arrivée autrement pendant
+       le téléchargement, et ce qui s'y trouve est plus récent que ce qu'on
+       tient. On n'écrase JAMAIS une bibliothèque existante avec une série
+       fraîchement téléchargée, dont `watched` est vide par construction.
+
+   Fonction à part plutôt qu'un `if` en ligne : c'est ce qui la rend testable
+   sans réseau, et un garde-fou qu'aucun test ne peut prendre en défaut est un
+   garde-fou qui disparaîtra. */
+function poserSerieJeuRech(id, s){
+  if(!etatRech().jeu) return false;
+  if(db.shows[id]) return false;
+  s.watched = {}; s.addedAt = Date.now();
+  db.shows[id] = s; saveDB();
+  return true;
 }
 function jeuOuiRech(){                       // « Ce soir, c'est lui »
   /* La décision se conclut par le lancement, pas par un ajout à une liste de
@@ -1543,7 +1588,12 @@ function corpsJeuRech(){
       /* La raison, en haut à gauche. Même règle qu'au chapitre 3 : jamais de
          titre sans explication lisible. */
       '<div class="jsrc">'+esc(x.__pourquoi || '')+'</div>'+
-      '<button class="jdeja" onclick="event.stopPropagation();jeuDejaVuRech()">'+I.check+' Déjà vu</button>'+
+      /* GRISÉ PENDANT UN AJOUT EN COURS, comme les trois gestes du bas. Il ne
+     l'était pas, et c'était le chemin qui menait à la perte d'épisodes : il
+     quitte le jeu, donc il laissait un téléchargement finir dans le vide et
+     écraser la série qu'on venait d'ouvrir. */
+  '<button class="jdeja" onclick="event.stopPropagation();jeuDejaVuRech()"'+
+    (j.occupe?' disabled':'')+'>'+I.check+' Déjà vu</button>'+
       '<div class="jtxt">'+
         '<h3>'+esc(nom)+'</h3>'+
         '<div class="jmeta">'+esc(meta.filter(Boolean).join(' · '))+'</div>'+
