@@ -16,7 +16,7 @@
       a cessé de s'évaluer. Chaque fichier passait `node --check` séparément ;
       l'app, elle, ne démarrait plus.
 
-   3. Il relit les déclarations de premier niveau des onze fichiers et refuse
+   3. Il relit les déclarations de premier niveau des douze fichiers et refuse
       qu'un nom soit déclaré deux fois. Les scripts partagent une seule portée
       globale : c'est la contrainte structurante du projet, et rien ne la
       surveillait. Contrôle statique, donc il attrape aussi les collisions

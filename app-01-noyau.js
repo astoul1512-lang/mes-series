@@ -319,8 +319,53 @@ const MIGRATIONS = {
    8 600 épisodes) avant le premier rendu.
    `normaliserSerie` fait le même travail pour ce qui ARRIVE du distant ; ici
    c'est pour ce qui SORT du stockage local, que rien ne normalisait avant. */
-function reparerBase(){
+/* LOT A — la forme des trois clés du signal d'appréciation.
+   Elle est posée ICI et non dans une migration numérotée : ce sont des clés
+   AJOUTÉES, pas une transformation de format, et le registre lui-même dit qu'un
+   simple contrôle de présence suffit pour ça. Surtout, `reparerBase` tourne à
+   chaque lancement — donc aussi sur une base arrivée d'un autre appareil, ou
+   d'un export réimporté, où la clé peut manquer sans que `db.v` l'avoue.
+
+   Un avis dont le `v` ne vaut ni 1 ni -1 est retiré plutôt que corrigé : on ne
+   devine pas si quelqu'un a aimé. */
+function reparerAvis(){
   let n = 0;
+  if(!db.avis || typeof db.avis !== 'object'){ db.avis = {}; n++; }
+  ['tv','movie'].forEach(m=>{
+    if(!db.avis[m] || typeof db.avis[m] !== 'object'){ db.avis[m] = {}; n++; return; }
+    Object.keys(db.avis[m]).forEach(id=>{
+      const a = db.avis[m][id];
+      if(!a || (a.v !== 1 && a.v !== -1)){ delete db.avis[m][id]; n++; return; }
+      if(typeof a.quand !== 'number'){ a.quand = 0; n++; }
+    });
+  });
+  if(!db.podium || typeof db.podium !== 'object'){ db.podium = {}; n++; }
+  ['film','serie','anime'].forEach(f=>{
+    if(!Array.isArray(db.podium[f])){ db.podium[f] = []; n++; }
+    else if(db.podium[f].length > PODIUM_MAX){ db.podium[f] = db.podium[f].slice(0, PODIUM_MAX); n++; }
+  });
+  if(typeof db.podium.maj !== 'number'){ db.podium.maj = 0; n++; }
+  /* Les avis effacés. Même mécanique que `unwatched` pour les épisodes : sans
+     trace, un 👎 repris ici reviendrait à la première synchro avec un appareil
+     resté en arrière, qui le croit toujours posé. Elles s'effacent seules au
+     bout de trois mois, comme les décochages. */
+  if(!db.avisRetires || typeof db.avisRetires !== 'object'){ db.avisRetires = {}; n++; }
+  ['tv','movie'].forEach(m=>{
+    if(!db.avisRetires[m] || typeof db.avisRetires[m] !== 'object'){ db.avisRetires[m] = {}; n++; return; }
+    const t = Date.now();
+    Object.keys(db.avisRetires[m]).forEach(id=>{
+      if(t - (db.avisRetires[m][id] || 0) > RETENTION_DECOCHE){ delete db.avisRetires[m][id]; n++; }
+    });
+  });
+  return n;
+}
+/* Dix au plus, comme le dit le contrat de données du lot. Au-delà, ce n'est
+   plus un podium : c'est un classement, et le duel a explicitement renoncé à
+   en produire un. */
+const PODIUM_MAX = 10;
+
+function reparerBase(){
+  let n = reparerAvis();
   if(!db.shows || typeof db.shows !== 'object'){ db.shows = {}; n++; }
   if(!db.movies || typeof db.movies !== 'object'){ db.movies = {}; n++; }
   Object.values(db.shows).forEach(s=>{
@@ -609,7 +654,15 @@ function payload(){
               que les proches continuaient de voir l'ancien avatar (il vit dans
               la table `profils`, lui). Arbitrés par `maj` à la réception. */
            gouts:  db.gouts  || null,
-           profil: db.profil || null };
+           profil: db.profil || null,
+           /* LOT A — le signal d'appréciation. Il monte au serveur pour la même
+              raison que les épisodes vus : c'est du patrimoine, pas un réglage.
+              Quelqu'un qui change de téléphone ne doit pas avoir à redire ce
+              qu'il a aimé. Et à la différence des goûts, ces trois-là ne se
+              remplacent pas en bloc — voir `mergeRemote`. */
+           avis:        db.avis        || { tv:{}, movie:{} },
+           avisRetires: db.avisRetires || { tv:{}, movie:{} },
+           podium:      db.podium      || null };
 }
 function mergeRemote(rem){
   if(!rem || typeof rem !== 'object') return false;
@@ -682,6 +735,7 @@ function mergeRemote(rem){
   if(rem.profil && (rem.profil.maj||0) > ((db.profil||{}).maj||0)){
     db.profil = rem.profil; changed = true;
   }
+  if(fusionnerAvis(rem)) changed = true;
   /* Les cloches arrivées d'un autre appareil : la liste côté serveur a été
      écrite par lui, elle ignore donc les nôtres. On la refait au complet. */
   if(typeof fusionnerNotif === 'function' && fusionnerNotif(rem.notif)){
@@ -693,6 +747,94 @@ function mergeRemote(rem){
   }
   return changed;
 }
+/* ---------------------------------------------------------------------------
+   LOT A — la fusion du signal d'appréciation
+
+   Trois pièces, trois règles différentes, et c'est voulu :
+
+   · `avis` se fusionne TITRE PAR TITRE. Chaque avis porte sa propre date, et
+     c'est elle qui tranche. Remplacer le bloc en entier — comme on le fait pour
+     `gouts`, qui est un réglage — perdrait tous les pouces posés sur le
+     téléphone resté en arrière. Un avis est du patrimoine : deux appareils qui
+     ont chacun noté dix titres différents doivent finir avec vingt avis.
+
+   · `avisRetires` porte les avis EFFACÉS, avec leur date. Sans cette trace, un
+     👎 repris dans « Écartés » reviendrait à la première synchro : l'autre
+     appareil le croit toujours posé et le renvoie. Exactement le problème que
+     `unwatched` résout pour les épisodes décochés, et la même solution.
+
+   · `podium` se remplace EN BLOC sur `maj`. C'est un classement, il n'a de sens
+     qu'entier : fusionner deux podiums titre par titre produirait un ordre que
+     personne n'a joué.
+--------------------------------------------------------------------------- */
+function fusionnerAvis(rem){
+  if(!rem || typeof rem !== 'object') return false;
+  let bouge = false;
+  db.avis        = db.avis        || { tv:{}, movie:{} };
+  db.avisRetires = db.avisRetires || { tv:{}, movie:{} };
+
+  ['tv','movie'].forEach(m=>{
+    db.avis[m]        = db.avis[m]        || {};
+    db.avisRetires[m] = db.avisRetires[m] || {};
+    /* Les effacements d'abord : ils doivent pouvoir arbitrer un avis qui arrive
+       dans le même paquet. */
+    const rr = (rem.avisRetires && rem.avisRetires[m]) || {};
+    Object.keys(rr).forEach(id=>{
+      const t = Number(rr[id]) || 0;
+      if(!t) return;
+      if(t > (db.avisRetires[m][id] || 0)){ db.avisRetires[m][id] = t; bouge = true; }
+    });
+    const ra = (rem.avis && rem.avis[m]) || {};
+    Object.keys(ra).forEach(id=>{
+      const a = ra[id];
+      if(!a || (a.v !== 1 && a.v !== -1)) return;
+      const quand = Number(a.quand) || 0;
+      const ici = db.avis[m][id];
+      if(ici && (ici.quand || 0) >= quand) return;
+      /* Effacé ici APRÈS avoir été posé là-bas : l'effacement gagne.
+         Le `efface &&` n'est pas décoratif : `reparerAvis` conserve un avis sans
+         date en lui posant `quand = 0` — cas réel d'un export bricolé ou d'une
+         base venue d'ailleurs — et sans ce garde, `0 >= 0` refusait cet avis à
+         la réception alors qu'AUCUN effacement n'existait. L'avis restait sur
+         son appareil et ne franchissait jamais la synchro. */
+      const efface = db.avisRetires[m][id] || 0;
+      if(efface && efface >= quand) return;
+      db.avis[m][id] = { v:a.v, quand:quand };
+      bouge = true;
+    });
+    /* Effacements distants à appliquer chez nous. */
+    Object.keys(db.avisRetires[m]).forEach(id=>{
+      const ici = db.avis[m][id];
+      if(ici && db.avisRetires[m][id] >= (ici.quand || 0)){ delete db.avis[m][id]; bouge = true; }
+    });
+  });
+
+  /* Le podium porte les TROIS familles dans un seul objet, avec une seule date.
+     Le remplacer en bloc sur cette date perdait le travail de l'autre appareil :
+     jouer les films sur le téléphone puis les séries sur la tablette effaçait
+     le podium des films, définitivement et sans un mot.
+
+     La date arbitre donc famille par famille, et une famille VIDE ne réclame
+     jamais rien : un podium n'est écrit que par une session de duel, il n'est
+     jamais vidé volontairement, donc « vide » veut toujours dire « cet appareil
+     n'a rien joué dans cette famille ». On garde alors ce qu'on a — et
+     réciproquement, on récupère une famille que le distant est seul à porter,
+     même si sa date est plus ancienne que la nôtre. */
+  if(rem.podium && typeof rem.podium === 'object'){
+    db.podium = db.podium || { film:[], serie:[], anime:[], maj:0 };
+    const distantGagne = (rem.podium.maj || 0) > (db.podium.maj || 0);
+    ['film','serie','anime'].forEach(f=>{
+      const la = Array.isArray(rem.podium[f]) ? rem.podium[f] : [];
+      const ici = Array.isArray(db.podium[f]) ? db.podium[f] : [];
+      const gagnant = !la.length ? ici : !ici.length ? la : (distantGagne ? la : ici);
+      if(gagnant !== ici){ db.podium[f] = gagnant; bouge = true; }
+    });
+    if(distantGagne){ db.podium.maj = rem.podium.maj; bouge = true; }
+    if(typeof reparerAvis === 'function') reparerAvis();   // forme garantie, même venue d'ailleurs
+  }
+  return bouge;
+}
+
 function markDeleted(kind, id){
   db.deleted = db.deleted || {shows:{},movies:{}};
   db.deleted[kind][id] = Date.now();
