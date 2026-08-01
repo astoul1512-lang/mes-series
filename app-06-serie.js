@@ -318,17 +318,23 @@ function removeShow(id){
   if(view === 'show') goBack(); else render();
 }
 
-/* Décocher est le geste le plus destructeur de l'app, et le plus facile à faire
-   par accident — un rond de 26 pixels dans une liste dense. Il passe donc par
-   `applyWatched`, comme les gestes de masse : une seule sauvegarde, et surtout
-   la barre Annuler. Cocher 26 épisodes d'un coup était annulable, en cocher un
-   seul par erreur ne l'était pas. */
+/* Décocher est le geste le plus facile à faire par accident — un rond de
+   26 pixels dans une liste dense. Il passe donc toujours par `applyWatched` :
+   une seule sauvegarde, un seul statut recalculé, un seul point d'accroche.
+
+   §1.4 — mais SANS la barre « Annuler ». Elle avait été ajoutée ici parce que
+   cocher 26 épisodes d'un coup était annulable et en cocher un seul ne l'était
+   pas. La réponse retenue est plus simple : un épisode isolé se ré-appuie. Le
+   bouton est là, sous le doigt, il fait exactement l'inverse, et il n'y a rien
+   à reconstruire de mémoire. Une barre qui apparaît à chaque coche encombre le
+   bas de l'écran toute la soirée — et occupe la place de la question qui, elle,
+   n'arrive qu'une fois par saison. */
 function toggleEp(id,s,e){
   const sh = db.shows[id];
   if(!sh) return;
   const k = key(s,e), etaitVu = !!sh.watched[k];
   applyWatched(id, x=>{ if(etaitVu) delete x.watched[k]; else x.watched[k] = Date.now(); },
-               codeEp(s,e) + (etaitVu ? ' décoché' : ' vu'));
+               codeEp(s,e) + (etaitVu ? ' décoché' : ' vu'), { annulable:false });
 }
 /* Cocher une saison marque aussi les précédentes ; la décocher libère les suivantes.
    Les hors-série (saison 0) restent indépendants et ne déclenchent aucune cascade. */
@@ -383,6 +389,11 @@ function toggleToutVu(id){
 let undoData = null, undoTimer = null;
 
 function pushUndo(showId, prevWatched, label){
+  /* LOT A — les deux barres partagent le même emplacement au pixel près, et la
+     question se posait PAR-DESSUS « Annuler » avec un z-index plus fort : le
+     doigt qui visait « Annuler » tombait sur un pouce. Elle recule dans la file
+     et reviendra quand la place sera libre. */
+  if(typeof reculerAvis === 'function') reculerAvis();
   undoData = { showId, prev: prevWatched };
   const el = document.getElementById('undo');
   el.innerHTML = '<span>'+esc(label)+'</span><button onclick="doUndo()">Annuler</button>';
@@ -397,9 +408,18 @@ function hideUndo(){
   if(el) el.classList.remove('show');
   document.body.classList.remove('undo');
   undoData = null;
+  /* LOT A — la barre « Annuler » libère la place : si une question « tu as
+     aimé ? » attendait derrière, c'est son tour. Les deux se suivent au lieu de
+     se mélanger — Annuler reste Annuler, et la question ne pollue pas un geste
+     qu'on est peut-être en train de regretter. */
+  if(typeof filerAvis === 'function') filerAvis();
 }
 function doUndo(){
   if(!undoData) return;
+  /* LOT A — la saison n'est plus terminée : il n'y a plus rien à demander SUR
+     CETTE SÉRIE. Les questions en attente sur d'autres titres, elles, restent
+     valables. Avant `hideUndo`, qui déclenche justement la file. */
+  if(typeof annulerFileAvis === 'function') annulerFileAvis('tv', undoData.showId);
   const sh = db.shows[undoData.showId];
   if(sh){
     const avant = Object.assign({}, sh.watched);
@@ -410,15 +430,35 @@ function doUndo(){
   hideUndo(); render(); toast('Annulé');
 }
 
-/* Applique une modification d'un coup : une sauvegarde, un rendu, un statut recalculé */
-function applyWatched(showId, mutate, label){
+/* Applique une modification d'un coup : une sauvegarde, un rendu, un statut
+   recalculé — et c'est le PASSAGE UNIQUE de toute modification des épisodes vus.
+   C'est pour ça que les deux nouveautés du lot A s'accrochent ici et nulle part
+   ailleurs : aucun chemin ne peut les contourner.
+
+   `opts.annulable` — §1.4. La barre « Annuler » DISPARAÎT du geste unitaire :
+   cocher ou décocher un épisode isolé est réversible par un second clic, au même
+   endroit, immédiatement. Une barre pour ça encombrait le bas de l'écran à
+   chaque coche et, surtout, elle occupait la place où la question « tu as
+   aimé ? » doit maintenant venir.
+   Elle RESTE sur les actions groupées, elles, non réversibles par re-clic :
+   après une cascade, un second clic ne restaure pas l'état d'avant, et personne
+   ne se souvient de ce qui était coché avant.
+   Le défaut est `true` : en cas d'oubli, on retombe sur le comportement d'avant
+   ce lot, jamais sur la perte silencieuse d'un moyen de revenir en arrière. */
+function applyWatched(showId, mutate, label, opts){
   const sh = db.shows[showId];
   if(!sh) return;
+  const annulable = !opts || opts.annulable !== false;
   const prev = Object.assign({}, sh.watched);
+  const saisonsAvant = (typeof saisonsFinies === 'function') ? saisonsFinies(sh) : {};
   mutate(sh);
   noterDecoches(sh, prev);
   saveDB(); render();
-  pushUndo(showId, prev, label);
+  if(annulable) pushUndo(showId, prev, label);
+  /* Après `pushUndo` : la question doit voir si une barre « Annuler » vient
+     d'être posée, pour prendre la file derrière elle. */
+  if(typeof signalerSaisonsFinies === 'function')
+    signalerSaisonsFinies(sh, saisonsAvant, saisonsFinies(sh));
 }
 
 /* Épisodes antérieurs, diffusés et non vus, sur toute la série (hors-série exclus) */
@@ -444,9 +484,10 @@ function tapEp(id, n, e){
     '<button class="opt" onclick="closeSheet()">Annuler</button>');
 }
 
+/* Geste unitaire : un seul épisode, réversible par un second appui (§1.4). */
 function marquerSeul(id, n, e){
   applyWatched(id, sh=>{ sh.watched[key(n,e)] = Date.now(); },
-               codeEp(n,e)+' marqué vu');
+               codeEp(n,e)+' marqué vu', { annulable:false });
 }
 function marquerCascade(id, n, e){
   const sh = db.shows[id];
@@ -457,14 +498,17 @@ function marquerCascade(id, n, e){
 }
 
 /* B5 — le rond de la carte « À rattraper ». C'est le geste le plus exposé de
-   l'app : un rond au milieu d'un rail qui défile sous le pouce. Il passe donc
-   par `applyWatched` comme tout le reste, et devient annulable. Le toast
-   disparaît : la barre Annuler dit déjà ce qui s'est passé, et les deux se
-   recouvrent à l'écran (voir G10). */
+   l'app : un rond au milieu d'un rail qui défile sous le pouce.
+
+   §1.4 — il perd lui aussi sa barre « Annuler » : c'est un épisode, un seul, et
+   la carte affiche aussitôt le suivant, donc l'effet se voit. Le retour en
+   arrière se fait depuis la fiche, d'un appui sur la coche.
+   Le toast reste absent pour la raison d'origine (G10) : il se recouvrirait
+   avec la question « tu as aimé ? » quand ce rond termine une saison. */
 function quickWatch(id, ev){
   if(ev) ev.stopPropagation();
   const s = db.shows[id], nx = nextToWatch(s);
   if(!nx) return;
   applyWatched(id, x=>{ x.watched[key(nx.s,nx.e)] = Date.now(); },
-               codeEp(nx.s,nx.e)+' vu');
+               codeEp(nx.s,nx.e)+' vu', { annulable:false });
 }
