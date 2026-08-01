@@ -80,6 +80,7 @@ window.MODE_TEST = true;
 <script src="./app-09-notifications.js"></script>
 <script src="./app-10-sorties.js"></script>
 <script src="./app-11-gouts.js"></script>
+<script src="./app-12-recherche.js"></script>
 <script src="./app-08-reglages.js"></script>
 
 <script>
@@ -1137,6 +1138,134 @@ window.MODE_TEST = true;
     go('follow');
     vrai(!duel.actif, 'le duel survit à un changement d\'onglet');
     db.auth = null; view = vueAvant;
+  });
+
+  groupe('Lot A — §1.4 : « un second appui défait-il le geste ? »');
+
+  /* La règle avait d'abord été formulée « geste unitaire ou geste groupé », et
+     c'était faux. Le rond de la carte « À rattraper » est unitaire, il avait
+     donc perdu sa barre — sauf qu'il ne se ré-appuie PAS : dès le premier appui
+     il vise l'épisode suivant. Résultat, le geste le plus exposé de l'app
+     n'offrait plus aucun retour en arrière. Les cinq cas qui suivent fixent le
+     vrai critère, pour qu'il ne se reperde pas. */
+  const raz = ()=>{ hideUndo(); annulerFileAvis(null); fermerAvis(); };
+
+  test('la coche d\'un épisode, sur la fiche, ne pose PAS de barre', ()=>{
+    /* Ici un second appui au même endroit défait le geste : la coche ne bouge
+       pas. La barre serait du bruit, et elle occuperait la place de la question. */
+    baseVierge(); raz();
+    db.shows[1] = serie(1, [ep(1,HIER), ep(2,HIER)], {});
+    toggleEp(1, 1, 1);
+    vrai(!barreUndoMontree(), 'une barre est posée sur un geste qui se ré-appuie');
+    marquerSeul(1, 1, 2);
+    vrai(!barreUndoMontree(), 'idem sur « cet épisode uniquement »');
+    raz();
+  });
+
+  test('le rond « À rattraper », lui, POSE une barre', ()=>{
+    baseVierge(); raz();
+    db.shows[1] = serie(1, [ep(1,HIER), ep(2,HIER)], {});
+    quickWatch(1);
+    vrai(barreUndoMontree(),
+         'le geste le plus exposé de l\'app n\'offre aucun retour en arrière');
+    raz();
+  });
+
+  test('et voici pourquoi : le rond ne se ré-appuie pas, il vise déjà le suivant', ()=>{
+    /* La raison de la règle, noir sur blanc. Deux appuis ne défont pas le
+       premier — ils marquent DEUX épisodes. C'est ce cas qui invalide la
+       formulation « unitaire donc réversible ». */
+    baseVierge(); raz();
+    db.shows[1] = serie(1, [ep(1,HIER), ep(2,HIER)], {});
+    quickWatch(1);
+    quickWatch(1);
+    egal(Object.keys(db.shows[1].watched).sort(), ['1x1','1x2'],
+         'le second appui a défait le premier : la règle « unitaire » serait alors juste');
+    raz();
+  });
+
+  test('une action groupée garde sa barre', ()=>{
+    baseVierge(); raz();
+    db.shows[1] = serie(1, [ep(1,HIER), ep(2,HIER), ep(3,HIER)], {});
+    marquerCascade(1, 1, 3);
+    vrai(barreUndoMontree(), 'la barre a disparu d\'une cascade');
+    raz();
+  });
+
+  test('le rond qui termine une saison : la question attend derrière la barre', ()=>{
+    /* Le prix assumé du retour de la barre. Les deux ne doivent jamais être à
+       l'écran ensemble, et la question ne doit pas être perdue pour autant. */
+    baseVierge(); raz();
+    db.shows[1] = serie(1, [ep(1,HIER), ep(2,HIER)], {'1x1':1});
+    quickWatch(1);                                   // dernier épisode de la saison
+    vrai(barreUndoMontree(), '« Annuler » ne s\'est pas affichée');
+    vrai(!barreAvisMontree(), 'LES DEUX BARRES SONT À L\'ÉCRAN');
+    hideUndo();
+    vrai(barreAvisMontree(), 'la question a été perdue au lieu d\'attendre son tour');
+    raz();
+  });
+
+  groupe('Lot A — l\'échappement, jusqu\'au bout');
+
+  test('la fiche ⓘ d\'un duel n\'écrit aucun identifiant brut dans la page', ()=>{
+    /* L'identifiant partait sans filtre dans l'attribut `id` du bloc synopsis,
+       alors que le nom du titre, juste à côté, était bien échappé. Pas
+       exploitable — ces identifiants viennent de TMDB ou de ta propre
+       sauvegarde — mais c'est la règle maison, et elle vaut partout. */
+    baseVierge();
+    duel.paire = [{ media:'movie', id:'1" onload="alert(1)', nom:'Piège', date:null },
+                  { media:'movie', id:'2', nom:'Autre', date:null }];
+    let html = '';
+    const vraiOpen = window.openSheet, vraiCharge = window.chargerFiche;
+    window.openSheet = h => { html = h; };
+    /* `zoneBande` appelle `chargerFiche` dans un `setTimeout(…, 0)` : la rendre
+       à sa place ici, dans le `finally` SYNCHRONE, la restituerait avant que le
+       minuteur ne parte — et la vraie fonction irait sur le réseau. On rend donc
+       la main par un minuteur à son tour : celui de `zoneBande` a été posé le
+       premier, il passe le premier. */
+    window.chargerFiche = ()=>{};
+    /* `synopsisDe`, lui, est appelé tout de suite et va sur le réseau : le
+       bouchon synchrone de `horsLigne` suffit pour celui-là. */
+    horsLigne(()=>{
+      try{ ficheDuel('movie', '1" onload="alert(1)'); }
+      finally { window.openSheet = vraiOpen; }
+    });
+    setTimeout(()=>{ window.chargerFiche = vraiCharge; }, 0);
+    const boite = document.createElement('div');
+    boite.innerHTML = html;
+    egal([...boite.querySelectorAll('[onload]')].length, 0,
+         'un identifiant truqué a produit un attribut exécutable');
+    /* Et les deux blocs restent retrouvables : `esc` protège la SOURCE, le
+       parseur la redécode, donc `peindreSynopsisDuel` et `peindreBande`
+       continuent de viser la clé brute. */
+    vrai(boite.querySelector('[id^="syn-"]'), 'le bloc synopsis a disparu');
+    vrai(boite.querySelector('[id^="ba-"]'), 'la zone bande-annonce a disparu');
+    duel.paire = null;
+  });
+
+  test('le bouton « Bande-annonce » passe par escJs comme partout ailleurs', ()=>{
+    /* Antérieur au lot, trouvé en écrivant le cas ci-dessus : la clé partait
+       nue dans l'`onclick`. Elle est aujourd'hui « movie:550 » — le test fixe
+       la règle, pas une faille. */
+    const k = "movie:1');alert(1);//";
+    const avant = bandes[k];
+    bandes[k] = { key:'abc' };
+    try{
+      const boite = document.createElement('div');
+      boite.innerHTML = boutonBande(k);
+      const b = boite.querySelector('button[onclick]');
+      vrai(b, 'aucun bouton produit : le test ne prouve rien');
+      /* On ne cherche PAS la chaîne « alert » : elle survit légitimement à
+         l'échappement, sous forme de texte. On EXÉCUTE le gestionnaire dans un
+         bac à sable où `ouvrirBande` et `alert` sont deux paramètres — donc
+         aucune boîte de dialogue réelle ne peut s'ouvrir — et on regarde ce qui
+         arrive vraiment. */
+      let recu = null;
+      new Function('ouvrirBande', 'alert', b.getAttribute('onclick'))(
+        x => { recu = x; },
+        ()=>{ throw new Error('du code injecté s\'est exécuté'); });
+      egal(recu, k, 'la clé n\'est pas arrivée intacte');
+    } finally { if(avant === undefined) delete bandes[k]; else bandes[k] = avant; }
   });
 
   groupe('Lot A — la synchro');
