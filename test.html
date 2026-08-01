@@ -127,6 +127,9 @@ window.MODE_TEST = true;
     db.avis = { tv:{}, movie:{} };
     db.avisRetires = { tv:{}, movie:{} };
     db.podium = { film:[], serie:[], anime:[], maj:0 };
+    /* R1 — le classement global. Sans lui, un test qui joue un duel hériterait
+       des scores du test précédent : ils ne sont plus jetés à la fin. */
+    db.classement = { film:{}, serie:{}, anime:{}, maj:0 };
     db.profil = { couleur:'corail', embleme:'lettre' };
     db.pseudo = ''; db.auth = null; db.v = 2;
   }
@@ -1015,17 +1018,189 @@ window.MODE_TEST = true;
     try{ fn(); } finally { window.tmdb = vrai_; }
   }
 
-  test('le duel écrit un podium de dix au plus, du meilleur au moins bon', ()=>{
+  /* R1 · point 11 — le podium n'est PLUS écrit par la session : il est projeté
+     depuis `db.classement`, filtré sur trois duels joués, coupé à dix. */
+  test('le duel projette un podium de dix au plus, du meilleur au moins bon', ()=>{
     baseVierge();
     for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
     ouvrirDuel('film');
     horsLigne(()=>{
-      /* On force un classement lisible plutôt que de jouer douze duels au hasard. */
-      duel.paquet.forEach((t,i)=>{ duel.scores['movie:'+t.id] = 2000 - i; });
+      /* On force un classement lisible plutôt que de jouer douze duels au hasard.
+         Tous à trois duels joués : c'est le seuil d'entrée au podium. */
+      duel.paquet.forEach((t,i)=>{ db.classement.film[String(t.id)] = { s:2000 - i, n:3 }; });
       const attendu = duel.paquet.slice(0,10).map(t=>String(t.id));
       terminerDuel();
       egal(db.podium.film, attendu);
       vrai(db.podium.maj > 0, 'le podium n\'est pas daté : la synchro ne saura pas l\'arbitrer');
+    });
+    fermerDuel();
+  });
+
+  test('un titre en dessous de trois duels est classé, mais pas exposé au podium', ()=>{
+    baseVierge();
+    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
+    ouvrirDuel('film');
+    horsLigne(()=>{
+      /* Le n° 1 par le score n'a joué qu'une fois : il a gagné par chance.
+         Deux autres ont vraiment joué. */
+      db.classement.film['1'] = { s:9000, n:1 };
+      db.classement.film['2'] = { s:1200, n:3 };
+      db.classement.film['3'] = { s:1100, n:7 };
+      terminerDuel();
+      egal(db.podium.film, ['2','3'],
+           'un titre qui a gagné une fois par chance coiffe un titre qui a joué quinze fois');
+      egal(db.classement.film['1'].n, 1, 'le titre a été déclassé au lieu d\'être seulement caché');
+    });
+    fermerDuel();
+  });
+
+  /* LE CAS QUI MANQUAIT, ET IL COÛTAIT NEUF TITRES.
+     La première écriture remplaçait le podium par la seule projection. Le
+     classement démarrant vide, une partie rendait une liste presque vide — et
+     elle écrasait un podium de dix titres. Le seuil des trois duels commande
+     l'ENTRÉE au podium, jamais la sortie de ceux qui y étaient déjà. */
+  test('une partie ne peut pas raccourcir le podium', ()=>{
+    baseVierge();
+    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
+    db.podium.film = ['1','2','3','4','5','6','7','8','9','10']; db.podium.maj = 1;
+    ouvrirDuel('film');
+    horsLigne(()=>{
+      /* Une seule partie : un seul titre a eu le temps d'atteindre ses trois duels. */
+      db.classement.film['12'] = { s:1400, n:3 };
+      terminerDuel();
+      egal(db.podium.film.length, 10, 'le podium a rétréci : des titres sont perdus');
+      egal(db.podium.film[0], '12', 'le titre qui vient de gagner sa place n\'est pas en tête');
+      egal(db.podium.film.slice(1), ['1','2','3','4','5','6','7','8','9'],
+           'l\'ancien podium n\'a pas été conservé dans son ordre, le dernier en moins');
+    });
+    fermerDuel();
+  });
+
+  test('un podium hérité de la v85 survit à la première partie', ()=>{
+    baseVierge();
+    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
+    /* L'état exact d'une base qui vient de migrer : un podium plein, aucun
+       classement derrière. C'est ce cas-là qui effaçait dix titres. */
+    db.podium.film = ['3','4','5']; db.podium.maj = 1;
+    ouvrirDuel('film');
+    horsLigne(()=>{
+      terminerDuel();
+      egal(db.podium.film, ['3','4','5'], 'le podium hérité a été effacé par la première partie');
+    });
+    fermerDuel();
+  });
+
+  /* R1 · L'ÉCRAN DE FIN NE PROMET QUE CE QU'IL TIENDRA.
+     Il annonçait « X devient ton point de départ, la rangée "Dans l'esprit de
+     X" remplace la rotation au hasard ». C'est `departJeuRech` qui décide
+     réellement d'où part cette rangée — et elle prend le premier podium non
+     vide dans l'ordre films, séries, animés, pas la famille qu'on vient de
+     jouer. */
+  test('l\'écran de résultat ne promet pas une rangée qu\'il ne tiendra pas', ()=>{
+    baseVierge();
+    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
+    ouvrirDuel('film');
+    horsLigne(()=>{
+      terminerDuel();                       // aucun titre n'a ses trois duels
+      egal(db.podium.film, [], 'le test ne prouve rien : le podium n\'est pas vide');
+      vrai(!duel.tete, 'un point de départ est annoncé alors qu\'il n\'y en a aucun');
+      const boite = document.createElement('div');
+      boite.innerHTML = ecranDuelResultat();
+      vrai(boite.textContent.indexOf('Dans l\'esprit de') < 0,
+           'l\'écran promet une rangée « Dans l\'esprit de… » qui n\'arrivera pas');
+    });
+    fermerDuel();
+  });
+
+  test('la promesse tient quand la rangée part bien du titre annoncé', ()=>{
+    baseVierge();
+    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
+    db.podium.film = ['5']; db.podium.maj = 1;
+    db.classement.film['5'] = { s:1500, n:4 };
+    ouvrirDuel('film');
+    horsLigne(()=>{
+      terminerDuel();
+      egal(db.podium.film[0], '5');
+      vrai(duel.tete && String(duel.tete.id) === '5', 'le vrai point de départ n\'est pas annoncé');
+      const boite = document.createElement('div');
+      boite.innerHTML = ecranDuelResultat();
+      vrai(boite.textContent.indexOf('Dans l\'esprit de') >= 0,
+           'la promesse a disparu alors qu\'elle est vraie');
+    });
+    fermerDuel();
+  });
+
+  test('jouer une famille quand une autre alimente la rangée ne promet rien', ()=>{
+    baseVierge();
+    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
+    for(let i=21;i<=32;i++) db.shows[i] = serie(i, [ep(1,HIER)], {'1x1':1});
+    /* Un podium de films déjà en place : la rangée part de LUI, quelle que soit
+       la famille qu'on vient de départager. */
+    db.podium.film = ['1']; db.podium.maj = 1;
+    db.classement.film['1'] = { s:1400, n:5 };
+    ouvrirDuel('serie');
+    horsLigne(()=>{
+      db.classement.serie['21'] = { s:1300, n:4 };
+      terminerDuel();
+      egal(db.podium.serie[0], '21', 'le podium des séries n\'a pas été projeté');
+      vrai(!duel.tete,
+           'on promet une rangée bâtie sur la série alors qu\'elle partira du film');
+    });
+    fermerDuel();
+  });
+
+  test('le score survit à la partie : rejouer ne repart pas de 1000', ()=>{
+    baseVierge();
+    for(let i=1;i<=11;i++) db.movies[i] = film(i, ['Drame']);
+    ouvrirDuel('film');
+    duel.paire = [ { media:'movie', id:'1' }, { media:'movie', id:'2' } ];
+    duel.scores['movie:1'] = 1000; duel.scores['movie:2'] = 1000;
+    appliquerVote(0);
+    const apres = db.classement.film['1'].s;
+    vrai(apres > 1000, 'le gagnant n\'a rien gagné dans le classement global');
+    egal(db.classement.film['1'].n, 1, 'le duel joué n\'a pas été compté');
+    egal(db.classement.film['2'].n, 1, 'le duel joué n\'a pas été compté pour le perdant');
+    fermerDuel();
+    /* Une nouvelle partie : le score de départ vient du classement, pas d'un
+       bonus reconstruit depuis le podium. C'était toute la cause de l'immobilité. */
+    ouvrirDuel('film');
+    egal(duel.scores['movie:1'], apres, 'la partie a jeté le travail de la précédente');
+    egal(duel.scores['movie:11'], 1000, 'un titre jamais rencontré ne démarre pas à 1000');
+    fermerDuel();
+  });
+
+  test('un titre du podium ne démarre plus avec une avance de 120 points', ()=>{
+    baseVierge();
+    for(let i=1;i<=11;i++) db.movies[i] = film(i, ['Drame']);
+    /* Un podium hérité de la v85, sans aucun classement derrière : c'est
+       exactement l'état d'une base qui vient de migrer. */
+    db.podium.film = ['1','2','3']; db.podium.maj = 1;
+    poserAvis('movie', 2, 1);
+    ouvrirDuel('film');
+    egal(duel.scores['movie:1'], 1000, 'le n° 1 sortant repart avec une avance');
+    egal(duel.scores['movie:2'], 1000, 'un 👍 donne encore un bonus de départ');
+    fermerDuel();
+  });
+
+  test('une session sert au moins quatre duels « neuf contre podium »', ()=>{
+    baseVierge();
+    for(let i=1;i<=20;i++) db.movies[i] = film(i, ['Drame']);
+    /* Cinq titres bien installés au podium, quinze qui n'ont jamais joué. */
+    db.podium.film = ['1','2','3','4','5']; db.podium.maj = 1;
+    ['1','2','3','4','5'].forEach(id=>{ db.classement.film[id] = { s:1200, n:9 }; });
+    db.classement.maj = 1;
+    ouvrirDuel('film');
+    horsLigne(()=>{
+      let neufs = 0;
+      for(let k=0; k<DUEL_TAILLE && duel.paire; k++){
+        const [a, b] = duel.paire;
+        const pod = t => db.podium.film.indexOf(String(t.id)) >= 0;
+        const zero = t => !db.classement.film[String(t.id)];
+        if((zero(a) && pod(b)) || (zero(b) && pod(a))) neufs++;
+        duel.faits++; duelSuivant();
+      }
+      vrai(neufs >= 4, 'seulement ' + neufs + ' duel(s) neuf contre podium : le classement '+
+           'ne bougera pas plus qu\'avant');
     });
     fermerDuel();
   });
@@ -1039,6 +1214,60 @@ window.MODE_TEST = true;
     vrai(db.gouts.pasVus.indexOf('movie:1') >= 0, 'rien n\'est retenu : il reviendra demain');
     egal(avisDe('movie', 1), 0, '« pas vu » a été pris pour un avis');
     fermerDuel();
+  });
+
+  /* R1 · point 12 — « Encore une chose » ne parle que du duel qui vient de
+     finir. Avant, elle prenait le paquet PUIS toute la bibliothèque : Blue
+     Exorcist revenait en tête juste après avoir été départagé, et le reste de
+     la liste n'avait été vu nulle part dans la session. */
+  test('la liste de rattrapage ne contient que les titres passés à l\'écran', ()=>{
+    baseVierge();
+    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
+    ouvrirDuel('film');
+    /* On rejoue une session lisible : trois paires, six titres vus. */
+    duel.vus = ['1','2','3','4','5','6'].map(id=>({ media:'movie', id:id, nom:'F'+id, date:null }));
+    const l = titresARattraper().map(t=>t.id);
+    egal(l.length, 6, 'la liste déborde du duel : elle est repartie dans la bibliothèque');
+    /* Les titres vus EN DERNIER en haut : l'ordre suit le duel. */
+    egal(l, ['6','5','4','3','2','1'], 'l\'ordre ne suit pas le duel');
+    fermerDuel();
+  });
+
+  test('un titre déjà pouçé ne figure pas dans la liste de rattrapage', ()=>{
+    baseVierge();
+    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
+    ouvrirDuel('film');
+    poserAvis('movie', 2, 1);
+    poserAvis('movie', 3, -1);
+    duel.vus = ['1','2','3','4'].map(id=>({ media:'movie', id:id, nom:'F'+id, date:null }));
+    egal(titresARattraper().map(t=>t.id), ['4','1'],
+         'on redemande un avis à quelqu\'un qui vient de le donner');
+    /* Et un titre récusé pendant la partie ne revient pas non plus.
+       `duelPasVu` enchaîne sur le duel suivant, donc de nouveaux titres passent
+       à l'écran : on repose la même liste de quatre pour ne mesurer que ça. */
+    duelPasVu('movie', 4);
+    duel.vus = ['1','2','3','4'].map(id=>({ media:'movie', id:id, nom:'F'+id, date:null }));
+    egal(titresARattraper().map(t=>t.id), ['1'],
+         'on demande « tu l\'as aimé ? » sur un titre qu\'on vient de dire ne pas avoir vu');
+    fermerDuel();
+  });
+
+  test('liste de rattrapage vide ⇒ l\'écran est sauté, pas affiché à vide', ()=>{
+    baseVierge();
+    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
+    ouvrirDuel('film');
+    duel.vus = ['1','2'].map(id=>({ media:'movie', id:id, nom:'F'+id, date:null }));
+    poserAvis('movie', 1, 1); poserAvis('movie', 2, -1);
+    egal(titresARattraper().length, 0, 'le test ne prouve rien : la liste n\'est pas vide');
+    /* Le résultat doit alors proposer « Terminer », jamais « Continuer → ». */
+    duel.ecran = 'resultat'; duel.classe = []; duel.podiumPret = false;
+    const boite = document.createElement('div');
+    boite.innerHTML = ecranDuelResultat();
+    vrai(boite.textContent.indexOf('Continuer') < 0,
+         '« Continuer → » mène à un écran qui ne demande rien');
+    /* Et s'y rendre quand même referme la session au lieu d'afficher le vide. */
+    ouvrirRattrapage();
+    vrai(!duel.actif, 'l\'écran vide s\'est affiché');
   });
 
   test('un titre au nom truqué ne produit aucun gestionnaire exécutable', ()=>{
@@ -1271,10 +1500,10 @@ window.MODE_TEST = true;
 
   groupe('Lot A — la synchro');
 
-  test('payload emporte les avis, leurs effacements et le podium', ()=>{
+  test('payload emporte les avis, leurs effacements, le podium et le classement', ()=>{
     baseVierge();
     const p = payload();
-    ['avis','avisRetires','podium'].forEach(k=>{
+    ['avis','avisRetires','podium','classement'].forEach(k=>{
       if(p[k] === undefined) throw new Error(k+' ne monte pas au serveur');
     });
   });
@@ -1368,6 +1597,98 @@ window.MODE_TEST = true;
     db.podium.film = ['550']; db.podium.maj = 1;
     vrai(explicationProfil().podium.indexOf('Fight Club') >= 0,
          'le podium des films nomme un titre qui n\'a jamais été départagé');
+  });
+
+  /* ---------------------------------------------------------------------------
+     R1 · point 11 — LA FUSION DU CLASSEMENT
+
+     C'est le point le plus délicat du lot, et le seul endroit où une erreur
+     efface des mois de duels sans que rien ne s'affiche. La propriété à tenir
+     est simple à dire : LA FUSION NE FAIT JAMAIS PERDRE DE DUELS.
+  --------------------------------------------------------------------------- */
+  const clAvecN = (o)=>{ const r = {}; Object.keys(o).forEach(k=>{ r[k] = o[k].n; }); return r; };
+
+  test('le classement se fusionne titre par titre : le plus de duels gagne', ()=>{
+    baseVierge();
+    db.classement.film = { '1':{s:1200,n:9}, '2':{s:900,n:1} };
+    db.classement.maj = 1000;
+    fusionnerClassement({ classement:{ film:{
+      '1':{s:1500,n:2},        // moins de duels : refusé, même avec un meilleur score
+      '2':{s:1400,n:7},        // plus de duels : gagne
+      '3':{s:1100,n:4}         // n'existe que là-bas : conservé tel quel
+    }, serie:{}, anime:{}, maj:2000 } });
+    egal(db.classement.film['1'], { s:1200, n:9 }, 'un classement moins informé a gagné');
+    egal(db.classement.film['2'], { s:1400, n:7 }, 'des duels ont été perdus');
+    egal(db.classement.film['3'], { s:1100, n:4 }, 'une clé du distant a été jetée');
+    egal(db.classement.maj, 2000, '`maj` n\'a pas pris le plus grand des deux');
+  });
+
+  test('la fusion du classement est idempotente : synchroniser deux fois ne dégrade rien', ()=>{
+    baseVierge();
+    db.classement.film = { '1':{s:1200,n:9}, '2':{s:900,n:1} };
+    const paquet = { classement:{ film:{ '1':{s:1500,n:2}, '2':{s:1400,n:7}, '3':{s:1100,n:4} },
+                                  serie:{}, anime:{}, maj:2000 } };
+    fusionnerClassement(paquet);
+    const apres1 = JSON.stringify(db.classement);
+    fusionnerClassement(paquet);
+    egal(db.classement, JSON.parse(apres1), 'la seconde synchro a changé le classement');
+    vrai(!fusionnerClassement(paquet), 'la seconde synchro se croit encore porteuse d\'un changement');
+  });
+
+  test('aucun duel n\'est perdu, quel que soit l\'ordre des appareils', ()=>{
+    /* Le téléphone et la tablette ont chacun joué de leur côté. Peu importe qui
+       se synchronise le premier : chaque titre doit finir avec le plus grand
+       nombre de duels des deux, et aucune clé ne doit disparaître. */
+    const A = { '1':{s:1200,n:9}, '2':{s:900,n:1},  '4':{s:1000,n:5} };
+    const B = { '1':{s:1500,n:2}, '2':{s:1400,n:7}, '3':{s:1100,n:4} };
+    const attendu = { '1':9, '2':7, '3':4, '4':5 };
+
+    baseVierge();
+    db.classement.film = JSON.parse(JSON.stringify(A));
+    fusionnerClassement({ classement:{ film:JSON.parse(JSON.stringify(B)), maj:0 } });
+    egal(clAvecN(db.classement.film), attendu, 'des duels ont été perdus dans un sens');
+
+    baseVierge();
+    db.classement.film = JSON.parse(JSON.stringify(B));
+    fusionnerClassement({ classement:{ film:JSON.parse(JSON.stringify(A)), maj:0 } });
+    egal(clAvecN(db.classement.film), attendu, 'des duels ont été perdus dans l\'autre sens');
+  });
+
+  test('la fusion du classement n\'imite pas celle du podium : rien ne se remplace en bloc', ()=>{
+    /* Jouer les films sur le téléphone puis les séries sur la tablette. Avec un
+       remplacement en bloc sur la date — la règle du podium — le classement des
+       films disparaîtrait, définitivement et sans un mot. */
+    baseVierge();
+    db.classement.film = { '11':{s:1300,n:6} };
+    db.classement.maj = 1000;
+    fusionnerClassement({ classement:{ film:{}, serie:{ '99':{s:1250,n:4} }, anime:{}, maj:5000 } });
+    egal(db.classement.film['11'], { s:1300, n:6 }, 'le classement des films a été effacé');
+    egal(db.classement.serie['99'], { s:1250, n:4 }, 'le classement des séries n\'est pas arrivé');
+  });
+
+  test('la migration crée le classement sans jamais détruire le podium', ()=>{
+    baseVierge();
+    /* L'état exact d'une base qui arrive de la v85 : un podium, pas de classement. */
+    db.podium = { film:['550','551'], serie:[], anime:[], maj:1234 };
+    delete db.classement;
+    reparerAvis();
+    egal(db.podium.film, ['550','551'], 'le podium hérité a été détruit par la migration');
+    egal(db.podium.maj, 1234, 'la date du podium a été écrasée');
+    egal(db.classement, { film:{}, serie:{}, anime:{}, maj:0 },
+         'le classement n\'a pas été créé, ou pas vide');
+  });
+
+  test('reparerAvis remet en forme un classement abîmé sans jeter ce qui est lisible', ()=>{
+    baseVierge();
+    db.classement = { film:{ '1':{s:1200,n:3}, '2':{s:'beaucoup',n:2},
+                             '3':{s:1100}, '4':{s:1050,n:-4} }, maj:'hier' };
+    reparerAvis();
+    egal(db.classement.film['1'], { s:1200, n:3 }, 'une entrée saine a été touchée');
+    vrai(!db.classement.film['2'], 'un score qui n\'en est pas un a été gardé');
+    egal(db.classement.film['3'], { s:1100, n:0 }, 'un compteur absent n\'a pas été comblé');
+    egal(db.classement.film['4'], { s:1050, n:0 }, 'un compteur négatif a été gardé');
+    egal(db.classement.maj, 0, 'une date qui n\'en est pas une a été gardée');
+    egal(db.classement.serie, {}, 'une famille manquante n\'a pas été créée');
   });
 
   test('reparerAvis jette un avis qui n\'en est pas un', ()=>{
@@ -2205,9 +2526,12 @@ window.MODE_TEST = true;
     const vraieZone = window.zoneBande;
     window.zoneBande = function(){ return ''; };
     try{ boite.innerHTML = corpsJeuRech(); } finally { window.zoneBande = vraieZone; }
-    /* « Déjà vu » quitte le jeu : le laisser cliquable pendant un
-       téléchargement, c'est rouvrir le chemin de la perte d'épisodes. */
-    vrai(boite.querySelector('.jdeja[disabled]'), '« Déjà vu » reste cliquable pendant l\'ajout');
+    /* « Je l'ai déjà vu » quitte le jeu : le laisser cliquable pendant un
+       téléchargement, c'est rouvrir le chemin de la perte d'épisodes.
+       LOT R2, point 7 : l'action a quitté le coin haut-droit pour la ligne
+       d'actions sous le résumé — c'est `.jvu`, dans `.jmini`. */
+    vrai(boite.querySelector('.jvu[disabled]'),
+         '« Je l\'ai déjà vu » reste cliquable pendant l\'ajout');
     egal(boite.querySelectorAll('.jgestes .jg[disabled]').length, 3,
          'les trois gestes du bas ne sont pas tous grisés');
     vrai(boite.textContent.indexOf('Saisons 1/3') >= 0, 'l\'attente n\'est pas dite à l\'écran');
@@ -2240,6 +2564,353 @@ window.MODE_TEST = true;
       if(faux.parentNode) faux.parentNode.removeChild(faux);
       params = sauve;
     }
+  });
+
+  /* ==================== Recherche — LOT R2 ====================
+     Un cas par décision, et surtout un cas par CUL-DE-SAC : ce lot corrige des
+     défauts qui ne se voyaient pas à la lecture du code, seulement à l'usage.
+     Ce sont exactement ceux qui reviennent si personne ne les garde. */
+  groupe('LOT R2 — point 19 : « + préciser » ouvre ce qui reste');
+
+  test('« Peu importe » laisse le critère atteignable', ()=>{
+    const r = rechVierge('film');
+    r.amb = null;
+    const tous = critLibresRech().map(m=>m.cle);
+    ['origine','epoque','duree','note','pasvu','plate'].forEach(c=>
+      vrai(tous.indexOf(c) >= 0, 'le critère « '+c+' » n\'est pas proposé'));
+    /* « Peu importe » remet le mot à `null` : le critère est donc LIBRE, et il
+       doit reparaître. C'est exactement la demande d'Adrien — pouvoir revenir
+       sur un critère auquel on avait répondu « ça m'est égal ». */
+    r.origine = null;
+    vrai(critLibresRech().some(m=>m.cle==='origine'),
+         'un critère répondu « peu importe » ne revient pas : c\'est le cul-de-sac');
+    r.origine = 'fr';
+    vrai(!critLibresRech().some(m=>m.cle==='origine'),
+         'un critère déjà posé est proposé une deuxième fois');
+  });
+
+  test('les constantes de la famille ne se proposent jamais', ()=>{
+    const r = rechVierge('serie');
+    vrai(!critLibresRech().some(m=>m.cle==='duree'),
+         'la durée est proposée hors des films : elle n\'y veut rien dire');
+    r.fam = 'film';
+    vrai(critLibresRech().some(m=>m.cle==='duree'), 'la durée manque sur les films');
+    /* L'origine, elle, N'EST PLUS une constante des animés depuis le point 20 :
+       la famille s'est ouverte à trois langues, le mot a donc un vrai choix. */
+    r.fam = 'anime';
+    vrai(critLibresRech().some(m=>m.cle==='origine'), '« d\'où » manque sur les animés');
+  });
+
+  test('« + préciser » ouvre la liste, plus jamais toujours le même mot', ()=>{
+    const r = rechVierge('film');
+    r.amb = null;
+    const boite = document.createElement('div');
+    boite.innerHTML = blocPhraseRech();
+    const b = boite.querySelector('.rmot.vide');
+    vrai(b, 'l\'invitation à préciser a disparu');
+    vrai(/ouvrirAjoutRech\(\)/.test(b.getAttribute('onclick')),
+         '« + préciser » impose encore un mot au lieu d\'ouvrir un choix');
+    ouvrirAjoutRech();
+    const f = document.getElementById('sheetin');
+    egal(f.querySelectorAll('.rajl').length, critLibresRech().length,
+         'la feuille ne liste pas tous les critères libres');
+    vrai(f.textContent.indexOf('Terminé') >= 0,
+         'aucune sortie « Terminé » : on ne sait pas comment refermer');
+    closeSheet();
+  });
+
+  groupe('LOT R2 — points 16 et 20 : les quatre familles se partagent le catalogue');
+
+  test('la famille Animés demande l\'animation asiatique en UNE requête', ()=>{
+    const r = rechVierge('anime');
+    genresTMDB.tv = [{ id:16, nom:'Animation' }];
+    const p = paramsRech('tv');
+    egal(p.with_genres, '16', 'le genre Animation n\'est plus la définition du cadre');
+    egal(p.with_original_language, 'ja|zh|ko',
+         'le OU sur la langue d\'origine a été perdu : mesuré, il fonctionne');
+    genresTMDB.tv = null;
+  });
+
+  test('la famille Séries ne rend plus d\'animation asiatique', ()=>{
+    const r = rechVierge('serie');
+    genresTMDB.tv = [{ id:16, nom:'Animation' }, { id:35, nom:'Comédie' }];
+    const dora    = { id:1, __media:'tv', genre_ids:[16],    original_language:'ja', name:'Doraemon' };
+    const donghua = { id:2, __media:'tv', genre_ids:[16],    original_language:'zh', name:'Perfect World' };
+    const rick    = { id:3, __media:'tv', genre_ids:[16,35], original_language:'en', name:'Rick et Morty' };
+    const house   = { id:4, __media:'tv', genre_ids:[35],    original_language:'en', name:'House of the Dragon' };
+    const lot = [dora, donghua, rick, house];
+    /* Rick et Morty RESTE : c'est une série animée occidentale, aucune autre
+       puce ne peut l'accueillir, et la rendre introuvable serait un défaut plus
+       grave que celui qu'on corrige. */
+    egal(tamiserRech(lot).map(x=>x.id), [3,4],
+         'Doraemon est resté dans Séries, ou Rick et Morty en est sorti');
+    r.fam = 'anime';
+    egal(tamiserRech(lot).map(x=>x.id), [1,2],
+         'la puce Animés ne rend pas l\'animation asiatique, et elle seule');
+    genresTMDB.tv = null;
+  });
+
+  test('le garde-fou : sans langue ni genre, on ne filtre pas à l\'aveugle', ()=>{
+    const r = rechVierge('serie');
+    genresTMDB.tv = [{ id:16, nom:'Animation' }];
+    /* Mieux vaut un écran un peu large qu'un écran vide sans explication.
+       C'est la règle que `garderAnimesRech` tenait déjà dans l'autre sens. */
+    egal(tamiserRech([{ id:1, __media:'tv', name:'Sans info' }]).length, 1,
+         'un écran a été vidé faute d\'information, au lieu de rester large');
+    genresTMDB.tv = null;
+  });
+
+  groupe('LOT R2 — point 15 : ne plus proposer ce qui est déjà vu');
+
+  test('« Un classique que j\'ai raté » tient la promesse de son nom', ()=>{
+    const r = rechVierge('film');
+    r.amb = 'classique';
+    db.movies[808] = { id:808, title:'Shrek', genres:[], seen:true };
+    egal(tamiserRech([t_(808,'movie'), t_(999,'movie')]).map(x=>x.id), [999],
+         'l\'ambiance contredit encore son propre libellé');
+    vrai(tamisActifRech(), 'le compteur annonce toujours un chiffre qu\'il ne tient pas');
+  });
+
+  test('le mot « que je n\'ai pas vu » vaut pour n\'importe quelle recherche', ()=>{
+    const r = rechVierge('film');
+    db.movies[808] = { id:808, title:'Shrek', genres:[], seen:true };
+    /* La règle générale de l'écran ne bouge pas : on demande, on a tout, et ce
+       qu'on a est marqué. Le retrait n'a lieu que si on le demande. */
+    egal(tamiserRech([t_(808,'movie'), t_(999,'movie')]).length, 2,
+         'la règle générale de l\'écran a changé sans qu\'on le demande');
+    r.pasvu = 'non';
+    egal(tamiserRech([t_(808,'movie'), t_(999,'movie')]).map(x=>x.id), [999],
+         'le mot ne retire rien');
+    vrai(motsPhraseRech().some(m=>m.mot === "que je n'ai pas vu"),
+         'le mot ne se déplie pas dans la phrase');
+    /* Et il ne part PAS à TMDB, qui ne connaît pas ta bibliothèque. */
+    const p = paramsRech('movie');
+    vrai(!Object.keys(p).some(k=>/pasvu|vu|watched/i.test(k)),
+         'un paramètre inventé est parti à TMDB');
+  });
+
+  test('le compteur ne promet plus un chiffre qu\'il ne tient pas', ()=>{
+    const r = rechVierge('film');
+    egal(prefixeCompteurRech(), '', 'un écran sans retrait ne doit rien nuancer');
+    r.fam = 'serie';
+    egal(prefixeCompteurRech(), 'moins de ',
+         'le compteur annonce 4 986 séries alors qu\'il en retire les animés');
+    r.fam = 'film'; r.pasvu = 'non';
+    egal(prefixeCompteurRech(), 'moins de ');
+  });
+
+  groupe('LOT R2 — points 14 et 18 : « d\'où » remplace « en quelle langue »');
+
+  test('les cinq origines, et le piège du pays français', ()=>{
+    rechVierge('film');
+    egal(RECH_ORIGINES.map(o=>o.id), ['fr','us','eu','ja','monde']);
+    const fr = RECH_ORIGINES.find(o=>o.id==='fr');
+    egal(fr.p.with_original_language, 'fr', 'le français doit passer par la langue d\'origine');
+    /* LE PIÈGE : `with_origin_country=FR` rend 517 films… dont Terminator 2.
+       TMDB compte tous les pays de production, une participation financière
+       suffit. Ce cas garde la porte fermée. */
+    vrai(!fr.p.with_origin_country, 'le piège de Terminator 2 est revenu sur « français »');
+    const ja = RECH_ORIGINES.find(o=>o.id==='ja');
+    vrai(!ja.p.with_origin_country, 'le japonais doit passer par la langue, comme le français');
+    /* Dans l'autre sens, la langue seule ne suffit pas : `en` ramènerait le
+       Royaume-Uni et l'Australie. Là, le pays est nécessaire. */
+    const us = RECH_ORIGINES.find(o=>o.id==='us');
+    egal(us.p.with_origin_country, 'US');
+    egal(us.p.with_original_language, 'en');
+    vrai(RECH_ORIGINES.find(o=>o.id==='eu').p.with_origin_country.indexOf('GB') >= 0,
+         'l\'Europe doit se dire en pays');
+    /* La règle des 50–500 ne s'applique PAS ici : une origine est un
+       ingrédient, pas une recette. On exige seulement qu'elle ait été mesurée. */
+    vrai(RECH_ORIGINES.every(o=>o.mesure > 0), 'une origine part sans avoir été mesurée');
+  });
+
+  test('« d\'où » a sa propre liste sur les animés', ()=>{
+    const r = rechVierge('anime');
+    egal(originesRech().map(o=>o.id), ['ja','zh','ko'],
+         'les neuf langues absurdes sont revenues, ou la liste juste a disparu');
+    genresTMDB.tv = [{ id:16, nom:'Animation' }];
+    r.origine = 'zh';
+    egal(paramsRech('tv').with_original_language, 'zh',
+         'demander « chinois » ne change rien à la requête envoyée');
+    genresTMDB.tv = null;
+    r.fam = 'film';
+    egal(originesRech().length, 5, 'la liste générale a perdu des origines');
+  });
+
+  test('changer de famille ne laisse pas traîner une origine impossible', ()=>{
+    const r = rechVierge('anime');
+    r.origine = 'zh';
+    /* `setFamRech` relance l'écran ; on rejoue seulement sa décision. */
+    r.fam = 'film';
+    if(r.origine && !origineRech(r.origine)) r.origine = null;
+    egal(r.origine, null, 'une origine d\'animé a survécu au passage aux films');
+  });
+
+  groupe('LOT R2 — point 17 : les huit ambiances de séries');
+
+  test('les huit recettes tiennent les trois règles du §4.6', ()=>{
+    egal(RECH_AMBIANCES_TV.length, 8);
+    RECH_AMBIANCES_TV.forEach(a=>{
+      const clés = {};
+      (a.ing||[]).forEach(i => Object.keys(i.p).forEach(k => { clés[k] = 1; }));
+      Object.keys(a.fond||{}).forEach(k => { clés[k] = 1; });
+      vrai(Object.keys(clés).length >= 3, a.id+' : moins de trois ingrédients');
+      vrai(a.mesure >= 50 && a.mesure <= 500,
+           a.id+' : mesuré hors de la fourchette 50–500 ('+a.mesure+')');
+      /* Le `without_genres=16` a été RETIRÉ — décision du point 16. La famille
+         s'occupe de l'exclusion, et plus finement. Le garder ferait disparaître
+         Rick et Morty des ambiances alors qu'il reste dans la grille : les deux
+         écrans se contrediraient. */
+      (a.ing||[]).forEach(i=>{
+        if(i.p.without_genres)
+          vrai(String(i.p.without_genres).split(',').indexOf('16') < 0,
+               a.id+' : le without_genres=16 est revenu');
+      });
+    });
+    /* Quatre libellés existent des deux côtés avec des recettes différentes :
+       sans préfixe, une ambiance de film survivrait au passage sur Séries en
+       changeant de recette en silence. */
+    vrai(RECH_AMBIANCES_TV.every(a=>/^tv-/.test(a.id)),
+         'un identifiant de recette de série n\'est pas préfixé');
+    vrai(!RECH_AMBIANCES_TV.some(a=>RECH_AMBIANCES.some(f=>f.id === a.id)),
+         'deux recettes différentes partagent un identifiant');
+  });
+
+  test('les ambiances de séries sont enfin proposées', ()=>{
+    const r = rechVierge('serie');
+    egal(ambiancesRech().length, 8, 'la rangée d\'ambiances est encore vide sur Séries');
+    r.fam = 'tout';
+    egal(ambiancesRech().length, 0,
+         'une recette non mesurée est proposée sur « Tout » : règle 3 du §4.6');
+  });
+
+  test('« Un classique » se calcule en années glissantes, jamais en date fixe', ()=>{
+    const r = rechVierge('serie');
+    r.amb = 'tv-classique';
+    const p = paramsRech('tv');
+    const attendu = String(new Date().getFullYear() - 15);
+    vrai(String(p['first_air_date.lte']||'').indexOf(attendu) === 0,
+         'la recette est écrite en date fixe : elle vieillira toute seule');
+    egal(p['vote_average.gte'], '8');
+    egal(p['vote_count.gte'], '800', 'le plancher invisible de la recette a bougé');
+    vrai(sansVusDemandeRech(), 'le classique des séries n\'exclut pas la bibliothèque');
+  });
+
+  groupe('LOT R2 — point 13 : pas plus de deux du même genre à la suite');
+
+  test('la règle réordonne, elle ne retire jamais rien', ()=>{
+    rechVierge('film');
+    const l = [];
+    for(let i = 1; i <= 6; i++) l.push(t_(i,'movie',[16]));   // six animations
+    l.push(t_(7,'movie',[35]), t_(8,'movie',[18]));
+    const out = espacerGenresRech(l);
+    egal(out.length, 8, 'LA RÈGLE A RETIRÉ DES TITRES — elle ne doit que réordonner');
+    egal(out.map(x=>x.id).sort((a,b)=>a-b), [1,2,3,4,5,6,7,8],
+         'un titre a disparu ou a été dupliqué');
+    let suite = 1, faute = 0;
+    for(let i = 1; i < out.length; i++){
+      const g = genreDominantRech(out[i]);
+      suite = (g && g === genreDominantRech(out[i-1])) ? suite + 1 : 1;
+      if(suite > 2) faute++;
+    }
+    egal(faute, 0, 'trois titres du même genre se suivent encore');
+  });
+
+  test('`trierParGout` garde la même longueur après l\'espacement', ()=>{
+    rechVierge('film');
+    genresTMDB.movie = [{ id:16, nom:'Animation' }, { id:35, nom:'Comédie' }];
+    db.gouts.genres = ['Animation'];        // le cas d'Adrien : l'animation écrase tout
+    const l = [];
+    for(let i = 1; i <= 9; i++) l.push(t_(i,'movie', i <= 6 ? [16] : [35]));
+    const out = trierParGout(l);
+    egal(out.length, 9, 'LE PROFIL A FILTRÉ — c\'est la faute capitale de cet écran');
+    egal(out.map(x=>x.id).sort((a,b)=>a-b), [1,2,3,4,5,6,7,8,9],
+         'un titre a disparu du résultat');
+    vrai(genreDominantRech(out[0]) !== genreDominantRech(out[2]) ||
+         genreDominantRech(out[1]) !== genreDominantRech(out[2]),
+         'les trois premiers résultats sont du même genre');
+    genresTMDB.movie = null;
+  });
+
+  groupe('LOT R2 — point 4 : le jeu respecte la puce et la phrase');
+
+  test('aucune source du jeu ne sort de la famille demandée', ()=>{
+    const r = rechVierge('serie');
+    genresTMDB.tv = [{ id:16, nom:'Animation' }, { id:35, nom:'Comédie' }];
+    r.jeu = { pool:{}, page:{}, ecartes:{}, precedente:null };
+    const film  = { id:11, __media:'movie', genre_ids:[35], original_language:'en' };
+    const anime = { id:12, __media:'tv',    genre_ids:[16], original_language:'ja' };
+    const serie = { id:13, __media:'tv',    genre_ids:[35], original_language:'en' };
+    vrai(!jouableRech(film),  'un film est distribué alors que la puce dit « Séries »');
+    vrai(!jouableRech(anime), 'un animé est distribué sur la puce « Séries »');
+    vrai(jouableRech(serie),  'une série honnête est refusée');
+    r.jeu = null; genresTMDB.tv = null;
+  });
+
+  test('la phrase s\'applique aux cartes « Parce que tu as aimé … »', ()=>{
+    const r = rechVierge('film');
+    genresTMDB.movie = [{ id:35, nom:'Comédie' }, { id:27, nom:'Horreur' }];
+    r.genre = 'Comédie'; r.note = '7';
+    const bon  = { id:1, __media:'movie', genre_ids:[35], vote_average:7.4, release_date:'2015-01-01' };
+    const faux = { id:2, __media:'movie', genre_ids:[27], vote_average:7.4, release_date:'2015-01-01' };
+    const mou  = { id:3, __media:'movie', genre_ids:[35], vote_average:5.1, release_date:'2015-01-01' };
+    vrai(respecteDemandeRech(bon,'movie'),   'une carte conforme est rejetée');
+    vrai(!respecteDemandeRech(faux,'movie'), 'le genre de la phrase n\'est pas appliqué');
+    vrai(!respecteDemandeRech(mou,'movie'),  'la note de la phrase n\'est pas appliquée');
+    genresTMDB.movie = null;
+  });
+
+  test('une source qui ne sait pas respecter la demande rend un tas vide', ()=>{
+    const r = rechVierge('film');
+    vrai(!demandeAveugleRech(), 'une phrase nue devrait être vérifiable');
+    /* C'est le trou exact des films de 1 h 45 servis sur « plus de 2 h 15 » :
+       une liste de résultats ne porte pas la durée. */
+    r.duree = 'long';
+    vrai(demandeAveugleRech(), 'la durée se prétend vérifiable sur une liste');
+    r.duree = null; r.amb = 'vraie';        // recette à mot-clé
+    vrai(demandeAveugleRech(), 'un mot-clé se prétend vérifiable sur une liste');
+    r.amb = null; r.plate = 'mes';
+    vrai(demandeAveugleRech(), 'une plateforme se prétend vérifiable sur une liste');
+  });
+
+  test('le point de départ de « coeur » est du média de la famille', ()=>{
+    const r = rechVierge('serie');
+    db.podium = { film:[603], serie:[], anime:[], maj:0 };
+    db.movies[603] = { id:603, title:'Matrix', genres:[] };
+    egal(departJeuRech('tv'), null,
+         'le jeu partirait d\'un film pour proposer des séries');
+    db.shows[1399] = { id:1399, name:'Le Trône de fer', genres:[], seasons:{}, watched:{} };
+    db.podium.serie = [1399];
+    const d = departJeuRech('tv');
+    vrai(d && d.media === 'tv' && d.id === 1399, 'le départ série n\'est pas retenu');
+  });
+
+  test('le libellé « Dans tes genres » ne dit plus deux fois le même genre', ()=>{
+    rechVierge('film');
+    genresTMDB.tv = [{ id:10759, nom:'Action & Adventure' }];
+    db.gouts.genres = ['Action', 'Action & Adventure', 'Comédie'];
+    /* Côté séries, « Action » et « Action & Adventure » sont le MÊME genre
+       TMDB : `genreParNom` les ramène au même identifiant. */
+    egal(genresProfilRech('tv'), ['Action', 'Comédie'],
+         'l\'étiquette affiche encore « Action et Action & Adventure »');
+    genresTMDB.tv = null;
+  });
+
+  groupe('LOT R2 — point 3 : un tap ouvre la vraie fiche');
+
+  test('la jaquette ouvre la fiche, plus l\'aperçu', ()=>{
+    rechVierge('film');
+    const boite = document.createElement('div');
+    boite.innerHTML = jaquetteRech(t_(603,'movie',[28]));
+    const on = boite.querySelector('.jq').getAttribute('onclick');
+    vrai(/ouvrirTitre\(603,'movie','search'\)/.test(on),
+         'la jaquette n\'ouvre pas la fiche : '+on);
+    /* L'aperçu n'a plus de raison d'exister sur cet écran : ni sa fonction, ni
+       sa fermeture ne doivent traîner. Une fermeture orpheline se rejouerait
+       sur la feuille suivante. */
+    vrai(typeof window.peindreDetailRech === 'undefined',
+         'l\'aperçu de Recherche est encore là');
+    vrai(!FERMETURES['detail-rech'], 'la fermeture de l\'aperçu traîne encore');
   });
 
   /* ==================== Bilan ==================== */

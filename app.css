@@ -973,7 +973,13 @@
 
   .iwrap{padding-bottom:6px}
   .ititre{font-size:25px;font-weight:800;letter-spacing:-.5px;line-height:1.15;margin:12px 0 6px}
-  .itxt{color:var(--muted);font-size:13.5px;line-height:1.5;margin:0}
+  /* R1 · point 2 — RATTACHÉE À SON ÉCRAN. Déclarée nue, cette règle écrasait
+     discrètement le texte du bloc d'invitation d'un proche (`.invitg .itxt`,
+     plus haut), qui porte le même nom depuis le socle. Les deux conteneurs du
+     parcours d'inscription sont nommés ici, exactement comme le socle nomme le
+     sien. Correctif fait SUR PLACE, et non en fin de fichier : une collision se
+     répare là où elle est née. */
+  .iwrap .itxt,.ifini .itxt{color:var(--muted);font-size:13.5px;line-height:1.5;margin:0}
 
   /* L'encadré d'explication : le même objet que `.note` de la maquette. Il sert
      à trois choses différentes — dire ce qu'on a déduit, dire pourquoi l'animé
@@ -1102,15 +1108,32 @@
   body.avis .app{padding-bottom:calc(142px + var(--safe-b))}
 
   /* ---------- Le duel ----------
-     Deux affiches EMPILÉES et non côte à côte : sur un téléphone, deux affiches
-     côte à côte font 150 pixels de large chacune, on ne reconnaît plus rien.
-     Empilées, elles gardent une vraie surface, et le pouce atteint les deux. */
-  /* 137 px = l'en-tête (61) + la place réservée sous le contenu pour la barre
-     du bas (76). Mesuré, pas estimé : à 190 px l'arène s'arrêtait 53 px trop
-     haut et les deux affiches perdaient chacune un quart de leur surface. */
+     R1 · point 10 — DEUX AFFICHES CÔTE À CÔTE, AU FORMAT EXACT DE LA JAQUETTE.
+     Elles étaient empilées : chaque carte était donc large et basse, et
+     l'affiche, au format 2/3, y était recadrée en `cover` — on n'en voyait
+     qu'une bande centrale, 51 % mesurés sur un iPhone de 390 × 844. Le duel
+     demande de choisir sur la seule foi de l'affiche ; une affiche tronquée
+     rend la question sans réponse honnête.
+     Deux colonnes, le VS entre elles, chaque carte au format 2/3 et centrée
+     verticalement : 170 × 255 avec 100 % de l'affiche. La bande vide au-dessus
+     et en dessous est le prix du format respecté. */
+  /* R1 · point 9 — LA HAUTEUR DE L'ARÈNE, ZONES DE SÉCURITÉ COMPRISES.
+     137 px = l'en-tête (61) + la place réservée sous le contenu pour la barre
+     du bas (76). Ce calcul OUBLIAIT les deux zones de sécurité de l'iPhone :
+     l'en-tête porte `padding-top:var(--safe-t)` (l'encoche, ~59 px) et la barre
+     du bas `padding-bottom:var(--safe-b)` (~34 px). L'arène était donc ~93 px
+     plus haute que la place réelle — très exactement la hauteur du bouton
+     « Je ne sais pas / les deux », qui passait sous la ligne de flottaison.
+     `max-height` autant que `min-height` : c'est elle qui garantit que la
+     sortie neutre est visible SANS DÉFILER, toujours. Sans elle, une carte
+     trop haute repousserait à nouveau le bouton hors de l'écran. */
   .darene{display:flex;flex-direction:column;padding:0 16px 16px;
-    min-height:calc(100vh - 137px)}
-  @supports (min-height:100dvh){ .darene{min-height:calc(100dvh - 137px)} }
+    min-height:calc(100vh - 137px - var(--safe-t) - var(--safe-b));
+    max-height:calc(100vh - 137px - var(--safe-t) - var(--safe-b))}
+  @supports (min-height:100dvh){
+    .darene{min-height:calc(100dvh - 137px - var(--safe-t) - var(--safe-b));
+            max-height:calc(100dvh - 137px - var(--safe-t) - var(--safe-b))}
+  }
   .dcompte{color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums;
     align-self:center;margin-right:4px}
   .dbarre{height:3px;background:#1c2029;border-radius:2px;overflow:hidden;margin:2px 0 0}
@@ -1118,11 +1141,19 @@
     transition:width .3s ease}
   .dquest{text-align:center;font-size:20px;font-weight:800;letter-spacing:-.4px;margin:14px 0 2px}
   .dsous{text-align:center;color:var(--muted);font-size:12.5px;margin-bottom:12px}
-  .dcartes{flex:1;display:flex;flex-direction:column;position:relative;min-height:0}
-  .dcarte{flex:1;min-height:0;border-radius:16px;border:1.5px solid var(--line);
-    position:relative;overflow:hidden;display:block;width:100%;
+  /* Une rangée, pas une colonne. `align-items:center` fait le centrage vertical
+     demandé : la carte prend la hauteur que son format lui donne, jamais toute
+     la place disponible. */
+  .dcartes{flex:1;display:flex;flex-direction:row;align-items:center;
+    justify-content:center;position:relative;min-height:0}
+  /* `aspect-ratio:2/3` EST le format de la jaquette. Le cadre étant déjà au bon
+     format, `object-fit:cover` ne coupe plus rien — c'est tout le point 10.
+     `max-height:100%` n'est là que pour un écran très bas (paysage) : la
+     largeur reste le facteur qui contraint sur un téléphone tenu droit. */
+  .dcarte{flex:1 1 0;min-width:0;aspect-ratio:2/3;max-height:100%;
+    border-radius:16px;border:1.5px solid var(--line);
+    position:relative;overflow:hidden;display:block;
     background:var(--surface2);transition:border-color .16s,transform .16s,opacity .16s}
-  .dcarte + .dcarte{margin-top:0}
   .dcimg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
   .dcimg.ph{display:flex;align-items:center;justify-content:center;padding:0 18px;
     text-align:center;font-weight:700;color:var(--muted);background:var(--surface2)}
@@ -1132,23 +1163,42 @@
     background:linear-gradient(to top,rgba(7,7,10,.94) 12%,transparent 58%)}
   .dcarte.gagne{border-color:var(--ok);transform:scale(1.02)}
   .dcarte.perd{opacity:.3;transform:scale(.97)}
-  .dtxt{position:absolute;left:14px;right:14px;bottom:11px;z-index:3;text-align:left}
-  .dtxt b{display:block;font-size:19px;font-weight:800;letter-spacing:-.3px;line-height:1.15}
-  .dtxt i{display:block;font-style:normal;color:#b3bacb;font-size:12px;margin-top:2px}
+  /* R1 · point 10 — REPRIS POUR UNE CARTE ÉTROITE (170 points au lieu de 357).
+     À 19 px, un titre un peu long débordait de la carte ou se faisait couper au
+     milieu d'un mot. Deux lignes au plus, puis les points de suspension : on
+     remplace un défaut de cadrage, on n'en installe pas un de texte. */
+  .dtxt{position:absolute;left:10px;right:10px;bottom:9px;z-index:3;text-align:left}
+  .dtxt b{display:block;font-size:13.5px;font-weight:800;letter-spacing:-.2px;
+    line-height:1.2;overflow:hidden;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .dtxt i{display:block;font-style:normal;color:#b3bacb;font-size:10.5px;margin-top:1px}
   /* La pastille rend visible la règle du §1.7 : battre un titre aimé fait
-     passer le gagnant à « aimé ». Sans elle, la règle s'appliquerait en secret. */
-  .dpouce{position:absolute;top:11px;left:11px;z-index:3;background:rgba(7,7,10,.75);
-    border:1px solid rgba(62,207,142,.35);color:var(--ok);padding:4px 10px;
-    border-radius:999px;font-size:10.5px;font-weight:750}
-  .dinfo{position:absolute;top:9px;right:9px;z-index:6;width:30px;height:30px;
+     passer le gagnant à « aimé ». Sans elle, la règle s'appliquerait en secret.
+     R1 · point 10 — resserrée et tenue sur UNE ligne : sur 170 points, le
+     libellé d'origine passait à la ligne et la pastille devenait un pavé. */
+  .dpouce{position:absolute;top:8px;left:8px;z-index:3;background:rgba(7,7,10,.75);
+    border:1px solid rgba(62,207,142,.35);color:var(--ok);padding:3px 7px;
+    border-radius:999px;font-size:9.5px;font-weight:750;white-space:nowrap;
+    max-width:calc(100% - 44px);overflow:hidden;text-overflow:ellipsis}
+  /* R1 · point 1 — RENOMMÉE. Elle s'appelait `.dinfo`, un nom que le socle
+     employait déjà pour le bloc titre de l'aperçu de Recherche
+     (`.ddet > .daff + .dinfo`, plus haut). Écrite plus bas, elle gagnait : le
+     titre, l'année, le genre et la note de l'aperçu partaient se dessiner en
+     haut de l'écran, écrasés dans un cercle de 30 pixels. */
+  .dpastille{position:absolute;top:8px;right:8px;z-index:6;width:27px;height:27px;
     border-radius:50%;background:rgba(7,7,10,.72);border:1px solid rgba(255,255,255,.18);
-    color:#fff;font-size:13px;font-weight:800;font-style:italic;
+    color:#fff;font-size:12px;font-weight:800;font-style:italic;
     display:flex;align-items:center;justify-content:center}
-  .dvs{align-self:center;margin:-15px 0;z-index:9;width:44px;height:44px;border-radius:50%;
+  /* Le chevauchement passe de vertical à horizontal avec la rangée : le VS
+     mord sur les deux cartes au lieu de leur voler 44 points de largeur. */
+  .dvs{align-self:center;margin:0 -13px;z-index:9;width:44px;height:44px;border-radius:50%;
     background:var(--bg);border:1.5px solid var(--line);display:flex;align-items:center;
     justify-content:center;font-size:12px;font-weight:850;color:var(--muted);
     letter-spacing:.5px;flex:0 0 auto}
-  .dneutre{width:100%;margin-top:14px;padding:13px;border-radius:12px;
+  /* `flex:0 0 auto` : la sortie neutre ne se laisse jamais comprimer par les
+     cartes. C'est l'autre moitié du point 9 — la hauteur de l'arène est juste,
+     et ce bouton-là garde sa place quoi qu'il arrive. */
+  .dneutre{flex:0 0 auto;width:100%;margin-top:14px;padding:13px;border-radius:12px;
     border:1px solid var(--line);background:var(--surface2);color:var(--muted);
     font-size:13.5px;font-weight:650}
 
@@ -1299,11 +1349,10 @@
   .jsrc{position:absolute;top:12px;left:12px;z-index:3;max-width:62%;
     background:rgba(7,7,10,.72);border:1px solid #ffffff22;padding:5px 11px;
     border-radius:999px;font-size:10.5px;font-weight:700;color:#fff}
-  .jdeja{position:absolute;top:12px;right:12px;z-index:4;background:rgba(7,7,10,.72);
-    border:1px solid #ffffff22;padding:5px 11px;border-radius:999px;font-size:10.5px;
-    font-weight:700;color:#cfd6e4;font-family:inherit;cursor:pointer;
-    display:inline-flex;align-items:center;gap:4px}
-  .jdeja svg{width:11px;height:11px}
+  /* La pastille « ✓ Déjà vu » du coin haut-droit a été RETIRÉE — lot R2,
+     point 7 : en pastille avec une coche, elle se lisait comme une étiquette
+     d'état et affirmait sur chaque carte quelque chose de faux. L'action existe
+     toujours, sous le résumé, en `.jvu` (section LOT R2, en fin de fichier). */
   .jtxt{position:absolute;left:15px;right:15px;bottom:14px;z-index:3}
   .jtxt h3{margin:0;font-size:23px;font-weight:800;letter-spacing:-.5px}
   .jmeta{color:#b9c0d0;font-size:12.5px;margin-top:3px}
@@ -1332,3 +1381,122 @@
   .jg .ic svg{width:17px;height:17px}
   .jg.oui{flex:1.6;background:var(--accent);border-color:var(--accent);color:#fff}
   .jastuce{text-align:center;color:var(--muted);opacity:.75;font-size:11.5px;margin-top:13px}
+
+  /* ===================== LOT R2 — la recherche : la phrase, les familles, le jeu
+
+     Écrit en fin de fichier, comme les lots précédents : trois branches
+     travaillent en parallèle et une insertion au milieu se transforme en
+     conflit pénible sans rien apporter.
+
+     TOUTES LES CLASSES DE CETTE SECTION SONT PRÉFIXÉES et n'existent nulle part
+     ailleurs dans ce fichier — c'est la leçon des points 1 et 2 des retours,
+     deux défauts nés d'un nom de classe redéclaré (`.dinfo`, `.itxt`) que
+     personne n'avait vu parce que le contrôle anti-collision ne lit que le JS.
+     Vérifié à l'écriture : `.rajout`, `.rajl`, `.jarene`, `.jcrit`, `.jdec` et
+     `.jvu` n'apparaissent qu'ici.
+     ------------------------------------------------------------------- */
+
+  /* ---- Point 19 : la feuille « Ajouter un critère » ----
+     Des LIGNES et non des puces : chaque critère porte sa question et un aperçu
+     de ce qu'on va pouvoir répondre. Une rangée de puces nues obligerait à
+     ouvrir chaque feuille pour savoir ce qu'elle contient — c'est exactement le
+     tâtonnement qu'on vient de supprimer. */
+  .rajout{display:flex;flex-direction:column;gap:2px}
+  .rajl{display:block;width:100%;text-align:left;background:none;border:0;
+    border-bottom:1px solid var(--line);padding:12px 2px;color:var(--text);
+    font-family:inherit;cursor:pointer}
+  .rajout .rajl:last-child{border-bottom:0}
+  .rajl b{display:block;font-size:15px;font-weight:700}
+  .rajl span{display:block;color:var(--muted);font-size:12px;margin-top:2px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* Dans le jeu, la feuille liste AUSSI les critères déjà répondus — la phrase
+     n'y est pas cliquable. Une réponse posée se lit comme une réponse, pas
+     comme une suggestion. */
+  .rajl span.pose{color:var(--accent);font-weight:700}
+
+  /* ---- Point 5 : l'arène du jeu tient dans la hauteur VISIBLE ----
+
+     La carte était plafonnée à `min(62vh,470px)`, une valeur absolue qui ne
+     savait rien de ce qui l'entoure : sur un grand téléphone elle occupait à
+     peine la moitié de l'écran, et le total dépassait quand même la page, si
+     bien qu'il fallait défiler pour atteindre les trois boutons.
+
+     Ici la colonne occupe exactement la place disponible et la carte prend TOUT
+     CE QUI RESTE. 184 px = l'en-tête avec sa rangée de puces (108, mesuré au
+     navigateur à 390 × 844, pas estimé) + la place réservée sous le contenu
+     pour la barre du bas (76).
+
+     LES ZONES DE SÉCURITÉ SONT COMPTÉES, et ce n'est pas un détail : c'est
+     exactement l'oubli qui cache la sortie du duel (point 9 des retours), où un
+     `calc(100dvh - 137px)` ignore l'encoche (~59 px) et la barre d'accueil
+     (~34 px). Un calcul qui oublie 93 px cache un bouton entier. */
+  .jarene{position:relative;display:flex;flex-direction:column;
+    height:calc(100vh - 184px - var(--safe-t) - var(--safe-b));
+    min-height:430px}
+  @supports (height:100dvh){
+    .jarene{height:calc(100dvh - 184px - var(--safe-t) - var(--safe-b))}
+  }
+  /* La phrase reste sous la main pendant la partie (§4.7), sur une seule ligne :
+     c'est un rappel, pas un texte à lire. */
+  .jcrit{flex:0 0 auto;display:flex;gap:8px;align-items:center;padding:6px 16px 0}
+  .jcrit .tiny{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .jcrit .chip{flex:0 0 auto}
+
+  /* La carte prend le reste. `min-height:0` est obligatoire : sans lui, un
+     élément flex ne descend jamais sous la hauteur de son contenu et la colonne
+     déborde à nouveau. Les marges latérales passent de 16 à 10 : neuf pour cent
+     de largeur d'affiche en plus, gratuitement. */
+  .jarene .jcarte{flex:1 1 auto;height:auto;min-height:0;margin:8px 10px 0}
+  /* Le balayage n'emprunte pas ces classes : il pose son propre `transform` en
+     ligne, parce qu'il doit repartir de l'endroit exact où le doigt a lâché.
+     `.part-gauche` et `.part-haut` restent, elles, pour les boutons. */
+
+  /* ---- Point 6 : la décision en cours, révélée par le geste ----
+     Invisible au repos, elle apparaît sous le doigt et dit ce qui va se passer
+     AVANT que ça se passe. C'est ce qui rend le balayage essayable : on voit la
+     conséquence, et on peut encore revenir. */
+  .jdec{position:absolute;top:16px;z-index:5;opacity:0;pointer-events:none;
+    padding:7px 13px;border-radius:10px;font-size:13px;font-weight:800;
+    letter-spacing:-.2px;border:2px solid;background:rgba(7,7,10,.55)}
+  .jdec.non{left:14px;transform:rotate(-9deg);color:#ff8a8a;border-color:#ff8a8a}
+  .jdec.oui{right:14px;transform:rotate(9deg);color:var(--ok);border-color:var(--ok)}
+
+  /* LES TROIS GESTES PASSENT SUR LE BAS DE LA CARTE, et c'est la seule façon
+     d'agrandir VRAIMENT. La mesure est sans appel : en gardant la rangée sous
+     la carte, sur un iPhone à encoche (390 × 844, 47 px en haut, 34 en bas), il
+     ne reste que 448 px de carte — moins qu'aujourd'hui. Le compte est simple :
+     265 px de l'écran sont pris par l'en-tête, la barre du bas et les zones de
+     sécurité, et une rangée de boutons plus une astuce en prennent 72 de plus.
+
+     Posés sur la carte, ils rendent ces 72 px à l'affiche : 546 px au lieu de
+     470, sur 370 de large au lieu de 358 — un cinquième de surface en plus. Ils
+     restent visibles sans défiler, ce qui est la consigne, et ils sont hors de
+     `#jcarte` : ils ne bougent donc pas avec le balayage, et un appui sur un
+     bouton ne déclenche jamais un geste.
+
+     Ils gardent leur fond opaque et leur bordure : posés sur une affiche, la
+     lisibilité ne peut pas dépendre de l'image qu'il y a dessous. Le voile du
+     bas de carte est renforcé en conséquence. Icône et libellé passent sur UNE
+     ligne au lieu de deux, ce qui abaisse la rangée à 46 px. */
+  .jarene .jgestes{position:absolute;left:10px;right:10px;bottom:24px;z-index:6;margin:0}
+  /* `nowrap` : sur 370 px de rangée, « Pas ce soir » passait à la ligne et la
+     rangée perdait son alignement. Et « Ce soir, c'est lui » garde un peu plus
+     de place que les deux autres — c'est la décision, pas un report — mais
+     moins qu'avant, pour laisser les trois libellés tenir sur une ligne. */
+  .jarene .jg{flex-direction:row;gap:5px;min-height:46px;font-size:11.5px;
+    white-space:nowrap;padding:0 6px}
+  .jarene .jg.oui{flex:1.45}
+  .jarene .jastuce{position:absolute;left:0;right:0;bottom:2px;z-index:6;
+    margin:0;font-size:11px}
+  /* Le titre et le résumé remontent au-dessus des boutons : sans ça la rangée
+     recouvrirait exactement ce qu'elle demande de juger. */
+  .jarene .jtxt{bottom:84px}
+  .jarene .jcarte:after{background:linear-gradient(to top,
+    rgba(7,7,10,.98) 32%,rgba(7,7,10,.35) 62%,transparent)}
+
+  /* ---- Point 7 : « Je l'ai déjà vu », une action et non une étiquette ----
+     Elle rejoint la ligne d'actions sous le résumé, à côté de « ⓘ La fiche »,
+     et elle porte le même habillage : deux gestes clairement nommés, plus rien
+     qui ressemble à un état. Aucune coche — la coche est le signe d'un état,
+     pas d'un geste. */
+  .jvu{white-space:nowrap}
