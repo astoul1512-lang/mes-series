@@ -55,6 +55,18 @@ function migrerGouts(){
      l'Ouest ? Oui par défaut : c'est le comportement actuel, et le changer
      sans qu'on le demande ferait bouger l'écran de tout le monde. */
   if(typeof g.toutesOrigines !== 'boolean') g.toutesOrigines = false;
+  /* LOT A — les sous-genres d'animé retenus (§5.6). Le genre « Animation » ne
+     sépare rien côté animé : tout y est étiqueté Animation + Action & Aventure.
+     La clé est posée ici parce que le contrat de données du lot l'exige et
+     qu'elle doit entrer dans la synchro dès maintenant ; l'écran qui la remplit
+     appartient au parcours d'inscription, donc à un autre lot. */
+  if(!Array.isArray(g.animeSous)) g.animeSous = [];
+  /* LOT A — les titres dont on a déclaré, en plein duel, ne pas les avoir vus.
+     Le paquet du duel vient de titres SUPPOSÉS vus ; sans mémoire, le même
+     titre inconnu reviendrait à chaque session et il faudrait le récuser
+     indéfiniment. Ce n'est pas un avis : ça ne dit rien du goût, seulement que
+     la bibliothèque se trompe sur ce titre. */
+  if(!Array.isArray(g.pasVus)) g.pasVus = [];
 }
 
 /* B8 — toute modification des goûts est datée. C'est cet horodatage, et lui
@@ -67,12 +79,252 @@ function toucheGouts(){
   saveDB();
 }
 
+/* ===========================================================================
+   LOT A — LE SIGNAL D'APPRÉCIATION
+
+   Tout ce qui précède reposait sur une équation fausse : vu = aimé. Un titre
+   terminé devenait un modèle à copier, alors qu'on finit des séries par
+   habitude. Ce bloc récolte ce qui a été RÉELLEMENT aimé, et rien d'autre.
+
+   Une seule règle gouverne toute la section : l'app ne déduit rien à la place
+   de la personne. Un avis se déclare, il ne se devine pas — et partout où on
+   en demande un, il faut pouvoir dire « je ne peux pas répondre ». Sans cette
+   porte de sortie, on récolte du bruit en croyant récolter du signal.
+=========================================================================== */
+
+/* L'avis porté sur un titre : 1, -1, ou 0 quand il n'y en a pas.
+   Zéro et « pas d'avis » sont la même chose ici parce qu'aucun appelant n'a
+   besoin de les distinguer ; là où la distinction compte (le poids), c'est
+   `poidsTitre` qui tranche. */
+function avisDe(media, id){
+  const a = db.avis && db.avis[media] && db.avis[media][String(id)];
+  return (a && (a.v === 1 || a.v === -1)) ? a.v : 0;
+}
+const aAime    = (media, id)=> avisDe(media, id) === 1;
+const aPasAime = (media, id)=> avisDe(media, id) === -1;
+
+/* Poser un avis. Repasser le même pouce l'ANNULE — c'est le seul geste de
+   retour disponible sur la barre, qui n'a pas de bouton « Annuler », et c'est
+   aussi ce qui permet de reprendre un 👎 depuis « Écartés » d'un seul appui. */
+function poserAvis(media, id, v){
+  if(v !== 1 && v !== -1) return retirerAvis(media, id);
+  db.avis = db.avis || { tv:{}, movie:{} };
+  db.avis[media] = db.avis[media] || {};
+  const cle = String(id);
+  if(avisDe(media, id) === v) return retirerAvis(media, id);
+  db.avis[media][cle] = { v:v, quand: Date.now() };
+  /* Un avis posé efface la trace de son effacement : sinon la synchro suivante
+     verrait un effacement plus récent que l'avis et le reprendrait. */
+  if(db.avisRetires && db.avisRetires[media]) delete db.avisRetires[media][cle];
+  apresAvis();
+  return v;
+}
+function retirerAvis(media, id){
+  const cle = String(id);
+  if(db.avis && db.avis[media]) delete db.avis[media][cle];
+  db.avisRetires = db.avisRetires || { tv:{}, movie:{} };
+  db.avisRetires[media] = db.avisRetires[media] || {};
+  db.avisRetires[media][cle] = Date.now();
+  apresAvis();
+  return 0;
+}
+/* Un avis change ce que l'app croit savoir : la vitrine doit répondre TOUT DE
+   SUITE. C'est le contrat du §3.9 — un geste qui ne change rien à l'écran est
+   un geste qu'on ne refait pas. `saveDB` déclenche la synchro et `veilleBiblio`
+   par-dessus ; `oublierSuggestions` force le recalcul sans attendre les 24 h de
+   cache, qui feraient passer le pouce pour inopérant. */
+function apresAvis(){
+  if(typeof oublierSuggestions === 'function') oublierSuggestions();
+  saveDB();
+}
+
+/* ---------- Le poids d'un titre dans le profil de goût ----------
+   Règle commune à tous les lots, elle ne se discute pas :
+     👍 → 2 · aucun avis → 1 · 👎 → 0, c'est-à-dire exclu.
+   Les titres non qualifiés comptent à moitié plutôt que zéro : sans ça, au
+   premier lancement personne n'a de 👍, donc personne n'a de suggestions. Une
+   falaise, là où il faut une pente. */
+const POIDS_AIME = 2, POIDS_NEUTRE = 1, POIDS_ECARTE = 0;
+function poidsTitre(media, id){
+  const v = avisDe(media, id);
+  return v === 1 ? POIDS_AIME : v === -1 ? POIDS_ECARTE : POIDS_NEUTRE;
+}
+
+/* Les titres explicitement écartés, pour la liste du même nom dans Mes goûts.
+   Sans retour en arrière possible, on cesse de voter — c'est le garde-fou
+   nommé dans la spec, et il n'a de sens que si l'écran existe. */
+function titresEcartes(){
+  const out = [];
+  Object.keys((db.avis && db.avis.tv) || {}).forEach(id=>{
+    if(avisDe('tv', id) !== -1) return;
+    const s = db.shows[id];
+    out.push({ media:'tv', id:id, nom:(s && s.name) || 'Titre retiré de ta liste',
+               affiche:(s && s.poster) || null, quand:db.avis.tv[id].quand || 0 });
+  });
+  Object.keys((db.avis && db.avis.movie) || {}).forEach(id=>{
+    if(avisDe('movie', id) !== -1) return;
+    const m = db.movies[id];
+    out.push({ media:'movie', id:id, nom:(m && m.title) || 'Titre retiré de ta liste',
+               affiche:(m && m.poster) || null, quand:db.avis.movie[id].quand || 0 });
+  });
+  return out.sort((a,b)=>b.quand-a.quand);
+}
+
+/* ===========================================================================
+   LOT A — LE MODÈLE DE GOÛT (chapitre 2)
+
+   Deux erreurs à ne pas commettre, et le code les évite explicitement :
+
+   1. LE GENRE EST TROP GROS. Mesuré sur TMDB : « comédie » seul rend 173 456
+      titres, « comédie + enquête policière » en rend 379. Un genre ne dit pas
+      un goût — d'où le taux, qui au moins dit lesquels on aime.
+
+   2. UN GOÛT N'EST PAS UNIQUE. On peut adorer la SF exigeante ET les comédies
+      familiales ; la moyenne des deux ne ressemble à ni l'une ni l'autre. D'où
+      DEUX moteurs séparés, `moteurHabitude` et `moteurCoeur`, qu'il ne faut
+      JAMAIS fondre dans un même calcul.
+=========================================================================== */
+
+/* Un genre ne compte qu'à partir de ce nombre de titres vus. En dessous, le
+   taux n'est pas une mesure : c'est un accident. « 1 vu, 1 aimé » ferait un
+   genre à 100 % qui gouvernerait tout l'écran. */
+const GENRE_PLANCHER = 3;
+
+/* Tous les titres VUS d'une famille, avec leur média, leur nom et leurs genres.
+   Un titre ajouté et jamais ouvert n'en est pas : il ne dit rien, ni dans un
+   sens ni dans l'autre. C'est la matière première des deux moteurs et du duel,
+   d'où une seule fonction pour les trois. */
+function titresVus(famille){
+  const out = [];
+  Object.values(db.shows).forEach(s=>{
+    /* Sur le nombre d'épisodes cochés et non sur `statutSerie` : une série mise
+       en pause porte le statut « pause », qui masque le fait qu'on ne l'ait
+       jamais ouverte. Même critère que `genresDeduits` et `famillesVues`. */
+    if(!s || !progress(s).watched) return;
+    const f = familleDe(s, 'tv');
+    if(famille && f !== famille) return;
+    out.push({ media:'tv', id:String(s.id), nom:s.name, famille:f,
+               genres:s.genres || [], affiche:s.poster || null,
+               date:s.first || null, fini:isFinished(s), part:progress(s).pct });
+  });
+  Object.values(db.movies).forEach(m=>{
+    if(!m || !m.seen) return;
+    if(famille && famille !== 'film') return;
+    out.push({ media:'movie', id:String(m.id), nom:m.title, famille:'film',
+               genres:m.genres || [], affiche:m.poster || null,
+               date:m.date || null, fini:true, part:100 });
+  });
+  return out;
+}
+
+/* « Sur les SF que tu as vues, combien tu en as aimé ? » — et non « combien de
+   SF as-tu vues ». Le volume mesure l'habitude, le taux mesure l'amour. Le
+   drame passe de dernier à premier alors qu'il ne pèse que six titres, et c'est
+   juste.
+   Les titres 👎 comptent dans les VUS mais jamais dans les AIMÉS : c'est ce qui
+   fait chuter le taux d'un genre qu'on subit. */
+function tauxParGenre(famille){
+  const par = {};
+  titresVus(famille).forEach(t=>{
+    const v = avisDe(t.media, t.id);
+    (t.genres || []).forEach(g=>{
+      const e = par[g] || (par[g] = { genre:g, vus:0, aimes:0, poids:0 });
+      e.vus++;
+      if(v === 1) e.aimes++;
+      e.poids += poidsTitre(t.media, t.id) * (t.fini ? 1.5 : 1);
+    });
+  });
+  return Object.values(par).map(e=>
+    Object.assign(e, { taux: e.vus ? e.aimes / e.vus : 0, mesurable: e.vus >= GENRE_PLANCHER }));
+}
+
+/* Les genres classés AU TAUX, plancher appliqué. Exposé pour les rangées de
+   Découvrir, qui ne sont pas de ce lot. */
+function genresParTaux(famille){
+  const hors = (db.gouts && db.gouts.exclus) || [];
+  return tauxParGenre(famille)
+    .filter(e => e.mesurable && e.aimes > 0 && hors.indexOf(e.genre) < 0)
+    .sort((a,b)=> b.taux - a.taux || b.vus - a.vus)
+    .map(e => e.genre);
+}
+
+/* MOTEUR 1 — L'HABITUDE. Le volume, corrigé par le taux. Il confirme, il
+   remplit, il rassure : « Des drames pour toi ».
+
+   La correction est multiplicative et bornée : un genre sans aucun 👍 garde
+   exactement son poids d'avant, un genre aimé à 100 % triple. C'est ce qui
+   garantit qu'au premier lancement — zéro avis partout — l'ordre est
+   RIGOUREUSEMENT celui d'avant ce lot. On n'a le droit de bouger l'écran de
+   quelqu'un qu'à partir du moment où il a dit quelque chose. */
+function moteurHabitude(famille){
+  const hors = (db.gouts && db.gouts.exclus) || [];
+  return tauxParGenre(famille)
+    .filter(e => e.poids > 0 && hors.indexOf(e.genre) < 0)
+    .map(e => ({ genre:e.genre, score: e.poids * (1 + 2 * (e.mesurable ? e.taux : 0)) }))
+    .sort((a,b)=> b.score - a.score)
+    .map(e => e.genre);
+}
+
+/* MOTEUR 2 — LE CŒUR. Les titres qui servent de point de départ : « Dans
+   l'esprit de Whiplash ». Il part d'un favori et explore loin.
+
+   L'ordre dit tout le raisonnement : le podium d'abord (la personne a joué, on
+   la croit), les 👍 ensuite (elle l'a dit), le reste enfin (on ne sait pas, on
+   ne prétend rien). Les 👎 n'y sont jamais : poids 0 veut dire exclu.
+   UN SEUL 👍 SUFFIT à ouvrir la rangée — le duel n'est jamais un péage. */
+function moteurCoeur(famille){
+  const rang = ((db.podium || {})[famille] || []).map(String);
+  return titresVus(famille)
+    .filter(t => avisDe(t.media, t.id) !== -1)
+    .map(t=>{
+      const i = rang.indexOf(String(t.id));
+      return Object.assign({}, t, {
+        rang: i,
+        score: (i >= 0 ? 10000 - i * 100 : 0) + (aAime(t.media, t.id) ? 1000 : 0)
+               + (t.fini ? 50 : 0) + t.part });
+    })
+    .sort((a,b)=> b.score - a.score);
+}
+
+/* L'ÉCHELLE DE DÉGRADATION (§2.4). Ce qu'on peut faire avec ce qu'on a — et
+   ce qu'il faut DIRE quand on ne peut pas. L'app ne surjoue jamais ce qu'elle
+   sait : jamais « adoré » sur un simple 👍, jamais « ton préféré » sans duel. */
+function niveauProfil(){
+  const podium = ['film','serie','anime'].some(f => (((db.podium||{})[f])||[]).length);
+  if(podium) return 'podium';
+  const aime = ['tv','movie'].some(m =>
+    Object.keys((db.avis && db.avis[m]) || {}).some(id => avisDe(m, id) === 1));
+  if(aime) return 'aimes';
+  if(titresVus().length) return 'vus';
+  return 'rien';
+}
+
+/* Le titre de tête d'une famille, et de quel signal il tire sa légitimité.
+   C'est ce couple, et lui seul, qui autorise une formulation à l'écran :
+     'podium' → « Ton film préféré : Whiplash »
+     'aime'   → « Parce que tu as aimé Whiplash »
+     'vu'     → rien de tout ça : on n'a qu'un titre regardé.
+   Exposé pour les rangées de Découvrir, qui ne sont pas de ce lot. */
+function titrePhare(famille){
+  const l = moteurCoeur(famille);
+  if(!l.length) return null;
+  const t = l[0];
+  return Object.assign({}, t,
+    { signal: t.rang >= 0 ? 'podium' : aAime(t.media, t.id) ? 'aime' : 'vu' });
+}
+
 /* Le sous-titre de la ligne « Mes goûts » dans les réglages : il doit dire en
    un coup d'œil si l'app devine toute seule ou si on lui a donné des consignes. */
 function resumeGouts(){
   const g = db.gouts || {};
-  if(!goutsManuels()) return 'Automatique, d\'après ce que tu regardes';
+  /* LOT A — les pouces comptent autant que les genres cochés : ce sont eux, et
+     non la déduction, qui gouvernent désormais les suggestions. Dire
+     « automatique » à quelqu'un qui a déclaré vingt titres serait faux. */
+  const aimes = ['tv','movie'].reduce((n,m)=>
+    n + Object.keys((db.avis && db.avis[m]) || {}).filter(id => avisDe(m, id) === 1).length, 0);
+  if(!goutsManuels() && !aimes) return 'Automatique, d\'après ce que tu regardes';
   const bouts = [];
+  if(aimes) bouts.push(aimes + ' titre'+(aimes>1?'s':'')+' aimé'+(aimes>1?'s':''));
   if((g.genres||[]).length)  bouts.push(g.genres.length + (g.genres.length>1?' genres':' genre'));
   if((g.acteurs||[]).length) bouts.push(g.acteurs.length + (g.acteurs.length>1?' acteurs':' acteur'));
   if((g.exclus||[]).length)  bouts.push(g.exclus.length + ' écarté'+(g.exclus.length>1?'s':''));
@@ -118,20 +370,39 @@ function genresRetenus(){
   return base.filter(x => hors.indexOf(x) < 0);
 }
 
-/* Les titres que l'on a visiblement aimés : finis, ou bien avancés. Ce sont
-   eux qui serviront de point de départ aux recommandations. */
+/* Les titres qui servent de point de départ aux recommandations.
+   LOT A — le nom de cette fonction MENTAIT, et c'était la cause n°1 du manque
+   de pertinence de Découvrir : « fini ou vu à plus de 50 % » n'est pas « aimé »,
+   c'est « regardé ». On finit des séries par habitude, par inertie, parce
+   qu'elles traînaient.
+   Le calcul reste le même faute de mieux — on ne peut pas inventer un signal —
+   mais il obéit désormais à ce qui a été DIT :
+     · un titre 👎 en sort complètement, quoi qu'on en ait regardé (poids 0) ;
+     · un titre 👍 passe devant tout ce qui n'a été que regardé ;
+     · un titre du podium passe devant les autres 👍.
+   Sans un seul avis en base, l'ordre est exactement celui d'avant. */
 function titresAimes(){
   const out = [];
+  const bonus = (media, id, famille)=>{
+    const rang = ((db.podium || {})[famille] || []).map(String).indexOf(String(id));
+    return (rang >= 0 ? 10000 - rang * 100 : 0) + (aAime(media, id) ? 1000 : 0);
+  };
   Object.values(db.shows).forEach(s=>{
     const p = progress(s);
     if(!p.total) return;
+    if(aPasAime('tv', s.id)) return;
     const part = p.watched / p.total;
-    if(isFinished(s) || part >= 0.5)
-      out.push({ media:'tv', id:s.id, nom:s.name, famille: familleDe(s, 'tv'),
-                 score: part * 100 + p.watched });
+    const fam = familleDe(s, 'tv');
+    /* Un 👍 fait entrer un titre même peu avancé : la personne vient de dire
+       qu'elle l'aime, on n'a pas à lui opposer un compteur d'épisodes. */
+    if(isFinished(s) || part >= 0.5 || aAime('tv', s.id))
+      out.push({ media:'tv', id:s.id, nom:s.name, famille: fam,
+                 score: part * 100 + p.watched + bonus('tv', s.id, fam) });
   });
   Object.values(db.movies).forEach(m=>{
-    if(m.seen) out.push({ media:'movie', id:m.id, nom:m.title, famille:'film', score: 60 });
+    if(!m.seen || aPasAime('movie', m.id)) return;
+    out.push({ media:'movie', id:m.id, nom:m.title, famille:'film',
+               score: 60 + bonus('movie', m.id, 'film') });
   });
   /* D5 — les graines posées à la main sur la grille d'amorçage, quand la
      bibliothèque était encore vide. Elles comptent comme des titres aimés,
@@ -142,6 +413,8 @@ function titresAimes(){
     /* Une graine dont le titre est entré dans la bibliothèque ferait doublon. */
     if(g.media === 'tv' && db.shows[g.id]) return;
     if(g.media === 'movie' && db.movies[g.id]) return;
+    /* LOT A — un 👎 posé depuis prime sur une graine posée le premier jour. */
+    if(aPasAime(g.media, g.id)) return;
     out.push({ media:g.media, id:g.id, nom:g.nom||'', famille: g.famille||(g.media==='movie'?'film':'serie'),
                score: 20, graine:true });
   });
@@ -333,6 +606,16 @@ function signatureGouts(){
      Disney+ ne bouge pas la longueur de la liste. */
   (g.plates||[]).forEach(p=> mel(p && p.id));
   mel(g.suggMesPlates ? 1 : 0);
+  /* LOT A — un pouce et un duel déplacent le profil bien plus qu'un genre
+     coché : ils doivent donc périmer la vitrine. Sans ces trois lignes, un 👍
+     ne se serait vu à l'écran qu'au bout des 24 h de cache, et le geste aurait
+     eu l'air sans effet — exactement ce que le §3.9 interdit. */
+  ['tv','movie'].forEach(m=>{
+    const t = (db.avis && db.avis[m]) || {};
+    Object.keys(t).forEach(id=>{ mel(Number(id) || 0); mel(t[id].v); });
+  });
+  ['film','serie','anime'].forEach(f=>
+    (((db.podium||{})[f])||[]).forEach(id=> mel(Number(id) || 0)));
   return h;
 }
 
@@ -493,15 +776,32 @@ function genresDeFamille(famille){
     if(familleDe(s,'tv') !== famille) return;
     const p = progress(s);
     if(!p.watched) return;
-    const n = p.watched + (isFinished(s) ? 10 : 0);
+    /* LOT A — le poids du titre entre dans le calcul : un 👎 ne pèse plus rien
+       (poids 0), un 👍 pèse double. Une série subie jusqu'au bout cessait
+       jusqu'ici de se distinguer d'une série adorée. */
+    const w = poidsTitre('tv', s.id);
+    if(!w) return;
+    const n = (p.watched + (isFinished(s) ? 10 : 0)) * w;
     (s.genres||[]).forEach(x=>{ poids[x] = (poids[x]||0) + n; });
   });
   if(famille === 'film') Object.values(db.movies).forEach(m=>{
     if(!m.seen) return;
-    (m.genres||[]).forEach(x=>{ poids[x] = (poids[x]||0) + 5; });
+    const w = poidsTitre('movie', m.id);
+    if(!w) return;
+    (m.genres||[]).forEach(x=>{ poids[x] = (poids[x]||0) + 5 * w; });
   });
+  /* LE TAUX PLUTÔT QUE LE VOLUME (§2.2). Le volume mesure l'habitude, le taux
+     mesure l'amour — mais aucun des deux seul ne suffit, donc on corrige l'un
+     par l'autre plutôt que de choisir. Multiplicatif et borné : un genre sans
+     aucun 👍 garde exactement son score d'avant, ce qui rend ce lot invisible
+     pour qui n'a encore rien déclaré. Le plancher de trois titres protège du
+     genre à un seul vu qui afficherait 100 %. */
+  const taux = {};
+  tauxParGenre(famille).forEach(e=>{ taux[e.genre] = e.mesurable ? e.taux : 0; });
   return Object.keys(poids)
-    .sort((a,b)=>poids[b]-poids[a])
+    .map(x => ({ nom:x, score: poids[x] * (1 + 2 * (taux[x] || 0)) }))
+    .sort((a,b)=> b.score - a.score)
+    .map(x => x.nom)
     .filter(x => hors.indexOf(x) < 0)
     .slice(0, GENRES_DEDUITS_MAX);
 }
@@ -867,10 +1167,34 @@ function explicationProfil(court){
     return { volume: volume, genres: fondus.slice(0, 3),
              aDire: fondus.length > 0 || volume.series > 0 || volume.films > 0 };
   }
+  /* LOT A — le nom de tête de chaque famille classée. On ne nomme que ce qui
+     vient d'un duel joué : un titre simplement aimé n'est pas « préféré », et
+     l'app ne doit jamais prétendre en savoir plus qu'elle n'en sait. */
+  const podium = [];
+  DUEL_FAMILLES.forEach(f=>{
+    const id = (((db.podium||{})[f.cle]) || [])[0];
+    if(!id) return;
+    /* Le podium ne garde que des identifiants nus, et les espaces d'identifiants
+       TMDB des séries et des films se recouvrent : 550 est Fight Club côté film
+       ET un identifiant de série valide. On interroge donc la bonne collection
+       en premier, selon la famille — sinon « Tes préférés » nomme un titre qui
+       n'a jamais été départagé. */
+    const media = f.cle === 'film' ? 'movie' : 'tv';
+    const o = (media === 'movie' ? db.movies[id] : db.shows[id]) ||
+              db.shows[id] || db.movies[id];
+    const nom = (o && (media === 'movie' ? (o.title || o.name) : (o.name || o.title))) ||
+      (((g.graines||[]).find(x=> String(x.id) === String(id) && x.media === media) || {}).nom);
+    if(nom) podium.push(nom);
+  });
+  const compter = v => ['tv','movie'].reduce((n,m)=>
+    n + Object.keys((db.avis && db.avis[m]) || {}).filter(id => avisDe(m, id) === v).length, 0);
   return {
     manuels: manuels,
     parFamille: parFamille,
     volume: volume,
+    aimes: compter(1),
+    pasAimes: compter(-1),
+    podium: podium,
     acteurs: (g.acteurs||[]).map(a=>a.nom),
     exclus: (g.exclus||[]).slice(),
     origine: manuels
@@ -879,6 +1203,717 @@ function explicationProfil(court){
           ? 'Calculés séparément pour chaque famille, d\'après tout ce que tu as regardé.'
           : 'Rien à déduire pour l\'instant : coche quelques épisodes.')
   };
+}
+
+/* ===========================================================================
+   LOT A — LA BARRE « TU AS AIMÉ ? » (§1.3)
+
+   Une seule barre, au format et à l'emplacement de la barre « Annuler ». Elle
+   porte le FAIT, formulé comme un moment et non comme une transaction, la
+   question en sous-titre, deux cibles, et une croix.
+
+   Elle NE contient PAS de bouton « Annuler ». C'était le point le plus discuté :
+   trois actions dans un mouchoir de poche, dont une destructrice, et « Annuler »
+   qui perd le premier rôle alors qu'il est le plus urgent. Les deux se suivent
+   donc au lieu de se mélanger — voir `filerAvis`.
+
+   Ne pas répondre est une réponse valide : la barre s'efface seule et le titre
+   reste non qualifié. Mais la sortie doit être VISIBLE : sans porte de sortie
+   explicite, on apprend à ignorer la barre — y compris quand elle sert à autre
+   chose.
+=========================================================================== */
+
+/* Plus long que les 10 s de la barre « Annuler » : celle-ci ne court pas après
+   un regret, elle attend une réponse, et on lit avant de répondre. */
+const AVIS_DUREE = 12000;
+let avisAffiche = null;        // { media, id, fait } en ce moment à l'écran
+/* UNE FILE, pas une seule place. Terminer une saison par un geste groupé met la
+   question derrière la barre « Annuler » ; marquer un film vu pendant ces dix
+   secondes écrasait purement et simplement la première question, qui n'était
+   alors jamais posée. Deux titres, deux questions, l'une après l'autre. */
+let avisEnFile = [];
+let avisTimer = null;
+
+/* La couche est créée à la volée plutôt que posée dans `index.html`, pour la
+   même raison que le lecteur vidéo : le service worker garde la page en cache,
+   et une page en retard d'une version se retrouverait sans l'emplacement
+   attendu par le script. */
+function coucheAvis(){
+  let el = document.getElementById('barreavis');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'barreavis'; el.className = 'barreavis';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+/* Le point d'entrée unique. Deux refus, tous deux volontaires :
+   · un titre qui porte déjà un avis ne se redemande pas — la personne a
+     répondu, la relancer à chaque fin de saison serait du harcèlement, et son
+     avis reste modifiable dans Mes goûts ;
+   · une barre « Annuler » occupe la place : on prend la file. Annuler reste
+     Annuler, et la question ne pollue pas un geste qu'on est peut-être en train
+     de regretter. */
+function proposerAvis(media, id, fait){
+  if(!id || !fait) return;
+  if(avisDe(media, id) !== 0) return;
+  const p = { media:media, id:String(id), fait:fait };
+  if(avisEnFile.some(x => x.media === p.media && x.id === p.id)) return;
+  if(typeof undoData !== 'undefined' && undoData){ avisEnFile.push(p); return; }
+  montrerAvis(p);
+}
+/* La barre « Annuler » vient de partir sans avoir été utilisée : la question
+   prend sa place. Appelée par `hideUndo`. */
+function filerAvis(){
+  const p = avisEnFile.shift();
+  if(p) montrerAvis(p);
+}
+/* Une action groupée vient d'être annulée : la saison n'est plus terminée, il
+   n'y a plus rien à demander SUR CE TITRE. Sur les autres, si — annuler le
+   cochage d'une saison de Breaking Bad ne doit pas faire disparaître la
+   question posée sur le film marqué vu trente secondes plus tôt.
+   Appelée par `doUndo`, qui sait quelle série il vient de remettre en état. */
+function annulerFileAvis(media, id){
+  if(media == null){ avisEnFile = []; return; }
+  const c = String(id);
+  avisEnFile = avisEnFile.filter(x => !(x.media === media && x.id === c));
+  if(avisAffiche && avisAffiche.media === media && avisAffiche.id === c) fermerAvis();
+}
+/* Une barre « Annuler » vient d'apparaître. Les deux occupent EXACTEMENT le même
+   emplacement, et la question, posée au-dessus, offrait ses pouces là où le
+   doigt visait « Annuler » : on croyait annuler une saison, on posait un 👍 sur
+   un film. La question recule donc dans la file, et revient quand la place est
+   libre. Appelée par `pushUndo`. */
+function reculerAvis(){
+  if(!avisAffiche) return;
+  avisEnFile.unshift(avisAffiche);
+  fermerAvis();
+}
+
+function montrerAvis(p){
+  if(avisDe(p.media, p.id) !== 0) return;   // répondu entre-temps, d'un autre écran
+  /* Le toast occupe le même bas d'écran, avec un z-index plus fort : « Marqué
+     comme vu ✓ » recouvrait pendant deux secondes le fait et le pouce 👎 de la
+     question qu'il venait lui-même de déclencher. La barre dit mieux la même
+     chose — le toast s'efface. */
+  if(typeof cacherToast === 'function') cacherToast();
+  avisAffiche = p;
+  const el = coucheAvis();
+  el.innerHTML =
+    '<div class="bacol"><span>'+esc(p.fait)+'</span><small>Tu as aimé&nbsp;?</small></div>'+
+    '<div class="bapouces">'+
+      '<button class="bapouce non" aria-label="Je n\'ai pas aimé" '+
+        'onclick="repondreAvis(-1)">👎</button>'+
+      '<button class="bapouce oui" aria-label="J\'ai aimé" '+
+        'onclick="repondreAvis(1)">👍</button>'+
+    '</div>'+
+    '<button class="bacroix" aria-label="Fermer sans répondre" '+
+      'onclick="fermerAvis()">'+I.close+'</button>';
+  el.classList.add('show');
+  document.body.classList.add('avis');
+  clearTimeout(avisTimer);
+  avisTimer = setTimeout(fermerAvis, AVIS_DUREE);
+}
+function fermerAvis(){
+  clearTimeout(avisTimer);
+  const el = document.getElementById('barreavis');
+  if(el) el.classList.remove('show');
+  document.body.classList.remove('avis');
+  avisAffiche = null;
+}
+function repondreAvis(v){
+  const p = avisAffiche;
+  if(!p) return;
+  fermerAvis();
+  poserAvis(p.media, p.id, v);
+  /* Un message court, et qui dit à quoi ça sert. « Enregistré » n'apprend
+     rien ; ce qui donne envie de recommencer, c'est de voir que ça compte. */
+  toast(v === 1 ? '👍 Noté — ça guidera tes suggestions'
+                : '👎 Noté — on t\'en proposera moins comme ça');
+  if(typeof render === 'function') render();
+}
+
+/* ---------- Les deux déclenchements (§1.3) ---------- */
+
+/* Les saisons intégralement vues, hors-série exclus. Les hors-série ne sont pas
+   une saison : les compter ferait poser la question au mauvais moment, et ne
+   pas les compter ne prive de rien. */
+function saisonsFinies(sh){
+  const out = {};
+  if(!sh) return out;
+  seasonNums(sh, false).forEach(n=>{
+    const eps = (sh.seasons[n] || []).filter(aired);
+    if(eps.length && eps.every(ep => sh.watched[key(n, ep.e)])) out[n] = 1;
+  });
+  return out;
+}
+
+/* À LA FIN D'UNE SAISON, jamais sur un épisode isolé. Un épisode ne dit rien —
+   et la question, posée à chaque coche, deviendrait le bruit de fond de l'app.
+   Appelée par `applyWatched`, qui est le passage unique de toute modification
+   des épisodes vus : un seul point d'accroche, donc aucun chemin oublié. */
+function signalerSaisonsFinies(sh, avant, apres){
+  const neuves = Object.keys(apres).filter(n => !avant[n]).map(Number);
+  if(!neuves.length) return;
+  const derniere = Math.max.apply(null, neuves);
+  /* Sans guillemets : la ligne ne fait qu'une hauteur et tronque au-delà d'une
+     vingtaine de caractères, or « … » en coûte quatre pour rien. */
+  const fait = isFinished(sh)
+    ? sh.name+', terminée 🎉'
+    : sh.name+', saison '+derniere+' terminée 🎉';
+  proposerAvis('tv', sh.id, fait);
+}
+
+/* À CHAQUE FILM MARQUÉ VU. Un film est binaire : il n'y a pas d'autre moment
+   où poser la question, et pas de raison de la reporter. */
+function signalerFilmVu(id){
+  const m = db.movies[id];
+  if(!m || !m.seen) return;
+  proposerAvis('movie', id, m.title+', vu 🎉');
+}
+
+/* ===========================================================================
+   LOT A — LE DUEL (§1.5)
+
+   Comparer est beaucoup plus facile que juger dans l'absolu. « Est-ce que j'ai
+   aimé Ozark ? » n'a pas de réponse nette ; « Ozark ou Breaking Bad ? » se
+   tranche en une seconde.
+
+   Cinq règles, toutes actées, toutes implémentées ici :
+     1. même famille — film contre film, série contre série, animé contre animé ;
+     2. adversaires CHOISIS, pas tirés au hasard : on apprend quand c'est serré ;
+     3. session courte et bornée — dix duels, jamais de puits sans fond ;
+     4. une sortie honnête — « Je ne sais pas / les deux » ;
+     5. ça finit TOUJOURS par un résultat, et la boucle se ferme dans la session.
+
+   Et deux garde-fous : un titre mal classé ne devient jamais un 👎, et un 👎
+   doit pouvoir être repris (liste « Écartés », plus bas).
+=========================================================================== */
+
+const DUEL_TAILLE = 10;      // dix duels, ~40 secondes
+const DUEL_MINI = 10;        // une famille s'ouvre à partir de dix titres éligibles
+const DUEL_ALEA = 3;         // les premiers duels au hasard, faute de repères
+const DUEL_VOISINS = 4;      // parmi combien de rangs voisins on cherche l'adversaire
+const RATTRAPAGE_MAX = 10;   // une dizaine de lignes, jamais cent
+
+const DUEL_FAMILLES = [
+  { cle:'film',  nom:'films',  titre:'Départage tes films'  },
+  { cle:'serie', nom:'séries', titre:'Départage tes séries' },
+  { cle:'anime', nom:'animés', titre:'Départage tes animés' }
+];
+const DUEL_VIDE = { actif:false, famille:null, paquet:[], scores:{}, joues:{},
+                    faits:0, paire:null, choix:null, ecran:'jeu',
+                    classe:[], sugg:null, rattrapage:[] };
+let duel = Object.assign({}, DUEL_VIDE);
+
+/* QUI ENTRE DANS LE JEU. Un titre vu y entre, qu'il porte un 👍 ou rien du
+   tout — c'est justement ce qu'on cherche à départager. Un titre ajouté et
+   jamais ouvert reste dans « à voir un jour » : il n'a rien à dire. Un titre
+   👎 sort du jeu : aucune suggestion ne sera bâtie dessus, le classer serait du
+   temps perdu.
+   Les graines de la grille d'amorçage en font partie : ce sont des titres
+   déclarés aimés, et sans elles quelqu'un qui vient de s'inscrire n'aurait
+   jamais assez de matière pour jouer. */
+function titresEligiblesDuel(famille){
+  const pasVus = (db.gouts && db.gouts.pasVus) || [];
+  const recuse = c => pasVus.indexOf(c) >= 0;
+  const out = [], deja = {};
+  titresVus(famille).forEach(t=>{
+    const c = t.media+':'+t.id;
+    if(avisDe(t.media, t.id) === -1 || recuse(c)) return;
+    deja[c] = 1; out.push(t);
+  });
+  ((db.gouts && db.gouts.graines) || []).forEach(g=>{
+    const fam = g.famille || (g.media === 'movie' ? 'film' : 'serie');
+    if(famille && fam !== famille) return;
+    const c = g.media+':'+g.id;
+    if(deja[c] || recuse(c) || avisDe(g.media, g.id) === -1) return;
+    deja[c] = 1;
+    out.push({ media:g.media, id:String(g.id), nom:g.nom || 'Sans titre', famille:fam,
+               genres:[], affiche:null, date:null, fini:false, part:0, graine:true });
+  });
+  return out;
+}
+
+/* LE JEU NE PROPOSE QUE LES FAMILLES PRÊTES. Quarante films et six animés :
+   on départage les films, pas les animés. En dessous de dix titres, un podium
+   ne veut rien dire — on classerait ce qu'on a, pas ce qu'on préfère. */
+function famillesDuel(){
+  return DUEL_FAMILLES.filter(f => titresEligiblesDuel(f.cle).length >= DUEL_MINI);
+}
+function duelDisponible(){ return famillesDuel().length > 0; }
+
+/* « 4 nouveaux titres à départager », jamais « viens jouer ». Le duel revient
+   quand il a de la matière, et l'invitation le DIT : ce qui n'a pas encore été
+   classé et sur quoi rien n'a été déclaré. Zéro nouveau titre = aucune raison
+   de relancer, et l'app ne prétend pas le contraire. */
+function nouveauxADepartager(famille){
+  const rang = ((db.podium || {})[famille] || []).map(String);
+  return titresEligiblesDuel(famille)
+    .filter(t => rang.indexOf(String(t.id)) < 0 && !aAime(t.media, t.id)).length;
+}
+
+const cleDuel = t => t.media+':'+t.id;
+
+function ouvrirDuel(famille){
+  const paquet = titresEligiblesDuel(famille);
+  if(paquet.length < DUEL_MINI)
+    return toast('Il faut une dizaine de titres vus pour départager');
+  /* Le podium existant sert de point de départ : sans lui, chaque session
+     repartirait de zéro et rejouerait des duels déjà tranchés. Un 👍 pèse un
+     peu, sans jamais valoir un classement — le pouce donne le signe, le duel
+     donne l'ordre. */
+  const rang = ((db.podium || {})[famille] || []).map(String);
+  const scores = {};
+  paquet.forEach(t=>{
+    const i = rang.indexOf(String(t.id));
+    scores[cleDuel(t)] = 1000 + (i >= 0 ? (rang.length - i) * 12 : 0)
+                               + (aAime(t.media, t.id) ? 25 : 0);
+  });
+  duel = Object.assign({}, DUEL_VIDE,
+    { actif:true, famille:famille, paquet:paquet, scores:scores, joues:{},
+      faits:0, ecran:'jeu', classe:[], sugg:null, rattrapage:[] });
+  duelSuivant();
+  if(view !== 'gouts') go('gouts', { from: view });
+  else render();
+}
+
+function fermerDuel(){
+  oublierDuel();
+  render();
+}
+/* Range la session sans rien redessiner. Appelée par `go()` dès qu'on quitte
+   Mes goûts : la barre du bas reste atteignable pendant une partie, et un duel
+   laissé actif après un changement d'onglet empoisonnait toute l'app — le
+   premier appui sur « retour » était mangé par `goBack`, le geste de bord
+   restait désarmé partout, et revenir dans Mes goûts rouvrait l'arène au lieu
+   de l'écran. Le podium, lui, est déjà enregistré : on ne perd rien d'acquis. */
+function oublierDuel(){ duel = Object.assign({}, DUEL_VIDE); }
+
+/* ADVERSAIRES CHOISIS, PAS TIRÉS AU HASARD. Les premiers duels au hasard —
+   on n'a aucun repère — puis on fait s'affronter les titres qui se tiennent :
+   c'est là que l'information est, un écart de dix places n'apprend rien.
+   Le départ est pris à un rang quelconque et non toujours en tête : sinon les
+   dix duels d'une session ne parleraient jamais que des dix meilleurs. */
+function duelSuivant(){
+  duel.choix = null;
+  if(duel.faits >= DUEL_TAILLE || duel.paquet.length < 2) return terminerDuel();
+  const p = duel.paquet;
+  const marque = (a,b)=>{
+    const x = cleDuel(a), y = cleDuel(b);
+    return x < y ? x+'|'+y : y+'|'+x;
+  };
+  let a = null, b = null;
+  if(duel.faits < DUEL_ALEA){
+    for(let essai = 0; essai < 40 && !b; essai++){
+      const i = Math.floor(Math.random() * p.length);
+      let j = Math.floor(Math.random() * p.length);
+      if(j === i) j = (i + 1) % p.length;
+      if(!duel.joues[marque(p[i], p[j])]){ a = p[i]; b = p[j]; }
+    }
+  }
+  if(!b){
+    const tri = p.slice().sort((x,y)=> duel.scores[cleDuel(y)] - duel.scores[cleDuel(x)]);
+    const departs = tri.map((t,i)=>i).sort(()=> Math.random() - 0.5);
+    for(const i of departs){
+      for(let j = i + 1; j < Math.min(tri.length, i + 1 + DUEL_VOISINS); j++){
+        if(!duel.joues[marque(tri[i], tri[j])]){ a = tri[i]; b = tri[j]; break; }
+      }
+      if(b) break;
+    }
+    /* Tous les voisinages épuisés : on prend n'importe quelle paire encore
+       vierge plutôt que d'arrêter la session sur une impasse. */
+    if(!b) for(let i = 0; i < tri.length - 1 && !b; i++)
+      for(let j = i + 1; j < tri.length && !b; j++)
+        if(!duel.joues[marque(tri[i], tri[j])]){ a = tri[i]; b = tri[j]; }
+  }
+  if(!b) return terminerDuel();                 // plus rien à départager
+  duel.joues[marque(a, b)] = 1;
+  duel.paire = [a, b];
+}
+
+/* Le tap sur une affiche EST le vote : c'est le geste principal, il ne partage
+   rien avec autre chose. Le temps d'arrêt avant le duel suivant n'est pas
+   décoratif — sans lui, on ne voit pas ce qu'on vient de choisir, et on doute. */
+function duelVote(i){
+  if(!duel.actif || !duel.paire || duel.choix) return;
+  duel.choix = cleDuel(duel.paire[i]);
+  render();
+  setTimeout(()=> appliquerVote(i), 320);
+}
+function appliquerVote(i){
+  if(!duel.actif || !duel.paire) return;
+  const g = duel.paire[i], p = duel.paire[1 - i];
+  const kg = cleDuel(g), kp = cleDuel(p);
+  /* Un classement par confrontations, à la manière des échecs : battre un titre
+     bien placé rapporte plus que battre un titre déjà relégué. C'est ce qui
+     permet de trouver le sommet en une dizaine de duels au lieu des centaines
+     qu'un tri complet demanderait. */
+  const K = 32;
+  const attendu = 1 / (1 + Math.pow(10, (duel.scores[kp] - duel.scores[kg]) / 400));
+  duel.scores[kg] += K * (1 - attendu);
+  duel.scores[kp] -= K * (1 - attendu);
+  /* §1.7, L'EXCEPTION. Un titre non noté qui bat un titre 👍 passe à 👍 : la
+     personne vient de déclarer qu'elle le préfère à quelque chose qu'elle aime.
+     C'est une déclaration explicite, pas une déduction — et c'est exactement ce
+     que la pastille « 👍 déjà aimé » rend visible sur la carte adverse. */
+  if(avisDe(g.media, g.id) === 0 && aAime(p.media, p.id)) poserAvis(g.media, g.id, 1);
+  /* LE GARDE-FOU, et il n'y a rien à écrire pour l'obtenir : le perdant ne
+     devient JAMAIS un 👎. Finir dernier parmi quarante titres aimés n'est pas
+     un rejet. Le duel donne l'ordre, jamais le signe. */
+  duel.faits++;
+  duelSuivant();
+  render();
+}
+/* UNE SORTIE HONNÊTE. Sans elle, on tranche au hasard et on pollue son propre
+   classement — un classement faux vaut moins que pas de classement du tout.
+   Le duel est compté comme joué : la session reste bornée à dix. */
+function duelPasse(){
+  if(!duel.actif || duel.choix) return;
+  duel.faits++;
+  duelSuivant();
+  render();
+}
+/* « Je ne l'ai pas vu ». Le paquet vient de titres SUPPOSÉS vus — la grille
+   d'inscription et la bibliothèque — et ces deux sources contiennent forcément
+   des erreurs. Le titre sort du paquet, pour cette session et pour les
+   suivantes : sans mémoire, il faudrait le récuser à chaque fois.
+   Ce n'est pas un avis : ça ne dit rien du goût, seulement que la bibliothèque
+   se trompe. Le duel n'est donc pas compté. */
+function duelPasVu(media, id){
+  if(typeof closeSheet === 'function') closeSheet();
+  const c = media+':'+String(id);
+  duel.paquet = duel.paquet.filter(t => cleDuel(t) !== c);
+  db.gouts.pasVus = db.gouts.pasVus || [];
+  if(db.gouts.pasVus.indexOf(c) < 0) db.gouts.pasVus.push(c);
+  /* Une graine posée par erreur sur la grille d'amorçage se retire pour de bon :
+     elle nourrissait les suggestions sur la foi d'un titre jamais vu. */
+  const gr = (db.gouts && db.gouts.graines) || [];
+  const i = gr.findIndex(x => x.media === media && String(x.id) === String(id));
+  if(i >= 0){ gr.splice(i, 1); if(typeof oublierSuggestions === 'function') oublierSuggestions(); }
+  toucheGouts();
+  duelSuivant();
+  render();
+}
+
+/* ÇA FINIT TOUJOURS PAR UN RÉSULTAT. Une session de tri sans récompense
+   immédiate n'est jouée qu'une fois. */
+function terminerDuel(){
+  if(!duel.actif) return;
+  duel.paire = null; duel.choix = null;
+  const classe = duel.paquet.slice()
+    .sort((a,b)=> duel.scores[cleDuel(b)] - duel.scores[cleDuel(a)]);
+  duel.classe = classe;
+  /* PODIUM, PAS CLASSEMENT. Ordonner cent titres coûterait des centaines de
+     duels ; trouver le sommet en coûte une dizaine. On garde donc une tête de
+     dix, et on n'en montre que trois. */
+  db.podium = db.podium || {};
+  db.podium[duel.famille] = classe.slice(0, PODIUM_MAX).map(t => String(t.id));
+  db.podium.maj = Date.now();
+  duel.ecran = 'resultat';
+  apresAvis();                      // enregistre, et périme la vitrine
+  chargerSuggDuel(classe[0]);
+  render();
+}
+
+/* LA BOUCLE SE FERME DANS LA SESSION : cinq titres à découvrir, recalculés à
+   partir du nouveau numéro un. C'est la preuve que l'effort a changé quelque
+   chose, tout de suite — et c'est ça qui donne envie de rejouer. */
+async function chargerSuggDuel(tete){
+  if(!tete){ duel.sugg = []; return; }
+  duel.sugg = 'attente';
+  try{
+    const d = await tmdb('/'+tete.media+'/'+tete.id+'/recommendations');
+    duel.sugg = ((d && d.results) || [])
+      .map(x => normaliser(x, tete.media))
+      .filter(x => x && !dejaChezMoi(x.media, x.id))
+      .slice(0, 5);
+  }catch(e){ duel.sugg = []; }      // une source muette vaut mieux qu'un écran bloqué
+  if(view === 'gouts' && duel.actif) render();
+}
+
+function rejouerDuel(){ ouvrirDuel(duel.famille); }
+
+/* ---------------------------------------------------------------------------
+   LA LISTE DE RATTRAPAGE (§1.6)
+
+   Le duel vient de mettre la personne en mode « je juge » : c'est là qu'elle
+   est le plus disposée à enchaîner. Et surtout, le duel ne saura JAMAIS dire
+   « celui-là, je l'ai détesté » — il ne fait que classer. La liste complète ce
+   trou. Le duel donne l'ordre, la liste donne le signe.
+
+   La liste est figée à l'entrée : répondre ne doit pas faire disparaître la
+   ligne sous le doigt ni décaler les suivantes.
+--------------------------------------------------------------------------- */
+function ouvrirRattrapage(){
+  const vus = {}, out = [];
+  const prendre = t=>{
+    const c = cleDuel(t);
+    if(vus[c] || avisDe(t.media, t.id) !== 0) return;
+    vus[c] = 1; out.push(t);
+  };
+  (duel.paquet || []).forEach(prendre);   // ceux qu'on vient de manipuler d'abord
+  titresVus().forEach(prendre);
+  duel.rattrapage = out.slice(0, RATTRAPAGE_MAX);
+  duel.ecran = 'rattrapage';
+  render();
+}
+/* TROIS ÉTATS : 👍, 👎, et RIEN — qui est le défaut et une réponse parfaitement
+   valide. Repasser le même pouce revient donc au troisième état. */
+function avisRattrapage(media, id, v){
+  poserAvis(media, id, v);
+  render();
+}
+
+/* ---------------------------------------------------------------------------
+   Le synopsis d'un titre, pour la fiche ouverte depuis le duel
+
+   Un doute sur l'un des deux titres et on est bloqué : il faut une porte de
+   sortie. La bibliothèque porte déjà le synopsis des titres qu'elle contient ;
+   pour une graine, qui n'y est pas, on va le chercher une fois.
+--------------------------------------------------------------------------- */
+const synopsisDuel = {};             // 'tv:1399' → texte | 'attente' | ''
+function synopsisDe(media, id){
+  const local = media === 'tv' ? db.shows[id] : db.movies[id];
+  if(local && local.overview) return local.overview;
+  const k = media+':'+id;
+  if(synopsisDuel[k] === undefined){
+    synopsisDuel[k] = 'attente';
+    tmdb('/'+media+'/'+id)
+      .then(d=>{ synopsisDuel[k] = (d && d.overview) || ''; peindreSynopsisDuel(k); })
+      .catch(()=>{ synopsisDuel[k] = ''; peindreSynopsisDuel(k); });
+  }
+  return synopsisDuel[k];
+}
+function peindreSynopsisDuel(k){
+  const el = document.getElementById('syn-'+k);
+  if(el) el.textContent = synopsisDuel[k] === 'attente' ? '' : (synopsisDuel[k] || '');
+}
+
+/* ---------------------------------------------------------------------------
+   L'écran du duel
+
+   Deux affiches empilées, un VS au milieu, la question au-dessus, et sous les
+   cartes la sortie neutre. « 3 / 10 » et une barre qui avance : c'est ce qui
+   fait aller au bout — un jeu sans fin visible est un jeu qu'on quitte à la
+   troisième carte.
+--------------------------------------------------------------------------- */
+function affDuel(t, cls){
+  const src = srcImage(t.affiche, 'w342');
+  return src
+    ? '<img class="'+cls+'" src="'+src+'" alt="" onerror="posterFail(this)">'
+    : '<div class="'+cls+' ph">'+esc((t.nom || '?').slice(0, 22))+'</div>';
+}
+function carteDuel(t, i){
+  const etat = !duel.choix ? '' : (duel.choix === cleDuel(t) ? ' gagne' : ' perd');
+  const an = t.date ? year(t.date) : '';
+  return '<button class="dcarte'+etat+'" onclick="duelVote('+i+')" '+
+      'aria-label="Choisir '+esc(t.nom)+'">'+
+    affDuel(t, 'dcimg')+
+    /* LA PASTILLE « déjà aimé » rend visible la règle du §1.7 : un titre non
+       qualifié qui bat un titre aimé devient aimé à son tour. Sans elle, la
+       règle s'appliquerait dans le dos de la personne. */
+    (aAime(t.media, t.id) ? '<span class="dpouce">👍 déjà aimé</span>' : '')+
+    '<span class="dinfo" onclick="event.stopPropagation();ficheDuel(\''+t.media+'\',\''+
+      escJs(String(t.id))+'\')" role="button" aria-label="Voir la fiche">i</span>'+
+    '<span class="dtxt"><b>'+esc(t.nom)+'</b>'+
+      (an ? '<i>'+esc(an)+'</i>' : '')+'</span>'+
+  '</button>';
+}
+function ecranDuelJeu(){
+  const [a, b] = duel.paire || [];
+  if(!a || !b) return '<div class="empty"><p>Plus rien à départager.</p></div>';
+  const avance = Math.round(duel.faits / DUEL_TAILLE * 100);
+  return '<div class="darene">'+
+    '<div class="dbarre"><i style="width:'+avance+'%"></i></div>'+
+    '<div class="dquest">Lequel tu as préféré&nbsp;?</div>'+
+    '<div class="dsous">Il n\'y a pas de mauvaise réponse.</div>'+
+    '<div class="dcartes">'+carteDuel(a, 0)+'<span class="dvs">VS</span>'+carteDuel(b, 1)+'</div>'+
+    /* Une sortie honnête, écrite en toutes lettres. */
+    '<button class="dneutre" onclick="duelPasse()">Je ne sais pas / les deux</button>'+
+  '</div>';
+}
+
+/* LA FICHE, ACCESSIBLE DEPUIS LE DUEL. Deux sorties, et elles comptent autant
+   l'une que l'autre : « C'est celui-là » vote directement — pas de retour en
+   arrière puis de re-visée, on ne casse pas le rythme d'un jeu de quarante
+   secondes — et « Je ne l'ai pas vu » nettoie le paquet.
+   Principe général : chaque fois qu'on demande un avis, il faut pouvoir dire
+   « je ne peux pas répondre ». */
+function ficheDuel(media, id){
+  const t = (duel.paire || []).find(x => x.media === media && String(x.id) === String(id));
+  if(!t) return;
+  const i = duel.paire.indexOf(t);
+  const syn = synopsisDe(media, id);
+  const an = t.date ? year(t.date) : '';
+  openSheet(
+    '<h3>'+esc(t.nom)+'</h3>'+
+    (an ? '<p class="small muted" style="margin:0 0 8px">'+esc(an)+'</p>' : '')+
+    '<div id="syn-'+media+':'+id+'" class="overview" style="margin:0 0 12px">'+
+      esc(syn === 'attente' ? '' : (syn || ''))+'</div>'+
+    zoneBande(media, id)+
+    '<button class="opt" onclick="closeSheet();duelVote('+i+')">C’est celui-là</button>'+
+    '<button class="opt" onclick="duelPasVu(\''+media+'\',\''+escJs(String(id))+'\')">'+
+      'Je ne l’ai pas vu</button>'+
+    '<button class="opt" onclick="closeSheet()">Revenir au duel</button>');
+}
+
+/* Le résultat. Deux blocs, deux fonctions : le podium, c'est la fierté ; les
+   cinq titres, c'est la preuve que l'effort a changé quelque chose. Et une
+   note qui explique le gain en UNE phrase — c'est elle qui donne envie de
+   rejouer, pas le podium. */
+const RANGS = ['🥇','🥈','🥉'];
+function ecranDuelResultat(){
+  const trois = (duel.classe || []).slice(0, 3);
+  const tete = trois[0];
+  const nomFam = (DUEL_FAMILLES.find(f => f.cle === duel.famille) || {}).nom || 'titres';
+  let html = '<div class="dres">'+
+    '<div class="dfete">🏆</div>'+
+    '<div class="drtitre">Ton podium</div>'+
+    '<div class="drsous">D\'après tes '+duel.faits+' duel'+(duel.faits>1?'s':'')+'</div>';
+  /* Le n°1 au milieu et plus haut : un podium se lit d'un coup d'œil, pas en
+     lisant les médailles une par une. */
+  const ordre = trois.length >= 3 ? [trois[1], trois[0], trois[2]]
+              : trois.length === 2 ? [trois[1], trois[0]] : trois;
+  html += '<div class="dpodium">'+ordre.map(t=>{
+    const r = trois.indexOf(t);
+    return '<div class="dpod'+(r === 0 ? ' un' : '')+'">'+
+      '<div class="drang">'+RANGS[r]+'</div>'+
+      affDuel(t, 'dpaff')+
+      '<div class="dpnom">'+esc(t.nom)+'</div></div>';
+  }).join('')+'</div>';
+
+  if(tete){
+    html += '<div class="sectitle">Ce que ça change tout de suite</div>';
+    if(duel.sugg === 'attente')
+      html += '<div class="wrap" style="padding-top:0"><span class="spin"></span></div>';
+    else if((duel.sugg || []).length)
+      html += '<div class="drail" data-rail="duelsugg">'+duel.sugg.map(x=>
+        '<button class="djq" onclick="ouvrirApercuDuel(\''+x.media+'\','+x.id+')">'+
+          affDuel({ affiche:x.affiche, nom:x.nom }, 'djqaff')+
+          '<span class="djqnom">'+esc(x.nom)+'</span></button>').join('')+'</div>';
+    html += '<div class="wrap" style="padding-top:10px"><div class="card dnote">'+
+      '<b>'+esc(tete.nom)+'</b> devient ton point de départ. La rangée '+
+      '« Dans l\'esprit de '+esc(tete.nom)+' » remplace la rotation au hasard, '+
+      'dès maintenant.</div></div>';
+  }
+  html += '<div class="dcta">'+
+      '<button class="btn ghost" onclick="rejouerDuel()">Encore '+DUEL_TAILLE+' duels</button>'+
+      '<button class="btn" onclick="ouvrirRattrapage()">Continuer →</button>'+
+    '</div>'+
+    '<div class="tiny muted center" style="margin-top:10px">Ton podium '+
+      esc(nomFam ? 'des '+nomFam : '')+' est enregistré.</div>'+
+  '</div>';
+  return html;
+}
+/* Quitter le duel pour ouvrir une fiche perdrait la session : on ferme
+   proprement d'abord, et on garde le podium — il est déjà enregistré. */
+function ouvrirApercuDuel(media, id){
+  duel = Object.assign({}, DUEL_VIDE);
+  ui.preview = { id:id, type:media, loading:true, data:null, error:'' };
+  go('preview', { id:id, type:media, from:'gouts' });
+  /* Après le rendu : `loadPreview` redessine seul quand la réponse arrive, et
+     il ne doit pas courir avant que l'écran existe. */
+  if(typeof loadPreview === 'function') setTimeout(loadPreview, 0);
+}
+
+function ecranRattrapage(){
+  /* Pas de titre ici : l'en-tête porte déjà « Encore une chose », et le
+     répéter à dix pixels de distance donne l'impression d'un écran cassé. */
+  let html = '<div class="wrap"><div class="drsous" style="text-align:left;margin:0 0 6px">'+
+    'Tant que tu es lancé : ceux-là, tu les as aimés&nbsp;?</div></div>';
+  if(!duel.rattrapage.length){
+    html += '<div class="empty"><p>Tout est déjà qualifié. Rien à faire ici.</p></div>';
+  } else {
+    html += '<div class="wrap" style="padding-top:0">'+duel.rattrapage.map(t=>{
+      const v = avisDe(t.media, t.id);
+      return '<div class="rlig">'+
+        affDuel(t, 'rlaff')+
+        '<div class="rli"><b>'+esc(t.nom)+'</b>'+
+          (t.date ? '<span>'+esc(year(t.date))+'</span>' : '')+'</div>'+
+        '<div class="rduo">'+
+          '<button class="rpb non'+(v === -1 ? ' on' : '')+'" aria-pressed="'+(v === -1)+'" '+
+            'onclick="avisRattrapage(\''+t.media+'\',\''+escJs(String(t.id))+'\',-1)">👎</button>'+
+          '<button class="rpb oui'+(v === 1 ? ' on' : '')+'" aria-pressed="'+(v === 1)+'" '+
+            'onclick="avisRattrapage(\''+t.media+'\',\''+escJs(String(t.id))+'\',1)">👍</button>'+
+        '</div></div>';
+    }).join('')+'</div>';
+  }
+  html += '<div class="wrap"><div class="card dnote">Rien n\'est obligatoire. '+
+      'Ce que tu ne touches pas reste simplement non qualifié.</div></div>'+
+    '<div class="dcta"><button class="btn block" onclick="fermerDuel()">Terminer</button></div>'+
+    '<div style="height:24px"></div>';
+  return html;
+}
+
+function ecranDuel(){
+  const t = duel.ecran === 'jeu'
+    ? (DUEL_FAMILLES.find(f => f.cle === duel.famille) || {}).titre || 'Le duel'
+    : duel.ecran === 'resultat' ? 'Le résultat' : 'Encore une chose';
+  const compteur = duel.ecran === 'jeu'
+    ? '<span class="dcompte">'+Math.min(duel.faits + 1, DUEL_TAILLE)+' / '+DUEL_TAILLE+'</span>'
+    : '';
+  let html = header(t, { right: compteur+
+    '<button class="iconbtn" onclick="fermerDuel()" aria-label="Fermer">'+I.close+'</button>' });
+  html += duel.ecran === 'jeu' ? ecranDuelJeu()
+        : duel.ecran === 'resultat' ? ecranDuelResultat()
+        : ecranRattrapage();
+  return html;
+}
+
+/* La carte d'invitation, en tête de Mes goûts. Elle dit ce qu'il y a à gagner
+   et combien il reste à faire, jamais « viens jouer ». */
+function carteDuelGouts(){
+  const prets = famillesDuel();
+  if(!prets.length){
+    /* On explique l'absence plutôt que de la taire : une fonctionnalité qui
+       n'apparaît pas sans raison passe pour cassée. */
+    return '<div class="wrap" style="padding-top:0"><div class="card dinvit">'+
+      '<div class="ditit">🏆 Le duel</div>'+
+      '<div class="tiny muted">Deux affiches, tu choisis celle que tu as préférée. '+
+      'Il s\'ouvre famille par famille, à partir d\'une dizaine de titres vus '+
+      'dans la même famille.</div></div></div>';
+  }
+  const lignes = prets.map(f=>{
+    const n = nouveauxADepartager(f.cle);
+    const rang = ((db.podium || {})[f.cle] || []).length;
+    const dit = !rang ? 'Départage tes '+f.nom
+              : n ? n+' nouveau'+(n>1?'x':'')+' titre'+(n>1?'s':'')+' à départager'
+                  : 'Rejouer — ton podium est à jour';
+    return '<button class="dfam" onclick="ouvrirDuel(\''+f.cle+'\')">'+
+      '<span class="dfnom">'+esc(f.nom.charAt(0).toUpperCase()+f.nom.slice(1))+'</span>'+
+      '<span class="dfdit">'+esc(dit)+'</span>'+
+      '<i>'+I.caret+'</i></button>';
+  }).join('');
+  return '<div class="wrap" style="padding-top:0"><div class="card dinvit">'+
+    '<div class="ditit">🏆 Le duel</div>'+
+    '<div class="tiny muted" style="margin-bottom:10px">Deux affiches, tu choisis '+
+      'celle que tu as préférée. Dix duels, une quarantaine de secondes.</div>'+
+    lignes+'</div></div>';
+}
+
+/* La liste « Écartés ». Sans retour en arrière, on cesse de voter — c'est le
+   second garde-fou du §1.5, et il n'existe que si cet écran existe. */
+function blocEcartes(){
+  const l = titresEcartes();
+  if(!l.length) return '';
+  return '<div class="sectitle">Titres écartés<span class="cnt">'+l.length+'</span></div>'+
+    '<div class="wrap" style="padding-top:0">'+
+      '<div class="small muted" style="margin-bottom:8px">Aucune suggestion n\'est '+
+        'bâtie sur ces titres. Un appui les remet dans le jeu.</div>'+
+      l.map(t=>'<div class="rlig">'+
+        affDuel(t, 'rlaff')+
+        '<div class="rli"><b>'+esc(t.nom)+'</b><span>👎 écarté</span></div>'+
+        '<button class="btn ghost mini" onclick="reprendreEcarte(\''+t.media+'\',\''+
+          escJs(String(t.id))+'\')">Remettre</button>'+
+      '</div>').join('')+
+    '</div>';
+}
+function reprendreEcarte(media, id){
+  retirerAvis(media, id);
+  toast('Remis dans le jeu');
+  render();
 }
 
 /* ---------------------------------------------------------------------------
@@ -979,6 +2014,11 @@ function corpsRechActeur(){
 }
 
 function viewGouts(){
+  /* LOT A — le duel VIT ICI. Il occupe l'écran entier plutôt que d'ouvrir une
+     vue à lui : c'est un jeu de quarante secondes lancé depuis cette page, et
+     on y revient à la fin. Le retour (flèche, geste, bouton matériel) le ferme
+     sans quitter Mes goûts — voir `goBack`. */
+  if(duel.actif) return ecranDuel();
   const g = db.gouts;
   /* D3 — cet écran ne fait plus partie de l'inscription : plus personne
      n'appelle `go('gouts',{from:'compte'})`. La variante « dernière étape de
@@ -1004,6 +2044,11 @@ function viewGouts(){
     'Ces réglages passent avant ce que l\'app devine. Laisse tout vide et elle reprend la main.'+
     '</div></div>';
 
+  /* LOT A — le duel en tête d'écran : c'est la seule chose de cette page qui
+     rapporte quelque chose en trente secondes. Les deux listes de genres, elles,
+     se corrigent une fois par an. */
+  html += carteDuelGouts();
+
   /* Le raisonnement complet, écrit noir sur blanc. La version courte de ce même
      bloc est sous le carrousel de la vitrine (§E6, `blocProfilCourt`) ; ici on
      montre en plus le détail des genres déduits famille par famille, puisque
@@ -1023,7 +2068,16 @@ function viewGouts(){
   if(p.acteurs.length)
     lignes.push('<div><b>Acteurs surveillés</b> '+esc(p.acteurs.join(', '))+'</div>');
   if(p.exclus.length)
-    lignes.push('<div><b>Écartés</b> '+esc(p.exclus.join(', '))+'</div>');
+    lignes.push('<div><b>Genres écartés</b> '+esc(p.exclus.join(', '))+'</div>');
+  /* LOT A — CE QUI A ÉTÉ DIT, distingué de ce qui a été déduit. C'est
+     exactement le reproche d'Adrien — « je ne sais pas ce que l'app croit
+     savoir » — et la réponse a changé de nature : une partie du profil n'est
+     plus une déduction, c'est une déclaration. Elle doit se lire comme telle. */
+  if(p.aimes)
+    lignes.push('<div><b>Tu as aimé</b> '+p.aimes+' titre'+(p.aimes>1?'s':'')+
+      (p.pasAimes ? ', et écarté '+p.pasAimes : '')+'</div>');
+  if(p.podium.length)
+    lignes.push('<div><b>Tes préférés</b> '+esc(p.podium.join(' · '))+'</div>');
 
   html += '<div class="wrap" style="padding-top:0"><div class="profcarte">'+
     '<div class="proftitre">'+I.boussole+' Ce que je crois savoir de toi</div>'+
@@ -1062,6 +2116,10 @@ function viewGouts(){
       '<button class="chip '+(g.exclus.indexOf(n)>=0?'hors':'')+'" '+
         'onclick="bascGoutExclu(\''+escJs(n)+'\')">'+esc(n)+'</button>').join('')+
     '</div>';
+
+  /* LOT A — la reprise des 👎. Placée juste après les genres écartés, parce que
+     c'est la même question posée à deux échelles : ce que je ne veux plus voir. */
+  html += blocEcartes();
 
   /* « Je suis obligé de sélectionner des acteurs ? » — non, et il fallait
      l'écrire : la recherche d'acteurs était le dernier élément actif de la
