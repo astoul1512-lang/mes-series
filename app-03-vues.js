@@ -55,6 +55,13 @@ function corpsDeVueBrut(){
   if(view==='bienvenue') return viewBienvenue();
   if(view==='gouts')    return viewGouts();
   if(view==='plates')   return viewPlates();
+  /* Lot C — les quatre écrans du parcours d'inscription. Ils vivent dans
+     app-13 et ne s'atteignent que par `finirAvatar`, ou par la reprise d'une
+     inscription abandonnée (`reprendreInscription`, appelée par `boot`). */
+  if(view==='inscTitres') return viewInscTitres();
+  if(view==='inscStyle')  return viewInscStyle();
+  if(view==='inscPlates') return viewInscPlates();
+  if(view==='inscFin')    return viewInscFin();
   return '';
 }
 /* Fabrique le HTML d'un autre écran que celui affiché, puis remet tout en place. */
@@ -101,7 +108,11 @@ function render(){
     view === 'bienvenue' || view === 'motdepasse' || view === 'avatar' || (view === 'account' && !signedIn())
     /* D3 — `from === 'compte'` n'existe plus : ces deux écrans ne font plus
        partie de l'inscription. La condition est retirée plutôt que laissée à
-       tourner à vide. */);
+       tourner à vide. */
+    /* Lot C — les quatre étapes de l'inscription sont dans le même cas que
+       l'avatar : il n'y a qu'une chose à faire, et une barre du bas y
+       proposerait de quitter le parcours au milieu d'une question. */
+    || (typeof INSC_VUES === 'object' && !!INSC_VUES[view]));
   app.classList.remove('enter','back');
   /* Le retour à deux couches gère lui-même son mouvement : pas d'animation par-dessus. */
   if(sansAnim){ sansAnim = false; navDir = 'none'; }
@@ -161,6 +172,9 @@ function renderNav(){
      voir » arrivait avec from:'rangee', que personne ne savait rattacher, et
      plus aucun onglet n'était allumé. Une barre éteinte se lit comme une
      panne, pas comme une nuance. */
+  /* Les écrans d'inscription n'appartiennent à aucun onglet : la barre du bas
+     n'y est pas affichée (classe `accueil`). Ils ne figurent donc pas dans la
+     table ci-dessous, et la valeur de repli ne coûte rien. */
   const TAB_DIRECT = { discover:'discover', search:'search', follow:'follow', profile:'profile',
     preview:'discover', rangee:'discover',
     account:'profile', abos:'profile', biblio:'profile', moi:'profile',
@@ -744,6 +758,16 @@ function finirAvatar(){
      avant d'avoir rien rendu » : le code contredisait sa propre doctrine.
      Les deux écrans restent accessibles depuis les Réglages, et une carte les
      propose sur Découvrir une fois la bibliothèque garnie (`carteInvitGouts`). */
+  /* LOT C — l'inscription ne s'arrête plus à l'avatar. D3 avait raison de
+     supprimer les deux questionnaires qui suivaient : « Mes goûts » et « Mes
+     plateformes » demandaient un effort AVANT d'avoir rien rendu. Ce qui les
+     remplace n'est pas un questionnaire de plus — c'est une grille de
+     jaquettes qui se répond à la reconnaissance, et dont les deux écrans
+     suivants sont PRÉ-REMPLIS. On corrige, on ne compose pas. La doctrine
+     d'app-11 est respectée, pas contournée.
+     `demarrerInscription` vit dans app-13 ; s'il n'est pas là, on retombe
+     exactement sur le comportement d'avant. */
+  if(typeof demarrerInscription === 'function') return demarrerInscription();
   go(ecranDArrivee());
 }
 

@@ -190,7 +190,12 @@ async function semerBande(type, id, d){
 function boutonBande(k){
   const b = bandes[k];
   if(!b || b === 'attente') return '';
-  return '<button class="btn ghost mini" onclick="ouvrirBande(\''+k+'\')">'+I.play+' Bande-annonce</button>';
+  /* `escJs` et pas la clé nue : c'est la règle du projet pour TOUTE chaîne
+     posée dans un `onclick`, et elle vaut ici comme ailleurs. La clé est
+     aujourd'hui « movie:550 », donc l'échappement ne change rien — mais une
+     règle qu'on n'applique que là où on croit en avoir besoin n'est plus une
+     règle, c'est un pari. */
+  return '<button class="btn ghost mini" onclick="ouvrirBande(\''+escJs(k)+'\')">'+I.play+' Bande-annonce</button>';
 }
 function peindreBande(k){
   const el = document.getElementById('ba-'+k);
@@ -200,7 +205,10 @@ function peindreBande(k){
 function zoneBande(type, id){
   const k = type+':'+id;
   setTimeout(()=> chargerFiche(type, id), 0);
-  return '<div id="ba-'+k+'" class="zba">'+boutonBande(k)+'</div>';
+  /* `esc` protège la SOURCE ; le parseur redécode l'attribut, si bien que le
+     nœud porte la clé brute et que `peindreBande` continue de le retrouver
+     avec `k` non échappé. Ne pas « corriger » l'autre bout. */
+  return '<div id="ba-'+esc(k)+'" class="zba">'+boutonBande(k)+'</div>';
 }
 /* ---------- Lecteur ----------
    Le lecteur prend tout l'écran, sur fond noir : la vidéo occupe la plus grande
@@ -339,7 +347,11 @@ function viewPreview(){
   } else {
     const m = db.movies[d.id];
     html += '<div class="actions">'+
-      '<button class="btn" style="'+(m&&m.seen?'background:var(--ok);color:#08130d':'')+'" onclick="addMovie('+d.id+',true)">'+
+      /* LOT A — `marquerFilmVu` plutôt que `addMovie(id, true)` : marquer un
+         film vu doit poser la question « tu as aimé ? », d'où qu'on le fasse.
+         Le détour existe parce que `addMovie` vit dans app-04, hors du
+         périmètre de ce lot. */
+      '<button class="btn" style="'+(m&&m.seen?'background:var(--ok);color:#08130d':'')+'" onclick="marquerFilmVu('+d.id+')">'+
         I.check+(m&&m.seen?' Déjà vu':' Marquer vu')+'</button>'+
       '<button class="btn ghost" onclick="addMovie('+d.id+',false)">'+I.bookmark+' À voir</button>'+
     '</div>';
@@ -542,6 +554,20 @@ function toggleMovie(id){
   const m = db.movies[id]; if(!m) return;
   m.seen = !m.seen; m.watchedAt = m.seen ? Date.now() : null;
   saveDB(); render();
+  /* LOT A, §1.3 — à CHAQUE film marqué vu. Un film est binaire : il n'y a pas
+     d'autre moment où poser la question, et pas de raison de la reporter.
+     Décocher, en revanche, ne retire pas l'avis : « je ne l'ai plus dans mes
+     films vus » ne veut pas dire « je ne l'ai plus aimé ». */
+  if(m.seen && typeof signalerFilmVu === 'function') signalerFilmVu(id);
+}
+/* Marquer un film vu depuis un aperçu — c'est-à-dire depuis un titre qui n'est
+   pas encore dans la bibliothèque. `addMovie` fait l'ajout et l'enregistrement ;
+   ici on n'ajoute que la question, une fois l'ajout réellement abouti. */
+function marquerFilmVu(id){
+  const p = addMovie(id, true);
+  const suite = ()=>{ if(typeof signalerFilmVu === 'function') signalerFilmVu(id); };
+  if(p && typeof p.then === 'function') p.then(suite, ()=>{});
+  else suite();
 }
 function movieMenu(id){
   const m = db.movies[id];
