@@ -214,6 +214,148 @@ function collisionsCss(src){
     souci += r.soucis.length;
   }
 
+  /* --- 5. LOT D — L'ÉCRAN DÉCOUVRIR SE DESSINE-T-IL VRAIMENT ? ---
+
+     `test.html` éprouve les fonctions pures ; il ne peut pas éprouver
+     `chargerSuggestions`, qui ne fait rien d'autre que parler à TMDB. Or c'est
+     là que se joue la seule règle vraiment fragile du lot : L'ORDRE DE
+     DÉPOUILLEMENT. Les rangées se servent dans un pot commun (`vus`), la
+     première servie garde les titres — et une rangée peut donc en affamer une
+     autre sans qu'aucun test unitaire ne s'en aperçoive.
+
+     C'est arrivé pendant l'écriture, et c'est ce qui justifie ce contrôle :
+     dépouillée après « Dans l'esprit de X », la rangée « Ce que tes favoris
+     ont en commun » sortait TOUJOURS vide — ses titres, recommandés par le
+     favori n°1, étaient déjà pris. L'écran était vert de partout et il
+     manquait une rangée.
+
+     On charge donc l'app réelle, on remplace `tmdb` par un faux catalogue, et
+     on regarde ce qui est peint. Aucun réseau : le faux répond à tout. */
+  {
+    const page = await nav.newPage({ viewport:{width:390,height:844} });
+    const erreurs = [];
+    page.on('pageerror', e => erreurs.push(e.message));
+    await page.goto(BASE + '/index.html', { waitUntil:'networkidle' });
+
+    /* Le faux catalogue. Deux détails comptent : chaque appel rend des titres
+       NEUFS (sinon tout se télescope et l'ordre ne prouve rien), et toutes les
+       recommandations partagent un titre commun — c'est lui, et lui seul, que
+       le croisement des favoris doit isoler. */
+    const dessine = async (riche) => page.evaluate((riche)=>{
+      const G = { tv:[{id:18,nom:'Drame'},{id:10759,nom:'Action & Adventure'}],
+                  movie:[{id:18,nom:'Drame'},{id:28,nom:'Action'}] };
+      genresTMDB.tv = G.tv; genresTMDB.movie = G.movie;
+      let n = 0;
+      const lot = (media, tag) => Array.from({length:12}, ()=>{
+        n++;
+        const o = { id:1000+n, poster_path:'/p'+n+'.jpg', backdrop_path:'/b'+n+'.jpg',
+                    vote_average:7.4, vote_count:900, genre_ids:[18], original_language:'en' };
+        if(media === 'tv'){ o.name = tag+' '+n; o.first_air_date = '2016-04-02'; }
+        else { o.title = tag+' '+n; o.release_date = '2016-04-02'; }
+        return o;
+      });
+      window.tmdb = async (chemin)=>{
+        if(/\/genre\//.test(chemin))
+          return { genres:(/\/tv\//.test(chemin)?G.tv:G.movie).map(g=>({id:g.id,name:g.nom})) };
+        if(/watch\/providers/.test(chemin))
+          return { results:[{provider_id:8,provider_name:'Netflix',display_priorities:{FR:1}}] };
+        if(/combined_credits/.test(chemin))
+          return { cast: lot('movie','Acteur').map(x=>Object.assign({media_type:'movie'}, x)) };
+        if(/recommendations/.test(chemin)){
+          const l = lot(/\/tv\//.test(chemin) ? 'tv' : 'movie', 'Reco');
+          l.push({ id:7777, poster_path:'/c.jpg', backdrop_path:'/c.jpg',
+                   title:'Le Commun', name:'Le Commun', release_date:'2011-01-01',
+                   first_air_date:'2011-01-01', vote_average:8, vote_count:4000,
+                   genre_ids:[18], original_language:'en' });
+          return { results:l, total_pages:3 };
+        }
+        return { results: lot(/\/discover\/tv/.test(chemin) ? 'tv' : 'movie', 'Disc'),
+                 total_pages:5 };
+      };
+      db.auth = { token:'x', uid:'u' };
+      db.shows = {}; db.movies = {};
+      db.avis = { tv:{}, movie:{} };
+      db.podium = { film:[], serie:[], anime:[], maj:0 };
+      db.gouts.graines = []; db.gouts.amorcageFait = true; db.gouts.exclus = [];
+      db.gouts.pasPourMoi = {};
+      db.gouts.acteurs = [{ id:2037, nom:'Cillian Murphy' }];
+      db.gouts.plates  = [{ id:8, nom:'Netflix' }];
+      for(let i = 1; i <= 6; i++)
+        db.movies[i] = { id:i, title:'Film '+i, genres:['Drame'], seen:true, watchedAt:1,
+                         addedAt:1, date:'2014-01-01', poster:'/f.jpg' };
+      db.shows[50] = { id:50, name:'Série 50', genres:['Drame'], status:'Ended', poster:'/s.jpg',
+                       seasons:{1:[{e:1,n:'E1',d:'2020-01-01',r:42}]}, watched:{'1x1':1},
+                       addedAt:1, updated:1 };
+      if(riche) [1,2,3,4].forEach(i => poserAvis('movie', i, 1));
+      partage.suivis = [{ id:'ami', pseudo:'Léa' }];
+      biblios.ami = { movies:{ 900:{ id:900, title:'Chez Léa', poster:'/l.jpg',
+                                     genres:['Drame'], date:'2018-01-01', watchedAt:5 } } };
+      ui.disc.type = 'tout';
+      oublierSuggestions();
+      view = 'discover'; params = {};
+      return chargerSuggestions(true).then(()=>{
+        render();
+        return { rangees: [...document.querySelectorAll('.sectitle')].map(e=>e.textContent),
+                 hero: (document.querySelector('.d4nom')||{}).textContent || null,
+                 raison: (document.querySelector('.d4pq')||{}).textContent || null,
+                 lien: !!document.querySelector('.d4lien'),
+                 appel: !!document.querySelector('.d4appel'),
+                 texte: document.getElementById('app').textContent };
+      });
+    }, riche);
+
+    const rate = m => erreurs.push('lot D : ' + m);
+
+    const riche = await dessine(true);
+    /* L'ordre du §3.4, et surtout la présence des DEUX rangées de cœur. */
+    ['Dans l\'esprit de Film', 'Ce que tes favoris ont en commun', 'Avec Cillian Murphy',
+     'Des drames pour toi', 'Vu par tes proches', 'Les incontournables des années',
+     'Sur Netflix', 'Sorties récentes', 'Bientôt'].forEach((attendu, i)=>{
+      if(!riche.rangees.some(t => t.indexOf(attendu) === 0)) rate('rangée manquante : ' + attendu);
+    });
+    const rang = t => riche.rangees.findIndex(x => x.indexOf(t) === 0);
+    if(!(rang('Dans l\'esprit de Film') < rang('Ce que tes favoris ont en commun')
+      && rang('Ce que tes favoris ont en commun') < rang('Avec Cillian Murphy')
+      && rang('Avec Cillian Murphy') < rang('Des drames pour toi')
+      && rang('Des drames pour toi') < rang('Vu par tes proches')
+      && rang('Vu par tes proches') < rang('Les incontournables des années')
+      && rang('Les incontournables des années') < rang('Sur Netflix')
+      && rang('Sur Netflix') < rang('Sorties récentes')
+      && rang('Sorties récentes') < rang('Bientôt')))
+      rate('l\'ordre fixe du §3.4 n\'est pas respecté : ' + riche.rangees.join(' | '));
+    if(!riche.hero) rate('aucune proposition du jour en tête d\'écran');
+    if(!/Parce que tu as aimé/.test(riche.raison || '')) rate('la proposition n\'a pas de raison lisible');
+    if(!riche.lien) rate('le lien « Ajuster mes goûts » a disparu');
+    if(riche.appel) rate('la carte d\'appel au duel s\'affiche sur un profil nourri');
+    if(/TMDB/.test(riche.texte)) rate('l\'aveu technique sur les plateformes est encore à l\'écran');
+    if(/Je pars de tes/.test(riche.texte)) rate('le pavé de diagnostic est encore à l\'écran');
+
+    /* « Pas pour moi » : la carte change tout de suite, et rien n'entre dans
+       `db.avis` — c'est la ligne de partage du §3.8. */
+    const avant = riche.hero;
+    await page.click('.d4act .btn.ghost');
+    const apres = await page.evaluate(()=>({
+      hero: (document.querySelector('.d4nom')||{}).textContent || null,
+      avis: Object.keys(db.avis.movie).filter(id => db.avis.movie[id].v === -1).length }));
+    if(apres.hero === avant) rate('« Pas pour moi » ne remplace pas la carte');
+    if(apres.avis) rate('« Pas pour moi » a écrit un 👎 : c\'est un rejet ferme, pas un report');
+
+    /* Le profil qui démarre : pas de rangée de cœur, mais un appel au duel. */
+    const pauvre = await dessine(false);
+    if(pauvre.rangees.some(t => /^Dans l'esprit de/.test(t)))
+      rate('une rangée de cœur s\'ouvre sans le moindre 👍');
+    if(!pauvre.appel) rate('aucun appel au duel sur un profil qui n\'a rien déclaré');
+    if(!/incontournable/.test(pauvre.raison || ''))
+      rate('sans signal, la proposition doit s\'annoncer comme un incontournable');
+
+    console.log('lot D        → ' + (erreurs.length
+      ? erreurs.length + ' problème(s)'
+      : riche.rangees.length + ' rangées nourries, ' + pauvre.rangees.length + ' au démarrage'));
+    erreurs.forEach(e => console.log('   ! ' + e));
+    souci += erreurs.length;
+    await page.close();
+  }
+
   await nav.close();
   console.log(souci ? '\nÉCHEC — ' + souci + ' problème(s)' : '\nTout est vert.');
   process.exit(souci ? 1 : 0);
