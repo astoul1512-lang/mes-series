@@ -339,7 +339,11 @@ function viewPreview(){
   } else {
     const m = db.movies[d.id];
     html += '<div class="actions">'+
-      '<button class="btn" style="'+(m&&m.seen?'background:var(--ok);color:#08130d':'')+'" onclick="addMovie('+d.id+',true)">'+
+      /* LOT A — `marquerFilmVu` plutôt que `addMovie(id, true)` : marquer un
+         film vu doit poser la question « tu as aimé ? », d'où qu'on le fasse.
+         Le détour existe parce que `addMovie` vit dans app-04, hors du
+         périmètre de ce lot. */
+      '<button class="btn" style="'+(m&&m.seen?'background:var(--ok);color:#08130d':'')+'" onclick="marquerFilmVu('+d.id+')">'+
         I.check+(m&&m.seen?' Déjà vu':' Marquer vu')+'</button>'+
       '<button class="btn ghost" onclick="addMovie('+d.id+',false)">'+I.bookmark+' À voir</button>'+
     '</div>';
@@ -542,6 +546,20 @@ function toggleMovie(id){
   const m = db.movies[id]; if(!m) return;
   m.seen = !m.seen; m.watchedAt = m.seen ? Date.now() : null;
   saveDB(); render();
+  /* LOT A, §1.3 — à CHAQUE film marqué vu. Un film est binaire : il n'y a pas
+     d'autre moment où poser la question, et pas de raison de la reporter.
+     Décocher, en revanche, ne retire pas l'avis : « je ne l'ai plus dans mes
+     films vus » ne veut pas dire « je ne l'ai plus aimé ». */
+  if(m.seen && typeof signalerFilmVu === 'function') signalerFilmVu(id);
+}
+/* Marquer un film vu depuis un aperçu — c'est-à-dire depuis un titre qui n'est
+   pas encore dans la bibliothèque. `addMovie` fait l'ajout et l'enregistrement ;
+   ici on n'ajoute que la question, une fois l'ajout réellement abouti. */
+function marquerFilmVu(id){
+  const p = addMovie(id, true);
+  const suite = ()=>{ if(typeof signalerFilmVu === 'function') signalerFilmVu(id); };
+  if(p && typeof p.then === 'function') p.then(suite, ()=>{});
+  else suite();
 }
 function movieMenu(id){
   const m = db.movies[id];
