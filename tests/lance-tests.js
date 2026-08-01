@@ -16,7 +16,7 @@
       a cessé de s'évaluer. Chaque fichier passait `node --check` séparément ;
       l'app, elle, ne démarrait plus.
 
-   3. Il relit les déclarations de premier niveau des onze fichiers et refuse
+   3. Il relit les déclarations de premier niveau des douze fichiers et refuse
       qu'un nom soit déclaré deux fois. Les scripts partagent une seule portée
       globale : c'est la contrainte structurante du projet, et rien ne la
       surveillait. Contrôle statique, donc il attrape aussi les collisions
@@ -33,10 +33,18 @@ const BASE = process.env.BASE || 'http://localhost:8099';
    qui échoue ne bloque pas le démarrage, et elle journalise. */
 const CONSOLE_ATTENDUE = [/migration \d+ en échec/];
 
+/* DOUZE fichiers, pas onze. `app-12-recherche.js` a été ajouté en v83/v84 sans
+   entrer dans cette liste : le contrôle anti-collision ne l'a jamais lu, et une
+   collision dans ce fichier serait passée inaperçue — c'est-à-dire exactement
+   le genre de panne que ce contrôle existe pour attraper (app-01 / app-05 le
+   30/07 : chaque fichier passait `node --check`, l'app ne démarrait plus).
+   Signalé par le lot 0, qui n'avait pas ce fichier dans son périmètre.
+   Vérifié à l'ajout : aucune collision préexistante. */
 const FICHIERS = [
   'app-01-noyau.js','app-02-outils.js','app-03-vues.js','app-04-decouvrir.js',
   'app-05-plateformes.js','app-06-serie.js','app-07-partage.js',
-  'app-08-reglages.js','app-09-notifications.js','app-10-sorties.js','app-11-gouts.js'
+  'app-08-reglages.js','app-09-notifications.js','app-10-sorties.js',
+  'app-11-gouts.js','app-12-recherche.js'
 ];
 
 /* Déclarations de PREMIER NIVEAU seulement : une colonne 0 pour `function`,

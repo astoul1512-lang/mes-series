@@ -960,3 +960,159 @@
   .dsyn{font-size:13.5px;line-height:1.5;color:#c8cdd8;margin:14px 0 16px;min-height:20px}
   .dact{display:flex;gap:9px}
   .dact .btn{flex:1}
+
+  /* ===================== LOT A — le signal d'appréciation et le moteur de goût ===================== */
+
+  /* ---------- La barre « tu as aimé ? » ----------
+     Même format et même emplacement que la barre « Annuler » : c'est le même
+     objet de l'interface, à la même place, et jamais les deux en même temps.
+     Elle porte le FAIT sur une ligne, la question en dessous, deux cibles
+     larges, et une croix — la sortie doit être visible, sans quoi on apprend à
+     ignorer la barre y compris quand elle sert à autre chose. */
+  .barreavis{position:fixed;left:16px;right:16px;bottom:calc(84px + var(--safe-b));
+    max-width:688px;margin:0 auto;
+    background:var(--surface2);border:1px solid var(--line);
+    padding:10px 8px 10px 16px;border-radius:12px;
+    z-index:86;font-size:13px;box-shadow:0 10px 30px rgba(0,0,0,.55);display:none;
+    align-items:center;justify-content:space-between;gap:10px}
+  .barreavis.show{display:flex;animation:avismonte .26s cubic-bezier(.2,.9,.3,1.15)}
+  @keyframes avismonte{from{transform:translateY(16px);opacity:0}to{transform:none;opacity:1}}
+  @media (prefers-reduced-motion:reduce){ .barreavis.show{animation:none} }
+  .barreavis .bacol{min-width:0;flex:1}
+  .barreavis .bacol span{display:block;font-weight:650;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .barreavis .bacol small{display:block;color:var(--muted);font-size:11.5px;margin-top:1px}
+  .bapouces{display:flex;gap:7px;flex:0 0 auto}
+  /* 38 × 34 : la même cible que les pouces de la liste de rattrapage, et assez
+     large pour un pouce sur une barre qui ne reste que douze secondes. */
+  .bapouce{width:38px;height:34px;border-radius:9px;background:#232734;
+    border:1px solid #313747;display:flex;align-items:center;justify-content:center;
+    font-size:16px;transition:transform .12s,background .12s,border-color .12s}
+  .bapouce.oui:active,.bapouce.oui:hover{background:#1d3b2c;border-color:var(--ok)}
+  .bapouce.non:active,.bapouce.non:hover{background:#3b2a1d;border-color:var(--warn)}
+  .bacroix{color:var(--muted);flex:0 0 auto;width:30px;height:30px;
+    display:flex;align-items:center;justify-content:center}
+  .bacroix svg{width:16px;height:16px}
+  /* La place réservée sous le contenu, comme pour la barre « Annuler » : sans
+     ça la barre recouvre la dernière ligne de la liste qu'on est en train de
+     cocher, c'est-à-dire exactement celle qui vient de changer. */
+  body.avis .app{padding-bottom:calc(142px + var(--safe-b))}
+
+  /* ---------- Le duel ----------
+     Deux affiches EMPILÉES et non côte à côte : sur un téléphone, deux affiches
+     côte à côte font 150 pixels de large chacune, on ne reconnaît plus rien.
+     Empilées, elles gardent une vraie surface, et le pouce atteint les deux. */
+  /* 137 px = l'en-tête (61) + la place réservée sous le contenu pour la barre
+     du bas (76). Mesuré, pas estimé : à 190 px l'arène s'arrêtait 53 px trop
+     haut et les deux affiches perdaient chacune un quart de leur surface. */
+  .darene{display:flex;flex-direction:column;padding:0 16px 16px;
+    min-height:calc(100vh - 137px)}
+  @supports (min-height:100dvh){ .darene{min-height:calc(100dvh - 137px)} }
+  .dcompte{color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums;
+    align-self:center;margin-right:4px}
+  .dbarre{height:3px;background:#1c2029;border-radius:2px;overflow:hidden;margin:2px 0 0}
+  .dbarre i{display:block;height:100%;background:var(--accent);border-radius:2px;
+    transition:width .3s ease}
+  .dquest{text-align:center;font-size:20px;font-weight:800;letter-spacing:-.4px;margin:14px 0 2px}
+  .dsous{text-align:center;color:var(--muted);font-size:12.5px;margin-bottom:12px}
+  .dcartes{flex:1;display:flex;flex-direction:column;position:relative;min-height:0}
+  .dcarte{flex:1;min-height:0;border-radius:16px;border:1.5px solid var(--line);
+    position:relative;overflow:hidden;display:block;width:100%;
+    background:var(--surface2);transition:border-color .16s,transform .16s,opacity .16s}
+  .dcarte + .dcarte{margin-top:0}
+  .dcimg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .dcimg.ph{display:flex;align-items:center;justify-content:center;padding:0 18px;
+    text-align:center;font-weight:700;color:var(--muted);background:var(--surface2)}
+  /* Le voile n'est pas décoratif : sans lui le titre passe sous une zone claire
+     de l'affiche et devient illisible sur une carte sur trois. */
+  .dcarte:after{content:"";position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(to top,rgba(7,7,10,.94) 12%,transparent 58%)}
+  .dcarte.gagne{border-color:var(--ok);transform:scale(1.02)}
+  .dcarte.perd{opacity:.3;transform:scale(.97)}
+  .dtxt{position:absolute;left:14px;right:14px;bottom:11px;z-index:3;text-align:left}
+  .dtxt b{display:block;font-size:19px;font-weight:800;letter-spacing:-.3px;line-height:1.15}
+  .dtxt i{display:block;font-style:normal;color:#b3bacb;font-size:12px;margin-top:2px}
+  /* La pastille rend visible la règle du §1.7 : battre un titre aimé fait
+     passer le gagnant à « aimé ». Sans elle, la règle s'appliquerait en secret. */
+  .dpouce{position:absolute;top:11px;left:11px;z-index:3;background:rgba(7,7,10,.75);
+    border:1px solid rgba(62,207,142,.35);color:var(--ok);padding:4px 10px;
+    border-radius:999px;font-size:10.5px;font-weight:750}
+  .dinfo{position:absolute;top:9px;right:9px;z-index:6;width:30px;height:30px;
+    border-radius:50%;background:rgba(7,7,10,.72);border:1px solid rgba(255,255,255,.18);
+    color:#fff;font-size:13px;font-weight:800;font-style:italic;
+    display:flex;align-items:center;justify-content:center}
+  .dvs{align-self:center;margin:-15px 0;z-index:9;width:44px;height:44px;border-radius:50%;
+    background:var(--bg);border:1.5px solid var(--line);display:flex;align-items:center;
+    justify-content:center;font-size:12px;font-weight:850;color:var(--muted);
+    letter-spacing:.5px;flex:0 0 auto}
+  .dneutre{width:100%;margin-top:14px;padding:13px;border-radius:12px;
+    border:1px solid var(--line);background:var(--surface2);color:var(--muted);
+    font-size:13.5px;font-weight:650}
+
+  /* ---------- Le résultat ---------- */
+  .dres{padding:16px 16px 24px}
+  .dfete{text-align:center;font-size:36px;margin-bottom:4px}
+  .drtitre{text-align:center;font-size:23px;font-weight:800;letter-spacing:-.5px}
+  .drsous{text-align:center;color:var(--muted);font-size:13px;margin:4px 0 20px}
+  .dpodium{display:flex;align-items:flex-end;gap:9px;justify-content:center}
+  .dpod{flex:1;text-align:center;min-width:0}
+  .drang{font-size:19px;margin-bottom:5px}
+  .dpaff{width:100%;aspect-ratio:2/3;border-radius:10px;border:1px solid #232734;
+    object-fit:cover;display:block}
+  .dpaff.ph{display:flex;align-items:center;justify-content:center;padding:6px;
+    font-size:10.5px;font-weight:700;color:var(--muted);background:var(--surface2);
+    text-align:center;line-height:1.2}
+  /* Le numéro un est plus HAUT, pas seulement doré : un podium doit se lire
+     d'un coup d'œil, sans avoir à déchiffrer les médailles une par une. */
+  .dpod.un .dpaff{border:2px solid #f5c518;aspect-ratio:2/2.72}
+  .dpnom{font-size:11.5px;color:var(--muted);margin-top:6px;line-height:1.25;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .drail{display:flex;gap:9px;overflow-x:auto;padding:0 16px;margin:0 -16px}
+  .drail::-webkit-scrollbar{height:0}
+  .djq{flex:0 0 auto;width:96px;text-align:left}
+  .djqaff{width:96px;height:144px;border-radius:9px;border:1px solid #232734;
+    object-fit:cover;display:block}
+  .djqaff.ph{display:flex;align-items:center;justify-content:center;padding:6px;
+    text-align:center;font-size:10.5px;font-weight:700;color:var(--muted);
+    background:var(--surface2);line-height:1.2}
+  .djqnom{display:block;font-size:11.5px;font-weight:650;margin-top:5px;line-height:1.25;
+    height:2.5em;overflow:hidden;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .dnote{padding:12px 13px;font-size:12.5px;color:var(--muted);line-height:1.5}
+  .dnote b{color:var(--text)}
+  .dcta{display:flex;gap:8px;padding:18px 16px 0}
+  /* Deux boutons côte à côte sur 390 px : « Encore 10 duels » passait à la
+     ligne et déséquilibrait la paire. */
+  .dcta .btn{flex:1;font-size:13.5px;padding-left:8px;padding-right:8px}
+
+  /* ---------- La liste de rattrapage, et les titres écartés ----------
+     Même ligne pour les deux : ce sont les deux faces du même geste, on les
+     lit donc de la même façon. */
+  .rlig{display:flex;align-items:center;gap:11px;padding:9px 0;
+    border-bottom:1px solid #191c24}
+  .rlig:last-child{border-bottom:0}
+  .rlaff{width:44px;height:66px;border-radius:7px;flex:0 0 auto;border:1px solid #232734;
+    object-fit:cover;display:block}
+  .rlaff.ph{display:flex;align-items:center;justify-content:center;font-size:9px;
+    text-align:center;padding:3px;color:var(--muted);background:var(--surface2);
+    overflow:hidden;line-height:1.15}
+  .rli{flex:1;min-width:0}
+  .rli b{display:block;font-size:13.5px;font-weight:700;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .rli span{color:var(--muted);font-size:11.5px}
+  .rduo{display:flex;gap:6px;flex:0 0 auto}
+  .rpb{width:38px;height:34px;border-radius:9px;background:#232734;
+    border:1px solid #313747;display:flex;align-items:center;justify-content:center;
+    font-size:15px;transition:background .12s,border-color .12s}
+  .rpb.oui.on{background:#1d3b2c;border-color:var(--ok)}
+  .rpb.non.on{background:#3b2a1d;border-color:var(--warn)}
+
+  /* ---------- L'invitation, en tête de Mes goûts ---------- */
+  .dinvit{padding:14px}
+  .ditit{font-size:15px;font-weight:750;margin-bottom:4px}
+  .dfam{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+    padding:11px 0;border-top:1px solid #191c24}
+  .dfam .dfnom{font-weight:700;font-size:14px;flex:0 0 auto}
+  .dfam .dfdit{color:var(--muted);font-size:12px;flex:1;min-width:0;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
+  .dfam i{color:var(--muted);display:flex;flex:0 0 auto}

@@ -392,6 +392,14 @@ function toast(msg){
   t.textContent = msg; t.classList.add('show');
   clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove('show'), 2200);
 }
+/* Le toast et les deux barres du bas se disputent le même emplacement, et le
+   toast a le z-index le plus fort : il recouvre ce qu'il annonce. Quand une
+   barre prend la parole au même endroit, elle le fait taire. */
+function cacherToast(){
+  clearTimeout(toastTimer);
+  const t = document.getElementById('toast');
+  if(t) t.classList.remove('show');
+}
 /* E5 — CE QUI DOIT SE PASSER À LA FERMETURE D'UN PANNEAU.
    La feuille de filtres compose un brouillon et ne lance sa requête qu'à la
    fermeture — quelle que soit la fermeture : le bouton, le geste de tirage, un
@@ -807,6 +815,12 @@ function go(v, p, dir, opts){
      état à l'autre, à contre-courant de la pastille qui glisse. Le contenu
      arrive maintenant du côté d'où l'on vient. */
   const deTab = ONGLETS_BARRE.indexOf(view), versTab = ONGLETS_BARRE.indexOf(v);
+  /* LOT A — le duel n'est pas une vue à lui : il occupe l'écran de Mes goûts.
+     Quitter cet écran par n'importe quel chemin — un onglet du bas, un lien,
+     une notification — doit donc ranger la session, sinon `duel.actif` reste
+     vrai partout ailleurs et confisque le retour dans toute l'app. */
+  if(typeof duel !== 'undefined' && duel && duel.actif && view === 'gouts' && v !== 'gouts')
+    oublierDuel();
   view = v; params = p||{};
   if(typeof hideUndo === 'function') hideUndo();
   render();
@@ -884,6 +898,12 @@ function goBack(){
      au lieu de quitter la fiche qui est dessous. */
   if(typeof lecteurOuvert === 'function' && lecteurOuvert()) return fermerBande();
   if(document.getElementById('sheet').classList.contains('show')) return closeSheet();
+  /* LOT A — le duel occupe tout l'écran de Mes goûts sans être une vue à lui :
+     le retour doit donc le refermer avant de quitter l'écran, exactement comme
+     il referme d'abord le lecteur ou un panneau. Sans ça, un geste de retour
+     lancé pendant une partie faisait sortir de Mes goûts et perdait la session
+     — et l'écran d'arrivée dessiné sous le doigt aurait été le mauvais. */
+  if(typeof duel !== 'undefined' && duel && duel.actif) return fermerDuel();
   const t = cibleRetour();
   if(!t) return;
   /* Un deuxième appui pendant que l'écran glisse encore ne doit pas lancer
@@ -932,6 +952,14 @@ window.addEventListener('popstate', function(e){
   const feuille = document.getElementById('sheet');
   if(feuille && feuille.classList.contains('show')){
     closeSheet();
+    try{ history.pushState(etatHisto(view, params, iHisto), '', adresseCourante()); }catch(err){}
+    return;
+  }
+  /* LOT A — même traitement que la feuille pour le duel : le bouton matériel
+     d'Android le referme au lieu de quitter Mes goûts, et on repousse l'entrée
+     qu'on vient de consommer. */
+  if(typeof duel !== 'undefined' && duel && duel.actif){
+    fermerDuel();
     try{ history.pushState(etatHisto(view, params, iHisto), '', adresseCourante()); }catch(err){}
     return;
   }
@@ -1141,6 +1169,12 @@ const RAILS = '.rangee, .cast, .rattrap, .filmrow, .chips, .souschips, .seasonpi
        les conteneurs serait plus sûr — c'est ce que fait C4.3, à terme les deux
        se rejoindront. */
     if(t.target && t.target.closest && t.target.closest(RAILS)){ x0=null; return; }
+    /* LOT A — pendant un duel, le balayage ne doit pas dessiner l'écran d'où
+       l'on vient : le duel n'est pas une entrée d'historique, la couche du
+       dessous montrerait le mauvais écran et le relâchement quitterait Mes
+       goûts en perdant la session. On sort par la croix, ou par le bouton
+       matériel (traité au `popstate`). */
+    if(typeof duel !== 'undefined' && duel && duel.actif && !surVideo){ x0=null; return; }
     if(t.clientX <= 28 && (surVideo || cibleRetour()) &&
        !document.getElementById('sheet').classList.contains('show')){
       x0=t.clientX; y0=t.clientY; t0=Date.now();
