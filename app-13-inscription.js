@@ -403,18 +403,26 @@ function inscNormaliser(r, media){
    deux libellés se ramènent de toute façon au même identifiant côté séries,
    le choix ne change que le mot affiché.
 
-   NOTE POUR LE MOTEUR — cette table règle la DÉDUCTION, pas la recherche.
-   `genreParNom` (app-04) ignore toujours onze des dix-neuf libellés dès qu'il
-   cherche une série : cocher « Horreur » ne rendra jamais une série d'horreur.
-   Ce défaut est antérieur à ce lot (l'écran « Mes goûts » l'a déjà) et se
-   règle dans app-04, hors du périmètre de ce lot : le compte rendu donne le
-   correctif exact, en trois lignes et pour toute l'app. */
+   Cette table règle la DÉDUCTION (jaquette → libellé affichable). Le sens
+   inverse — libellé coché → identifiant TMDB côté séries — est tenu par
+   `GENRE_SERIE` dans app-04, à côté de `genreParNom` : c'est le moteur qui en
+   a besoin, pas cet écran. Les deux tables sont courtes et chacune vit là où
+   elle sert. */
 const INSC_GENRE_TV = {
   'Action & Adventure': 'Action',
   'Sci-Fi & Fantasy':   'Science-Fiction',
   'War & Politics':     'Guerre',
   'Kids':               'Familial'
 };
+
+/* Les six libellés qui n'ont RÉELLEMENT aucun équivalent en série chez TMDB :
+   la taxonomie des séries ne les connaît pas du tout. Aucune correspondance ne
+   peut les sauver — les cocher n'aura jamais d'effet sur les séries ni sur les
+   animés. Ce n'est pas une raison pour les retirer de l'écran : ils sont
+   parfaitement utiles côté films, et amputer la liste ferait perdre une vraie
+   information. C'est une raison pour LE DIRE, et seulement à qui est concerné.
+   Une puce cochable sans effet et sans mention, c'est un écran qui ment. */
+const INSC_GENRES_FILM_SEUL = ['Histoire', 'Horreur', 'Musique', 'Romance', 'Sport', 'Thriller'];
 
 /* Le libellé de la liste de l'écran qui correspond à un nom de genre TMDB, ou
    rien du tout si ce nom n'a pas d'équivalent (« Soap », « Talk », « News »,
@@ -698,6 +706,18 @@ function viewInscStyle(){
       '<button class="chip '+(g.animeOui ? 'on' : '')+'" aria-pressed="'+(!!g.animeOui)+'" '+
         'onclick="inscBascAnime()">Animé</button>'+
     '</div>';
+
+  /* La mention n'apparaît QUE si elle concerne quelqu'un, et elle nomme les
+     genres en cause plutôt que d'énoncer une règle générale. Personne n'a
+     besoin de savoir que la taxonomie des séries de TMDB est incomplète ; la
+     personne qui vient de cocher « Horreur » a besoin de savoir que ça ne lui
+     rendra pas de séries d'horreur. */
+  const filmSeul = INSC_GENRES_FILM_SEUL.filter(n => g.genres.indexOf(n) >= 0);
+  if(filmSeul.length)
+    html += '<div class="wrap" style="padding-top:0"><div class="inote">'+
+      '<b>'+esc(filmSeul.join(', '))+'</b> '+(filmSeul.length > 1 ? 'n\'existent' : 'n\'existe')+
+      ' que côté films : je m\'en servirai pour te proposer des films, jamais des '+
+      'séries ni des animés.</div></div>';
 
   /* LE SECOND NIVEAU, ET SEULEMENT LÀ OÙ LE PREMIER EST AVEUGLE (§5.6).
      Côté films, les genres TMDB séparent à peu près correctement. Côté animé,
