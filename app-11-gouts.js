@@ -1410,14 +1410,88 @@ const DUEL_ALEA = 3;         // les premiers duels au hasard, faute de repères
 const DUEL_VOISINS = 4;      // parmi combien de rangs voisins on cherche l'adversaire
 const RATTRAPAGE_MAX = 10;   // une dizaine de lignes, jamais cent
 
+/* ---------------------------------------------------------------------------
+   R1 · point 11 — LE CLASSEMENT GLOBAL ET PERMANENT
+
+   Avant : les scores de duel étaient JETÉS à la fin de chaque partie, et seuls
+   dix identifiants survivaient — puis revenaient sous forme de bonus de départ
+   (`1000 + (rang.length − i) × 12`). Le n°1 sortant démarrait 120 points devant
+   un titre jamais classé, et avec K = 32 il fallait trois victoires directes
+   pour le déloger. Comme l'appariement ne confrontait que des voisins de
+   classement, ces trois rencontres n'arrivaient jamais. On jetait le travail et
+   on gardait le résultat : le podium ne pouvait mécaniquement plus bouger.
+
+   Maintenant : chaque titre porte SON score, en permanence, dans
+   `db.classement`. Une partie ne recommence plus à zéro, elle continue. Et
+   `db.podium` — que beaucoup de code lit — n'est plus la source de vérité mais
+   une PROJECTION, recalculée à la fin de chaque partie. Sa forme, son nom et
+   son contenu attendu ne changent pas d'un caractère.
+--------------------------------------------------------------------------- */
+const DUEL_SCORE0 = 1000;    // score d'un titre jamais rencontré
+const DUEL_K = 32;           // le K de l'Elo, inchangé
+/* Un titre est CLASSÉ dès son premier duel, mais n'entre au podium qu'à partir
+   de trois confrontations : sans ce seuil, un titre qui a gagné une fois par
+   chance coifferait un titre qui a gagné quinze fois. */
+const DUEL_MINI_N = 3;
+/* Sur les dix duels d'une session, au moins quatre opposent un titre jamais
+   joué à un titre déjà présent au podium. Un classement global ne bouge que sur
+   ce qui est joué : sans cette règle, on aurait immobilisé le classement plus
+   proprement, c'est tout. */
+const DUEL_NEUFS = 4;
+
+/* La famille du classement, créée à la demande. `reparerBase` la crée déjà au
+   démarrage ; ce garde couvre une base arrivée d'ailleurs entre-temps. */
+function classementFamille(fam){
+  if(!db.classement || typeof db.classement !== 'object')
+    db.classement = { film:{}, serie:{}, anime:{}, maj:0 };
+  if(!db.classement[fam] || typeof db.classement[fam] !== 'object') db.classement[fam] = {};
+  return db.classement[fam];
+}
+function scoreClassement(fam, id){
+  const e = classementFamille(fam)[String(id)];
+  return e && typeof e.s === 'number' ? e.s : DUEL_SCORE0;
+}
+function duelsJoues(fam, id){
+  const e = classementFamille(fam)[String(id)];
+  return e && typeof e.n === 'number' ? e.n : 0;
+}
+function ecrireClassement(fam, id, s, n){
+  classementFamille(fam)[String(id)] = { s:s, n:n };
+  db.classement.maj = Date.now();
+}
+/* LA PROJECTION. `db.podium` garde exactement la forme qu'il a toujours eue —
+   au plus dix identifiants par famille, du meilleur au moins bon — mais il est
+   désormais DÉDUIT du classement au lieu d'être entretenu à la main. C'est ce
+   qui le garde juste sans que les rangées de Découvrir, les suggestions ni le
+   point de départ du jeu de Recherche aient à changer d'une ligne.
+   L'égalité de score se départage sur l'identifiant : un podium doit être le
+   même sur les deux téléphones, y compris quand deux titres se valent. */
+function classementTrie(fam){
+  const c = classementFamille(fam);
+  return Object.keys(c)
+    .filter(id => (c[id] && c[id].n || 0) >= DUEL_MINI_N)
+    .sort((x,y)=> (c[y].s - c[x].s) || (x < y ? -1 : x > y ? 1 : 0));
+}
+function projeterPodium(fam){
+  db.podium = db.podium || {};
+  db.podium[fam] = classementTrie(fam).slice(0, PODIUM_MAX);
+  db.podium.maj = Date.now();
+}
+
 const DUEL_FAMILLES = [
   { cle:'film',  nom:'films',  titre:'Départage tes films'  },
   { cle:'serie', nom:'séries', titre:'Départage tes séries' },
   { cle:'anime', nom:'animés', titre:'Départage tes animés' }
 ];
+/* `vus` — les titres réellement APPARUS dans les paires de la session, dans
+   l'ordre où ils sont passés à l'écran. C'est la matière de « Encore une
+   chose » (point 12) : le paquet entier ne dit pas ce qu'on a vu.
+   `neufs` — combien de duels « titre jamais joué contre titre du podium » ont
+   déjà été servis (point 11, règle 3). */
 const DUEL_VIDE = { actif:false, famille:null, paquet:[], scores:{}, joues:{},
                     faits:0, paire:null, choix:null, ecran:'jeu',
-                    classe:[], sugg:null, rattrapage:[] };
+                    classe:[], sugg:null, rattrapage:[], vus:[], neufs:0,
+                    podiumPret:false };
 let duel = Object.assign({}, DUEL_VIDE);
 
 /* QUI ENTRE DANS LE JEU. Un titre vu y entre, qu'il porte un 👍 ou rien du
@@ -1473,20 +1547,16 @@ function ouvrirDuel(famille){
   const paquet = titresEligiblesDuel(famille);
   if(paquet.length < DUEL_MINI)
     return toast('Il faut une dizaine de titres vus pour départager');
-  /* Le podium existant sert de point de départ : sans lui, chaque session
-     repartirait de zéro et rejouerait des duels déjà tranchés. Un 👍 pèse un
-     peu, sans jamais valoir un classement — le pouce donne le signe, le duel
-     donne l'ordre. */
-  const rang = ((db.podium || {})[famille] || []).map(String);
+  /* R1 · point 11 — LE SCORE VIENT DU CLASSEMENT, PLUS DU PODIUM.
+     Le bonus de départ reconstruit depuis le podium a disparu, et avec lui le
+     petit bonus de 25 points d'un 👍 : le contrat de données ne connaît qu'un
+     score de départ, 1000, pour un titre jamais rencontré. Une session ne
+     recommence plus à zéro, elle reprend là où la précédente s'est arrêtée. */
   const scores = {};
-  paquet.forEach(t=>{
-    const i = rang.indexOf(String(t.id));
-    scores[cleDuel(t)] = 1000 + (i >= 0 ? (rang.length - i) * 12 : 0)
-                               + (aAime(t.media, t.id) ? 25 : 0);
-  });
+  paquet.forEach(t=>{ scores[cleDuel(t)] = scoreClassement(famille, t.id); });
   duel = Object.assign({}, DUEL_VIDE,
     { actif:true, famille:famille, paquet:paquet, scores:scores, joues:{},
-      faits:0, ecran:'jeu', classe:[], sugg:null, rattrapage:[] });
+      faits:0, ecran:'jeu', classe:[], sugg:null, rattrapage:[], vus:[], neufs:0 });
   duelSuivant();
   if(view !== 'gouts') go('gouts', { from: view });
   else render();
@@ -1509,6 +1579,26 @@ function oublierDuel(){ duel = Object.assign({}, DUEL_VIDE); }
    c'est là que l'information est, un écart de dix places n'apprend rien.
    Le départ est pris à un rang quelconque et non toujours en tête : sinon les
    dix duels d'une session ne parleraient jamais que des dix meilleurs. */
+/* R1 · point 11, règle 3 — UNE PAIRE « NEUF CONTRE PODIUM ».
+   Un titre jamais joué (`n = 0`) contre un titre déjà présent au podium. C'est
+   la seule façon qu'un nouveau venu a de rencontrer le haut du classement :
+   laissé à l'appariement par voisinage, il ne croiserait que d'autres inconnus.
+   `nouveauxADepartager` savait déjà compter les titres neufs ; l'information
+   existait, elle n'était simplement pas utilisée pour composer les paires.
+   Rend `null` si l'un des deux camps est vide — on n'invente rien. */
+function paireNeuveDuel(marque){
+  const fam = duel.famille;
+  const pod = ((db.podium || {})[fam] || []).map(String);
+  const neufs = duel.paquet.filter(t => duelsJoues(fam, t.id) === 0);
+  const tetes = duel.paquet.filter(t => pod.indexOf(String(t.id)) >= 0);
+  if(!neufs.length || !tetes.length) return null;
+  const melange = l => l.slice().sort(()=> Math.random() - 0.5);
+  for(const a of melange(neufs))
+    for(const b of melange(tetes))
+      if(cleDuel(a) !== cleDuel(b) && !duel.joues[marque(a, b)]) return [a, b];
+  return null;
+}
+
 function duelSuivant(){
   duel.choix = null;
   if(duel.faits >= DUEL_TAILLE || duel.paquet.length < 2) return terminerDuel();
@@ -1517,8 +1607,17 @@ function duelSuivant(){
     const x = cleDuel(a), y = cleDuel(b);
     return x < y ? x+'|'+y : y+'|'+x;
   };
-  let a = null, b = null;
-  if(duel.faits < DUEL_ALEA){
+  let a = null, b = null, neuve = false;
+  /* Un duel sur deux est réservé au neuf — soit quatre sur dix, le minimum de
+     la règle 3 — et si la fin de session approche sans qu'ils aient tous été
+     servis, ils passent devant tout le reste. Les intercaler plutôt que de les
+     mettre en bloc au début garde la partie variée. */
+  const dus = DUEL_NEUFS - duel.neufs;
+  if(dus > 0 && (duel.faits % 2 === 0 || dus >= DUEL_TAILLE - duel.faits)){
+    const pr = paireNeuveDuel(marque);
+    if(pr){ a = pr[0]; b = pr[1]; neuve = true; }
+  }
+  if(!b && duel.faits < DUEL_ALEA){
     for(let essai = 0; essai < 40 && !b; essai++){
       const i = Math.floor(Math.random() * p.length);
       let j = Math.floor(Math.random() * p.length);
@@ -1544,6 +1643,11 @@ function duelSuivant(){
   if(!b) return terminerDuel();                 // plus rien à départager
   duel.joues[marque(a, b)] = 1;
   duel.paire = [a, b];
+  if(neuve) duel.neufs++;
+  /* R1 · point 12 — on note ce qui est PASSÉ À L'ÉCRAN, dans l'ordre. C'est ce
+     qui permettra à « Encore une chose » de ne parler que du duel qu'on vient
+     de finir, au lieu de repartir dans toute la bibliothèque. */
+  duel.vus.push(a, b);
 }
 
 /* Le tap sur une affiche EST le vote : c'est le geste principal, il ne partage
@@ -1563,10 +1667,21 @@ function appliquerVote(i){
      bien placé rapporte plus que battre un titre déjà relégué. C'est ce qui
      permet de trouver le sommet en une dizaine de duels au lieu des centaines
      qu'un tri complet demanderait. */
-  const K = 32;
+  const K = DUEL_K;
   const attendu = 1 / (1 + Math.pow(10, (duel.scores[kp] - duel.scores[kg]) / 400));
   duel.scores[kg] += K * (1 - attendu);
   duel.scores[kp] -= K * (1 - attendu);
+  /* R1 · point 11, règle 1 — LE SCORE SURVIT À LA PARTIE. On écrit duel par
+     duel, et non à la fin : une session abandonnée en cours de route garde ce
+     qu'elle a appris, et c'est aussi ce qui compte les confrontations. */
+  ecrireClassement(duel.famille, g.id, duel.scores[kg], duelsJoues(duel.famille, g.id) + 1);
+  ecrireClassement(duel.famille, p.id, duel.scores[kp], duelsJoues(duel.famille, p.id) + 1);
+  /* Enregistré tout de suite — `saveDB` est déjà différé de 150 ms, donc dix
+     duels d'affilée ne coûtent pas dix écritures. Sans cet appel, une session
+     quittée en cours de route (changement d'onglet, app fermée par iOS) perdait
+     tout ce qu'elle avait appris, et on aurait réinstallé exactement le défaut
+     qu'on vient de corriger : jeter le travail. */
+  saveDB();
   /* §1.7, L'EXCEPTION. Un titre non noté qui bat un titre 👍 passe à 👍 : la
      personne vient de déclarer qu'elle le préfère à quelque chose qu'elle aime.
      C'est une déclaration explicite, pas une déduction — et c'est exactement ce
@@ -1624,18 +1739,27 @@ function duelPasVu(media, id){
 function terminerDuel(){
   if(!duel.actif) return;
   duel.paire = null; duel.choix = null;
-  const classe = duel.paquet.slice()
-    .sort((a,b)=> duel.scores[cleDuel(b)] - duel.scores[cleDuel(a)]);
-  duel.classe = classe;
-  /* PODIUM, PAS CLASSEMENT. Ordonner cent titres coûterait des centaines de
-     duels ; trouver le sommet en coûte une dizaine. On garde donc une tête de
-     dix, et on n'en montre que trois. */
-  db.podium = db.podium || {};
-  db.podium[duel.famille] = classe.slice(0, PODIUM_MAX).map(t => String(t.id));
-  db.podium.maj = Date.now();
+  /* R1 · point 11, règle 4 — LE PODIUM EST RECALCULÉ, PAS ÉCRIT.
+     Les titres de la famille, triés par score décroissant, filtrés sur trois
+     duels joués au moins, coupés à dix. Tout le reste de l'app continue de lire
+     `db.podium` sans savoir que sa nature a changé. */
+  const fam = duel.famille;
+  projeterPodium(fam);
+  /* Ce que l'écran de résultat montre, c'est le haut du CLASSEMENT — le vrai
+     podium, celui qui vient d'être enregistré. Tant qu'aucun titre n'a atteint
+     ses trois duels, il est vide : on montre alors l'ordre de la session, qui
+     est ce que la personne vient réellement de faire. La phrase du bas dit
+     laquelle des deux choses elle est en train de lire. */
+  const parId = {};
+  duel.paquet.forEach(t=>{ parId[String(t.id)] = t; });
+  duel.classe = db.podium[fam].map(id => parId[id]).filter(Boolean);
+  duel.podiumPret = duel.classe.length > 0;
+  if(!duel.classe.length)
+    duel.classe = duel.paquet.slice()
+      .sort((a,b)=> duel.scores[cleDuel(b)] - duel.scores[cleDuel(a)]);
   duel.ecran = 'resultat';
   apresAvis();                      // enregistre, et périme la vitrine
-  chargerSuggDuel(classe[0]);
+  chargerSuggDuel(duel.classe[0]);
   render();
 }
 
@@ -1668,16 +1792,35 @@ function rejouerDuel(){ ouvrirDuel(duel.famille); }
    La liste est figée à l'entrée : répondre ne doit pas faire disparaître la
    ligne sous le doigt ni décaler les suivantes.
 --------------------------------------------------------------------------- */
-function ouvrirRattrapage(){
+/* R1 · point 12 — SEULEMENT LE DUEL QUI VIENT DE FINIR.
+   La liste prenait le paquet PUIS toute la bibliothèque. Un titre départagé à
+   l'écran précédent revenait en tête avec « tu l'as aimé ? » — « je viens de te
+   répondre, et tu me redemandes » — et le reste (Yu-Gi-Oh, Naruto, Death Note…)
+   n'avait été vu nulle part dans la session : rien ne reliait l'écran au duel.
+   L'intention était pourtant juste, et elle est écrite dans le code : le duel
+   donne un ORDRE, jamais un SIGNE. C'est sa présentation qui échouait.
+   Désormais : les titres réellement apparus dans les paires, les derniers vus
+   en haut, sans ceux qui portent déjà un 👍 ou un 👎. */
+function titresARattraper(){
+  /* Un titre récusé pendant la partie (« Je ne l'ai pas vu ») est sorti du
+     paquet ; il n'a rien à faire ici non plus. Demander « tu l'as aimé ? » à
+     quelqu'un qui vient de dire qu'il ne l'a pas vu est la même faute que celle
+     que le point 12 corrige, à un écran de distance. */
+  const recuse = (db.gouts && db.gouts.pasVus) || [];
   const vus = {}, out = [];
-  const prendre = t=>{
-    const c = cleDuel(t);
-    if(vus[c] || avisDe(t.media, t.id) !== 0) return;
+  for(let i = (duel.vus || []).length - 1; i >= 0; i--){
+    const t = duel.vus[i], c = cleDuel(t);
+    if(vus[c] || recuse.indexOf(c) >= 0 || avisDe(t.media, t.id) !== 0) continue;
     vus[c] = 1; out.push(t);
-  };
-  (duel.paquet || []).forEach(prendre);   // ceux qu'on vient de manipuler d'abord
-  titresVus().forEach(prendre);
-  duel.rattrapage = out.slice(0, RATTRAPAGE_MAX);
+  }
+  return out.slice(0, RATTRAPAGE_MAX);
+}
+function ouvrirRattrapage(){
+  duel.rattrapage = titresARattraper();
+  /* LISTE VIDE ⇒ ÉCRAN SAUTÉ. Un écran qui ne demande rien ne s'affiche pas.
+     Le bouton du résultat dit déjà « Terminer » dans ce cas (`ecranDuelResultat`) ;
+     ce garde couvre le chemin par lequel on arriverait quand même ici. */
+  if(!duel.rattrapage.length) return fermerDuel();
   duel.ecran = 'rattrapage';
   render();
 }
@@ -1741,7 +1884,9 @@ function carteDuel(t, i){
        qualifié qui bat un titre aimé devient aimé à son tour. Sans elle, la
        règle s'appliquerait dans le dos de la personne. */
     (aAime(t.media, t.id) ? '<span class="dpouce">👍 déjà aimé</span>' : '')+
-    '<span class="dinfo" onclick="event.stopPropagation();ficheDuel(\''+t.media+'\',\''+
+    /* R1 · point 1 — `.dinfo` s'appelait comme le bloc titre de l'aperçu de
+       Recherche et l'écrasait. Renommée `.dpastille`, nom vérifié libre. */
+    '<span class="dpastille" onclick="event.stopPropagation();ficheDuel(\''+t.media+'\',\''+
       escJs(String(t.id))+'\')" role="button" aria-label="Voir la fiche">i</span>'+
     '<span class="dtxt"><b>'+esc(t.nom)+'</b>'+
       (an ? '<i>'+esc(an)+'</i>' : '')+'</span>'+
@@ -1824,12 +1969,26 @@ function ecranDuelResultat(){
       '« Dans l\'esprit de '+esc(tete.nom)+' » remplace la rotation au hasard, '+
       'dès maintenant.</div></div>';
   }
+  /* R1 · point 12 — « Continuer → » n'ouvre l'écran suivant que s'il a quelque
+     chose à demander. Tout est déjà qualifié : le bouton dit « Terminer » et
+     referme, plutôt que de mener à une page vide. */
+  const reste = titresARattraper().length;
   html += '<div class="dcta">'+
       '<button class="btn ghost" onclick="rejouerDuel()">Encore '+DUEL_TAILLE+' duels</button>'+
-      '<button class="btn" onclick="ouvrirRattrapage()">Continuer →</button>'+
+      (reste
+        ? '<button class="btn" onclick="ouvrirRattrapage()">Continuer →</button>'
+        : '<button class="btn" onclick="fermerDuel()">Terminer</button>')+
     '</div>'+
-    '<div class="tiny muted center" style="margin-top:10px">Ton podium '+
-      esc(nomFam ? 'des '+nomFam : '')+' est enregistré.</div>'+
+    /* R1 · point 11 — on ne dit pas « ton podium est enregistré » tant qu'il est
+       vide. Un titre y entre à partir de trois duels joués : les toutes
+       premières parties construisent le classement avant de figer un podium, et
+       il vaut mieux l'écrire que de laisser croire à un écran cassé. */
+    '<div class="tiny muted center" style="margin-top:10px">'+
+      (duel.podiumPret
+        ? 'Ton podium '+esc(nomFam ? 'des '+nomFam : '')+' est enregistré.'
+        : 'Tes duels sont enregistrés. Un titre entre au podium à partir de '+
+          DUEL_MINI_N+' duels joués — encore quelques parties et il se figera.')+
+    '</div>'+
   '</div>';
   return html;
 }
