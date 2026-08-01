@@ -337,6 +337,39 @@ function genreParNom(media, nom){
   return g ? g.id : null;
 }
 
+/* LOT D — LA MÊME TABLE, LUE À L'ENVERS.
+
+   `GENRE_SERIE` traduit un nom de genre vers la taxonomie des séries. Il
+   manquait le chemin inverse, et c'est lui qui produisait le défaut relevé au
+   point 8 des retours de la v85 : « Genres retenus : action, ACTION &
+   ADVENTURE, comédie » — le même genre compté deux fois, une fois sous son
+   libellé film et une fois sous son libellé série.
+
+   `genreCanon` ramène tout sur le libellé FILM, qui sert de forme canonique.
+   Ce sens-là et pas l'autre, pour une raison précise : `genreParNom('tv',
+   'Action')` sait retrouver « Action & Adventure » grâce à `GENRE_SERIE`,
+   alors que `genreParNom('movie', 'Action & Adventure')` ne peut rien faire.
+   Canoniser vers le film ne perd donc jamais un identifiant.
+
+   Un nom inconnu ressort tel quel : cette fonction normalise, elle ne filtre
+   pas. */
+const GENRE_CANON = {
+  'action & adventure':'Action',
+  'sci-fi & fantasy':'Science-Fiction',
+  'war & politics':'Guerre'
+};
+function genreCanon(nom){
+  return GENRE_CANON[String(nom == null ? '' : nom).toLowerCase()] || nom;
+}
+/* Le libellé d'un identifiant de genre TMDB, dans le média où il a été lu.
+   Sert au malus de « Pas pour moi » : on retient un NOM canonique et non un
+   identifiant, sans quoi refuser un film d'action ne dirait rien d'une série
+   d'action — les deux taxonomies ne partagent aucun identifiant. */
+function nomGenreParId(media, id){
+  const g = (genresTMDB[media] || []).find(x => x.id === id);
+  return g ? g.nom : null;
+}
+
 /* Les genres proposés dépendent du type choisi. Pour les animés, « Animation »
    est déjà imposé : inutile de le proposer une deuxième fois. */
 function genresAffiches(){
@@ -706,50 +739,153 @@ function vitrineVisible(){
   return !filtresActifs();
 }
 
-/* Une diapositive du carrousel : grande image, la raison de sa présence,
-   le titre, et les deux actions. Cinq d'affilée, que l'on balaie du pouce. */
-function diapoVedette(x){
+/* ===========================================================================
+   LOT D §3.8 — « PAS POUR MOI » N'EST PAS UN 👎
+
+   Deux gestes, deux sens, deux poids — et les confondre serait une faute :
+
+     👎 sur un titre VU          « je n'ai pas aimé »     profil négatif, fort
+     Pas pour moi sur une SUGGESTION  « ne me le remontre pas »  écarté, malus léger
+
+   Un refus sur un titre qu'on n'a pas vu ne dit presque rien du goût : il dit
+   « pas envie, là, maintenant ». Le traiter comme un rejet ferme condamnerait
+   un genre entier en trois refus de politesse. Rien n'est donc écrit dans
+   `db.avis` — jamais, à aucune condition.
+
+   Où c'est rangé : dans `db.gouts`, qui part en entier à la synchro et que
+   `toucheGouts` date. Le contrat de données du lot interdit d'écrire dans les
+   clés existantes ; celle-ci est neuve, et elle est créée à la volée plutôt
+   que dans `migrerGouts`, qui n'est pas de ce lot.
+=========================================================================== */
+
+/* Au-delà, on oublie les plus anciens. Ce bloc voyage à chaque synchro : un
+   journal qui ne se vide jamais finit par coûter plus cher que ce qu'il rend. */
+const REFUS_MAX = 300;
+function refusSugg(){
+  const g = db.gouts;
+  if(!g) return {};
+  if(!g.pasPourMoi || typeof g.pasPourMoi !== 'object' || Array.isArray(g.pasPourMoi))
+    g.pasPourMoi = {};
+  return g.pasPourMoi;
+}
+function estRefuseSugg(media, id){
+  return !!refusSugg()[media + ':' + String(id)];
+}
+/* Le geste lui-même. On retient les GENRES du titre au moment du refus : c'est
+   tout ce dont le malus a besoin, et c'est la seule information qui survivra
+   au titre lui-même. */
+function refuserSugg(x){
+  if(!x || !db.gouts) return;
+  const r = refusSugg();
+  const genres = (x.genre_ids || [])
+    .map(g => nomGenreParId(x.media, g))
+    .filter(Boolean)
+    .map(genreCanon);
+  r[x.media + ':' + String(x.id)] = { quand: Date.now(), g: genres };
+  const cles = Object.keys(r);
+  if(cles.length > REFUS_MAX)
+    cles.sort((a,b)=> (r[a].quand||0) - (r[b].quand||0))
+        .slice(0, cles.length - REFUS_MAX)
+        .forEach(k => { delete r[k]; });
+  toucheGouts();
+}
+
+/* Le malus, et il est LÉGER : il décale, il ne retire rien. Un titre dont le
+   genre a été refusé cinq fois recule d'une dizaine de places — assez pour
+   qu'on cesse de le voir en tête, pas assez pour qu'un genre disparaisse sur
+   trois refus de politesse. La borne haute est là pour ça.
+
+   Le tri est STABLE : à malus égal, l'ordre reçu du moteur est conservé au
+   titre près. C'est ce qui garantit qu'aucun refus ne réordonne un écran
+   entier. */
+const MALUS_PAS = 2, MALUS_MAX = 5;
+function poidsRefusGenres(){
+  const par = {}, r = refusSugg();
+  Object.keys(r).forEach(k=>{
+    (r[k].g || []).forEach(n=>{ par[n] = (par[n] || 0) + 1; });
+  });
+  return par;
+}
+function malusTitre(x, par){
+  let n = 0;
+  (x.genre_ids || []).forEach(g=>{
+    const nom = nomGenreParId(x.media, g);
+    if(nom) n += par[genreCanon(nom)] || 0;
+  });
+  return n;
+}
+function classerParMalus(l){
+  const par = poidsRefusGenres();
+  if(!Object.keys(par).length) return l;
+  return l.map((x, i)=> ({ x:x, r: i + MALUS_PAS * Math.min(MALUS_MAX, malusTitre(x, par)) }))
+    .sort((a,b)=> a.r - b.r)
+    .map(o => o.x);
+}
+
+/* ---------------------------------------------------------------------------
+   §3.3 — LA PROPOSITION DU JOUR
+
+   Un seul titre, plein cadre, avec sa raison écrite et deux actions. Elle
+   remplace le carrousel de cinq vedettes, qui ne disait rien de la personne :
+   une seule proposition justifiée en dit plus que dix génériques.
+
+   La raison est calculée par le moteur (`raisonDuJour`), pas ici : c'est lui
+   qui sait de quel signal elle tire sa légitimité, et l'app ne doit jamais
+   prétendre en savoir plus qu'elle n'en sait.
+--------------------------------------------------------------------------- */
+function propositionJourHtml(x){
+  if(!x) return '';
   const bouts = [year(x.date), x.note ? '★ '+(Math.round(x.note*10)/10) : ''].filter(Boolean);
   const img = srcImage(x.bandeau,'w780') || srcImage(x.affiche,'w342');
-  const item = x.media === 'tv' ? db.shows[x.id] : db.movies[x.id];
-  return '<div class="diapo">'+
-    (img ? '<img class="dhimg" loading="lazy" src="'+img+'" alt="">' : '<div class="dhimg"></div>')+
-    '<div class="dhsur">'+
-      '<div class="dhetiq">'+esc(x.pourquoi || 'À découvrir')+'</div>'+
-      '<h2>'+esc(x.nom)+'</h2>'+
-      '<div class="dhmeta">'+esc((x.media==='tv'?'Série':'Film')+(bouts.length?' · '+bouts.join(' · '):''))+'</div>'+
-      '<div class="dhact">'+
-        '<button class="btn" onclick="ouvrirTitre('+x.id+',\''+x.media+'\',\'discover\')">Voir la fiche</button>'+
-        (item ? '<span class="dhdeja">'+I.check+' Dans ma liste</span>'
-              : '<button class="btn ghost" onclick="ajouterDepuisVitrine('+x.id+',\''+x.media+'\')">'+
-                  I.plus+' Ma liste</button>')+
+  const id = Number(x.id), media = x.media === 'tv' ? 'tv' : 'movie';
+  return '<div class="d4jour">'+
+    '<button class="d4voir" onclick="ouvrirTitre('+id+',\''+media+'\',\'discover\')" '+
+      'aria-label="'+esc(x.nom)+'">'+
+      (img ? '<img class="d4img" loading="lazy" src="'+img+'" alt="">' : '<div class="d4img"></div>')+
+    '</button>'+
+    '<div class="d4bas">'+
+      '<div class="d4tag">La proposition du jour</div>'+
+      '<h2 class="d4nom">'+esc(x.nom)+'</h2>'+
+      '<div class="d4meta">'+esc((media==='tv'?'Série':'Film')+(bouts.length?' · '+bouts.join(' · '):''))+'</div>'+
+      '<div class="d4pq">'+I.coeur+'<span>'+esc(x.pourquoi || 'À découvrir')+'</span></div>'+
+      '<div class="d4act">'+
+        '<button class="btn"'+(ui.busy?' disabled':'')+
+          ' onclick="ajouterProposition('+id+',\''+media+'\')">Ajouter à ma liste</button>'+
+        '<button class="btn ghost" onclick="pasPourMoiProposition()">Pas pour moi</button>'+
       '</div>'+
     '</div></div>';
 }
 
-/* Le carrousel : un rail que l'on fait glisser, avec ses points repères.
-   Aucun défilement automatique — rien ne bouge sous le doigt sans qu'on l'ait
-   demandé. */
-function carrouselVedettes(l){
-  if(!l.length) return '';
-  return '<div class="carr" id="carr" data-rail="carrousel" onscroll="majPointsCarr()">'+
-    l.map(diapoVedette).join('')+'</div>'+
-    (l.length > 1 ? '<div class="carrpts" id="carrpts">'+
-      l.map((x,i)=>'<i class="'+(i===0?'on':'')+'"></i>').join('')+'</div>' : '');
+/* « Ajouter à ma liste » NE QUITTE PAS DÉCOUVRIR. C'est une des deux actions
+   d'une carte qu'on enchaîne : partir sur la fiche de la série ferait perdre
+   l'écran qu'on était en train de parcourir. `addOrOpenShow` reste le chemin
+   normal depuis un aperçu, où l'on VOULAIT ouvrir la fiche ; ici on ajoute et
+   on reste. Le titre entre alors dans la bibliothèque, donc il sort des
+   suggestions, donc la proposition passe à la suivante — sans qu'on ait rien
+   à écrire pour ça. */
+async function ajouterProposition(id, media){
+  if(media !== 'tv') return addMovie(id, false);
+  if(db.shows[id]) return;
+  if(ui.busy) return;
+  ui.busy = true; peindreDisc();
+  try{
+    const s = await fetchShowFull(id);
+    s.watched = {}; s.addedAt = Date.now();
+    db.shows[id] = s; saveDB();
+    toast('« '+s.name+' » ajoutée');
+  }catch(e){ toast('Impossible d\'ajouter cette série'); }
+  ui.busy = false;
+  render();
 }
 
-/* Les points suivent le doigt : on lit la position du rail plutôt que de tenir
-   un compteur qui se désynchroniserait au moindre geste interrompu. */
-function majPointsCarr(){
-  const r = document.getElementById('carr'), p = document.getElementById('carrpts');
-  if(!r || !p) return;
-  const i = Math.round(r.scrollLeft / Math.max(1, r.clientWidth));
-  [...p.children].forEach((pt, k)=> pt.classList.toggle('on', k === i));
-}
-
-function ajouterDepuisVitrine(id, media){
-  if(media === 'tv') return addOrOpenShow(id);
-  return addMovie(id, false);
+/* La carte est remplacée IMMÉDIATEMENT par le candidat suivant : l'effet est
+   visible tout de suite, et le titre écarté ne revient pas. Un geste qui ne
+   change rien à l'écran est un geste qu'on ne refait pas (§3.9). */
+function pasPourMoiProposition(){
+  const x = propositionDuJour();
+  if(!x) return;
+  refuserSugg(x);
+  peindreDisc();
 }
 
 /* Une vignette de rangée, à partir d'un titre normalisé par le moteur de
@@ -806,13 +942,18 @@ function vitrineBody(){
       '<button class="btn ghost" onclick="chargerSuggestions(true)">Réessayer</button></div>';
 
   const rangees = rangeesSuggerees();
-  if(!suggestions.vedettes.length && !rangees.length)
+  const jour = propositionDuJour();
+  if(!jour && !rangees.length)
     return '<div class="empty">'+I.boussole+'<h3>Rien à proposer '+esc(dansCettePuce())+'</h3>'+
       '<p>Ajoute une série ou un film : les suggestions se règlent sur ce que tu regardes.</p>'+
       '<button class="btn ghost" onclick="go(\'search\')">Chercher un titre</button></div>';
 
-  let html = carteInvitGouts() + carrouselVedettes(suggestions.vedettes) +
-             barreSuggPlates() + blocProfilCourt();
+  let html = lienAjusterGouts() + propositionJourHtml(jour) + carteProfilPauvre();
+  /* UN SEUL NIVEAU DE TEXTE : le titre (§3.2). Pas de sous-titre, pas de
+     pastille, pas de code couleur, aucun vocabulaire de moteur. Si une rangée
+     ne sait pas s'expliquer dans son titre, c'est la rangée qui est mal
+     conçue — c'est au moteur de la nommer mieux, pas à l'écran de la
+     rattraper avec une seconde ligne. */
   rangees.forEach(r=>{
     html += '<div class="sectitle">'+esc(r.titre)+'</div>'+
       '<div class="rangee" data-rail="rangee-'+esc(r.cle||r.titre)+'">'+
@@ -822,28 +963,57 @@ function vitrineBody(){
   return html + '<div style="height:6px"></div>';
 }
 
-/* E6 — DEUX LIGNES SOUS LE CARROUSEL : ce que l'app a lu, ce qu'elle en a
-   déduit, et par où le corriger. Le reproche fondateur — « je ne sais pas ce
-   que l'app croit savoir » — n'était levé que pour qui allait fouiller
-   Réglages → Mes goûts : `explicationProfil` n'était appelée QUE là, alors que
-   son commentaire annonçait deux formes depuis le début. La forme courte
-   existe enfin, et elle est ici, là où les suggestions se regardent.
-   Bibliothèque vide : rien à dire, donc rien à afficher — ce cas-là, c'est la
-   grille d'amorçage (§D5) qui le traite. */
-function blocProfilCourt(){
-  if(typeof explicationProfil !== 'function') return '';
-  const p = explicationProfil(true);
-  if(!p.aDire) return '';
-  const v = p.volume;
-  const source = [ v.series ? v.series+' série'+(v.series>1?'s':'')+' commencée'+(v.series>1?'s':'') : '',
-                   v.films  ? v.films+' film'+(v.films>1?'s':'')+' vu'+(v.films>1?'s':'')            : ''
-                 ].filter(Boolean).join(' et ');
-  const lignes = [];
-  if(source) lignes.push('Je pars de tes '+source+'.');
-  if(p.genres.length) lignes.push('Genres retenus : '+p.genres.join(', ').toLowerCase()+'.');
-  return '<div class="profcourt">'+
-    '<span>'+esc(lignes.join(' '))+'</span>'+
-    '<button onclick="go(\'gouts\')">Ajuster</button></div>';
+/* ---------------------------------------------------------------------------
+   POINT 8 DES RETOURS v85 — CE QUI REMPLACE LES DEUX PAVÉS DE TEXTE
+
+   Deux blocs s'affichaient ici : l'aveu technique sur les plateformes (« TMDB
+   ne sait pas y filtrer… ») et le rapport de diagnostic (« Je pars de tes 97
+   séries commencées et 382 films vus… »). Les deux sont partis.
+
+     · L'aveu technique est SUPPRIMÉ, purement et simplement. Le nom d'un
+       fournisseur de données et ce qu'il ne sait pas faire n'ont rien à faire
+       sous les yeux de quelqu'un qui cherche quoi regarder.
+     · Les chiffres du profil restent dans Mes goûts, où la version longue
+       existe déjà (`explicationProfil`). On n'en duplique pas une ligne : le
+       lien y mène, c'est tout.
+
+   Ce que la maquette a rendu visible et qui a emporté la décision : le pavé
+   repoussait la proposition du jour de près de cent pixels. On ouvrait l'app
+   et on lisait deux paragraphes avant de voir le premier film. Et
+   l'explication existe déjà au bon endroit — chaque titre porte sa raison.
+--------------------------------------------------------------------------- */
+function lienAjusterGouts(){
+  return '<div class="d4lien"><button onclick="go(\'gouts\',{from:\'discover\'})">'+
+    'Ajuster mes goûts →</button></div>';
+}
+
+/* §1.5 / §2.4 — DÉCOUVRIR APPELLE LE DUEL QUAND LE PROFIL EST TROP PAUVRE, et
+   seulement là. Une bibliothèque garnie mais aucun 👍, c'est exactement le cas
+   où l'app propose mal ET où deux minutes changent tout l'écran : les rangées
+   de cœur sont fermées, la proposition du jour n'a rien de mieux qu'un
+   incontournable à offrir.
+
+   Elle ne se ferme pas à la main, et c'est voulu : elle disparaît d'elle-même
+   au premier 👍. Une carte qu'on peut faire taire sans rien changer revient
+   demain ; celle-ci ne revient que tant qu'elle a raison. */
+function carteProfilPauvre(){
+  if(typeof titresAimes !== 'function') return '';
+  const aime = ['tv','movie'].some(m =>
+    Object.keys((db.avis && db.avis[m]) || {}).some(id => avisDe(m, id) === 1));
+  if(aime) return '';
+  const n = Object.keys(db.shows).length + Object.keys(db.movies).length;
+  if(!n) return '';                       // page blanche : c'est la grille d'amorçage qui parle
+  const prets = (typeof famillesDuel === 'function') ? famillesDuel() : [];
+  const f = prets[0];
+  return '<div class="d4appel">'+
+    '<b>Je te propose mal.</b>'+
+    '<p>Tu as '+n+' titre'+(n>1?'s':'')+' dans ta bibliothèque, mais je ne sais pas '+
+      'lesquels t\'ont plu. Deux minutes pour me le dire, et cet écran change '+
+      'complètement.</p>'+
+    (f ? '<button class="btn" onclick="ouvrirDuel(\''+escJs(f.cle)+'\')">Départager mes '+
+           esc(f.nom)+' →</button>'
+       : '<button class="btn" onclick="go(\'gouts\',{from:\'discover\'})">Dire ce que j\'aime →</button>')+
+  '</div>';
 }
 
 /* ===================== D5 — la grille d'amorçage ===================== */
@@ -965,35 +1135,14 @@ function amorcageBody(){
     '<div style="height:14px"></div>';
 }
 
-/* D3 — la carte qui remplace le questionnaire d'inscription.
-   « Mes goûts » ne s'impose plus à quelqu'un dont la bibliothèque est vide : on
-   attend d'avoir de quoi lui montrer que ça sert. Cinq titres aimés, c'est le
-   moment où les suggestions commencent à valoir quelque chose et où les affiner
-   devient une proposition concrète plutôt qu'un formulaire.
-   Elle ne revient pas : refusée ou suivie, `db.invitGoutsVue` la clôt. Et elle
-   ne s'affiche pas du tout si la personne a déjà réglé ses goûts (`gouts.maj`). */
-function carteInvitGouts(){
-  if(db.invitGoutsVue) return '';
-  if(db.gouts && db.gouts.maj) return '';
-  if(typeof titresAimes !== 'function' || titresAimes().length < 5) return '';
-  return '<div class="wrap" style="padding-bottom:0"><div class="card invitg">'+
-    '<div class="itxt">'+
-      '<b>Affiner tes suggestions ?</b>'+
-      '<span class="small muted">Dis-nous ce que tu aimes et ce que tu ne veux jamais voir. '+
-        'Deux minutes, et c\'est modifiable à tout moment.</span>'+
-    '</div>'+
-    '<div class="iact">'+
-      '<button class="btn" onclick="ouvrirGoutsDepuisInvit()">Y aller</button>'+
-      '<button class="btn ghost" onclick="refuserInvitGouts()">Non merci</button>'+
-    '</div></div></div>';
-}
-function ouvrirGoutsDepuisInvit(){
-  db.invitGoutsVue = true; saveDB();
-  go('gouts', {from:'discover'});
-}
-function refuserInvitGouts(){
-  db.invitGoutsVue = true; saveDB(); render();
-}
+/* LOT D — `carteInvitGouts` a été RETIRÉE, remplacée par `carteProfilPauvre`.
+   Elle invitait à régler ses goûts dès cinq titres aimés, refusable une fois
+   pour toutes. Deux cartes d'invitation sur le même écran, c'en était une de
+   trop, et la nouvelle est mieux fondée : elle ne s'affiche que quand l'app
+   propose RÉELLEMENT mal (aucun 👍), elle dit ce que ça coûte et ce que ça
+   change, et elle s'efface d'elle-même dès la première réponse au lieu de se
+   faire congédier. `db.invitGoutsVue` n'est plus lu ; il reste dans les bases
+   existantes, sans effet. */
 
 /* Le rail est un APERÇU, pas la liste. Dix titres : de quoi balayer du pouce
    sans que ça devienne un couloir sans fin, et de quoi laisser à « Tout voir »
@@ -1128,10 +1277,13 @@ function viewPlates(){
   /* La liste peut ne jamais arriver — TMDB en panne, ou hors-ligne. La barre du
      bas est ajoutée dans tous les cas : sans elle, on resterait coincé sur un
      rond qui tourne, au beau milieu de la création du compte. */
+  /* Le réglage est posé même si la liste n'arrive jamais : il porte sur les
+     plateformes DÉJÀ déclarées, et rien n'oblige à recharger le catalogue
+     TMDB pour changer d'avis dessus. */
   if(!toutes.length) return html +
     '<div class="wrap"><div class="empty"><span class="spin"></span>'+
     '<p style="margin-top:12px">On récupère la liste des plateformes…</p></div></div>'+
-    barrePlates();
+    barreSuggPlates() + barrePlates();
 
   const choisies = mesPlates();
   const vues = ui.mesPlatesTout ? toutes : toutes.slice(0, PLATES_VEDETTE);
@@ -1162,6 +1314,8 @@ function viewPlates(){
         ' · <button class="lienplus" style="margin:0" onclick="viderMesPlates()">Tout décocher</button>'
       : 'Rien de coché : l\'app te proposera tout, sans distinction.')+
   '</div></div>';
+
+  html += barreSuggPlates();
 
   return html + barrePlates();
 }
@@ -1222,43 +1376,37 @@ function fermerMesPlates(){
   goBack();
 }
 
-/* La ligne de choix posée sous le carrousel de la vitrine : toutes les
-   plateformes, ou seulement les siennes. Adrien : « il serait bien que
-   l'utilisateur choisisse ». Tant que rien n'est déclaré, la ligne devient une
-   invitation à le faire — c'est le seul endroit où la question se pose
-   naturellement, l'écran des réglages ne se visite pas tous les jours. */
+/* POINT 8 — LE RÉGLAGE A DÉMÉNAGÉ, IL N'A PAS DISPARU.
+
+   Cette ligne vivait sous le carrousel de Découvrir. Elle portait deux choses :
+   le choix « toutes les plateformes / les miennes », et l'aveu technique sur
+   ce que TMDB ne sait pas filtrer. L'aveu est supprimé ; le choix, lui, est un
+   vrai réglage et on ne pouvait pas le laisser orphelin — il n'existait nulle
+   part ailleurs.
+
+   Il rejoint donc « Mes plateformes », qui est l'écran de la question : on y
+   coche ses abonnements, on y dit dans la foulée si les suggestions doivent
+   s'y limiter. Découvrir redevient un écran qu'on parcourt, pas qu'on règle. */
 function barreSuggPlates(){
-  if(!aDeclarePlates())
-    return '<div class="wrap tiny muted" style="padding:2px 16px 0">'+
-      'Suggestions sur toutes les plateformes · '+
-      '<button class="lienplus" style="margin:0" onclick="go(\'plates\',{from:\'discover\'})">'+
-      'dis-moi à quoi tu es abonné</button></div>';
+  if(!aDeclarePlates()) return '';
   const on = suggSurMesPlates();
-  /* Une seule ligne, en petit : ce réglage ne doit pas prendre la place du
-     premier rang d'affiches. Deux puces pleine taille juste sous le carrousel
-     repoussaient la vitrine d'un tiers d'écran. */
   const puce = (v, txt) =>
     '<button class="chip '+(!!v === on ? 'on' : '')+'" aria-pressed="'+(!!v === on)+'" '+
-      'style="font-size:12px;padding:5px 12px" onclick="setSuggPlates('+(v?'true':'false')+')">'+
-      txt+'</button>';
-  return '<div class="wrap" style="padding:8px 16px 0;display:flex;align-items:center;gap:8px">'+
-      '<span class="tiny muted" style="flex:0 0 auto">Suggestions</span>'+
-      puce(false, 'Toutes')+puce(true, 'Les miennes')+
-    '</div>'+
-    (on ? '<div class="wrap tiny muted" style="padding:6px 16px 0">'+
-            'Les acteurs que tu suis et « Bientôt » restent sur tout le catalogue : '+
-            'TMDB ne sait pas y filtrer les plateformes.</div>'
-        : '');
+      'onclick="setSuggPlates('+(v?'true':'false')+')">'+txt+'</button>';
+  return '<div class="wrap" style="padding-top:0">'+
+      '<div class="small muted" style="margin-bottom:8px">Les suggestions de Découvrir '+
+        'doivent-elles se limiter à ces plateformes ?</div>'+
+      '<div class="fchips">'+puce(false, 'Tout me proposer')+puce(true, 'Seulement les miennes')+'</div>'+
+    '</div>';
 }
 function setSuggPlates(v){
   const g = db.gouts; if(!g) return;
   if(!!g.suggMesPlates === !!v) return;
   g.suggMesPlates = !!v;
   /* `toucheGouts` déclenche la veille : la signature des goûts vient de
-     changer, la vitrine se refait en douceur sans quitter l'écran. On repeint
-     tout de suite pour que la puce touchée s'allume sans attendre le réseau. */
+     changer, la vitrine se refera d'elle-même au retour sur Découvrir. */
   toucheGouts();
-  peindreDisc();
+  render();
 }
 
 function viewRangee(){
