@@ -1044,6 +1044,109 @@ window.MODE_TEST = true;
     genresTMDB.movie = null;
   });
 
+  /* ============ Recherche — les points relevés en relecture ============
+     Sept défauts ont été trouvés par une relecture indépendante sur la branche.
+     Chacun a sa correction ET son cas ici : un défaut réparé sans test revient,
+     et celui-ci reviendrait par le chemin le plus discret qui soit. */
+  groupe('Recherche — ce que la relecture a trouvé');
+
+  test('un identifiant venu d\'un proche qui n\'est pas un nombre n\'entre jamais dans le jeu', ()=>{
+    rechVierge('film');
+    /* La bibliothèque d'un proche est écrite par LUI, par appel direct à
+       l'API. L'identifiant part ensuite dans un `onclick` et dans un chemin
+       d'API : c'est le trou que `estIdTmdb` bouche déjà ailleurs dans le
+       projet, et il n'avait pas été appliqué ici. */
+    vrai(!jouableRech({ id:"1)+alert(1)+(", __media:'movie' }),
+         'un identifiant piégé peut être distribué');
+    vrai(!jouableRech({ id:'12x', __media:'movie' }), 'un identifiant non numérique passe');
+    vrai(!jouableRech({ id:'', __media:'movie' }), 'un identifiant vide passe');
+    vrai(jouableRech({ id:1399, __media:'movie' }), 'un identifiant honnête est refusé');
+  });
+
+  test('« Plus tard » n\'efface pas la mention « vu » d\'un film déjà chez toi', ()=>{
+    const r = rechVierge('film');
+    db.movies[42] = { id:42, title:'Déjà vu', genres:[], seen:true, watchedAt:1234 };
+    r.jeu = { carte:t_(42,'movie'), media:'movie', pool:{}, page:{}, ecartes:{}, occupe:false };
+    const vraiPeindre = window.peindreJeuRech;
+    window.peindreJeuRech = function(){};
+    try{ jeuPlusTardRech(); } finally { window.peindreJeuRech = vraiPeindre; }
+    r.jeu = null;                       // le tirage différé n'a plus rien à faire
+    egal(db.movies[42].seen, true, 'le film est repassé en « à voir »');
+    egal(db.movies[42].watchedAt, 1234, 'la date de visionnage a été effacée');
+  });
+
+  test('changer un critère pendant la partie vide les paquets', ()=>{
+    const r = rechVierge('film');
+    r.jeu = { pool:{ coeur:[t_(1,'movie')] }, page:{ coeur:3 }, carte:t_(1,'movie'),
+              ecartes:{ 'movie:9':1 }, precedente:'coeur', source:'coeur', occupe:false };
+    const vraiTirage = window.tirerCarteRech, vraiRender = window.render;
+    let tirages = 0;
+    window.tirerCarteRech = function(){ tirages++; };
+    window.render = function(){};
+    try{ relancerRech(); }
+    finally { window.tirerCarteRech = vraiTirage; window.render = vraiRender; }
+    egal(r.jeu.pool, {}, 'les cartes de l\'ancienne demande ont survécu au changement');
+    egal(r.jeu.page, {}, 'les compteurs de page ont survécu');
+    egal(r.jeu.carte, null, 'la carte de l\'ancienne demande est restée à l\'écran');
+    egal(tirages, 1, 'aucune carte neuve n\'a été tirée');
+    /* Ce qu'on a écarté ce soir le reste : changer d'avis sur un critère ne
+       doit pas faire revenir les titres qu'on vient de refuser. */
+    vrai(r.jeu.ecartes['movie:9'], 'les titres déjà écartés ce soir ont été oubliés');
+    r.jeu = null;
+  });
+
+  test('sur Animés, le genre choisi s\'ajoute à Animation au lieu d\'être jeté', ()=>{
+    const r = rechVierge('anime');
+    genresTMDB.tv = [{ id:16, nom:'Animation' }, { id:35, nom:'Comédie' }];
+    const sans = paramsRech('tv');
+    r.genre = 'Comédie';
+    const avec = paramsRech('tv');
+    egal(sans.with_genres, '16', 'la famille Animés ne pose plus son genre');
+    egal(avec.with_genres, '16,35', 'le mot du genre ne change rien à la demande envoyée');
+    /* La virgule est un ET mesuré. C'est le MÉLANGE virgule + barre verticale
+       qui est cassé chez TMDB : tout ce qui suit la barre est ignoré en
+       silence. Ce cas garde la porte fermée. */
+    vrai(avec.with_genres.indexOf('|') < 0,
+         'virgule et barre mélangées : TMDB ignorerait la moitié de la demande');
+    genresTMDB.tv = null;
+  });
+
+  test('sur « Tout », le jeu alterne films et séries', ()=>{
+    const r = rechVierge('tout');
+    r.jeu = { bascule:false };
+    egal([mediaJeuRech(), mediaJeuRech(), mediaJeuRech(), mediaJeuRech()],
+         ['movie','tv','movie','tv'], 'le jeu ne propose qu\'un seul type sur « Tout »');
+    r.fam = 'serie';
+    egal(mediaJeuRech(), 'tv', 'une famille explicite doit rester elle-même');
+    r.jeu = null;
+  });
+
+  test('« Reprendre » ne s\'affiche que si on a composé quelque chose soi-même', ()=>{
+    const r = rechVierge('film');
+    nouvelleOuvertureRech();
+    egal(r.reprise, null, 'la proposition du jour est comptée comme un choix de l\'utilisateur');
+    r.touche = true;
+    nouvelleOuvertureRech();
+    vrai(r.reprise && r.reprise.texte.indexOf('Je veux') === 0,
+         'un vrai travail de composition n\'est pas proposé au retour');
+  });
+
+  test('le marqueur d\'ouverture survit à un retour par l\'historique', ()=>{
+    /* Le bouton retour d'Android et celui du navigateur passent par `popstate`,
+       qui reconstruit `params` depuis l'état d'historique : comparer
+       l'IDENTITÉ de l'objet jetait la phrase sur ces deux chemins-là. Le
+       marqueur, lui, est recopié dans l'état d'historique — donc il revient. */
+    const sauve = params;
+    try{
+      params = {};
+      vrai(ouvertureRech(), 'une entrée par la barre du bas doit repartir à neuf');
+      vrai(!ouvertureRech(), 'un redessin du même écran ne doit pas tout remettre à zéro');
+      /* Ce que fait le navigateur : il clone l'état, il ne rend pas l'objet. */
+      params = JSON.parse(JSON.stringify(params));
+      vrai(!ouvertureRech(), 'un retour par l\'historique jette la phrase composée');
+    } finally { params = sauve; }
+  });
+
   /* ==================== Bilan ==================== */
   const b = document.getElementById('bilan');
   b.className = 'bilan ' + (ko ? 'rouge' : 'vert');
