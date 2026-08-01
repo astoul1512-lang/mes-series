@@ -1588,7 +1588,16 @@ function duelPasVu(media, id){
   db.gouts.pasVus = db.gouts.pasVus || [];
   if(db.gouts.pasVus.indexOf(c) < 0) db.gouts.pasVus.push(c);
   /* Une graine posée par erreur sur la grille d'amorçage se retire pour de bon :
-     elle nourrissait les suggestions sur la foi d'un titre jamais vu. */
+     elle nourrissait les suggestions sur la foi d'un titre jamais vu.
+
+     À REPRENDRE DANS UN LOT SUIVANT. C'est le seul endroit du lot où une
+     déclaration de la personne est DÉTRUITE sans retour possible, alors que le
+     lot s'impose partout ailleurs la règle inverse : un 👎 se reprend depuis la
+     liste « Titres écartés » de Mes goûts. « Je ne l'ai pas vu » devra faire
+     pareil — renvoyer le titre dans cette liste plutôt que l'effacer — pour que
+     le bouton du milieu, juste sous « C'est celui-là », cesse d'être le seul
+     geste irréversible de l'app. Laissé tel quel sciemment : la correction
+     demande un écran, pas une retouche. */
   const gr = (db.gouts && db.gouts.graines) || [];
   const i = gr.findIndex(x => x.media === media && String(x.id) === String(id));
   if(i >= 0){ gr.splice(i, 1); if(typeof oublierSuggestions === 'function') oublierSuggestions(); }
@@ -1686,6 +1695,10 @@ function synopsisDe(media, id){
   }
   return synopsisDuel[k];
 }
+/* `k` est la clé BRUTE, et c'est volontaire : côté fiche l'identifiant est posé
+   par `esc()`, mais le parseur HTML redécode l'attribut, si bien que la valeur
+   réellement portée par le nœud est la clé brute. Échapper ici aussi ferait
+   diverger les deux bouts et le synopsis ne se peindrait plus. */
 function peindreSynopsisDuel(k){
   const el = document.getElementById('syn-'+k);
   if(el) el.textContent = synopsisDuel[k] === 'attente' ? '' : (synopsisDuel[k] || '');
@@ -1750,7 +1763,7 @@ function ficheDuel(media, id){
   openSheet(
     '<h3>'+esc(t.nom)+'</h3>'+
     (an ? '<p class="small muted" style="margin:0 0 8px">'+esc(an)+'</p>' : '')+
-    '<div id="syn-'+media+':'+id+'" class="overview" style="margin:0 0 12px">'+
+    '<div id="syn-'+media+':'+esc(String(id))+'" class="overview" style="margin:0 0 12px">'+
       esc(syn === 'attente' ? '' : (syn || ''))+'</div>'+
     zoneBande(media, id)+
     '<button class="opt" onclick="closeSheet();duelVote('+i+')">C’est celui-là</button>'+
