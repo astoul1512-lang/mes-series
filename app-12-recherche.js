@@ -265,7 +265,9 @@ function etatRech(){
        qu'on lui a retirés à la main. Les autres clés sont les mots explicites. */
     amb:null, sans:[], genre:null, langue:null, epoque:null, duree:null, note:null, plate:null,
     total:null, res:[], page:1, pages:1, loading:false, err:'', charge:false,
-    reprise:null,
+    /* `touche` : la personne a-t-elle composé quelque chose elle-même ? La
+       proposition du jour ne compte pas — voir `nouvelleOuvertureRech`. */
+    touche:false, reprise:null,
     jeu:null
   };
   return ui.rech;
@@ -280,28 +282,51 @@ function enRechercheTitre(){ return rechTexte().length >= RECH_MIN; }
    « des années 90 » traîne encore.
 
    Comment on reconnaît une ouverture SANS toucher à `go()`, qui n'est pas dans
-   le périmètre de ce lot : `params` est remplacé par un objet NEUF à chaque
-   `go()`, et jamais pendant les redessins d'un même écran. Comparer son
-   IDENTITÉ suffit donc, et n'écrit nulle part. Revenir d'une fiche repasse par
-   l'objet mémorisé : la phrase survit, ce qui est bien ce qu'on veut. */
-let rechDernierPassage = null;
+   le périmètre de ce lot : on POSE UN MARQUEUR sur `params`.
+
+   La première version comparait l'IDENTITÉ de l'objet `params`, et c'était
+   faux : le bouton retour matériel d'Android et celui du navigateur passent
+   par `popstate`, qui reconstruit `params` depuis l'historique — un objet neuf
+   à chaque fois. La phrase composée était donc jetée sur ces deux chemins-là,
+   alors qu'elle survivait à la flèche de l'app et au balayage. Défaut trouvé
+   en relecture.
+
+   Le marqueur, lui, est recopié dans l'état d'historique au moment où
+   `inscrireHistorique` l'écrit — donc il revient avec `params` quel que soit
+   le chemin de retour. Et il est absent quand on entre depuis la barre du bas,
+   qui appelle `go('search')` sans paramètres : c'est exactement là, et
+   seulement là, qu'on veut repartir d'une phrase fraîche.
+
+   L'ordre le permet : `go()` fait `render()` — donc ce marqueur — AVANT
+   d'appeler `inscrireHistorique`. */
 function ouvertureRech(){
-  if(rechDernierPassage === params) return false;
-  rechDernierPassage = params;
+  /* Pendant le geste de retour, l'écran d'arrivée est dessiné UNE FOIS dans la
+     couche du dessous, avec `view` et `params` empruntés le temps du rendu
+     (`htmlDeLaVue`, app-03). Ce n'est pas une ouverture, c'est un aperçu : le
+     traiter comme une ouverture jetterait la phrase sous le doigt. */
+  if(typeof glisseRetour === 'object' && glisseRetour && typeof glisseRetour.enCours === 'function'
+     && glisseRetour.enCours()) return false;
+  if(params && params.rechOuvert) return false;
+  if(params) params.rechOuvert = 1;
   return true;
 }
 function nouvelleOuvertureRech(){
   const r = etatRech();
   /* Rien n'est perdu : le travail précédent reste sous la main, une puce
-     discrète propose de le reprendre. */
+     discrète propose de le reprendre.
+     ELLE NE S'AFFICHE QUE SI ON A VRAIMENT COMPOSÉ QUELQUE CHOSE. Compter la
+     proposition du jour comme un choix faisait apparaître « ↩ Reprendre » avec
+     la phrase déjà à l'écran, mot pour mot : une porte de sortie qui ne mène
+     nulle part apprend à ignorer les portes de sortie. */
   const avant = phraseTexte();
-  if(avant && (r.amb || r.genre || r.langue || r.epoque || r.duree || r.note || r.plate))
+  if(avant && r.touche)
     r.reprise = { texte:avant, fam:r.fam, amb:r.amb, sans:r.sans.slice(), genre:r.genre,
                   langue:r.langue, epoque:r.epoque, duree:r.duree, note:r.note, plate:r.plate };
   r.q = ''; r.qtitres = []; r.qgens = []; r.qerr = '';
   r.amb = null; r.sans = []; r.genre = null; r.langue = null;
   r.epoque = null; r.duree = null; r.note = null; r.plate = null;
   r.jeu = null;
+  r.touche = false;
   phraseDuJour();
   r.res = []; r.total = null; r.page = 1; r.pages = 1; r.charge = false; r.err = '';
 }
@@ -311,6 +336,7 @@ function reprendreRech(){
   r.fam = v.fam; r.amb = v.amb; r.sans = v.sans.slice(); r.genre = v.genre;
   r.langue = v.langue; r.epoque = v.epoque; r.duree = v.duree; r.note = v.note; r.plate = v.plate;
   r.reprise = null;
+  r.touche = true;
   relancerRech();
 }
 
@@ -350,7 +376,7 @@ function setFamRech(id){
      la phrase — langue, époque, note, plateforme — vaut pour toutes les
      familles et survit. */
   if(r.amb && !ambianceRech(r.amb)){ r.amb = null; r.sans = []; }
-  r.genre = null;
+  r.genre = null; r.touche = true;
   if(id !== 'film') r.duree = null;     // la durée ne veut rien dire hors du film
   relancerRech();
 }
@@ -377,7 +403,7 @@ function poserAmbianceRech(id){
      depuis « Séries » bascule sur Films plutôt que de ne rien faire. */
   if(!f.anime && RECH_AMBIANCES.some(a => a.id === id)) r.fam = 'film';
   r.amb = (r.amb === id) ? null : id;
-  r.sans = []; r.genre = null;
+  r.sans = []; r.genre = null; r.touche = true;
   if(r.amb) r.duree = r.note = null;    // l'ambiance les porte déjà
   relancerRech();
 }
@@ -387,6 +413,7 @@ function poserAmbianceRech(id){
 function retirerIngredientRech(cle){
   const r = etatRech();
   if(r.sans.indexOf(cle) < 0) r.sans.push(cle);
+  r.touche = true;
   /* Une recette dont on a retiré tous les mots n'est plus une recette. */
   const a = ambianceRech(r.amb);
   if(a && (a.ing||[]).every(i => r.sans.indexOf(i.cle) >= 0)){ r.amb = null; r.sans = []; }
@@ -394,7 +421,7 @@ function retirerIngredientRech(cle){
 }
 function poserMotRech(cle, val){
   const r = etatRech();
-  r[cle] = val;
+  r[cle] = val; r.touche = true;
   /* Un mot explicite l'emporte sur l'ingrédient de même nature : on ne peut
      pas demander « bien noté » et « très bien noté » à la fois. */
   if(val != null && r.amb && r.sans.indexOf(cle) < 0){
@@ -411,12 +438,27 @@ function viderRech(){
   r.q = ''; r.qtitres = []; r.qgens = [];
   r.amb = null; r.sans = []; r.genre = null; r.langue = null;
   r.epoque = null; r.duree = null; r.note = null; r.plate = null;
+  r.touche = true;
   relancerRech();
 }
 function relancerRech(){
   const r = etatRech();
   r.res = []; r.total = null; r.page = 1; r.pages = 1; r.charge = false; r.err = '';
   oublierDefil('search');
+  /* LES CRITÈRES RESTENT SOUS LA MAIN PENDANT LA PARTIE (§4.7) — encore
+     faut-il qu'ils fassent quelque chose. Les cinq tas ont été constitués avec
+     l'ancienne demande : les vider est la seule façon que la carte suivante
+     obéisse à ce qu'on vient de demander. Sans ça, la puce s'allumait, la
+     phrase changeait, et les cinq cartes suivantes étaient encore des films.
+     `ecartes` est conservé : ce qu'on a déjà écarté ce soir le reste. */
+  if(r.jeu){
+    r.jeu.pool = {}; r.jeu.page = {}; r.jeu.carte = null;
+    r.jeu.source = null; r.jeu.precedente = null;
+    r.jeu.fiche = null; r.jeu.plates = null; r.jeu.err = ''; r.jeu.loading = true;
+    render();
+    tirerCarteRech();
+    return;
+  }
   render();
   chargerGrilleRech();
 }
@@ -559,9 +601,19 @@ function paramsRech(media){
   if(r.genre){
     const id = genreParNom(media, r.genre);
     /* Les genres n'ont pas les mêmes noms côté films et côté séries. Quand le
-       genre demandé n'existe pas pour ce média, on ne l'expédie pas — et
-       l'écran le dit plutôt que de rendre une grille vide sans raison. */
-    if(id != null) p.with_genres = f.anime && p.with_genres ? p.with_genres : String(id);
+       genre demandé n'existe pas pour ce média, on ne l'expédie pas — mieux
+       vaut ne pas filtrer que filtrer sur rien. */
+    if(id != null){
+      /* SUR LA FAMILLE ANIMÉS, LE GENRE CHOISI S'AJOUTE À « Animation », il ne
+         le remplace pas et il ne se fait pas jeter. La VIRGULE est un ET chez
+         TMDB, et c'est mesuré ; c'est le mélange virgule + barre verticale qui
+         est cassé, pas la virgule seule. Avant cette correction, le mot
+         s'écrivait dans la phrase et ne changeait rien à la demande : un mot
+         qui ne fait rien est pire que pas de mot du tout. */
+      p.with_genres = (f.anime && p.with_genres)
+        ? p.with_genres + ',' + id
+        : String(id);
+    }
   }
   if(r.langue) p.with_original_language = r.langue;
   const ep = RECH_EPOQUES.find(x => x.id === r.epoque);
@@ -1093,6 +1145,9 @@ function ouvrirJeuRech(){
   const r = etatRech();
   r.jeu = { carte:null, media:null, source:null, precedente:null,
             pool:{}, page:{}, ecartes:{}, fiche:null, plates:null,
+            /* `occupe` : un ajout de série est en cours (état d'attente sur la
+               carte). `bascule` : films / séries à tour de rôle sur « Tout ». */
+            occupe:false, bascule:false,
             loading:true, err:'', anim:'' };
   render();
   tirerCarteRech();
@@ -1128,10 +1183,23 @@ function paramsJeuRech(media){
 }
 /* Chaque source remplit son propre tas. Un tas vide est sauté ; le joker, lui,
    est toujours tenté — c'est la seule source obligatoire. */
+/* SUR LA PUCE « TOUT », films et séries à tour de rôle. `mediaRech()` rend le
+   premier des deux, c'est-à-dire toujours `movie` : le jeu ne proposait jamais
+   une seule série sur « Tout ». La grille, elle, interroge les deux points de
+   terminaison et entrelace — mais le jeu ne tire qu'une carte, il faut donc
+   choisir, et alterner est la seule façon de tenir la promesse de la puce. */
+function mediaJeuRech(){
+  const f = familleRech();
+  if(f.media) return f.media;
+  const j = etatRech().jeu;
+  if(!j) return 'movie';
+  j.bascule = !j.bascule;
+  return j.bascule ? 'movie' : 'tv';
+}
 async function remplirSourceRech(cle){
   const r = etatRech(), j = r.jeu;
   if(!j) return [];
-  const media = mediaRech();
+  const media = mediaJeuRech();
   j.page[cle] = (j.page[cle] || 0) + 1;
   try{
     if(cle === 'coeur'){
@@ -1234,6 +1302,14 @@ async function vusParProchesRech(media){
     const b = biblios[p.id] || {};
     Object.values(b[cle] || {}).forEach(o=>{
       if(!o || o.id == null) return;
+      /* FRONTIÈRE DE CONFIANCE. Ces objets viennent de la colonne `data` d'une
+         AUTRE personne, qu'elle peut écrire par appel direct à l'API. Son
+         identifiant part ensuite dans un `onclick` et dans un chemin d'API :
+         un identifiant qui n'est pas une suite de chiffres n'entre pas dans le
+         paquet, point. C'est la règle déjà écrite dans app-07 (`estIdTmdb`), et
+         PAS un échappement — `escJs` laisserait passer un identifiant absurde
+         jusqu'à `/tv/<n'importe quoi>` côté relais. */
+      if(!estIdTmdb(o.id)) return;
       const k = String(o.id);
       if(!compte[k]) compte[k] = { n:0, o:o };
       compte[k].n++;
@@ -1281,13 +1357,25 @@ async function tirerCarteRech(){
       j.pool[s.cle] = (j.pool[s.cle]||[]).concat(propre);
     });
   }
-  const cle = sourceSuivanteRech();
-  if(!cle){
+  /* LES CINQ TAS SONT REMPLIS EN MÊME TEMPS : un même titre peut donc se
+     trouver dans deux d'entre eux, et le contrôle fait au remplissage a pu
+     être démenti depuis — un « Déjà vu » sur la carte précédente vient
+     justement de faire entrer ce titre dans la bibliothèque. On revérifie donc
+     AU MOMENT DE DISTRIBUER, et on reprend une carte si celle-ci ne va plus.
+     Le tour de boucle est borné : un tas vide fait rendre `null` à
+     `sourceSuivanteRech`, et on s'arrête. */
+  let cle = null, x = null;
+  for(let essai = 0; essai < 40; essai++){
+    cle = sourceSuivanteRech();
+    if(!cle) break;
+    const cand = j.pool[cle].shift();
+    if(cand && jouableRech(cand)){ x = cand; break; }
+  }
+  if(!x){
     j.loading = false;
     j.err = 'Plus rien à proposer avec cette phrase.';
     peindreJeuRech(); return;
   }
-  const x = j.pool[cle].shift();
   j.carte = x; j.media = x.__media; j.source = cle; j.precedente = cle;
   j.ecartes[x.__media+':'+x.id] = 1;
   j.loading = false;
@@ -1314,6 +1402,11 @@ async function tirerCarteRech(){
 function jouableRech(x){
   const j = etatRech().jeu;
   const m = x.__media || mediaRech();
+  /* Deuxième verrou, après celui de `vusParProchesRech` : AUCUNE carte dont
+     l'identifiant n'est pas une suite de chiffres n'est distribuée. Le contrôle
+     est ici plutôt qu'au seul rendu parce que l'identifiant sert aussi de
+     chemin d'API, et pas seulement de texte dans un `onclick`. */
+  if(!estIdTmdb(x.id)) return false;
   if(j && j.ecartes[m+':'+x.id]) return false;
   if(chezSoiRech(x, m)) return false;
   if(avisRech(m, x.id) === -1) return false;
@@ -1332,13 +1425,52 @@ function jeuNonRech(){                       // « Pas ce soir »
   j.anim = 'gauche'; peindreJeuRech();
   setTimeout(()=>{ if(etatRech().jeu){ etatRech().jeu.anim=''; tirerCarteRech(); } }, 160);
 }
-function jeuPlusTardRech(){                  // « Plus tard » → la liste à voir
-  const j = etatRech().jeu; if(!j || !j.carte) return;
+/* « Plus tard » — mise de côté : le titre part dans la liste à voir, et LE JEU
+   CONTINUE. C'est une mise de côté, pas une décision : quitter la partie pour
+   ça serait une punition.
+
+   DEUX PIÈGES, TOUS DEUX CORRIGÉS APRÈS RELECTURE.
+
+   1. `addMovie(id, false)` ÉCRASE `seen` et `watchedAt`. Sur un film déjà dans
+      la bibliothèque — cas parfaitement atteignable, il suffit d'avoir appuyé
+      sur « Déjà vu » quelques cartes plus tôt — ça repassait le film en « à
+      voir » et effaçait la date à laquelle on l'avait vu, puis ça partait au
+      serveur. On n'écrit donc RIEN sur un titre déjà connu.
+   2. Une série ne s'ajoute pas d'un appel : il faut télécharger tous ses
+      épisodes, ce qui prend plusieurs secondes. `addOrOpenShow` le fait bien,
+      mais il quitte l'écran à la fin et cherche un bouton `#addbtn` qui
+      n'existe pas ici — on restait donc plusieurs secondes sans le moindre
+      signe, avant d'être éjecté du jeu. On fait le téléchargement sur place,
+      avec un état d'attente visible, et on reste dans la partie. */
+function jeuPlusTardRech(){
+  const j = etatRech().jeu; if(!j || !j.carte || j.occupe) return;
   const x = j.carte, media = j.media;
-  if(media === 'movie'){ if(typeof addMovie === 'function') addMovie(x.id, false); }
-  else if(typeof addOrOpenShow === 'function'){ addOrOpenShow(x.id); return; }
-  j.anim = 'haut'; peindreJeuRech();
-  setTimeout(()=>{ if(etatRech().jeu){ etatRech().jeu.anim=''; tirerCarteRech(); } }, 160);
+  const suivante = ()=>{
+    if(!etatRech().jeu) return;
+    etatRech().jeu.anim = 'haut'; peindreJeuRech();
+    setTimeout(()=>{ if(etatRech().jeu){ etatRech().jeu.anim=''; tirerCarteRech(); } }, 160);
+  };
+  if(chezSoiRech(x, media)) return suivante();      // déjà chez soi : ne rien écrire
+  if(media === 'movie'){
+    if(typeof addMovie === 'function') addMovie(x.id, false);
+    return suivante();
+  }
+  j.occupe = 'Ajout de la série…';
+  peindreJeuRech();
+  fetchShowFull(x.id, (a,b)=>{
+    if(!etatRech().jeu) return;
+    etatRech().jeu.occupe = 'Saisons '+a+'/'+b+'…';
+    peindreJeuRech();
+  }).then(s=>{
+    s.watched = {}; s.addedAt = Date.now();
+    db.shows[x.id] = s; saveDB();
+    toast('« '+s.name+' » ajoutée');
+    if(etatRech().jeu){ etatRech().jeu.occupe = false; suivante(); }
+  }).catch(()=>{
+    if(!etatRech().jeu) return;
+    etatRech().jeu.occupe = false; peindreJeuRech();
+    toast("Impossible d'ajouter cette série");
+  });
 }
 function jeuOuiRech(){                       // « Ce soir, c'est lui »
   /* La décision se conclut par le lancement, pas par un ajout à une liste de
@@ -1416,18 +1548,31 @@ function corpsJeuRech(){
         '<h3>'+esc(nom)+'</h3>'+
         '<div class="jmeta">'+esc(meta.filter(Boolean).join(' · '))+'</div>'+
         '<div class="jsyn">'+esc(f ? (f.resume || '') : '')+'</div>'+
-        '<div class="jmini">'+
-          (typeof zoneBande === 'function' ? zoneBande(media, x.id) : '')+
-          '<button class="btn ghost mini" onclick="ouvrirTitre('+x.id+',\''+media+'\',\'search\')">'+
-          'ⓘ La fiche</button>'+
-        '</div>'+
+        /* Troisième verrou sur l'identifiant, au rendu cette fois : ni bouton
+           ni requête sur un identifiant qui n'est pas une suite de chiffres.
+           `jouableRech` l'écarte déjà en amont ; celui-ci est là pour que le
+           jour où une nouvelle source de cartes apparaîtra, elle ne rouvre pas
+           le trou sans que personne ne s'en aperçoive. */
+        (estIdTmdb(x.id)
+          ? '<div class="jmini">'+
+              (typeof zoneBande === 'function' ? zoneBande(media, x.id) : '')+
+              '<button class="btn ghost mini" onclick="ouvrirTitre('+x.id+',\''+media+'\',\'search\')">'+
+              'ⓘ La fiche</button>'+
+            '</div>'
+          : '')+
       '</div>'+
     '</div>';
 
+  /* Un ajout de série met plusieurs secondes : sans état d'attente, on croit
+     que l'appui n'a pas pris et on appuie ailleurs. */
   h += '<div class="jgestes">'+
-      '<button class="jg non" onclick="jeuNonRech()"><span class="ic">'+I.close+'</span>Pas ce soir</button>'+
-      '<button class="jg tard" onclick="jeuPlusTardRech()"><span class="ic">'+I.bookmark+'</span>Plus tard</button>'+
-      '<button class="jg oui" onclick="jeuOuiRech()"><span class="ic">'+I.play+'</span>Ce soir, c\'est lui</button>'+
+      '<button class="jg non" onclick="jeuNonRech()"'+(j.occupe?' disabled':'')+
+        '><span class="ic">'+I.close+'</span>Pas ce soir</button>'+
+      '<button class="jg tard" onclick="jeuPlusTardRech()"'+(j.occupe?' disabled':'')+'>'+
+        (j.occupe ? '<span class="ic"><span class="spin"></span></span>'+esc(j.occupe)
+                  : '<span class="ic">'+I.bookmark+'</span>Plus tard')+'</button>'+
+      '<button class="jg oui" onclick="jeuOuiRech()"'+(j.occupe?' disabled':'')+
+        '><span class="ic">'+I.play+'</span>Ce soir, c\'est lui</button>'+
     '</div>'+
     '<div class="jastuce">Balaie à gauche ou à droite pour aller plus vite · le paquet ne s\'épuise pas</div>';
   return h;
