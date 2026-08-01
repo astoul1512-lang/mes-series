@@ -190,7 +190,12 @@ async function semerBande(type, id, d){
 function boutonBande(k){
   const b = bandes[k];
   if(!b || b === 'attente') return '';
-  return '<button class="btn ghost mini" onclick="ouvrirBande(\''+k+'\')">'+I.play+' Bande-annonce</button>';
+  /* `escJs` et pas la clé nue : c'est la règle du projet pour TOUTE chaîne
+     posée dans un `onclick`, et elle vaut ici comme ailleurs. La clé est
+     aujourd'hui « movie:550 », donc l'échappement ne change rien — mais une
+     règle qu'on n'applique que là où on croit en avoir besoin n'est plus une
+     règle, c'est un pari. */
+  return '<button class="btn ghost mini" onclick="ouvrirBande(\''+escJs(k)+'\')">'+I.play+' Bande-annonce</button>';
 }
 function peindreBande(k){
   const el = document.getElementById('ba-'+k);
@@ -200,7 +205,10 @@ function peindreBande(k){
 function zoneBande(type, id){
   const k = type+':'+id;
   setTimeout(()=> chargerFiche(type, id), 0);
-  return '<div id="ba-'+k+'" class="zba">'+boutonBande(k)+'</div>';
+  /* `esc` protège la SOURCE ; le parseur redécode l'attribut, si bien que le
+     nœud porte la clé brute et que `peindreBande` continue de le retrouver
+     avec `k` non échappé. Ne pas « corriger » l'autre bout. */
+  return '<div id="ba-'+esc(k)+'" class="zba">'+boutonBande(k)+'</div>';
 }
 /* ---------- Lecteur ----------
    Le lecteur prend tout l'écran, sur fond noir : la vidéo occupe la plus grande
