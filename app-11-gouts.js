@@ -1472,9 +1472,31 @@ function classementTrie(fam){
     .filter(id => (c[id] && c[id].n || 0) >= DUEL_MINI_N)
     .sort((x,y)=> (c[y].s - c[x].s) || (x < y ? -1 : x > y ? 1 : 0));
 }
+/* LE SEUIL COMMANDE L'ENTRÉE AU PODIUM, JAMAIS LA SORTIE.
+   Première écriture de cette fonction : elle remplaçait le podium par la seule
+   projection. Conséquence, trouvée à la relecture et rejouée sur la vraie base
+   d'Adrien : le classement démarrant vide, aucun titre n'atteint trois duels
+   avant plusieurs parties — la projection rendait donc une liste presque vide
+   QUI ÉCRASAIT UN PODIUM DE DIX TITRES. Une seule partie et l'app se croyait
+   revenue au premier jour ; il fallait une quinzaine de parties pour revenir à
+   dix. On aurait corrigé l'immobilité du podium en le vidant.
+   Donc : on complète la projection avec les identifiants de l'ancien podium
+   encore absents, dans leur ordre, jusqu'à dix. Un titre entre au podium quand
+   il a joué ses trois duels ; il n'en sort que poussé dehors par un meilleur.
+   Le podium ne rétrécit jamais — c'est aussi ce que la fusion entre deux
+   appareils suppose pour lire une famille vide comme « rien joué ici ». */
 function projeterPodium(fam){
   db.podium = db.podium || {};
-  db.podium[fam] = classementTrie(fam).slice(0, PODIUM_MAX);
+  const ancien = Array.isArray(db.podium[fam]) ? db.podium[fam].map(String) : [];
+  const neuf = classementTrie(fam).slice(0, PODIUM_MAX);
+  const deja = {};
+  neuf.forEach(id=>{ deja[id] = 1; });
+  for(const id of ancien){
+    if(neuf.length >= PODIUM_MAX) break;
+    if(deja[id]) continue;
+    deja[id] = 1; neuf.push(id);
+  }
+  db.podium[fam] = neuf;
   db.podium.maj = Date.now();
 }
 
@@ -1491,7 +1513,7 @@ const DUEL_FAMILLES = [
 const DUEL_VIDE = { actif:false, famille:null, paquet:[], scores:{}, joues:{},
                     faits:0, paire:null, choix:null, ecran:'jeu',
                     classe:[], sugg:null, rattrapage:[], vus:[], neufs:0,
-                    podiumPret:false };
+                    podiumPret:false, tete:null };
 let duel = Object.assign({}, DUEL_VIDE);
 
 /* QUI ENTRE DANS LE JEU. Un titre vu y entre, qu'il porte un 👍 ou rien du
@@ -1751,15 +1773,33 @@ function terminerDuel(){
      est ce que la personne vient réellement de faire. La phrase du bas dit
      laquelle des deux choses elle est en train de lire. */
   const parId = {};
+  titresEligiblesDuel(fam).forEach(t=>{ parId[String(t.id)] = t; });
   duel.paquet.forEach(t=>{ parId[String(t.id)] = t; });
   duel.classe = db.podium[fam].map(id => parId[id]).filter(Boolean);
   duel.podiumPret = duel.classe.length > 0;
   if(!duel.classe.length)
     duel.classe = duel.paquet.slice()
       .sort((a,b)=> duel.scores[cleDuel(b)] - duel.scores[cleDuel(a)]);
+  /* R1 · point 2 de la relecture — NE RIEN PROMETTRE QU'ON NE TIENDRA PAS.
+     L'écran de résultat annonçait « X devient ton point de départ, la rangée
+     "Dans l'esprit de X" remplace la rotation au hasard ». Ce n'était vrai que
+     si X est BIEN le titre dont la rangée part. Deux cas où ça ne l'était pas :
+     le podium encore vide (on nommait alors le premier de la session), et une
+     famille jouée alors qu'une autre porte déjà un podium — `departJeuRech`
+     prend le premier podium non vide dans l'ordre films, séries, animés, pas
+     celui qu'on vient de jouer.
+     On demande donc directement à la fonction qui alimente la rangée quel titre
+     elle retiendra, et on ne promet que s'il s'agit du nôtre. Lecture seule :
+     rien n'est modifié dans `app-12-recherche.js`, hors de ce lot. */
+  duel.tete = null;
+  if(duel.podiumPret){
+    const numeroUn = String((db.podium[fam] || [])[0] || '');
+    const depart = (typeof departJeuRech === 'function') ? departJeuRech() : null;
+    if(depart && String(depart.id) === numeroUn) duel.tete = parId[numeroUn] || null;
+  }
   duel.ecran = 'resultat';
   apresAvis();                      // enregistre, et périme la vitrine
-  chargerSuggDuel(duel.classe[0]);
+  chargerSuggDuel(duel.tete);
   render();
 }
 
@@ -1937,7 +1977,10 @@ function ficheDuel(media, id){
 const RANGS = ['🥇','🥈','🥉'];
 function ecranDuelResultat(){
   const trois = (duel.classe || []).slice(0, 3);
-  const tete = trois[0];
+  /* PAS `trois[0]`, mais le titre dont la rangée de suggestions part réellement
+     — `terminerDuel` l'a vérifié auprès de `departJeuRech`. Vaut `null` quand
+     la promesse ne tient pas, et le bloc entier disparaît alors. */
+  const tete = duel.tete;
   const nomFam = (DUEL_FAMILLES.find(f => f.cle === duel.famille) || {}).nom || 'titres';
   let html = '<div class="dres">'+
     '<div class="dfete">🏆</div>'+

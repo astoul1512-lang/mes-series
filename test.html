@@ -1054,6 +1054,101 @@ window.MODE_TEST = true;
     fermerDuel();
   });
 
+  /* LE CAS QUI MANQUAIT, ET IL COÛTAIT NEUF TITRES.
+     La première écriture remplaçait le podium par la seule projection. Le
+     classement démarrant vide, une partie rendait une liste presque vide — et
+     elle écrasait un podium de dix titres. Le seuil des trois duels commande
+     l'ENTRÉE au podium, jamais la sortie de ceux qui y étaient déjà. */
+  test('une partie ne peut pas raccourcir le podium', ()=>{
+    baseVierge();
+    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
+    db.podium.film = ['1','2','3','4','5','6','7','8','9','10']; db.podium.maj = 1;
+    ouvrirDuel('film');
+    horsLigne(()=>{
+      /* Une seule partie : un seul titre a eu le temps d'atteindre ses trois duels. */
+      db.classement.film['12'] = { s:1400, n:3 };
+      terminerDuel();
+      egal(db.podium.film.length, 10, 'le podium a rétréci : des titres sont perdus');
+      egal(db.podium.film[0], '12', 'le titre qui vient de gagner sa place n\'est pas en tête');
+      egal(db.podium.film.slice(1), ['1','2','3','4','5','6','7','8','9'],
+           'l\'ancien podium n\'a pas été conservé dans son ordre, le dernier en moins');
+    });
+    fermerDuel();
+  });
+
+  test('un podium hérité de la v85 survit à la première partie', ()=>{
+    baseVierge();
+    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
+    /* L'état exact d'une base qui vient de migrer : un podium plein, aucun
+       classement derrière. C'est ce cas-là qui effaçait dix titres. */
+    db.podium.film = ['3','4','5']; db.podium.maj = 1;
+    ouvrirDuel('film');
+    horsLigne(()=>{
+      terminerDuel();
+      egal(db.podium.film, ['3','4','5'], 'le podium hérité a été effacé par la première partie');
+    });
+    fermerDuel();
+  });
+
+  /* R1 · L'ÉCRAN DE FIN NE PROMET QUE CE QU'IL TIENDRA.
+     Il annonçait « X devient ton point de départ, la rangée "Dans l'esprit de
+     X" remplace la rotation au hasard ». C'est `departJeuRech` qui décide
+     réellement d'où part cette rangée — et elle prend le premier podium non
+     vide dans l'ordre films, séries, animés, pas la famille qu'on vient de
+     jouer. */
+  test('l\'écran de résultat ne promet pas une rangée qu\'il ne tiendra pas', ()=>{
+    baseVierge();
+    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
+    ouvrirDuel('film');
+    horsLigne(()=>{
+      terminerDuel();                       // aucun titre n'a ses trois duels
+      egal(db.podium.film, [], 'le test ne prouve rien : le podium n\'est pas vide');
+      vrai(!duel.tete, 'un point de départ est annoncé alors qu\'il n\'y en a aucun');
+      const boite = document.createElement('div');
+      boite.innerHTML = ecranDuelResultat();
+      vrai(boite.textContent.indexOf('Dans l\'esprit de') < 0,
+           'l\'écran promet une rangée « Dans l\'esprit de… » qui n\'arrivera pas');
+    });
+    fermerDuel();
+  });
+
+  test('la promesse tient quand la rangée part bien du titre annoncé', ()=>{
+    baseVierge();
+    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
+    db.podium.film = ['5']; db.podium.maj = 1;
+    db.classement.film['5'] = { s:1500, n:4 };
+    ouvrirDuel('film');
+    horsLigne(()=>{
+      terminerDuel();
+      egal(db.podium.film[0], '5');
+      vrai(duel.tete && String(duel.tete.id) === '5', 'le vrai point de départ n\'est pas annoncé');
+      const boite = document.createElement('div');
+      boite.innerHTML = ecranDuelResultat();
+      vrai(boite.textContent.indexOf('Dans l\'esprit de') >= 0,
+           'la promesse a disparu alors qu\'elle est vraie');
+    });
+    fermerDuel();
+  });
+
+  test('jouer une famille quand une autre alimente la rangée ne promet rien', ()=>{
+    baseVierge();
+    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
+    for(let i=21;i<=32;i++) db.shows[i] = serie(i, [ep(1,HIER)], {'1x1':1});
+    /* Un podium de films déjà en place : la rangée part de LUI, quelle que soit
+       la famille qu'on vient de départager. */
+    db.podium.film = ['1']; db.podium.maj = 1;
+    db.classement.film['1'] = { s:1400, n:5 };
+    ouvrirDuel('serie');
+    horsLigne(()=>{
+      db.classement.serie['21'] = { s:1300, n:4 };
+      terminerDuel();
+      egal(db.podium.serie[0], '21', 'le podium des séries n\'a pas été projeté');
+      vrai(!duel.tete,
+           'on promet une rangée bâtie sur la série alors qu\'elle partira du film');
+    });
+    fermerDuel();
+  });
+
   test('le score survit à la partie : rejouer ne repart pas de 1000', ()=>{
     baseVierge();
     for(let i=1;i<=11;i++) db.movies[i] = film(i, ['Drame']);
