@@ -1147,6 +1147,88 @@ window.MODE_TEST = true;
     } finally { params = sauve; }
   });
 
+  /* ======== Recherche — les écritures du jeu, deuxième passe ========
+     La correction de « Plus tard » sur une série avait rouvert, trois lignes
+     plus bas, la faute qu'elle venait de corriger : une écriture en base qui
+     part sans revérifier l'état courant. Deuxième bug de la même famille en
+     deux relectures — d'où ces cas, qui portent sur l'écriture elle-même. */
+  groupe('Recherche — les écritures du jeu');
+
+  test('un téléchargement de série qui se termine trop tard n\'écrase rien', ()=>{
+    const r = rechVierge('serie');
+    const neuve = { id:1399, name:'Série', seasons:{1:[ep(1,HIER)]}, status:'Ended' };
+
+    /* 1. Le cas normal : le jeu est là, la série n'y est pas, on écrit. */
+    r.jeu = { pool:{}, page:{}, ecartes:{}, occupe:false };
+    vrai(poserSerieJeuRech(1399, neuve), 'l\'ajout normal ne passe plus');
+    egal(Object.keys(db.shows), ['1399']);
+
+    /* 2. LE SCÉNARIO DE PERTE. On a quitté le jeu pendant le téléchargement,
+       ouvert la fiche, et coché la saison 1. Le téléchargement se termine :
+       il ne doit RIEN écrire, sinon les épisodes cochés retombent à zéro. */
+    db.shows[1399].watched = { '1x1': Date.now() };
+    r.jeu = null;                                     // on a quitté la partie
+    vrai(!poserSerieJeuRech(1399, { id:1399, name:'Série', seasons:{1:[ep(1,HIER)]} }),
+         'une écriture est partie alors que le jeu était fermé');
+    egal(Object.keys(db.shows[1399].watched), ['1x1'],
+         'LES ÉPISODES VUS ONT ÉTÉ EFFACÉS — c\'est la perte de données');
+
+    /* 3. Et même en restant dans le jeu : une série déjà en bibliothèque ne se
+       fait pas écraser par un téléchargement neuf, dont `watched` est vide. */
+    r.jeu = { pool:{}, page:{}, ecartes:{}, occupe:false };
+    vrai(!poserSerieJeuRech(1399, { id:1399, name:'Série', seasons:{1:[ep(1,HIER)]} }),
+         'une série déjà en bibliothèque a été réécrite');
+    egal(Object.keys(db.shows[1399].watched), ['1x1'], 'les épisodes vus ont été perdus');
+    r.jeu = null;
+  });
+
+  test('pendant un ajout de série, aucun bouton de la carte ne répond', ()=>{
+    const r = rechVierge('serie');
+    r.jeu = { carte:t_(1399,'tv'), media:'tv', pool:{}, page:{}, ecartes:{},
+              occupe:'Saisons 1/3…', fiche:null, plates:null, err:'', anim:'' };
+    const boite = document.createElement('div');
+    /* `zoneBande` programme un chargement de fiche : sur cette page on teste
+       des fonctions, on ne part pas sur le réseau. */
+    const vraieZone = window.zoneBande;
+    window.zoneBande = function(){ return ''; };
+    try{ boite.innerHTML = corpsJeuRech(); } finally { window.zoneBande = vraieZone; }
+    /* « Déjà vu » quitte le jeu : le laisser cliquable pendant un
+       téléchargement, c'est rouvrir le chemin de la perte d'épisodes. */
+    vrai(boite.querySelector('.jdeja[disabled]'), '« Déjà vu » reste cliquable pendant l\'ajout');
+    egal(boite.querySelectorAll('.jgestes .jg[disabled]').length, 3,
+         'les trois gestes du bas ne sont pas tous grisés');
+    vrai(boite.textContent.indexOf('Saisons 1/3') >= 0, 'l\'attente n\'est pas dite à l\'écran');
+    /* Et les puces de famille, qui vident les paquets. */
+    const entete = document.createElement('div');
+    entete.innerHTML = puceFamillesRech();
+    egal(entete.querySelectorAll('.chip[disabled]').length, 4,
+         'les puces de famille restent actives pendant l\'ajout');
+    r.jeu = null;
+  });
+
+  test('réappuyer sur l\'onglet Recherche quand on y est déjà ne jette pas la phrase', ()=>{
+    const sauve = params;
+    const faux = document.createElement('div');
+    try{
+      params = {};
+      vrai(ouvertureRech(), 'venir d\'un autre onglet doit repartir à neuf');
+      /* On est maintenant sur Recherche : l'écran est peint. Réappuyer sur
+         l'onglet rend un `params` neuf — mais ce n'est pas une ouverture. */
+      faux.id = 'rres';
+      document.body.appendChild(faux);
+      params = {};
+      vrai(!ouvertureRech(), 'la phrase composée est jetée en réappuyant sur l\'onglet');
+      vrai(params.rechOuvert, 'le marqueur n\'a pas été posé au passage');
+      /* Le jeu compte pour la même chose : on y est aussi. */
+      faux.id = 'rjeu';
+      params = {};
+      vrai(!ouvertureRech(), 'réappuyer sur l\'onglet pendant le jeu remet tout à zéro');
+    } finally {
+      if(faux.parentNode) faux.parentNode.removeChild(faux);
+      params = sauve;
+    }
+  });
+
   /* ==================== Bilan ==================== */
   const b = document.getElementById('bilan');
   b.className = 'bilan ' + (ko ? 'rouge' : 'vert');
