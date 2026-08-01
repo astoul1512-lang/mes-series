@@ -472,31 +472,16 @@ function familleDe(o, media){
   return (o.genres||[]).some(g=>/^animation$/i.test(String(g))) ? 'anime' : 'serie';
 }
 
-/* Les titres qui servent de point de départ aux recommandations.
-   Sur « Tout », les prendre par score pur donnait six animés d'affilée : ce
-   sont eux qu'Adrien a le plus avancés, et One Piece pèse mille épisodes. On
-   pioche donc à tour de rôle dans les trois familles, pour que la vitrine
-   parte de films, de séries ET d'animés — sa demande, mot pour mot. */
 const FAMILLES = ['serie', 'film', 'anime'];
-function grainesSuggestions(cadre, combien){
-  const aimes = titresAimes().filter(t => cadre.medias.indexOf(t.media) >= 0);
-  /* Une puce précise ne mélange rien : son cadre est déjà la variété voulue. */
-  if(cadre.medias.length === 1) return aimes.slice(0, combien);
+/* LOT D — `grainesSuggestions` a été RETIRÉE ici, et il faut dire pourquoi
+   plutôt que de laisser un trou.
 
-  const paniers = {};
-  FAMILLES.forEach(f => { paniers[f] = aimes.filter(t => t.famille === f); });
-  const out = [];
-  for(let tour = 0; out.length < combien; tour++){
-    let pris = 0;
-    FAMILLES.forEach(f=>{
-      if(out.length >= combien) return;
-      const t = paniers[f][tour];
-      if(t){ out.push(t); pris++; }
-    });
-    if(!pris) break;                        // tous les paniers sont épuisés
-  }
-  return out;
-}
+   Elle entrelaçait les trois familles pour choisir le point de départ des
+   recommandations, à partir de `titresAimes()` — qui, malgré son nom, contient
+   tout ce qui a été REGARDÉ. C'est exactement l'équation fausse du §1.1, et
+   elle survivait là. Le point de départ vient désormais de `graineEsprit`, qui
+   ne connaît que le podium et les 👍, et qui applique l'échelle de dégradation
+   du §2.4. Aucun autre fichier ne l'appelait — vérifié avant de la retirer. */
 
 /* Déjà dans la bibliothèque ? Alors ce n'est pas une découverte. */
 function dejaChezMoi(media, id){
@@ -535,10 +520,20 @@ const SUGG_AVENIR_MAX = 120;        // ce que la grille dépliée montre au plus
 /* Une vitrine par puce, chacune avec son cache : passer de Séries à Animés ne
    doit pas relancer quatre requêtes si on vient d'y aller. */
 const cacheSugg = {};
+/* LOT D — une case par rangée du catalogue du §3.4, plus la réserve de la
+   proposition du jour. Le carrousel de vedettes a disparu : « une seule
+   proposition justifiée en dit plus que dix génériques » (§3.3). */
 function suggVide(){
   return { etat:'froid' /* froid|attente|ok|erreur */, quand:0,
            enCours:false, perime:false,
-           vedettes:[], sections:[], esprit:null, acteurs:[], nouveautes:[], avenir:[],
+           /* La réserve de la proposition du jour : le premier candidat non
+              écarté est celui qu'on montre. §3.8 — « la carte est remplacée
+              immédiatement par le candidat suivant » ; sans réserve, « Pas pour
+              moi » laisserait un trou en haut de l'écran. */
+           propositions:[],
+           esprit:null, favoris:null, acteur:null, genre:null,
+           sections:[], cercle:null, incont:null, plates:null,
+           nouveautes:[], avenir:[],
            /* Ce sur quoi l'app s'est appuyée, gardé pour pouvoir le montrer :
               « je ne sais pas ce que l'app croit savoir » était le reproche. */
            base:[], genresUtilises:[] };
@@ -704,6 +699,11 @@ function tamiser(liste, vus, cadre, perso){
     const cle = x.media + ':' + x.id;
     if(vus[cle]) return false;
     if(dejaChezMoi(x.media, x.id)) return false;
+    /* LOT D §3.8 — « Pas pour moi » veut dire « ne me le remontre pas ». Le
+       titre sort de toutes les rangées, pas seulement de celle où il a été
+       refusé : le contraire ferait réapparaître deux lignes plus bas ce qu'on
+       vient d'écarter. Appel gardé : app-11 ne dépend pas d'app-04. */
+    if(typeof estRefuseSugg === 'function' && estRefuseSugg(x.media, x.id)) return false;
     if(idsHors.some(g => x.genre_ids.indexOf(g) >= 0)) return false;
     if(!passeOrigine(x, cadre, perso)) return false;
     vus[cle] = 1;
@@ -857,6 +857,337 @@ function filtreMesPlates(){
     ? paramsMesPlates() : {};
 }
 
+/* ===========================================================================
+   LOT D — LE CATALOGUE DES RANGÉES (§3.4)
+
+   Dix rangées, un ordre fixe, et pour chacune une condition d'affichage. La
+   règle qui gouverne tout le reste : UNE RANGÉE QUI N'A RIEN À DIRE NE
+   S'AFFICHE PAS. Il n'y a donc aucun plafond de longueur — c'est la condition
+   qui règle l'écran, pas un quota. Un profil nourri voit une dizaine de
+   rangées, un profil qui démarre en voit quatre.
+
+   Et la règle d'écriture, §3.2 : CHAQUE RANGÉE DIT D'OÙ ELLE VIENT, DANS SON
+   TITRE. Pas de sous-titre, pas de pastille, aucun vocabulaire de moteur à
+   l'écran. Les quatre moteurs (cœur, habitude, actu, cercle) sont un outil de
+   spec ; ils ne sont écrits nulle part dans l'interface. C'est pour ça que
+   chaque rangée porte ci-dessous un `titre` complet et rien d'autre : s'il
+   fallait une seconde ligne pour l'expliquer, la rangée serait mal conçue.
+=========================================================================== */
+
+/* Le numéro du jour. Toute la rotation quotidienne en dépend — le titre du
+   jour, l'acteur mis en avant, la décennie des incontournables (§3.9). Il est
+   calculé sur la DATE et jamais tiré au sort : stable toute la journée,
+   différent demain, et surtout identique d'un rendu à l'autre — sans quoi
+   l'écran bougerait sous les doigts, ce que le §3.9 interdit. */
+function jourVitrine(){ return Math.floor(Date.parse(todayISO()) / 86400000); }
+
+/* Trois 👍 pour ouvrir « Ce que tes favoris ont en commun » (§3.4), et deux
+   favoris au moins pour qu'un titre y entre — sinon « en commun » ne veut rien
+   dire et la rangée n'est qu'une seconde « Dans l'esprit de ». */
+const FAVORIS_MINI = 3, FAVORIS_CROISEMENT = 2;
+/* La profondeur de la réserve de la proposition du jour. « Pas pour moi »
+   remplace la carte immédiatement (§3.8) : sans réserve, le deuxième refus de
+   la journée laisserait un trou en tête d'écran. Douze, c'est plus de refus
+   qu'on n'en enchaîne, et ça ne coûte aucune requête de plus. */
+const PROPOSITIONS_RESERVE = 12;
+
+/* §3.4 rangée 4 — le titre de la rangée de genre. IL DOIT SE SUFFIRE (§3.2) :
+   c'est lui, et rien d'autre, qui dit d'où vient la rangée.
+
+   Deux tournures selon que le genre se compte ou non — « Des drames pour toi »
+   mais « De la science-fiction pour toi ». La table porte donc l'article avec
+   le mot : un pluriel mécanique aurait écrit « Des science-fictions ». Un genre
+   absent de la table retombe sur une phrase qui reste vraie quel que soit le
+   mot, plutôt que sur une tournure fausse. */
+const GENRE_PLURIEL = {
+  'action':'de l\'action', 'aventure':'de l\'aventure', 'animation':'de l\'animation',
+  'comédie':'des comédies', 'crime':'des polars', 'documentaire':'des documentaires',
+  'drame':'des drames', 'familial':'des histoires de famille', 'fantastique':'du fantastique',
+  'histoire':'de l\'histoire', 'horreur':'de l\'horreur', 'musique':'de la musique',
+  'mystère':'du mystère', 'romance':'de la romance', 'science-fiction':'de la science-fiction',
+  'téléfilm':'des téléfilms', 'thriller':'des thrillers', 'western':'des westerns',
+  'action & adventure':'de l\'action', 'sci-fi & fantasy':'de la science-fiction',
+  'kids':'des programmes pour enfants', 'reality':'de la téléréalité',
+  'soap':'des feuilletons', 'talk':'des talk-shows', 'news':'de l\'info'
+};
+function titreRangeeGenre(nom){
+  const p = GENRE_PLURIEL[String(nom || '').toLowerCase()];
+  if(!p) return 'Ce que tu aimes le plus souvent : ' + nom;
+  return p.charAt(0).toUpperCase() + p.slice(1) + ' pour toi';
+}
+
+/* §3.3 — LA RAISON DE LA PROPOSITION DU JOUR, et elle ne surjoue jamais ce que
+   l'app sait. Un duel joué autorise « ton préféré », un simple 👍 n'autorise
+   que « tu as aimé », et sans aucun signal on ne prétend rien du tout : on dit
+   que c'est un incontournable, ce qui est vrai de la source. Jamais « adoré »
+   sur un simple 👍 — c'est exactement le travers dénoncé au §1.1. */
+const LIB_PREFERE = { film:'Ton film préféré', serie:'Ta série préférée',
+                      anime:'Ton animé préféré' };
+function raisonDuJour(graine){
+  if(!graine) return 'Un incontournable que tu n\'as pas encore vu';
+  if(graine.signal === 'podium')
+    return (LIB_PREFERE[graine.famille] || 'Ton préféré') + ' : ' + graine.nom;
+  return 'Parce que tu as aimé ' + graine.nom;
+}
+
+/* Les familles couvertes par une puce. Le cadre parle en médias TMDB
+   (`tv`/`movie`), le moteur de goût parle en familles (`serie`/`film`/`anime`) :
+   c'est la table de passage entre les deux. */
+function famillesDuCadre(cadre){
+  if(cadre.origine === 'anime') return ['anime'];
+  if(cadre.medias.length === 1) return [cadre.medias[0] === 'movie' ? 'film' : 'serie'];
+  return ['film','serie','anime'];
+}
+
+/* Les titres réellement AIMÉS, dans le cadre de la puce, du plus légitime au
+   moins légitime. C'est la matière des rangées de cœur — et la condition
+   d'affichage des rangées 1 et 2 se lit directement sur sa longueur.
+
+   Les graines de la grille d'amorçage en font partie : la question posée
+   là-bas est « lesquels tu as AIMÉS ? » (§5.5), pas « lesquels tu as vus ».
+   Les écarter aurait laissé sans rangée de cœur quelqu'un qui vient
+   précisément de dire ce qu'il aime — le contraire de ce que la grille promet.
+   Leur score reste délibérément bas : un vrai 👍 passe devant. */
+function titresAimesSugg(cadre){
+  const out = [], vus = {};
+  famillesDuCadre(cadre).forEach(f=>{
+    moteurCoeur(f).forEach(t=>{
+      if(cadre.medias.indexOf(t.media) < 0) return;
+      if(!aAime(t.media, t.id)) return;
+      const cle = t.media+':'+t.id;
+      if(vus[cle]) return; vus[cle] = 1;
+      out.push({ media:t.media, id:String(t.id), nom:t.nom, famille:f,
+                 rang:t.rang, score:t.score });
+    });
+  });
+  ((db.gouts && db.gouts.graines) || []).forEach(g=>{
+    if(!g || cadre.medias.indexOf(g.media) < 0) return;
+    const fam = g.famille || (g.media === 'movie' ? 'film' : 'serie');
+    if(famillesDuCadre(cadre).indexOf(fam) < 0) return;
+    if(aPasAime(g.media, g.id)) return;
+    const cle = g.media+':'+g.id;
+    if(vus[cle]) return; vus[cle] = 1;
+    out.push({ media:g.media, id:String(g.id), nom:g.nom||'', famille:fam,
+               rang:-1, score:20, graine:true });
+  });
+  return out.sort((a,b)=> b.score - a.score);
+}
+
+/* Le titre dont part « Dans l'esprit de … », et LE SIGNAL QUI L'AUTORISE.
+
+   L'ordre n'est pas cosmétique, c'est l'échelle de dégradation du §2.4 :
+     · un podium existe → on part de son n°1, et on a le droit de dire
+       « ton film préféré » ; il ne tourne pas, c'est un classement ;
+     · pas de podium mais des 👍 → rotation quotidienne parmi eux, et on ne
+       dit rien de plus que « tu as aimé » ;
+     · rien du tout → pas de rangée de cœur, et l'app le dit ailleurs.
+   Jamais « adoré » sur un simple 👍 : c'est le travers dénoncé au §1.1. */
+function graineEsprit(cadre){
+  const fams = famillesDuCadre(cadre);
+  for(let i = 0; i < fams.length; i++){
+    const id = (((db.podium || {})[fams[i]]) || [])[0];
+    if(id == null) continue;
+    const t = moteurCoeur(fams[i]).find(x => String(x.id) === String(id));
+    if(t && cadre.medias.indexOf(t.media) >= 0)
+      return { media:t.media, id:String(t.id), nom:t.nom, famille:fams[i], signal:'podium' };
+  }
+  const aimes = titresAimesSugg(cadre);
+  if(!aimes.length) return null;
+  const t = aimes[jourVitrine() % aimes.length];
+  return { media:t.media, id:t.id, nom:t.nom, famille:t.famille, signal:'aime' };
+}
+
+/* §3.6 — UNE SEULE RANGÉE ACTEUR, jamais trois. Trois rangées quasi
+   identiques alourdissent l'écran sans rien apporter.
+
+   « L'acteur est choisi par sa présence dans les titres aimés. » Cette
+   présence ne se lit pas localement : il faut la filmographie. On en examine
+   donc trois par jour — exactement le nombre de requêtes que coûtaient les
+   trois rangées d'avant, à l'unité près — et la fenêtre TOURNE, ce qui donne
+   son tour à chaque acteur déclaré au fil des jours. C'est la « rotation
+   quotidienne parmi les mieux placés » : on classe ceux du jour, on n'en garde
+   qu'un. Le défaut que ça corrige : les 3 PREMIERS acteurs ajoutés, pour
+   toujours — en ajouter 30 n'en faisait jamais apparaître 27. */
+const ACTEURS_EXAMEN = 3;
+function acteursExamines(){
+  const l = ((db.gouts || {}).acteurs) || [];
+  if(l.length <= ACTEURS_EXAMEN) return l.slice();
+  const d = jourVitrine() % l.length;
+  const out = [];
+  for(let i = 0; i < ACTEURS_EXAMEN; i++) out.push(l[(d + i) % l.length]);
+  return out;
+}
+
+/* §2.2 — LE GENRE AU MEILLEUR TAUX, celui de la rangée « Des drames pour toi ».
+   Pas « ce que tu regardes le plus » mais « ce que tu aimes le plus souvent ».
+   Le plancher de `tauxParGenre` fait le tri : un genre à un seul titre vu
+   afficherait 100 % et gouvernerait l'écran.
+
+   Les familles sont fondues sur le nom CANONIQUE : « Action » côté films et
+   « Action & Adventure » côté séries sont le même genre, et les compter deux
+   fois donnait deux rangées jumelles — le même défaut que le pavé de texte du
+   point 8 affichait en toutes lettres. */
+function genreDuTaux(cadre){
+  const par = {};
+  famillesDuCadre(cadre).forEach(f=>{
+    tauxParGenre(f).forEach(e=>{
+      if(!e.mesurable || !e.aimes) return;
+      const nom = (typeof genreCanon === 'function') ? genreCanon(e.genre) : e.genre;
+      const c = par[nom] || (par[nom] = { nom:nom, vus:0, aimes:0 });
+      c.vus += e.vus; c.aimes += e.aimes;
+    });
+  });
+  const hors = (db.gouts && db.gouts.exclus) || [];
+  const horsCanon = hors.map(n => (typeof genreCanon === 'function') ? genreCanon(n) : n);
+  return Object.keys(par).map(k => par[k])
+    .filter(e => horsCanon.indexOf(e.nom) < 0)
+    .map(e => Object.assign(e, { taux: e.aimes / e.vus }))
+    .sort((a,b)=> b.taux - a.taux || b.vus - a.vus)[0] || null;
+}
+
+/* §3.7 — LA RANGÉE QUI NE TE RESSEMBLE PAS. Bornée par ÉPOQUE, jamais par
+   genre : un incontournable se voit pour se faire son idée. La décennie tourne
+   au jour, sinon on sert Le Parrain et Shawshank jusqu'à la fin des temps, et
+   ELLE PASSE DANS LE TITRE. Le seul garde-fou est le genre explicitement
+   écarté dans Mes goûts — ce n'est pas une borne de genre, c'est le respect
+   d'une consigne donnée ; `tamiser` s'en charge pour toutes les rangées. */
+const DECENNIES_INCONT = [
+  { cle:'1970', titre:'Les incontournables des années 70',   de:'1970-01-01', a:'1979-12-31' },
+  { cle:'1980', titre:'Les incontournables des années 80',   de:'1980-01-01', a:'1989-12-31' },
+  { cle:'1990', titre:'Les incontournables des années 90',   de:'1990-01-01', a:'1999-12-31' },
+  { cle:'2000', titre:'Les incontournables des années 2000', de:'2000-01-01', a:'2009-12-31' },
+  { cle:'2010', titre:'Les incontournables des années 2010', de:'2010-01-01', a:'2019-12-31' }
+];
+function decennieVitrine(){
+  return DECENNIES_INCONT[jourVitrine() % DECENNIES_INCONT.length];
+}
+/* Beaucoup de votes ET très bien noté : c'est la définition de « forte
+   reconnaissance » du §3.7. Le plancher diffère entre films et séries — le
+   catalogue de séries est beaucoup plus petit, le même chiffre le viderait. */
+function requeteIncont(media, dec){
+  const champ = media === 'movie' ? 'primary_release_date' : 'first_air_date';
+  const p = { include_adult:'false', page:'1', sort_by:'vote_count.desc',
+              'vote_count.gte': media === 'movie' ? '4000' : '1500',
+              'vote_average.gte':'7.3' };
+  p[champ+'.gte'] = dec.de; p[champ+'.lte'] = dec.a;
+  /* Pas de filtre plateformes ici, DÉLIBÉRÉMENT : cette rangée parle de
+     notoriété, pas de catalogue, et sa condition d'affichage est « toujours »
+     (§3.4). La restreindre aux abonnements déclarés l'aurait fait disparaître
+     certains jours — une rangée « toujours » qui s'absente est un écran cassé.
+     Même raison que pour « Bientôt » et « Avec X ». */
+  return { media:media, p:p };
+}
+
+/* §3.4 rangée 8 — ce qui est réellement lançable ce soir. La rangée n'existe
+   que si des abonnements ont été déclarés : c'est la seule chose que l'app ne
+   peut pas deviner, et sans elle la requête n'a pas de sujet. */
+function requetePlatesRangee(media){
+  const l = (typeof mesPlates === 'function') ? mesPlates() : [];
+  if(!l.length) return null;
+  const p = Object.assign({ include_adult:'false', page:'1' }, triSuggestions(), {
+    with_watch_providers: l.map(x=>x.id).join('|'),
+    watch_region: REGION_PLATO,
+    with_watch_monetization_types: 'flatrate' });
+  return { media:media, p:p };
+}
+/* « Sur Netflix et Max » — le titre NOMME les plateformes tant qu'elles
+   tiennent, parce que c'est ça qui dit d'où vient la rangée (§3.2). Au-delà de
+   deux, la liste cesse d'être lisible d'un coup d'œil et on retombe sur une
+   formule générale. */
+function titreRangeePlates(){
+  const l = (typeof mesPlates === 'function') ? mesPlates() : [];
+  if(!l.length) return '';
+  if(l.length === 1) return 'Sur ' + l[0].nom;
+  if(l.length === 2) return 'Sur ' + l[0].nom + ' et ' + l[1].nom;
+  return 'Sur tes plateformes';
+}
+
+/* §3.5 — LE CERCLE, la meilleure carte et elle est déjà dans l'app.
+
+   Aucune donnée nouvelle à collecter : le partage existe déjà. UNE SEULE
+   rangée, généraliste, qui mélange les bibliothèques de tous les proches —
+   pas de rangée par personne, on n'en met aucun en avant. Pas de proches, pas
+   de section, et AUCUNE invitation dans Découvrir.
+
+   FRONTIÈRE DE CONFIANCE. Ces objets viennent de la colonne `data` d'une AUTRE
+   personne, qu'elle peut écrire par appel direct à l'API. Un identifiant qui
+   n'est pas une suite de chiffres n'entre pas dans le paquet (`estIdTmdb`) —
+   et pas un échappement à la place : `escJs` laisserait passer un identifiant
+   absurde jusqu'à `/tv/<n'importe quoi>` côté relais. */
+const CERCLE_BIBLIOS_MAX = 6;      // au-delà, c'est une cascade réseau, pas une rangée
+async function chargerBibliosCercle(){
+  const suivis = ((typeof partage === 'object' && partage && partage.suivis) || [])
+    .slice(0, CERCLE_BIBLIOS_MAX);
+  if(!suivis.length) return [];
+  await Promise.all(suivis.map(async p=>{
+    if(biblios[p.id]) return;                     // déjà en mémoire : on ne redemande pas
+    try{ await chargerBiblio(p.id); }catch(e){}
+  }));
+  return suivis.filter(p => biblios[p.id] && !biblios[p.id].erreur);
+}
+
+/* L'ORDRE FAIT TOUTE LA VALEUR DE LA RANGÉE, puisqu'elle est unique. Trois
+   critères, dans cet ordre exact (§3.5) :
+     1. combien de proches l'ont — le principe de corroboration ;
+     2. la proximité avec les goûts, à égalité ;
+     3. la récence chez eux.
+   Et on exclut ce qu'il a déjà : `tamiser` s'en charge en aval.
+
+   La famille se lit sur les genres, comme `familleDe` le fait déjà pour la
+   bibliothèque locale : une bibliothèque partagée ne porte pas la langue
+   d'origine. C'est l'approximation que l'app assume depuis toujours, elle ne
+   sert ici qu'à répartir, jamais à écarter un résultat d'une requête. */
+async function titresDuCercle(cadre){
+  return cercleDepuisBiblios(await chargerBibliosCercle(), cadre);
+}
+/* Le classement est séparé de la lecture réseau, et pas par élégance : c'est
+   l'ordre qui fait toute la valeur de cette rangée, et un tri qu'on ne peut
+   pas éprouver sans serveur ne s'éprouve jamais. */
+function cercleDepuisBiblios(gens, cadre){
+  if(!gens.length) return [];
+  const fams = famillesDuCadre(cadre);
+  const mesGenres = {};
+  fams.forEach(f => genresDeFamille(f).forEach(n=>{ mesGenres[String(n).toLowerCase()] = 1; }));
+
+  const compte = {};
+  gens.forEach(p=>{
+    const b = biblios[p.id] || {};
+    [['shows','tv'],['movies','movie']].forEach(([cle, media])=>{
+      if(cadre.medias.indexOf(media) < 0) return;
+      Object.values(b[cle] || {}).forEach(o=>{
+        if(!o || o.id == null || !estIdTmdb(o.id)) return;
+        const nom = media === 'tv' ? o.name : o.title;
+        if(!nom || !o.poster) return;
+        const genres = Array.isArray(o.genres) ? o.genres.map(String) : [];
+        if(fams.indexOf(familleDe({ genres:genres }, media)) < 0) return;
+        const k = media+':'+o.id;
+        const e = compte[k] || (compte[k] = { media:media, o:o, nom:nom, genres:genres,
+                                              n:0, quand:0 });
+        e.n++;
+        const q = Number(o.watchedAt || o.addedAt || 0);
+        if(isFinite(q) && q > e.quand) e.quand = q;
+      });
+    });
+  });
+
+  return Object.keys(compte).map(k=>compte[k])
+    .map(e=>{
+      const proximite = e.genres.filter(g => mesGenres[g.toLowerCase()]).length;
+      /* Les genres partagés sont retraduits en identifiants TMDB : sans eux, un
+         genre explicitement écarté dans Mes goûts passerait au travers de
+         `tamiser`, qui ne sait lire qu'une liste d'identifiants. Une consigne
+         donnée par la personne ne doit sauter sur aucune source. */
+      const ids = e.genres.map(g => genreParNom(e.media, g)).filter(x => x != null);
+      return { corrob:e.n, proximite:proximite, quand:e.quand,
+               x:{ id:e.o.id, media:e.media, nom:e.nom, affiche:e.o.poster,
+                   bandeau:null,
+                   date: e.media === 'tv' ? (e.o.first || null) : (e.o.date || null),
+                   note: e.o.note || null, votes:0, genre_ids:ids, langue:null } };
+    })
+    .sort((a,b)=> b.corrob - a.corrob || b.proximite - a.proximite || b.quand - a.quand)
+    .map(e => e.x);
+}
+
 async function chargerSuggestions(force){
   const type = (ui.disc && ui.disc.type) || 'tout';
   const c = suggCourantes();
@@ -887,16 +1218,20 @@ async function chargerSuggestions(force){
     const auj = todayISO();
     const debut = isoIlYA(60);
     const demain = isoDansN(1);
+    const jour = jourVitrine();
     const sections = sectionsPourPuce(type);
-    const acteurs = ((db.gouts||{}).acteurs || []).slice(0, 3);
 
-    /* Le titre qui sert de comparaison du jour. Une seule rangée, choisie parmi
-       ce qu'on a terminé ou bien avancé — et intitulée « Dans l'esprit de » et
-       non « parce que tu as aimé » : l'app ne sait pas si on a aimé, elle sait
-       seulement qu'on l'a regardé. Adrien a mis le doigt dessus. */
-    const candidats = grainesSuggestions(cadre, 12);
-    const graineJour = Math.floor(Date.parse(auj) / 86400000);
-    const esprit = candidats.length ? candidats[graineJour % candidats.length] : null;
+    /* LOT D — les rangées de cœur partent de ce qui a été AIMÉ, jamais de ce
+       qui a seulement été regardé. C'était la cause n°1 du manque de
+       pertinence (§1.1) : « vu = aimé » est une équation fausse. */
+    const aimes = titresAimesSugg(cadre);
+    const esprit = graineEsprit(cadre);
+    /* §3.4 rangée 2 — « Ce que tes favoris ont en commun » ne s'ouvre qu'à
+       partir de trois 👍 : en dessous, un croisement ne croise rien. */
+    const favoris = aimes.length >= FAVORIS_MINI ? aimes.slice(0, FAVORIS_MINI) : [];
+    const acteurs = acteursExamines();
+    const genreT = genreDuTaux(cadre);
+    const dec = decennieVitrine();
 
     const demandes = [];
     sections.forEach(sec=>{
@@ -905,15 +1240,67 @@ async function chargerSuggestions(force){
       demandes.push(sourceDouce(tmdb('/discover/'+r.media, r.p))
         .then(d => ({ kind:'section', sec:sec, l:(d&&d.results||[]).map(x=>normaliser(x, r.media)) })));
     });
-    if(esprit) demandes.push(sourceDouce(tmdb('/'+esprit.media+'/'+esprit.id+'/recommendations'))
-      .then(d => ({ kind:'esprit', titre:esprit.nom, id:esprit.id, media:esprit.media,
-                    l:(d&&d.results||[]).map(x=>normaliser(x, esprit.media)) })));
+
+    /* Les recommandations d'un titre servent DEUX rangées — « Dans l'esprit
+       de X » et le croisement des favoris — et le n°1 du podium est presque
+       toujours aussi le premier des favoris. On demande donc chaque titre une
+       seule fois et on répartit ensuite : sans ce dédoublonnage, la même
+       requête partait deux fois à chaque calcul. */
+    const recoCles = [];
+    if(esprit) recoCles.push(esprit.media+':'+esprit.id);
+    favoris.forEach(t=>{
+      const k = t.media+':'+t.id;
+      if(recoCles.indexOf(k) < 0) recoCles.push(k);
+    });
+    recoCles.forEach(k=>{
+      const m = k.slice(0, k.indexOf(':')), id = k.slice(k.indexOf(':')+1);
+      demandes.push(sourceDouce(tmdb('/'+m+'/'+id+'/recommendations'))
+        .then(d => ({ kind:'reco', cle:k,
+                      l:(d&&d.results||[]).map(x=>normaliser(x, m)) })));
+    });
+
     acteurs.forEach(a => demandes.push(sourceDouce(tmdb('/person/'+a.id+'/combined_credits'))
       .then(d => ({ kind:'acteur', titre:a.nom, id:a.id,
                     l:((d&&d.cast)||[])
                       .filter(x => x.media_type === 'tv' || x.media_type === 'movie')
                       .sort((x,y)=>(y.popularity||0)-(x.popularity||0))
                       .map(x => normaliser(x, x.media_type)) }))));
+
+    /* §3.4 rangée 4 — le genre au meilleur TAUX, nommé dans le titre. */
+    if(genreT) cadre.medias.forEach(m=>{
+      const gid = genreParNom(m, genreT.nom);
+      if(gid == null) return;
+      const p = Object.assign({ include_adult:'false', page:'1' }, triSuggestions());
+      if(cadre.origine === 'anime'){
+        p.with_original_language = 'ja';
+        const a = genreParNom(m, 'Animation');
+        /* Sur les animés, l'animation japonaise est la définition de la puce et
+           non une préférence : les deux identifiants partent en ET (virgule). */
+        p.with_genres = (a != null && a !== gid) ? [a, gid].join(',') : String(gid);
+      } else p.with_genres = String(gid);
+      Object.assign(p, filtreMesPlates());
+      demandes.push(sourceDouce(tmdb('/discover/'+m, p))
+        .then(d => ({ kind:'genre', media:m, l:(d&&d.results||[]).map(x=>normaliser(x, m)) })));
+    });
+
+    /* §3.4 rangée 6 — le cercle. Aucune requête TMDB : la matière est déjà là. */
+    demandes.push(titresDuCercle(cadre)
+      .then(l => ({ kind:'cercle', l:l }), () => ({ kind:'cercle', l:[] })));
+
+    /* §3.4 rangée 7 — les incontournables de la décennie du jour. */
+    cadre.medias.forEach(m=>{
+      const r = requeteIncont(m, dec);
+      demandes.push(sourceDouce(tmdb('/discover/'+m, r.p))
+        .then(d => ({ kind:'incont', media:m, l:(d&&d.results||[]).map(x=>normaliser(x, m)) })));
+    });
+
+    /* §3.4 rangée 8 — ce qui est lançable ce soir, sur les abonnements déclarés. */
+    cadre.medias.forEach(m=>{
+      const r = requetePlatesRangee(m);
+      if(!r) return;
+      demandes.push(sourceDouce(tmdb('/discover/'+m, r.p))
+        .then(d => ({ kind:'plates', media:m, l:(d&&d.results||[]).map(x=>normaliser(x, m)) })));
+    });
     /* Les nouveautés, sur chaque média du cadre de la puce. */
     cadre.medias.forEach(m=>{
       const champ = m === 'movie' ? 'primary_release_date' : 'first_air_date';
@@ -959,25 +1346,120 @@ async function chargerSuggestions(force){
 
     const rep = await Promise.all(demandes);
 
-    /* L'ordre de dépouillement fixe les priorités : ce qui est servi en premier
-       garde les titres, les suivants héritent du reste. Les sections d'abord —
-       ce sont elles que l'écran doit montrer. */
+    /* L'ORDRE DE DÉPOUILLEMENT SUIT L'ORDRE D'AFFICHAGE — et c'est ce qui a
+       changé avec ce lot. Le premier servi garde les titres, les suivants
+       héritent du reste (`vus` est partagé). Dépouiller les sections d'abord,
+       comme avant, revenait à vider « Dans l'esprit de X » de ses meilleurs
+       titres au profit d'une rangée générique affichée cinq crans plus bas.
+       Du plus personnel au plus générique, exactement comme le §3.4 range
+       l'écran. */
     const parKind = k => rep.filter(r => r && r.kind === k);
+    const recos = {};
+    parKind('reco').forEach(r=>{ recos[r.cle] = r.l || []; });
+
+    /* 2 — Ce que tes favoris ont en commun. Un titre n'entre que s'il est
+       proposé par AU MOINS DEUX favoris : c'est le « en commun » du titre, et
+       c'est aussi ce qui distingue cette rangée de la précédente. Un seul
+       favori suffirait à en faire une deuxième « Dans l'esprit de ».
+
+       ELLE EST DÉPOUILLÉE AVANT LA RANGÉE 1, ET C'EST LA SEULE EXCEPTION À
+       L'ORDRE D'AFFICHAGE. Vérifié en le faisant dans l'autre sens : la
+       rangée 2 sortait TOUJOURS vide. Ce n'est pas un hasard mais une
+       nécessité — un titre du croisement est, par construction, recommandé
+       par le favori n°1, donc déjà pris par « Dans l'esprit de » quelques
+       lignes plus haut. Le croisement est la ressource rare (il faut deux
+       favoris d'accord) ; la rangée 1 pioche dans vingt candidats et ne perd
+       rien à passer en second. La règle générale — le premier servi garde les
+       titres — n'est pas contredite : elle est ordonnée par la rareté quand
+       deux rangées puisent au même endroit. */
+    let favorisPret = null;
+    if(favoris.length >= FAVORIS_MINI){
+      const compte = {};
+      favoris.forEach(t=>{
+        const vusIci = {};
+        (recos[t.media+':'+t.id] || []).forEach(x=>{
+          if(!x) return;
+          const k = x.media+':'+x.id;
+          if(vusIci[k]) return; vusIci[k] = 1;    // un favori ne vote qu'une fois
+          const e = compte[k] || (compte[k] = { n:0, x:x });
+          e.n++;
+        });
+      });
+      const croises = Object.keys(compte).map(k=>compte[k])
+        .filter(e => e.n >= FAVORIS_CROISEMENT)
+        .sort((a,b)=> b.n - a.n)
+        .map(e => e.x);
+      const l = tamiser(croises, vus, cadre, true).slice(0, SUGG_MAX);
+      if(l.length) favorisPret = { l:l };
+    }
+
+    /* 1 — Dans l'esprit de X */
+    let espritPret = null;
+    if(esprit){
+      const l = tamiser(recos[esprit.media+':'+esprit.id] || [], vus, cadre, true).slice(0, SUGG_MAX);
+      if(l.length) espritPret = { titre:esprit.nom, id:esprit.id, media:esprit.media,
+                                  signal:esprit.signal, famille:esprit.famille, l:l };
+    }
+
+    /* 3 — Avec [acteur] : une seule rangée, celle du mieux placé. Le classement
+       se fait sur la présence dans les titres AIMÉS, comme le §3.6 le demande ;
+       à défaut de 👍, sur la présence dans la bibliothèque ; à défaut encore,
+       sur l'ordre de déclaration, que l'ordre de `rep` conserve. */
+    const cleAime = {};
+    aimes.forEach(t=>{ cleAime[t.media+':'+t.id] = 1; });
+    let acteurPret = null, meilleur = -1;
+    parKind('acteur').forEach(r=>{
+      const brut = r.l || [];
+      const presence = brut.reduce((n,x)=> n + (x && cleAime[x.media+':'+x.id] ? 1 : 0), 0);
+      const secours = brut.reduce((n,x)=> n + (x && dejaChezMoi(x.media, x.id) ? 1 : 0), 0);
+      const note = presence * 1000 + secours;
+      if(note <= meilleur) return;
+      meilleur = note;
+      acteurPret = { id:r.id, titre:r.titre, brut:brut };
+    });
+    if(acteurPret){
+      const l = tamiser(acteurPret.brut, vus, cadre, true).slice(0, SUGG_MAX);
+      acteurPret = l.length ? { id:acteurPret.id, titre:acteurPret.titre, l:l } : null;
+    }
+
+    /* 4 — Des drames pour toi */
+    let genrePret = null;
+    if(genreT){
+      const paq = parKind('genre').map(r => tamiser(r.l || [], vus, cadre, false));
+      const l = entrelacerSugg(paq).slice(0, SUGG_MAX);
+      if(l.length) genrePret = { nom:genreT.nom, titre:titreRangeeGenre(genreT.nom), l:l };
+    }
+
+    /* 5 — Des séries / des films / des animés pour toi */
     const sectionsPretes = [];
     parKind('section').forEach(r=>{
       const l = tamiser(r.l || [], vus, r.sec.cadre, false).slice(0, SUGG_MAX);
       if(l.length) sectionsPretes.push({ cle:r.sec.cle, titre:r.sec.titre, l:l });
     });
-    let espritPret = null;
-    parKind('esprit').forEach(r=>{
-      const l = tamiser(r.l || [], vus, cadre, true).slice(0, 20);
-      if(l.length) espritPret = { titre:r.titre, id:r.id, media:r.media, l:l };
+
+    /* 6 — Vu par tes proches */
+    let cerclePret = null;
+    parKind('cercle').forEach(r=>{
+      const l = tamiser(r.l || [], vus, cadre, true).slice(0, SUGG_MAX);
+      if(l.length) cerclePret = { l:l };
     });
-    const parActeur = [];
-    parKind('acteur').forEach(r=>{
-      const l = tamiser(r.l || [], vus, cadre, true).slice(0, 20);
-      if(l.length) parActeur.push({ id:r.id, titre:r.titre, l:l });
-    });
+
+    /* 7 — Les incontournables de la décennie du jour */
+    let incontPret = null;
+    {
+      const paq = parKind('incont').map(r => tamiser(r.l || [], vus, cadre, false));
+      const l = entrelacerSugg(paq).slice(0, SUGG_MAX);
+      if(l.length) incontPret = { cle:dec.cle, titre:dec.titre, l:l };
+    }
+
+    /* 8 — Sur Netflix et Max */
+    let platesPret = null;
+    {
+      const paq = parKind('plates').map(r => tamiser(r.l || [], vus, cadre, false));
+      const l = entrelacerSugg(paq).slice(0, SUGG_MAX);
+      if(l.length) platesPret = { titre:titreRangeePlates(), l:l };
+    }
+
     const paqNouv = [];
     parKind('nouv').forEach(r=>{
       const l = tamiser(r.l || [], vus, cadre, false).slice(0, 20);
@@ -993,22 +1475,27 @@ async function chargerSuggestions(force){
         .filter(x => x.affiche && x.date)
     ).slice(0, SUGG_AVENIR_MAX);
 
-    /* Le carrousel du jour : cinq titres pris dans les sections d'abord, dans
-       l'ordre où elles s'affichent, puis dans le reste. La rotation vient de la
-       date — stable toute la journée, différente demain, jamais tirée au sort. */
-    const bassin = []
-      .concat(...sectionsPretes.map(s => s.l.map(x => Object.assign({ pourquoi:s.titre }, x))))
-      .concat(...parActeur.map(p => p.l.map(x => Object.assign({ pourquoi:'Avec '+p.titre }, x))))
-      .concat(espritPret ? espritPret.l.map(x => Object.assign({ pourquoi:'Dans l\'esprit de '+espritPret.titre }, x)) : [])
-      .concat(nouv.map(x => Object.assign({ pourquoi:'Sortie récente' }, x)));
-    const vedettes = [];
-    for(let i = 0; i < 5 && bassin.length; i++){
-      const idx = (graineJour + i * 7) % bassin.length;
-      vedettes.push(bassin.splice(idx, 1)[0]);
-    }
+    /* §3.3 — LA PROPOSITION DU JOUR. Un seul titre, plein cadre, avec sa raison
+       écrite. Elle remplace le carrousel de vedettes, qui ne disait rien de la
+       personne : une seule proposition justifiée en dit plus que dix
+       génériques.
 
-    Object.assign(c, { etat:'ok', quand:Date.now(), vedettes:vedettes,
-      sections:sectionsPretes, esprit:espritPret, acteurs:parActeur,
+       On garde une RÉSERVE et pas un titre unique, parce que « Pas pour moi »
+       doit remplacer la carte immédiatement (§3.8). La réserve part de la
+       source la plus légitime disponible — la rangée de cœur si elle existe,
+       les incontournables sinon, ce qui est exactement l'échelle du §2.4 — et
+       elle est décalée d'un cran par jour : la proposition change demain sans
+       jamais bouger dans la journée (§3.9). */
+    const source = espritPret ? espritPret.l : (incontPret ? incontPret.l : []);
+    const raison = raisonDuJour(espritPret ? esprit : null);
+    const propositions = [];
+    for(let i = 0; i < Math.min(PROPOSITIONS_RESERVE, source.length); i++)
+      propositions.push(Object.assign({ pourquoi:raison }, source[(jour + i) % source.length]));
+
+    Object.assign(c, { etat:'ok', quand:Date.now(),
+      propositions:propositions,
+      esprit:espritPret, favoris:favorisPret, acteur:acteurPret, genre:genrePret,
+      sections:sectionsPretes, cercle:cerclePret, incont:incontPret, plates:platesPret,
       nouveautes:nouv.slice(0, SUGG_MAX),
       /* Gardé en entier, pas coupé à SUGG_MAX : c'est cette liste-là que la
          grille « Tout voir » déroule, et elle est déjà dans l'ordre. */
@@ -1035,21 +1522,82 @@ async function chargerSuggestions(force){
    désignés par leur nom faute d'identifiant conservé à ce stade — deux acteurs
    homonymes dans la même vitrine se partageraient la rangée, ce qui reste
    préférable à une clé qui change à chaque calcul. */
+/* LE CATALOGUE DU §3.4, DANS SON ORDRE FIXE. On sait où regarder sans
+   réfléchir, et l'ordre raconte quelque chose : du plus personnel au plus
+   générique.
+
+     1  Dans l'esprit de X               ≥ 1 titre 👍
+     2  Ce que tes favoris ont en commun ≥ 3 titres 👍
+     3  Avec [acteur]                    ≥ 1 acteur déclaré
+     4  Des drames pour toi              ≥ 1 genre au-dessus du plancher
+     5  Des séries / films / animés      idem
+     6  Vu par tes proches               ≥ 1 proche
+     7  Les incontournables des années X toujours
+     8  Sur Netflix et Max               ≥ 1 plateforme déclarée
+     9  Sorties récentes                 toujours
+    10  Bientôt                          si non vide
+
+   Ces conditions ne sont pas relues ici : elles ont déjà décidé, au calcul, si
+   la case était remplie ou laissée à `null`. UNE CASE VIDE NE PRODUIT AUCUNE
+   RANGÉE — c'est la règle « pas de plafond fixe » du §3.4 : c'est la condition
+   qui règle la longueur de l'écran, pas un quota.
+
+   Le titre de la proposition du jour est retiré de sa rangée d'origine : le
+   voir en grand puis le revoir six vignettes plus bas donnerait l'impression
+   que l'app se répète. */
 function rangeesSuggerees(){
   suggCourantes();
   const out = [];
-  (suggestions.sections || []).forEach(s=>{ if(s.l.length) out.push({ cle:s.cle, titre:s.titre, l:s.l }); });
-  (suggestions.acteurs || []).forEach(p=>{ if(p.l.length) out.push({ cle:'acteur:'+p.id, titre:'Avec '+p.titre, l:p.l }); });
-  if(suggestions.esprit && suggestions.esprit.l.length)
-    out.push({ cle:'esprit', titre:'Dans l\'esprit de '+suggestions.esprit.titre, l:suggestions.esprit.l });
-  if((suggestions.nouveautes || []).length)
-    out.push({ cle:'nouv', titre:'Sorties récentes', l:suggestions.nouveautes });
+  const jour = propositionDuJour();
+  /* DEUX RETRAITS À CHAQUE RENDU, et ils se font ici plutôt qu'au calcul :
+     ils doivent se voir TOUT DE SUITE (§3.9), et refaire une vingtaine de
+     requêtes à chaque « Pas pour moi » serait le prix d'un simple geste.
+
+       · le titre montré en grand, qui n'a pas à revenir six vignettes plus
+         bas — l'app aurait l'air de se répéter ;
+       · ce qui a été écarté, dans TOUTES les rangées et pas seulement dans
+         celle où le refus a eu lieu. `tamiser` s'en chargera au prochain
+         calcul ; d'ici là, les listes en mémoire le contiennent encore. */
+  const propre = l => l.filter(x=>{
+    if(jour && x.media === jour.media && String(x.id) === String(jour.id)) return false;
+    if(typeof estRefuseSugg === 'function' && estRefuseSugg(x.media, x.id)) return false;
+    return true;
+  });
+  const poser = (cle, titre, l)=>{
+    const liste = (typeof classerParMalus === 'function') ? classerParMalus(propre(l)) : propre(l);
+    if(liste.length) out.push({ cle:cle, titre:titre, l:liste });
+  };
+
+  const s = suggestions;
+  if(s.esprit && s.esprit.l.length)  poser('esprit',  'Dans l\'esprit de '+s.esprit.titre, s.esprit.l);
+  if(s.favoris && s.favoris.l.length) poser('favoris','Ce que tes favoris ont en commun', s.favoris.l);
+  if(s.acteur && s.acteur.l.length)  poser('acteur:'+s.acteur.id, 'Avec '+s.acteur.titre, s.acteur.l);
+  if(s.genre && s.genre.l.length)    poser('genre',   s.genre.titre, s.genre.l);
+  (s.sections || []).forEach(x=>{ if(x.l.length) poser(x.cle, x.titre, x.l); });
+  if(s.cercle && s.cercle.l.length)  poser('cercle',  'Vu par tes proches', s.cercle.l);
+  if(s.incont && s.incont.l.length)  poser('incont',  s.incont.titre, s.incont.l);
+  if(s.plates && s.plates.l.length)  poser('plates',  s.plates.titre, s.plates.l);
+  if((s.nouveautes || []).length)    poser('nouv',    'Sorties récentes', s.nouveautes);
   /* « Bientôt » vient après « Sorties récentes » : on lit le présent avant
      l'avenir, et une rangée vide (peu d'animés annoncés, par exemple) ne
      s'affiche tout simplement pas. */
-  if((suggestions.avenir || []).length)
-    out.push({ cle:'avenir', titre:'Bientôt', l:suggestions.avenir });
+  if((s.avenir || []).length)        poser('avenir',  'Bientôt', s.avenir);
   return out;
+}
+
+/* La proposition du jour effectivement à l'écran : le premier candidat de la
+   réserve qui n'a pas été écarté. « Pas pour moi » consomme le suivant, et
+   l'effet est visible tout de suite (§3.8). */
+function propositionDuJour(){
+  suggCourantes();
+  const l = suggestions.propositions || [];
+  for(let i = 0; i < l.length; i++){
+    const x = l[i];
+    if(typeof estRefuseSugg === 'function' && estRefuseSugg(x.media, x.id)) continue;
+    if(dejaChezMoi(x.media, x.id)) continue;
+    return x;
+  }
+  return null;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1087,6 +1635,61 @@ async function chargerPageRangee(cle, page, vus){
     const d = await tmdb('/'+e.media+'/'+e.id+'/recommendations', { page:String(page) });
     const l = ((d&&d.results)||[]).map(x=>normaliser(x, e.media));
     return { titres: tamiser(l, vus, cadre, true), pages:(d&&d.total_pages)||1 };
+  }
+
+  /* LOT D — TROIS RANGÉES QUI NE VONT RIEN RECHERCHER, et il faut dire
+     pourquoi plutôt que de laisser croire à un oubli :
+
+       · « Ce que tes favoris ont en commun » est un CROISEMENT. Sa page 2
+         n'existe pas : il faudrait redemander les trois filmographies pour
+         recroiser, et le croisement d'une page 2 avec une page 2 ne donne
+         presque jamais rien. On sert le croisement déjà calculé.
+       · « Vu par tes proches » est bâti sur des bibliothèques finies, déjà
+         lues en entier. Il n'y a pas de suite à aller chercher.
+       · « Bientôt » a été bâti d'un bloc et rangé par date : redemander une
+         page ramènerait des titres moins attendus dont les dates repartiraient
+         en arrière, et la chronologie sauterait au milieu de la grille. */
+  if(cle === 'favoris' || cle === 'cercle'){
+    if(page > 1) return { titres:[], pages:1 };
+    const bloc = suggCourantes()[cle === 'favoris' ? 'favoris' : 'cercle'];
+    const tout = (bloc && bloc.l) || [];
+    return { titres: tout.filter(x => !vus[x.media+':'+x.id]), pages:1 };
+  }
+
+  /* Le genre du jour, les incontournables et les plateformes : exactement la
+     requête qui a bâti la rangée, page suivante. Les médias du cadre sont
+     enchaînés et entrelacés, comme pour les nouveautés — sinon on lirait vingt
+     séries avant le premier film. */
+  if(cle === 'genre' || cle === 'incont' || cle === 'plates'){
+    const c = suggCourantes();
+    const paquets = [], totaux = [];
+    for(const m of cadre.medias){
+      let p = null;
+      if(cle === 'genre'){
+        const gid = c.genre ? genreParNom(m, c.genre.nom) : null;
+        if(gid == null) continue;
+        p = Object.assign({ include_adult:'false' }, triSuggestions());
+        if(cadre.origine === 'anime'){
+          p.with_original_language = 'ja';
+          const a = genreParNom(m, 'Animation');
+          p.with_genres = (a != null && a !== gid) ? [a, gid].join(',') : String(gid);
+        } else p.with_genres = String(gid);
+        Object.assign(p, filtreMesPlates());
+      } else if(cle === 'incont'){
+        const dec = DECENNIES_INCONT.find(x => x.cle === (c.incont && c.incont.cle)) || decennieVitrine();
+        p = requeteIncont(m, dec).p;
+      } else {
+        const r = requetePlatesRangee(m);
+        if(!r) continue;
+        p = r.p;
+      }
+      p.page = String(page);
+      const d = await sourceDouce(tmdb('/discover/'+m, p));
+      totaux.push((d&&d.total_pages)||1);
+      paquets.push(tamiser(((d&&d.results)||[]).map(x=>normaliser(x, m)), vus, cadre, false));
+    }
+    if(!paquets.length) return { titres:[], pages:1 };
+    return { titres: entrelacerSugg(paquets), pages: Math.max.apply(null, totaux) };
   }
 
   /* « Bientôt » ne va rien rechercher : le vivier a été bâti d'un bloc et
@@ -1175,8 +1778,19 @@ function explicationProfil(court){
      famille appartient à l'écran où on le corrige, pas à celui où on regarde
      des affiches. */
   if(court){
+    /* POINT 8 DES RETOURS v85 — « action, action & adventure, comédie » : le
+       même genre écrit deux fois, une fois en libellé film et une fois en
+       libellé série. Le dédoublonnage se fait ICI, dans la fonction qui produit
+       la liste, et pas dans chaque endroit qui l'affiche : le défaut venait de
+       la FUSION des familles, c'est donc la fusion qu'il faut corriger.
+       `genreCanon` ramène les trois libellés de séries qui ont un équivalent
+       film sur ce dernier — c'est la même table que `GENRE_SERIE`, lue à
+       l'envers. */
     const fondus = [];
-    parFamille.forEach(f=>f.genres.forEach(n=>{ if(fondus.indexOf(n) < 0) fondus.push(n); }));
+    parFamille.forEach(f=>f.genres.forEach(n=>{
+      const c = (typeof genreCanon === 'function') ? genreCanon(n) : n;
+      if(fondus.indexOf(c) < 0) fondus.push(c);
+    }));
     return { volume: volume, genres: fondus.slice(0, 3),
              aDire: fondus.length > 0 || volume.series > 0 || volume.films > 0 };
   }

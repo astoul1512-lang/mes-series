@@ -1500,3 +1500,69 @@
      qui ressemble à un état. Aucune coche — la coche est le signe d'un état,
      pas d'un geste. */
   .jvu{white-space:nowrap}
+
+  /* ===================== LOT D — Découvrir =====================
+
+     Toutes les classes de cette section sont préfixées `d4`, du nom du
+     fichier qu'elles habillent (`app-04-decouvrir.js`). Ce n'est pas une
+     coquetterie : les points 1 et 2 des retours de la v85 sont exactement
+     l'accident que ce préfixe empêche — une classe redéclarée nue par un lot
+     alors qu'un autre écran l'employait déjà, et un écran qu'on ne regardait
+     pas se dessine de travers. Le contrôle de `tests/lance-tests.js` le
+     vérifie désormais ; le préfixe fait qu'il n'a rien à dire.
+
+     Ce qui n'est PAS ici, et volontairement : le carrousel (`.carr`,
+     `.diapo`, `.dh*`) et le pavé de profil (`.profcourt`) ne sont plus
+     produits par aucun code, mais leurs règles restent dans le socle. Les
+     retirer était hors du périmètre du lot — « ta section en fin de fichier,
+     jamais au milieu ». À nettoyer par qui rouvrira le socle.
+     ===================================================================== */
+
+  /* ---- Le lien qui remplace les deux pavés de texte (point 8) ----
+     Discret, sur une ligne, sans chiffre ni explication. Il ne doit surtout
+     pas retrouver la hauteur de ce qu'il remplace : c'est précisément les
+     cent pixels rendus à la proposition du jour qui ont emporté la décision. */
+  .d4lien{padding:4px 16px 10px}
+  .d4lien button{color:var(--accent);font-weight:650;font-size:13px}
+
+  /* ---- La proposition du jour ----
+     Un seul titre, plein cadre. L'image est un bouton à elle seule : c'est le
+     geste qu'on tente d'abord sur une grande affiche, et il doit ouvrir la
+     fiche plutôt que de ne rien faire. */
+  .d4jour{position:relative;margin:0 0 6px}
+  .d4voir{display:block;width:100%;position:relative}
+  .d4voir:after{content:'';position:absolute;inset:0;
+    background:linear-gradient(to top,var(--bg) 4%,rgba(7,7,10,.55) 42%,transparent 78%)}
+  .d4img{width:100%;height:300px;object-fit:cover;background:var(--surface2);display:block}
+  /* Le texte remonte sur l'image : sans ce chevauchement, l'affiche perd un
+     tiers de sa hauteur pour ne montrer qu'un dégradé vide. */
+  .d4bas{position:relative;z-index:1;margin-top:-92px;padding:0 16px}
+  .d4tag{font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--accent)}
+  .d4nom{font-size:27px;font-weight:850;letter-spacing:-.02em;margin:3px 0 0;
+    text-shadow:0 2px 18px rgba(0,0,0,.7);line-height:1.12}
+  .d4meta{color:#cfd4dc;font-size:13px;margin-top:4px}
+  /* LA RAISON, et elle n'est jamais facultative : aucun titre n'apparaît sans
+     raison lisible. Le cœur la rattache d'un coup d'œil au moteur de goût,
+     sans qu'un mot de vocabulaire de moteur soit écrit (§3.2). */
+  .d4pq{display:flex;align-items:center;gap:7px;margin-top:9px;
+    font-size:13px;font-weight:650;color:#ff6b8a}
+  .d4pq svg{width:14px;height:14px;flex:0 0 auto}
+  .d4pq span{min-width:0}
+  .d4act{display:flex;gap:9px;margin-top:13px}
+  .d4act .btn{flex:1;padding:12px;font-size:14px}
+  .d4act .btn.ghost{flex:0 0 auto;color:var(--muted)}
+
+  /* ---- L'appel au duel, quand le profil est trop pauvre (§1.5) ----
+     Bordée d'accent plutôt que grise : elle propose quelque chose, elle ne
+     signale pas un problème. */
+  .d4appel{margin:16px 16px 4px;padding:16px;border-radius:var(--radius);
+    border:1px solid #3d8bff44;background:linear-gradient(150deg,#16233a,#131722)}
+  .d4appel b{display:block;font-size:15.5px;font-weight:750;margin-bottom:5px}
+  .d4appel p{margin:0 0 11px;font-size:13px;color:var(--muted);line-height:1.45}
+  .d4appel .btn{width:100%}
+
+  @media (max-width:359px){
+    .d4img{height:250px}
+    .d4nom{font-size:23px}
+  }

@@ -2913,6 +2913,321 @@ window.MODE_TEST = true;
     vrai(!FERMETURES['detail-rech'], 'la fermeture de l\'aperçu traîne encore');
   });
 
+  /* ==================== LOT D — Découvrir ====================
+     Les rangées, la proposition du jour, « Pas pour moi ». Aucune requête :
+     on remplit le cache de suggestions à la main et on éprouve ce qui en
+     sort. C'est là que tout se joue — l'ordre du §3.4, les conditions
+     d'affichage, et le fait qu'un refus n'est pas un 👎.
+     ============================================================== */
+  groupe('LOT D — l\'ordre des rangées et leurs conditions');
+
+  /* Une vitrine vide, prête à être remplie à la main. `oublierSuggestions`
+     efface les caches des quatre puces : sans ça, un test hériterait des
+     rangées du précédent. */
+  function vitrineVierge(type){
+    baseVierge();
+    ui.disc.type = type || 'tout';
+    ui.disc.tri = 'populaire';
+    oublierSuggestions();
+    const c = suggCourantes();
+    c.etat = 'ok'; c.quand = Date.now();
+    return c;
+  }
+  /* Un titre normalisé, tel que le moteur le range dans une rangée. */
+  const d_ = (id, media, genres, extra) => Object.assign({
+    id:id, media:media || 'movie', nom:'T'+id, affiche:'/p'+id+'.jpg', bandeau:null,
+    date:'2015-01-01', note:7.5, votes:900, genre_ids:genres || [], langue:'en' }, extra || {});
+
+  function vitrinePleine(){
+    const c = vitrineVierge('tout');
+    c.esprit   = { titre:'Whiplash', id:1, media:'movie', signal:'aime', famille:'film', l:[d_(11)] };
+    c.favoris  = { l:[d_(12)] };
+    c.acteur   = { id:99, titre:'Cillian Murphy', l:[d_(13)] };
+    c.genre    = { nom:'Drame', titre:'Des drames pour toi', l:[d_(14)] };
+    c.sections = [{ cle:'serie', titre:'Des séries pour toi', l:[d_(15,'tv')] }];
+    c.cercle   = { l:[d_(16)] };
+    c.incont   = { cle:'1990', titre:'Les incontournables des années 90', l:[d_(17)] };
+    c.plates   = { titre:'Sur Netflix et Max', l:[d_(18)] };
+    c.nouveautes = [d_(19)];
+    c.avenir   = [d_(20)];
+    return c;
+  }
+
+  test('les dix rangées sortent dans l\'ordre fixe du §3.4', ()=>{
+    vitrinePleine();
+    egal(rangeesSuggerees().map(r=>r.cle),
+      ['esprit','favoris','acteur:99','genre','serie','cercle','incont','plates','nouv','avenir'],
+      'l\'ordre va du plus personnel au plus générique, il ne se négocie pas');
+  });
+
+  test('chaque rangée dit d\'où elle vient dans son titre', ()=>{
+    vitrinePleine();
+    egal(rangeesSuggerees().map(r=>r.titre), [
+      'Dans l\'esprit de Whiplash', 'Ce que tes favoris ont en commun',
+      'Avec Cillian Murphy', 'Des drames pour toi', 'Des séries pour toi',
+      'Vu par tes proches', 'Les incontournables des années 90',
+      'Sur Netflix et Max', 'Sorties récentes', 'Bientôt']);
+  });
+
+  test('une rangée qui n\'a rien à dire ne s\'affiche pas', ()=>{
+    const c = vitrineVierge('tout');
+    c.esprit = { titre:'X', id:1, media:'movie', l:[] };     // calculée mais vide
+    c.cercle = { l:[] };                                     // aucun proche n\'a rien de neuf
+    c.nouveautes = [d_(3)];
+    egal(rangeesSuggerees().map(r=>r.cle), ['nouv'],
+         'une case vide produit une rangée : c\'est le plafond qui revient par la fenêtre');
+  });
+
+  test('un profil qui démarre voit quatre rangées, pas dix', ()=>{
+    const c = vitrineVierge('tout');
+    /* Aucun 👍 : pas de cœur, pas de croisement, pas d\'acteur, pas de genre
+       mesurable. Il reste ce qui ne dépend de personne. */
+    c.sections   = [{ cle:'film', titre:'Des films pour toi', l:[d_(1)] }];
+    c.incont     = { cle:'1990', titre:'Les incontournables des années 90', l:[d_(2)] };
+    c.nouveautes = [d_(3)];
+    c.avenir     = [d_(4)];
+    egal(rangeesSuggerees().length, 4);
+  });
+
+  test('la proposition du jour ne se répète pas dans sa propre rangée', ()=>{
+    const c = vitrinePleine();
+    c.esprit.l = [d_(11), d_(21)];
+    c.propositions = [Object.assign({ pourquoi:'Parce que tu as aimé Whiplash' }, d_(11))];
+    const r = rangeesSuggerees().find(x=>x.cle === 'esprit');
+    egal(r.l.map(x=>x.id), [21],
+         'le titre montré en grand revient six vignettes plus bas');
+  });
+
+  groupe('LOT D — §3.3 : la proposition du jour');
+
+  test('la formulation ne surjoue jamais le signal disponible', ()=>{
+    egal(raisonDuJour(null), 'Un incontournable que tu n\'as pas encore vu');
+    egal(raisonDuJour({ signal:'aime', nom:'Whiplash', famille:'film' }),
+         'Parce que tu as aimé Whiplash');
+    egal(raisonDuJour({ signal:'podium', nom:'Whiplash', famille:'film' }),
+         'Ton film préféré : Whiplash');
+    egal(raisonDuJour({ signal:'podium', nom:'Severance', famille:'serie' }),
+         'Ta série préférée : Severance');
+    vrai(!/ador/i.test(raisonDuJour({ signal:'aime', nom:'X', famille:'film' })),
+         'jamais « adoré » sur un simple 👍 — c\'est le travers du §1.1');
+  });
+
+  test('le point de départ des rangées de cœur est un titre AIMÉ, pas regardé', ()=>{
+    baseVierge();
+    db.movies[7] = film(7, ['Drame']);          // vu, sans avis
+    egal(graineEsprit(cadreSugg('movie')), null,
+         '« vu » suffisait à devenir un modèle à copier : c\'est l\'équation fausse du §1.1');
+    poserAvis('movie', 7, 1);
+    const g = graineEsprit(cadreSugg('movie'));
+    egal([g.id, g.signal], ['7','aime']);
+    db.podium.film = ['7'];
+    egal(graineEsprit(cadreSugg('movie')).signal, 'podium',
+         'un duel joué autorise « ton film préféré », un 👍 seul ne l\'autorise pas');
+  });
+
+  test('les graines de la grille d\'amorçage comptent comme des 👍', ()=>{
+    baseVierge();
+    db.gouts.graines = [{ media:'movie', id:42, nom:'Le Sixième Sens', famille:'film' }];
+    egal(titresAimesSugg(cadreSugg('movie')).map(t=>t.id), ['42'],
+         'la grille demande « lesquels tu as AIMÉS » : les écarter fermerait les rangées de cœur');
+  });
+
+  test('la proposition du jour saute ce qui est écarté et ce qu\'on a déjà', ()=>{
+    const c = vitrineVierge('tout');
+    c.propositions = [d_(11), d_(12), d_(13)];
+    db.movies[11] = film(11, ['Drame']);            // entré dans la bibliothèque entre-temps
+    refuserSugg(d_(12));
+    egal(propositionDuJour().id, 13);
+  });
+
+  groupe('LOT D — §3.8 : « Pas pour moi » n\'est pas un 👎');
+
+  test('un refus n\'écrit rien dans db.avis', ()=>{
+    const c = vitrineVierge('tout');
+    c.propositions = [Object.assign({ pourquoi:'p' }, d_(11,'movie',[18]))];
+    pasPourMoiProposition();
+    egal(avisDe('movie', 11), 0, 'un refus de politesse est devenu un rejet ferme');
+    egal(Object.keys(db.avis.movie).length, 0);
+    vrai(estRefuseSugg('movie', 11), 'le titre écarté doit ne plus revenir');
+  });
+
+  test('la carte est remplacée immédiatement par le candidat suivant', ()=>{
+    const c = vitrineVierge('tout');
+    c.propositions = [d_(11), d_(12)];
+    egal(propositionDuJour().id, 11);
+    pasPourMoiProposition();
+    egal(propositionDuJour().id, 12,
+         'un geste qui ne change rien à l\'écran est un geste qu\'on ne refait pas');
+  });
+
+  test('un titre écarté sort de TOUTES les rangées, pas seulement de la sienne', ()=>{
+    vitrineVierge('tout');
+    refuserSugg(d_(5,'movie',[18]));
+    const l = tamiser([d_(5), d_(6)], {}, cadreSugg('movie'), false);
+    egal(l.map(x=>x.id), [6], 'le tamis du prochain calcul laisse repasser un titre refusé');
+  });
+
+  test('un titre écarté disparaît des rangées DÉJÀ calculées, sans attendre', ()=>{
+    /* Les listes en mémoire ont été bâties avant le refus : si le retrait
+       n'était fait qu'au calcul suivant, le titre qu'on vient d'écarter en
+       grand réapparaîtrait aussitôt dans la rangée d'où il vient. */
+    const c = vitrineVierge('tout');
+    c.esprit = { titre:'X', id:1, media:'movie', l:[d_(5), d_(6)] };
+    refuserSugg(d_(5,'movie',[18]));
+    egal(rangeesSuggerees()[0].l.map(x=>x.id), [6]);
+  });
+
+  test('le malus de genre décale, il ne retire jamais rien', ()=>{
+    vitrineVierge('tout');
+    genresTMDB.movie = [{ id:18, nom:'Drame' }, { id:35, nom:'Comédie' }];
+    genresTMDB.tv    = [{ id:18, nom:'Drame' }];
+    [101,102,103].forEach(id => refuserSugg(d_(id,'movie',[18])));
+    const dedans = [d_(1,'movie',[18]), d_(2,'movie',[35])];
+    const dehors = classerParMalus(dedans);
+    egal(dehors.length, 2, 'un malus léger a fait disparaître un titre');
+    egal(dehors.map(x=>x.id).sort(), [1,2]);
+    egal(dehors[0].id, 2, 'trois refus de drame et le drame reste en tête');
+  });
+
+  test('sans aucun refus, l\'ordre du moteur est conservé au titre près', ()=>{
+    vitrineVierge('tout');
+    const l = [d_(1), d_(2), d_(3)];
+    egal(classerParMalus(l).map(x=>x.id), [1,2,3]);
+  });
+
+  groupe('LOT D — les genres, le cercle, les époques');
+
+  test('les deux libellés du même genre se ramènent à un seul', ()=>{
+    egal(genreCanon('Action & Adventure'), 'Action');
+    egal(genreCanon('Sci-Fi & Fantasy'), 'Science-Fiction');
+    egal(genreCanon('War & Politics'), 'Guerre');
+    egal(genreCanon('Comédie'), 'Comédie', 'la canonisation normalise, elle ne filtre pas');
+  });
+
+  test('« Genres retenus » n\'écrit plus deux fois le même genre', ()=>{
+    baseVierge();
+    db.movies[1] = film(1, ['Action']);
+    db.movies[2] = film(2, ['Action']);
+    db.shows[3]  = serie(3, [ep(1,HIER)], {'1x1':1}, { genres:['Action & Adventure'] });
+    ui.disc.type = 'tout';
+    const g = explicationProfil(true).genres;
+    egal(g.filter(x => genreCanon(x) === 'Action').length, 1,
+         '« action, action & adventure » : le même genre compté deux fois');
+  });
+
+  test('le titre de la rangée de genre se suffit à lui-même', ()=>{
+    egal(titreRangeeGenre('Drame'), 'Des drames pour toi');
+    egal(titreRangeeGenre('Science-Fiction'), 'De la science-fiction pour toi');
+    egal(titreRangeeGenre('Action & Adventure'), 'De l\'action pour toi');
+    vrai(/Zarbi/.test(titreRangeeGenre('Zarbi')),
+         'un genre inconnu doit rester nommé, pas disparaître');
+  });
+
+  test('les incontournables sont bornés par époque, et l\'époque est dans le titre', ()=>{
+    vrai(DECENNIES_INCONT.every(d => /années/.test(d.titre)), 'l\'époque doit passer dans le titre');
+    const d = decennieVitrine();
+    vrai(DECENNIES_INCONT.indexOf(d) >= 0);
+    const r = requeteIncont('movie', d);
+    vrai(!r.p.with_genres, 'bornée par époque, PAS par genre — c\'est l\'antidote à la bulle');
+    egal(r.p['primary_release_date.gte'], d.de);
+  });
+
+  test('un genre écarté ne ressort jamais, incontournables compris', ()=>{
+    baseVierge();
+    genresTMDB.movie = [{ id:27, nom:'Horreur' }, { id:18, nom:'Drame' }];
+    genresTMDB.tv    = [];
+    db.gouts.exclus  = ['Horreur'];
+    const l = tamiser([d_(1,'movie',[27]), d_(2,'movie',[18])], {}, cadreSugg('movie'), false);
+    egal(l.map(x=>x.id), [2], 'une consigne donnée par la personne a sauté');
+  });
+
+  test('la rangée des plateformes nomme les plateformes tant qu\'elles tiennent', ()=>{
+    baseVierge();
+    db.gouts.plates = [{ id:8, nom:'Netflix' }];
+    egal(titreRangeePlates(), 'Sur Netflix');
+    db.gouts.plates.push({ id:1899, nom:'Max' });
+    egal(titreRangeePlates(), 'Sur Netflix et Max');
+    db.gouts.plates.push({ id:337, nom:'Disney+' });
+    egal(titreRangeePlates(), 'Sur tes plateformes');
+  });
+
+  test('le cercle classe par corroboration, puis par goût, puis par récence', ()=>{
+    baseVierge();
+    genresTMDB.movie = [{ id:18, nom:'Drame' }];
+    genresTMDB.tv    = [];
+    const aff = { poster:'/x.jpg', date:'2015-01-01', genres:['Drame'] };
+    biblios.a = { movies:{ 1:Object.assign({ id:1, title:'Un', watchedAt:10 }, aff),
+                           2:Object.assign({ id:2, title:'Deux', watchedAt:99 }, aff) } };
+    biblios.b = { movies:{ 1:Object.assign({ id:1, title:'Un', watchedAt:5 }, aff) } };
+    const l = cercleDepuisBiblios([{ id:'a' },{ id:'b' }], cadreSugg('movie'));
+    egal(l.map(x=>x.id), [1,2],
+         'le titre présent chez deux proches doit passer devant : c\'est la corroboration');
+  });
+
+  test('un identifiant venu d\'un proche qui n\'est pas un nombre n\'entre pas', ()=>{
+    baseVierge();
+    genresTMDB.movie = []; genresTMDB.tv = [];
+    biblios.a = { movies:{ x:{ id:'1);alert(1)//', title:'Piège', poster:'/x.jpg', genres:[] } } };
+    egal(cercleDepuisBiblios([{ id:'a' }], cadreSugg('movie')).length, 0,
+         'frontière de confiance : cet identifiant part dans un onclick et dans un chemin d\'API');
+  });
+
+  test('les genres d\'un proche sont retraduits, sinon l\'exclusion saute', ()=>{
+    baseVierge();
+    genresTMDB.movie = [{ id:27, nom:'Horreur' }];
+    genresTMDB.tv    = [];
+    biblios.a = { movies:{ 1:{ id:1, title:'Peur', poster:'/x.jpg', genres:['Horreur'],
+                               date:'2015-01-01' } } };
+    const l = cercleDepuisBiblios([{ id:'a' }], cadreSugg('movie'));
+    egal(l[0].genre_ids, [27]);
+    db.gouts.exclus = ['Horreur'];
+    egal(tamiser(l, {}, cadreSugg('movie'), true).length, 0);
+  });
+
+  groupe('LOT D — point 8 : les deux pavés de texte ont disparu');
+
+  test('l\'écran ne porte plus qu\'un lien, sans chiffre ni explication', ()=>{
+    baseVierge();
+    db.movies[1] = film(1, ['Drame']);
+    poserAvis('movie', 1, 1);
+    const c = vitrineVierge('tout');
+    db.movies[1] = film(1, ['Drame']);
+    c.nouveautes = [d_(9)];
+    const html = vitrineBody();
+    vrai(/Ajuster mes goûts/.test(html), 'le lien qui remplace les deux pavés a disparu aussi');
+    vrai(!/TMDB/.test(html), 'l\'aveu technique sur les plateformes est encore à l\'écran');
+    vrai(!/Je pars de tes/.test(html), 'le rapport de diagnostic est encore à l\'écran');
+    vrai(!/Genres retenus/.test(html));
+    vrai(typeof window.blocProfilCourt === 'undefined', 'le bloc de profil traîne encore');
+  });
+
+  test('le réglage « seulement mes plateformes » n\'est pas resté orphelin', ()=>{
+    baseVierge();
+    egal(barreSuggPlates(), '', 'rien de déclaré : il n\'y a pas de question à poser');
+    db.gouts.plates = [{ id:8, nom:'Netflix' }];
+    vrai(/setSuggPlates/.test(barreSuggPlates()),
+         'le choix a disparu de Découvrir sans réapparaître dans « Mes plateformes »');
+    /* Les listes TMDB sont posées à la main : sans elles, `viewPlates` part
+       les chercher sur le réseau, ce que cette page n'a pas le droit de faire. */
+    platesTMDB.tv = [{ id:8, nom:'Netflix', logo:null, rang:1 }];
+    platesTMDB.movie = platesTMDB.tv.slice();
+    const p = view, q = params;
+    view = 'plates'; params = { from:'settings' };
+    let ecran = '';
+    try{ ecran = viewPlates(); } finally { view = p; params = q; }
+    platesTMDB.tv = null; platesTMDB.movie = null;
+    vrai(/setSuggPlates/.test(ecran), 'l\'écran des plateformes ne porte pas le réglage');
+  });
+
+  test('la carte d\'appel au duel ne s\'affiche que si l\'app propose mal', ()=>{
+    baseVierge();
+    egal(carteProfilPauvre(), '', 'bibliothèque vide : c\'est la grille d\'amorçage qui parle');
+    db.movies[1] = film(1, ['Drame']);
+    vrai(/Je te propose mal/.test(carteProfilPauvre()));
+    poserAvis('movie', 1, 1);
+    egal(carteProfilPauvre(), '', 'un 👍 et elle doit s\'effacer d\'elle-même');
+  });
+
   /* ==================== Bilan ==================== */
   const b = document.getElementById('bilan');
   b.className = 'bilan ' + (ko ? 'rouge' : 'vert');
