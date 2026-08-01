@@ -2205,9 +2205,12 @@ window.MODE_TEST = true;
     const vraieZone = window.zoneBande;
     window.zoneBande = function(){ return ''; };
     try{ boite.innerHTML = corpsJeuRech(); } finally { window.zoneBande = vraieZone; }
-    /* « Déjà vu » quitte le jeu : le laisser cliquable pendant un
-       téléchargement, c'est rouvrir le chemin de la perte d'épisodes. */
-    vrai(boite.querySelector('.jdeja[disabled]'), '« Déjà vu » reste cliquable pendant l\'ajout');
+    /* « Je l'ai déjà vu » quitte le jeu : le laisser cliquable pendant un
+       téléchargement, c'est rouvrir le chemin de la perte d'épisodes.
+       LOT R2, point 7 : l'action a quitté le coin haut-droit pour la ligne
+       d'actions sous le résumé — c'est `.jvu`, dans `.jmini`. */
+    vrai(boite.querySelector('.jvu[disabled]'),
+         '« Je l\'ai déjà vu » reste cliquable pendant l\'ajout');
     egal(boite.querySelectorAll('.jgestes .jg[disabled]').length, 3,
          'les trois gestes du bas ne sont pas tous grisés');
     vrai(boite.textContent.indexOf('Saisons 1/3') >= 0, 'l\'attente n\'est pas dite à l\'écran');
@@ -2240,6 +2243,353 @@ window.MODE_TEST = true;
       if(faux.parentNode) faux.parentNode.removeChild(faux);
       params = sauve;
     }
+  });
+
+  /* ==================== Recherche — LOT R2 ====================
+     Un cas par décision, et surtout un cas par CUL-DE-SAC : ce lot corrige des
+     défauts qui ne se voyaient pas à la lecture du code, seulement à l'usage.
+     Ce sont exactement ceux qui reviennent si personne ne les garde. */
+  groupe('LOT R2 — point 19 : « + préciser » ouvre ce qui reste');
+
+  test('« Peu importe » laisse le critère atteignable', ()=>{
+    const r = rechVierge('film');
+    r.amb = null;
+    const tous = critLibresRech().map(m=>m.cle);
+    ['origine','epoque','duree','note','pasvu','plate'].forEach(c=>
+      vrai(tous.indexOf(c) >= 0, 'le critère « '+c+' » n\'est pas proposé'));
+    /* « Peu importe » remet le mot à `null` : le critère est donc LIBRE, et il
+       doit reparaître. C'est exactement la demande d'Adrien — pouvoir revenir
+       sur un critère auquel on avait répondu « ça m'est égal ». */
+    r.origine = null;
+    vrai(critLibresRech().some(m=>m.cle==='origine'),
+         'un critère répondu « peu importe » ne revient pas : c\'est le cul-de-sac');
+    r.origine = 'fr';
+    vrai(!critLibresRech().some(m=>m.cle==='origine'),
+         'un critère déjà posé est proposé une deuxième fois');
+  });
+
+  test('les constantes de la famille ne se proposent jamais', ()=>{
+    const r = rechVierge('serie');
+    vrai(!critLibresRech().some(m=>m.cle==='duree'),
+         'la durée est proposée hors des films : elle n\'y veut rien dire');
+    r.fam = 'film';
+    vrai(critLibresRech().some(m=>m.cle==='duree'), 'la durée manque sur les films');
+    /* L'origine, elle, N'EST PLUS une constante des animés depuis le point 20 :
+       la famille s'est ouverte à trois langues, le mot a donc un vrai choix. */
+    r.fam = 'anime';
+    vrai(critLibresRech().some(m=>m.cle==='origine'), '« d\'où » manque sur les animés');
+  });
+
+  test('« + préciser » ouvre la liste, plus jamais toujours le même mot', ()=>{
+    const r = rechVierge('film');
+    r.amb = null;
+    const boite = document.createElement('div');
+    boite.innerHTML = blocPhraseRech();
+    const b = boite.querySelector('.rmot.vide');
+    vrai(b, 'l\'invitation à préciser a disparu');
+    vrai(/ouvrirAjoutRech\(\)/.test(b.getAttribute('onclick')),
+         '« + préciser » impose encore un mot au lieu d\'ouvrir un choix');
+    ouvrirAjoutRech();
+    const f = document.getElementById('sheetin');
+    egal(f.querySelectorAll('.rajl').length, critLibresRech().length,
+         'la feuille ne liste pas tous les critères libres');
+    vrai(f.textContent.indexOf('Terminé') >= 0,
+         'aucune sortie « Terminé » : on ne sait pas comment refermer');
+    closeSheet();
+  });
+
+  groupe('LOT R2 — points 16 et 20 : les quatre familles se partagent le catalogue');
+
+  test('la famille Animés demande l\'animation asiatique en UNE requête', ()=>{
+    const r = rechVierge('anime');
+    genresTMDB.tv = [{ id:16, nom:'Animation' }];
+    const p = paramsRech('tv');
+    egal(p.with_genres, '16', 'le genre Animation n\'est plus la définition du cadre');
+    egal(p.with_original_language, 'ja|zh|ko',
+         'le OU sur la langue d\'origine a été perdu : mesuré, il fonctionne');
+    genresTMDB.tv = null;
+  });
+
+  test('la famille Séries ne rend plus d\'animation asiatique', ()=>{
+    const r = rechVierge('serie');
+    genresTMDB.tv = [{ id:16, nom:'Animation' }, { id:35, nom:'Comédie' }];
+    const dora    = { id:1, __media:'tv', genre_ids:[16],    original_language:'ja', name:'Doraemon' };
+    const donghua = { id:2, __media:'tv', genre_ids:[16],    original_language:'zh', name:'Perfect World' };
+    const rick    = { id:3, __media:'tv', genre_ids:[16,35], original_language:'en', name:'Rick et Morty' };
+    const house   = { id:4, __media:'tv', genre_ids:[35],    original_language:'en', name:'House of the Dragon' };
+    const lot = [dora, donghua, rick, house];
+    /* Rick et Morty RESTE : c'est une série animée occidentale, aucune autre
+       puce ne peut l'accueillir, et la rendre introuvable serait un défaut plus
+       grave que celui qu'on corrige. */
+    egal(tamiserRech(lot).map(x=>x.id), [3,4],
+         'Doraemon est resté dans Séries, ou Rick et Morty en est sorti');
+    r.fam = 'anime';
+    egal(tamiserRech(lot).map(x=>x.id), [1,2],
+         'la puce Animés ne rend pas l\'animation asiatique, et elle seule');
+    genresTMDB.tv = null;
+  });
+
+  test('le garde-fou : sans langue ni genre, on ne filtre pas à l\'aveugle', ()=>{
+    const r = rechVierge('serie');
+    genresTMDB.tv = [{ id:16, nom:'Animation' }];
+    /* Mieux vaut un écran un peu large qu'un écran vide sans explication.
+       C'est la règle que `garderAnimesRech` tenait déjà dans l'autre sens. */
+    egal(tamiserRech([{ id:1, __media:'tv', name:'Sans info' }]).length, 1,
+         'un écran a été vidé faute d\'information, au lieu de rester large');
+    genresTMDB.tv = null;
+  });
+
+  groupe('LOT R2 — point 15 : ne plus proposer ce qui est déjà vu');
+
+  test('« Un classique que j\'ai raté » tient la promesse de son nom', ()=>{
+    const r = rechVierge('film');
+    r.amb = 'classique';
+    db.movies[808] = { id:808, title:'Shrek', genres:[], seen:true };
+    egal(tamiserRech([t_(808,'movie'), t_(999,'movie')]).map(x=>x.id), [999],
+         'l\'ambiance contredit encore son propre libellé');
+    vrai(tamisActifRech(), 'le compteur annonce toujours un chiffre qu\'il ne tient pas');
+  });
+
+  test('le mot « que je n\'ai pas vu » vaut pour n\'importe quelle recherche', ()=>{
+    const r = rechVierge('film');
+    db.movies[808] = { id:808, title:'Shrek', genres:[], seen:true };
+    /* La règle générale de l'écran ne bouge pas : on demande, on a tout, et ce
+       qu'on a est marqué. Le retrait n'a lieu que si on le demande. */
+    egal(tamiserRech([t_(808,'movie'), t_(999,'movie')]).length, 2,
+         'la règle générale de l\'écran a changé sans qu\'on le demande');
+    r.pasvu = 'non';
+    egal(tamiserRech([t_(808,'movie'), t_(999,'movie')]).map(x=>x.id), [999],
+         'le mot ne retire rien');
+    vrai(motsPhraseRech().some(m=>m.mot === "que je n'ai pas vu"),
+         'le mot ne se déplie pas dans la phrase');
+    /* Et il ne part PAS à TMDB, qui ne connaît pas ta bibliothèque. */
+    const p = paramsRech('movie');
+    vrai(!Object.keys(p).some(k=>/pasvu|vu|watched/i.test(k)),
+         'un paramètre inventé est parti à TMDB');
+  });
+
+  test('le compteur ne promet plus un chiffre qu\'il ne tient pas', ()=>{
+    const r = rechVierge('film');
+    egal(prefixeCompteurRech(), '', 'un écran sans retrait ne doit rien nuancer');
+    r.fam = 'serie';
+    egal(prefixeCompteurRech(), 'moins de ',
+         'le compteur annonce 4 986 séries alors qu\'il en retire les animés');
+    r.fam = 'film'; r.pasvu = 'non';
+    egal(prefixeCompteurRech(), 'moins de ');
+  });
+
+  groupe('LOT R2 — points 14 et 18 : « d\'où » remplace « en quelle langue »');
+
+  test('les cinq origines, et le piège du pays français', ()=>{
+    rechVierge('film');
+    egal(RECH_ORIGINES.map(o=>o.id), ['fr','us','eu','ja','monde']);
+    const fr = RECH_ORIGINES.find(o=>o.id==='fr');
+    egal(fr.p.with_original_language, 'fr', 'le français doit passer par la langue d\'origine');
+    /* LE PIÈGE : `with_origin_country=FR` rend 517 films… dont Terminator 2.
+       TMDB compte tous les pays de production, une participation financière
+       suffit. Ce cas garde la porte fermée. */
+    vrai(!fr.p.with_origin_country, 'le piège de Terminator 2 est revenu sur « français »');
+    const ja = RECH_ORIGINES.find(o=>o.id==='ja');
+    vrai(!ja.p.with_origin_country, 'le japonais doit passer par la langue, comme le français');
+    /* Dans l'autre sens, la langue seule ne suffit pas : `en` ramènerait le
+       Royaume-Uni et l'Australie. Là, le pays est nécessaire. */
+    const us = RECH_ORIGINES.find(o=>o.id==='us');
+    egal(us.p.with_origin_country, 'US');
+    egal(us.p.with_original_language, 'en');
+    vrai(RECH_ORIGINES.find(o=>o.id==='eu').p.with_origin_country.indexOf('GB') >= 0,
+         'l\'Europe doit se dire en pays');
+    /* La règle des 50–500 ne s'applique PAS ici : une origine est un
+       ingrédient, pas une recette. On exige seulement qu'elle ait été mesurée. */
+    vrai(RECH_ORIGINES.every(o=>o.mesure > 0), 'une origine part sans avoir été mesurée');
+  });
+
+  test('« d\'où » a sa propre liste sur les animés', ()=>{
+    const r = rechVierge('anime');
+    egal(originesRech().map(o=>o.id), ['ja','zh','ko'],
+         'les neuf langues absurdes sont revenues, ou la liste juste a disparu');
+    genresTMDB.tv = [{ id:16, nom:'Animation' }];
+    r.origine = 'zh';
+    egal(paramsRech('tv').with_original_language, 'zh',
+         'demander « chinois » ne change rien à la requête envoyée');
+    genresTMDB.tv = null;
+    r.fam = 'film';
+    egal(originesRech().length, 5, 'la liste générale a perdu des origines');
+  });
+
+  test('changer de famille ne laisse pas traîner une origine impossible', ()=>{
+    const r = rechVierge('anime');
+    r.origine = 'zh';
+    /* `setFamRech` relance l'écran ; on rejoue seulement sa décision. */
+    r.fam = 'film';
+    if(r.origine && !origineRech(r.origine)) r.origine = null;
+    egal(r.origine, null, 'une origine d\'animé a survécu au passage aux films');
+  });
+
+  groupe('LOT R2 — point 17 : les huit ambiances de séries');
+
+  test('les huit recettes tiennent les trois règles du §4.6', ()=>{
+    egal(RECH_AMBIANCES_TV.length, 8);
+    RECH_AMBIANCES_TV.forEach(a=>{
+      const clés = {};
+      (a.ing||[]).forEach(i => Object.keys(i.p).forEach(k => { clés[k] = 1; }));
+      Object.keys(a.fond||{}).forEach(k => { clés[k] = 1; });
+      vrai(Object.keys(clés).length >= 3, a.id+' : moins de trois ingrédients');
+      vrai(a.mesure >= 50 && a.mesure <= 500,
+           a.id+' : mesuré hors de la fourchette 50–500 ('+a.mesure+')');
+      /* Le `without_genres=16` a été RETIRÉ — décision du point 16. La famille
+         s'occupe de l'exclusion, et plus finement. Le garder ferait disparaître
+         Rick et Morty des ambiances alors qu'il reste dans la grille : les deux
+         écrans se contrediraient. */
+      (a.ing||[]).forEach(i=>{
+        if(i.p.without_genres)
+          vrai(String(i.p.without_genres).split(',').indexOf('16') < 0,
+               a.id+' : le without_genres=16 est revenu');
+      });
+    });
+    /* Quatre libellés existent des deux côtés avec des recettes différentes :
+       sans préfixe, une ambiance de film survivrait au passage sur Séries en
+       changeant de recette en silence. */
+    vrai(RECH_AMBIANCES_TV.every(a=>/^tv-/.test(a.id)),
+         'un identifiant de recette de série n\'est pas préfixé');
+    vrai(!RECH_AMBIANCES_TV.some(a=>RECH_AMBIANCES.some(f=>f.id === a.id)),
+         'deux recettes différentes partagent un identifiant');
+  });
+
+  test('les ambiances de séries sont enfin proposées', ()=>{
+    const r = rechVierge('serie');
+    egal(ambiancesRech().length, 8, 'la rangée d\'ambiances est encore vide sur Séries');
+    r.fam = 'tout';
+    egal(ambiancesRech().length, 0,
+         'une recette non mesurée est proposée sur « Tout » : règle 3 du §4.6');
+  });
+
+  test('« Un classique » se calcule en années glissantes, jamais en date fixe', ()=>{
+    const r = rechVierge('serie');
+    r.amb = 'tv-classique';
+    const p = paramsRech('tv');
+    const attendu = String(new Date().getFullYear() - 15);
+    vrai(String(p['first_air_date.lte']||'').indexOf(attendu) === 0,
+         'la recette est écrite en date fixe : elle vieillira toute seule');
+    egal(p['vote_average.gte'], '8');
+    egal(p['vote_count.gte'], '800', 'le plancher invisible de la recette a bougé');
+    vrai(sansVusDemandeRech(), 'le classique des séries n\'exclut pas la bibliothèque');
+  });
+
+  groupe('LOT R2 — point 13 : pas plus de deux du même genre à la suite');
+
+  test('la règle réordonne, elle ne retire jamais rien', ()=>{
+    rechVierge('film');
+    const l = [];
+    for(let i = 1; i <= 6; i++) l.push(t_(i,'movie',[16]));   // six animations
+    l.push(t_(7,'movie',[35]), t_(8,'movie',[18]));
+    const out = espacerGenresRech(l);
+    egal(out.length, 8, 'LA RÈGLE A RETIRÉ DES TITRES — elle ne doit que réordonner');
+    egal(out.map(x=>x.id).sort((a,b)=>a-b), [1,2,3,4,5,6,7,8],
+         'un titre a disparu ou a été dupliqué');
+    let suite = 1, faute = 0;
+    for(let i = 1; i < out.length; i++){
+      const g = genreDominantRech(out[i]);
+      suite = (g && g === genreDominantRech(out[i-1])) ? suite + 1 : 1;
+      if(suite > 2) faute++;
+    }
+    egal(faute, 0, 'trois titres du même genre se suivent encore');
+  });
+
+  test('`trierParGout` garde la même longueur après l\'espacement', ()=>{
+    rechVierge('film');
+    genresTMDB.movie = [{ id:16, nom:'Animation' }, { id:35, nom:'Comédie' }];
+    db.gouts.genres = ['Animation'];        // le cas d'Adrien : l'animation écrase tout
+    const l = [];
+    for(let i = 1; i <= 9; i++) l.push(t_(i,'movie', i <= 6 ? [16] : [35]));
+    const out = trierParGout(l);
+    egal(out.length, 9, 'LE PROFIL A FILTRÉ — c\'est la faute capitale de cet écran');
+    egal(out.map(x=>x.id).sort((a,b)=>a-b), [1,2,3,4,5,6,7,8,9],
+         'un titre a disparu du résultat');
+    vrai(genreDominantRech(out[0]) !== genreDominantRech(out[2]) ||
+         genreDominantRech(out[1]) !== genreDominantRech(out[2]),
+         'les trois premiers résultats sont du même genre');
+    genresTMDB.movie = null;
+  });
+
+  groupe('LOT R2 — point 4 : le jeu respecte la puce et la phrase');
+
+  test('aucune source du jeu ne sort de la famille demandée', ()=>{
+    const r = rechVierge('serie');
+    genresTMDB.tv = [{ id:16, nom:'Animation' }, { id:35, nom:'Comédie' }];
+    r.jeu = { pool:{}, page:{}, ecartes:{}, precedente:null };
+    const film  = { id:11, __media:'movie', genre_ids:[35], original_language:'en' };
+    const anime = { id:12, __media:'tv',    genre_ids:[16], original_language:'ja' };
+    const serie = { id:13, __media:'tv',    genre_ids:[35], original_language:'en' };
+    vrai(!jouableRech(film),  'un film est distribué alors que la puce dit « Séries »');
+    vrai(!jouableRech(anime), 'un animé est distribué sur la puce « Séries »');
+    vrai(jouableRech(serie),  'une série honnête est refusée');
+    r.jeu = null; genresTMDB.tv = null;
+  });
+
+  test('la phrase s\'applique aux cartes « Parce que tu as aimé … »', ()=>{
+    const r = rechVierge('film');
+    genresTMDB.movie = [{ id:35, nom:'Comédie' }, { id:27, nom:'Horreur' }];
+    r.genre = 'Comédie'; r.note = '7';
+    const bon  = { id:1, __media:'movie', genre_ids:[35], vote_average:7.4, release_date:'2015-01-01' };
+    const faux = { id:2, __media:'movie', genre_ids:[27], vote_average:7.4, release_date:'2015-01-01' };
+    const mou  = { id:3, __media:'movie', genre_ids:[35], vote_average:5.1, release_date:'2015-01-01' };
+    vrai(respecteDemandeRech(bon,'movie'),   'une carte conforme est rejetée');
+    vrai(!respecteDemandeRech(faux,'movie'), 'le genre de la phrase n\'est pas appliqué');
+    vrai(!respecteDemandeRech(mou,'movie'),  'la note de la phrase n\'est pas appliquée');
+    genresTMDB.movie = null;
+  });
+
+  test('une source qui ne sait pas respecter la demande rend un tas vide', ()=>{
+    const r = rechVierge('film');
+    vrai(!demandeAveugleRech(), 'une phrase nue devrait être vérifiable');
+    /* C'est le trou exact des films de 1 h 45 servis sur « plus de 2 h 15 » :
+       une liste de résultats ne porte pas la durée. */
+    r.duree = 'long';
+    vrai(demandeAveugleRech(), 'la durée se prétend vérifiable sur une liste');
+    r.duree = null; r.amb = 'vraie';        // recette à mot-clé
+    vrai(demandeAveugleRech(), 'un mot-clé se prétend vérifiable sur une liste');
+    r.amb = null; r.plate = 'mes';
+    vrai(demandeAveugleRech(), 'une plateforme se prétend vérifiable sur une liste');
+  });
+
+  test('le point de départ de « coeur » est du média de la famille', ()=>{
+    const r = rechVierge('serie');
+    db.podium = { film:[603], serie:[], anime:[], maj:0 };
+    db.movies[603] = { id:603, title:'Matrix', genres:[] };
+    egal(departJeuRech('tv'), null,
+         'le jeu partirait d\'un film pour proposer des séries');
+    db.shows[1399] = { id:1399, name:'Le Trône de fer', genres:[], seasons:{}, watched:{} };
+    db.podium.serie = [1399];
+    const d = departJeuRech('tv');
+    vrai(d && d.media === 'tv' && d.id === 1399, 'le départ série n\'est pas retenu');
+  });
+
+  test('le libellé « Dans tes genres » ne dit plus deux fois le même genre', ()=>{
+    rechVierge('film');
+    genresTMDB.tv = [{ id:10759, nom:'Action & Adventure' }];
+    db.gouts.genres = ['Action', 'Action & Adventure', 'Comédie'];
+    /* Côté séries, « Action » et « Action & Adventure » sont le MÊME genre
+       TMDB : `genreParNom` les ramène au même identifiant. */
+    egal(genresProfilRech('tv'), ['Action', 'Comédie'],
+         'l\'étiquette affiche encore « Action et Action & Adventure »');
+    genresTMDB.tv = null;
+  });
+
+  groupe('LOT R2 — point 3 : un tap ouvre la vraie fiche');
+
+  test('la jaquette ouvre la fiche, plus l\'aperçu', ()=>{
+    rechVierge('film');
+    const boite = document.createElement('div');
+    boite.innerHTML = jaquetteRech(t_(603,'movie',[28]));
+    const on = boite.querySelector('.jq').getAttribute('onclick');
+    vrai(/ouvrirTitre\(603,'movie','search'\)/.test(on),
+         'la jaquette n\'ouvre pas la fiche : '+on);
+    /* L'aperçu n'a plus de raison d'exister sur cet écran : ni sa fonction, ni
+       sa fermeture ne doivent traîner. Une fermeture orpheline se rejouerait
+       sur la feuille suivante. */
+    vrai(typeof window.peindreDetailRech === 'undefined',
+         'l\'aperçu de Recherche est encore là');
+    vrai(!FERMETURES['detail-rech'], 'la fermeture de l\'aperçu traîne encore');
   });
 
   /* ==================== Bilan ==================== */
