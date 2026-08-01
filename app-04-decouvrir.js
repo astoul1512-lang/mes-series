@@ -1,65 +1,4 @@
 "use strict";
-/* ---------- Vue : Recherche ---------- */
-/* Recherche progressive : 2 caractères minimum, 300 ms d'attente après la dernière
-   frappe, requête précédente abandonnée, 8 résultats au maximum. Le champ n'est jamais
-   redessiné pendant la frappe — seule la zone de résultats est rafraîchie. */
-const SEARCH_MIN = 2, SEARCH_WAIT = 300, SEARCH_MAX = 8;
-let searchTimer = null, searchAbort = null, searchSeq = 0;
-
-/* Une recherche est « active » dès qu'il y a assez de lettres dans le champ.
-   Tant qu'elle ne l'est pas, l'écran montre les suggestions. */
-function enRecherche(){ return (ui.searchQ||'').trim().length >= SEARCH_MIN; }
-
-/* Zone de résultats seule : chargement, erreur, aucun résultat, ou la grille */
-function searchBody(){
-  if(ui.searching)
-    return '<div class="empty"><span class="spin"></span><p style="margin-top:12px">Recherche…</p></div>';
-  if(ui.searchErr)
-    return '<div class="empty">'+I.search+'<h3>'+esc(ui.searchErr)+'</h3>'+
-      '<p>Vérifie ta connexion, puis réessaie.</p>'+
-      '<button class="btn ghost" onclick="searchNow()">Réessayer</button></div>';
-  if(!ui.searchRes || !ui.searchRes.length)
-    return '<div class="empty"><h3>Rien trouvé dans '+esc(libelleCherche())+'</h3>'+
-      '<p>Essaie une autre orthographe, ou change de type juste au-dessus.</p></div>';
-  return '<div class="grid">'+ui.searchRes.map(r=>
-    carteTitre(r, r.media_type || discMedia())).join('')+'</div>';
-}
-
-function onSearchInput(v){
-  const avant = enRecherche();
-  ui.searchQ = v;
-  clearTimeout(searchTimer);
-  abortSearch();
-  const q = v.trim();
-  /* Bascule entre suggestions et résultats : on repart du haut de la liste. */
-  if(enRecherche() !== avant){ oublierDefil('discover'); window.scrollTo(0,0); }
-  if(q.length < SEARCH_MIN){
-    ui.searchRes = null; ui.searching = false; ui.searchErr = '';
-    peindreDisc(); return;                    // on retombe sur les suggestions
-  }
-  ui.searching = true; ui.searchErr = '';
-  peindreDisc();
-  searchTimer = setTimeout(()=> runSearch(q), SEARCH_WAIT);
-}
-
-function searchNow(){
-  clearTimeout(searchTimer);
-  const q = (ui.searchQ||'').trim();
-  if(q.length < SEARCH_MIN) return;
-  ui.searching = true; ui.searchErr = ''; peindreDisc();
-  runSearch(q);
-}
-
-function viderRecherche(){
-  clearTimeout(searchTimer); abortSearch();
-  ui.searchQ = ''; ui.searchRes = null; ui.searching = false; ui.searchErr = '';
-  render();
-}
-
-function abortSearch(){
-  if(searchAbort){ try{ searchAbort.abort(); }catch(e){} searchAbort = null; }
-}
-
 /* La recherche TMDB n'accepte ni genre ni langue : quand la puce Animés est
    choisie, on écarte nous-mêmes ce qui n'est pas de l'animation japonaise.
    Si les résultats ne portent pas ces informations, on ne filtre pas à l'aveugle. */
@@ -101,35 +40,6 @@ function garderOccident(res){
   if(ui.disc.type === 'anime') return res;
   if(toutesOrigines()) return res;
   return res.filter(r => origineAdmise(r && r.original_language));
-}
-
-async function runSearch(q){
-  const seq = ++searchSeq;
-  const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-  searchAbort = ctrl;
-  try{
-    if(ui.disc.type === 'anime') await chargerGenres('tv');   // besoin de l'id du genre Animation
-    if(seq !== searchSeq) return;
-    /* Les animés restent des séries : TMDB ne cherche que dans tv ou movie. */
-    /* Sur « Tout », films et séries se cherchent ensemble : taper « Dune »
-       depuis la vitrine ne doit pas rester muet parce que c'est un film. */
-    const chemin = ui.disc.type === 'tout' ? '/search/multi' : '/search/'+discMedia();
-    const d = await tmdb(chemin, { query:q, include_adult:'false' },
-                         ctrl ? {signal:ctrl.signal} : null);
-    if(seq !== searchSeq) return;                      // une frappe plus récente a pris la main
-    let res = d.results || [];
-    if(ui.disc.type === 'tout')
-      res = res.filter(r => r.media_type === 'tv' || r.media_type === 'movie');
-    ui.searchRes = garderAnimes(res).slice(0, SEARCH_MAX);
-    ui.searching = false; ui.searchErr = '';
-    peindreDisc();
-  }catch(e){
-    if((e && e.name === 'AbortError') || seq !== searchSeq) return;
-    ui.searching = false;
-    ui.searchErr = (e.message === 'BADKEY') ? 'Service indisponible' : 'Pas de connexion';
-    ui.searchRes = [];
-    peindreDisc();
-  }
 }
 
 /* Vignette commune aux suggestions et aux résultats de recherche. */
@@ -670,18 +580,17 @@ async function chargerDecouverte(suite){
   if(!suite){
     d.res = []; d.pages = 1;
     oublierDefil('discover');
-    if(view === 'discover' && !enRecherche()) window.scrollTo(0,0);
+    if(view === 'discover') window.scrollTo(0,0);
   }
   d.loading = true; d.err = '';
   peindreDisc();
   try{
     const media = discMedia();
     await chargerGenres(media);
-    /* La liste des plateformes n'est pas bloquante : elle vient en arrière-plan
-       et la feuille de filtres se remet à jour toute seule si elle est ouverte. */
-    chargerPlates(media)
-      .then(()=>{ if(feuilleFiltresOuverte()) ouvrirFiltres(); return sonderPlates(media); })
-      .then(change=>{ if(change && feuilleFiltresOuverte()) ouvrirFiltres(); });
+    /* La liste des plateformes n'est pas bloquante : elle vient en arrière-plan.
+       Elle n'a plus de feuille à rafraîchir depuis que celle-ci est partie dans
+       Recherche ; elle sert encore à `platesRetenues`. */
+    chargerPlates(media);
     /* Un genre qui n'existe pas pour ce type est retiré, mais on le dit. */
     const perdus = d.genres.filter(n => genreParNom(media, n) == null);
     if(perdus.length){
@@ -735,241 +644,21 @@ function peindreDisc(){
   if(view !== 'discover') return;
   const el = document.getElementById('dres');
   if(!el) return render();
-  const cherche = enRecherche();
-  const vitr = vitrineVisible();
-  el.innerHTML = cherche ? searchBody() : (vitr ? vitrineBody() : discBody());
-  const r = document.querySelector('.resume');
-  if(r){
-    /* E1 — MÊME RÈGLE QUE DANS `discView`. Ce repeint partiel masquait la ligne
-       dès qu'on était en vitrine : `render()` l'affichait bien après un
-       changement de tri, puis `chargerDecouverte()` finissait par ici et la
-       remasquait. Le tri s'appliquait, sans que rien ne le dise. */
-    r.classList.toggle('masque', vitr && ui.disc.tri === 'populaire');
-    const b = r.querySelector('b');
-    if(b) b.textContent = cherche ? resumeRecherche() : (vitr ? resumeTri() : resumeFiltres());
-    const x = r.querySelector('.rx');
-    if(x) x.classList.toggle('masque', cherche);
-  }
-  const b = document.getElementById('fbtn');
-  if(b){ b.classList.toggle('actif', filtresActifs()); b.classList.toggle('masque', cherche); }
-  const c = document.querySelector('.qclear');
-  if(c) c.classList.toggle('masque', !ui.searchQ);
+  /* Il n'y a plus qu'un état à peindre : le champ, la ligne de résumé et le
+     bouton Filtres sont partis dans Recherche (§3.1). Ce qui reste de E1 — la
+     règle d'affichage écrite au même endroit dans la vue et dans le repeint —
+     n'a plus d'objet : il n'y a plus de ligne de résumé à masquer. */
+  el.innerHTML = vitrineVisible() ? vitrineBody() : discBody();
 }
 
 function setDiscType(t){
   if(ui.disc.type === t) return;
   ui.disc.type = t;
   ui.disc.typeForce = false;      // E4 — choix explicite : plus rien à signaler
-  if(enRecherche()){                      // la recherche suit la puce choisie
-    clearTimeout(searchTimer); abortSearch();
-    ui.searchRes = null; ui.searchErr = ''; ui.searching = true;
-  }
   render();
   /* Chacun son chargement : la vitrine au repos, la grille quand on filtre. */
   if(vitrineVisible()) chargerSuggestions();
   else chargerDecouverte();
-  if(enRecherche()) searchNow();
-}
-/* ===================== E5 — LE BROUILLON DE LA FEUILLE =====================
-
-   Chaque coche relançait une requête ET redessinait la feuille entière :
-   cocher trois genres, c'était trois volées de requêtes pour un filtre qu'on
-   n'avait pas fini de composer. Le coût réseau était réel, et le modèle
-   empêchait de réfléchir tranquillement.
-
-   `ui.disc` reste l'état APPLIQUÉ — celui qui décrit ce qui est à l'écran.
-   `ui.discBrouillon` porte l'état de la feuille. Les coches n'écrivent que
-   dans le brouillon ; la requête part à la fermeture, quelle qu'elle soit :
-   le bouton « Voir les résultats », le geste de tirage, un appui sur le fond.
-   Tirer la feuille ne doit pas faire perdre ses choix — c'est le piège que la
-   spec demandait de traiter explicitement.
-
-   Ce qui N'EST PAS dans le brouillon : le type (sa puce vit hors de la
-   feuille, et changer de type change la liste même des genres proposés) et
-   les rubriques repliées (`plies`), qui ne retranchent rien. */
-const CHAMPS_BROUILLON = ['genres','envies','plates','platesTouchees',
-                          'perimetre','tri','noteMin','duree'];
-function copieFiltres(src){
-  const o = {};
-  CHAMPS_BROUILLON.forEach(k=>{
-    const v = src[k];
-    o[k] = Array.isArray(v) ? v.map(x => (x && typeof x === 'object') ? Object.assign({},x) : x) : v;
-  });
-  return o;
-}
-/* Le brouillon courant, créé à la demande depuis l'état appliqué. */
-function brouillon(){
-  if(!ui.discBrouillon) ui.discBrouillon = copieFiltres(ui.disc);
-  return ui.discBrouillon;
-}
-function memeFiltres(a, b){
-  return CHAMPS_BROUILLON.every(k=>{
-    const x = a[k], y = b[k];
-    if(Array.isArray(x) || Array.isArray(y)){
-      if(!Array.isArray(x) || !Array.isArray(y) || x.length !== y.length) return false;
-      return x.every((v,i)=>{
-        const w = y[i];
-        return (v && typeof v === 'object') ? (w && v.id === w.id) : v === w;
-      });
-    }
-    return x === y;
-  });
-}
-/* Appliqué à la fermeture. Sans changement, aucune requête : rouvrir puis
-   refermer la feuille sans rien toucher ne doit rien coûter. */
-function appliquerBrouillon(){
-  const b = ui.discBrouillon;
-  ui.discBrouillon = null;
-  if(!b) return false;
-  if(memeFiltres(b, ui.disc)) return false;
-  CHAMPS_BROUILLON.forEach(k=>{ ui.disc[k] = b[k]; });
-  chargerDecouverte();
-  return true;
-}
-FERMETURES.filtres = appliquerBrouillon;
-function voirResultats(){ closeSheet(); }
-/* Combien de critères mordent dans le brouillon. Sert au libellé du bouton :
-   « Voir les résultats (3 critères) » dit ce qu'on s'apprête à appliquer. */
-function compteCriteres(d){
-  let n = d.genres.length + d.envies.length;
-  if(d.platesTouchees && d.plates.length) n++;
-  if(d.noteMin > 0) n++;
-  if(d.perimetre !== 'tout') n++;
-  if(DISC_DUREE_FIABLE && d.duree && d.duree !== 'tout' && discMedia() === 'movie') n++;
-  return n;
-}
-
-/* Les filtres portent sur un type précis — c'est ce qu'Adrien attend : « avec
-   les filtres on a soit l'un soit l'autre ». Depuis « Tout », on bascule donc
-   sur les séries, et on le dit plutôt que de filtrer un mélange en silence. */
-/* E4 — LE MESSAGE NE PEUT PAS ÊTRE UN TOAST. Il s'affichait à 84 px du bas,
-   c'est-à-dire SOUS la feuille de filtres, qui occupe presque tout l'écran.
-   Personne ne l'a jamais vu : on cochait « Comédie » depuis « Tout » et on
-   découvrait plus tard que les films avaient disparu. On pose donc un drapeau,
-   et la feuille dit la chose à l'endroit où le geste a été fait. */
-function typePourFiltrer(){
-  if(ui.disc.type !== 'tout') return;
-  ui.disc.type = 'tv';
-  ui.disc.typeForce = true;
-}
-/* Le lien du message. Choisir soi-même une puce lève le drapeau : le message a
-   été lu et suivi, le répéter n'apprendrait plus rien. */
-function basculerTypeFiltre(t){
-  ui.disc.typeForce = false;
-  ui.disc.type = t;
-  ouvrirFiltres();               // E5 — la requête partira à la fermeture
-}
-/* E5 — toutes ces bascules écrivent dans le brouillon et redessinent la
-   feuille. Aucune ne part sur le réseau : c'est `appliquerBrouillon`, à la
-   fermeture, qui le fait une seule fois. */
-function setDiscTri(t){ typePourFiltrer(); brouillon().tri = t; ouvrirFiltres(); }
-function setDiscPerimetre(p){ typePourFiltrer(); brouillon().perimetre = p; ouvrirFiltres(); }
-function setDiscNote(n){ typePourFiltrer(); brouillon().noteMin = n; ouvrirFiltres(); }
-function setDiscDuree(id){ typePourFiltrer(); brouillon().duree = id; ouvrirFiltres(); }
-function bascGenre(i){
-  const g = genresAffiches()[i];
-  if(!g) return;
-  typePourFiltrer();
-  const sel = brouillon().genres, k = sel.indexOf(g.nom);
-  if(k < 0) sel.push(g.nom); else sel.splice(k,1);
-  ouvrirFiltres();
-}
-/* Les plateformes sont retenues avec leur nom et leur logo : la ligne de résumé
-   et les puces restent lisibles même si la liste TMDB n'est pas encore revenue. */
-/* Cocher ou décocher une envie. Comme pour les genres, on passe par l'index
-   dans la liste affichée : l'identifiant traverserait un `onclick` sans mal,
-   mais l'index évite d'avoir à l'échapper et reste lisible dans le HTML. */
-function bascEnvie(i){
-  /* On résout l'envie AVANT `typePourFiltrer` : celui-ci fait basculer la puce
-     « Tout » vers « Séries », et la liste des envies n'est pas la même d'une
-     puce à l'autre — l'index désignerait alors une autre envie que celle
-     touchée. Même ordre que `bascGenre`, pour la même raison. */
-  const e = enviesAffichees()[i];
-  if(!e) return;
-  typePourFiltrer();
-  const sel = brouillon().envies, k = sel.indexOf(e.id);
-  if(k >= 0) sel.splice(k,1); else sel.push(e.id);
-  ouvrirFiltres();
-}
-function viderEnvies(){
-  typePourFiltrer();
-  brouillon().envies = [];
-  ouvrirFiltres();
-}
-
-function bascPlate(i){
-  const p = platesAffichees()[i];
-  if(!p) return;
-  /* À partir d'ici la sélection est la sienne, pas celle héritée de ses
-     abonnements : elle ne suit plus les réglages, et elle compte comme un
-     filtre posé — la grille remplace donc la vitrine. */
-  const b = brouillon();
-  b.platesTouchees = true;
-  const sel = b.plates, k = sel.findIndex(x => x.id === p.id);
-  if(k < 0) sel.push({ id:p.id, nom:p.nom, logo:p.logo }); else sel.splice(k,1);
-  ouvrirFiltres();
-}
-function voirToutesPlates(){
-  ui.disc.toutesPlates = !ui.disc.toutesPlates;
-  ouvrirFiltres();
-}
-function viderPlates(){
-  const b = brouillon();
-  b.platesTouchees = true;
-  b.plates = [];
-  ouvrirFiltres();
-}
-/* Deux appelants, deux gestes différents. Dans la feuille, « Tout effacer »
-   remet le BROUILLON à zéro, sans requête (§E5). Feuille fermée, la croix de
-   la ligne de résumé efface pour de bon et recharge. */
-function resetFiltres(){
-  if(feuilleFiltresOuverte()){
-    const b = brouillon();
-    b.genres = []; b.envies = [];
-    b.perimetre = 'tout'; b.tri = 'populaire'; b.noteMin = 0; b.duree = 'tout';
-    b.platesTouchees = false;
-    b.plates = mesPlates().map(p => ({ id:p.id, nom:p.nom, logo:p.logo }));
-    ui.disc.typeForce = false;
-    ouvrirFiltres();
-    return;
-  }
-  const d = ui.disc;
-  ui.discBrouillon = null;
-  d.genres = []; d.envies = [];
-  d.perimetre = 'tout'; d.tri = 'populaire'; d.noteMin = 0; d.duree = 'tout';
-  d.typeForce = false;            // E4 — plus de filtre, plus rien à expliquer
-  /* « Tout effacer » remet l'écran dans son état de départ — et son état de
-     départ, ce sont les abonnements déclarés. Vider jusque-là ferait perdre à
-     chaque fois un réglage qu'on n'a jamais posé à la main. */
-  d.platesTouchees = false; semerPlatesFiltres();
-  chargerDecouverte();
-}
-
-/* E1 — en vitrine, seul le tri peut être actif : tout le reste ferait basculer
-   sur la grille. La ligne le dit sans faire croire à un filtre. */
-function resumeTri(){
-  const t = DISC_TRIS.find(x=>x.id === ui.disc.tri);
-  return (t && t.court) ? 'Trié par : '+t.label.toLowerCase() : '';
-}
-
-function resumeFiltres(){
-  const d = ui.disc;
-  const bouts = [ (DISC_PERIMETRES.find(p=>p.id===d.perimetre)||{}).court,
-                  (DISC_TRIS.find(t=>t.id===d.tri)||{}).court ];
-  if(d.noteMin) bouts.push('note '+d.noteMin+' et +');
-  if(DISC_DUREE_FIABLE && discMedia() === 'movie'){
-    const du = DISC_DUREES.find(x=>x.id === d.duree);
-    if(du && du.court) bouts.push(du.court);
-  }
-  /* Les envies avant les genres : c'est le réglage le plus parlant de la
-     ligne, « braquage » dit bien plus que « thriller ». */
-  d.envies.forEach(id=>{ const e = envieParId(id); if(e) bouts.push(e.label.toLowerCase()); });
-  d.genres.forEach(n=> bouts.push(n.toLowerCase()));
-  /* Au-delà de deux plateformes on compte au lieu d'énumérer : la ligne tient. */
-  if(d.plates.length) bouts.push('sur '+(d.plates.length > 2
-    ? d.plates.length+' plateformes'
-    : d.plates.map(p=>p.nom).join(' ou ')));
-  return bouts.filter(Boolean).join(' · ');
 }
 function filtresActifs(){
   const d = ui.disc;
@@ -992,238 +681,6 @@ function filtresActifs(){
          (DISC_DUREE_FIABLE && d.duree && d.duree !== 'tout' && discMedia() === 'movie');
 }
 
-/* La feuille de filtres est-elle à l'écran ? Sert à la redessiner quand la liste
-   des plateformes arrive après coup, sans inventer un état de plus. */
-/* La feuille de filtres est-elle à l'écran ? Sert à la redessiner quand la
-   liste des plateformes arrive après coup. On teste un marqueur posé en tête de
-   la feuille, PAS la section des plateformes : depuis qu'elle se replie, elle
-   peut très bien être absente du DOM alors que la feuille est ouverte. */
-function feuilleFiltresOuverte(){
-  const s = document.getElementById('sheet');
-  return !!(s && s.classList.contains('show') && document.getElementById('feuilfiltres'));
-}
-
-/* Section « De quoi t'as envie » de la feuille de filtres. Elle vient en tête :
-   c'est la question qu'on se pose vraiment devant l'écran, avant la note ou la
-   plateforme. */
-function blocFiltreEnvies(){
-  const d = brouillon(), liste = enviesAffichees();   // E5 — lecture du brouillon
-  if(!liste.length) return '';
-  let h = '<div class="fgrp">De quoi t\'as envie'+(d.envies.length?' ('+d.envies.length+')':'')+'</div>';
-  h += '<div class="fchips">'+liste.map((e,i)=>
-    '<button class="chip '+(d.envies.indexOf(e.id)>=0?'on':'')+'" onclick="bascEnvie('+i+')">'+
-      esc(e.label)+'</button>').join('')+'</div>';
-  if(d.envies.length)
-    h += '<div class="small muted" style="margin-top:8px">'+
-         'Il suffit qu\'un titre corresponde à <b>une</b> de ces envies. '+
-         '<button class="lienplus" style="margin:0" onclick="viderEnvies()">Tout décocher</button></div>';
-  return h;
-}
-
-/* Section « Plateformes » de la feuille de filtres. */
-function blocFiltrePlates(){
-  const d = brouillon();                              // E5 — lecture du brouillon
-  const liste = platesAffichees(), reste = platesCachees();
-  let h = '<div class="small muted" id="fplates" style="margin-bottom:8px">'+
-          (aDeclarePlates()
-            ? 'Les tiennes d\'abord. <button class="lienplus" style="margin:0" '+
-              'onclick="go(\'plates\',{from:\'discover\'})">Modifier mes abonnements</button>'
-            : 'Uniquement ce qui est inclus dans un abonnement, en France.')+
-          '</div>';
-  if(!liste.length)
-    return h + '<div class="small muted">La liste des plateformes arrive avec les premiers résultats.</div>';
-  /* La feuille peut s'ouvrir avant la fin du sondage : on le termine et on
-     redessine. `sonderPlates` rend la main tout de suite si les abonnements
-     ont été déclarés — il n'y a alors plus rien à deviner. */
-  if(!sondageEnCours) sonderPlates(discMedia()).then(ch=>{ if(ch && feuilleFiltresOuverte()) ouvrirFiltres(); });
-  h += '<div class="fchips">'+liste.map((p,i)=>{
-    const on = d.plates.some(x => x.id === p.id);
-    const logo = srcImage(p.logo,'w45') ? '<img loading="lazy" src="'+srcImage(p.logo,'w45')+'" alt="">' : '';
-    return '<button class="chip chiplogo '+(on?'on':'')+'" onclick="bascPlate('+i+')">'+
-             logo+'<span>'+esc(p.nom)+'</span></button>';
-  }).join('')+'</div>';
-  /* `toutesPlates` n'est pas un critère mais un dépliage : il reste sur
-     l'état d'écran, pas sur le brouillon. */
-  if(reste || ui.disc.toutesPlates)
-    h += '<button class="lienplus" onclick="voirToutesPlates()">'+
-         (ui.disc.toutesPlates ? 'Ne montrer que les principales'
-                         : (reste > 1 ? 'Voir les '+reste+' autres plateformes'
-                                      : 'Voir la dernière plateforme'))+
-         '</button>';
-  if(d.plates.length)
-    h += '<div class="small muted" style="margin-top:8px">'+
-         'Il suffit qu\'un titre soit sur <b>une</b> de ces plateformes. '+
-         '<button class="lienplus" style="margin:0" onclick="viderPlates()">Tout décocher</button></div>';
-  return h;
-}
-
-/* Une rubrique de la feuille. Repliée, elle tient sur une ligne et annonce ce
-   qu'elle contient — c'est ce qui permet d'ajouter des critères sans que
-   l'écran devienne un formulaire à faire défiler. */
-/* Les rubriques ouvertes d'emblée. Le défaut vit ICI et nulle part ailleurs :
-   quand `blocPliable` et la bascule le déduisaient chacun de leur côté, un
-   premier appui sur une rubrique repliée la laissait repliée. */
-const FILTRES_OUVERTS = { genres:true, envies:true };
-function sectionPliee(cle){
-  const v = ui.disc.plies[cle];
-  return v === undefined ? !FILTRES_OUVERTS[cle] : v;
-}
-function blocPliable(cle, titre, resume, contenu){
-  const plie = sectionPliee(cle);
-  return '<button class="fpli'+(plie?'':' ouvert')+'" onclick="bascSectionFiltre(\''+cle+'\')">'+
-      '<span class="fplititre">'+esc(titre)+'</span>'+
-      (resume ? '<span class="fpliresume">'+esc(resume)+'</span>' : '')+
-      '<span class="fplicaret">'+I.caret+'</span>'+
-    '</button>' +
-    (plie ? '' : '<div class="fplicorps">'+contenu+'</div>');
-}
-function bascSectionFiltre(cle){
-  ui.disc.plies[cle] = !sectionPliee(cle);
-  ouvrirFiltres();
-}
-
-/* La feuille de filtres.
-
-   Deux décisions d'Adrien la façonnent. Les GENRES ont disparu : « les envies
-   remplacent les genres » — deux vocabulaires pour la même chose, c'est le
-   reproche qu'il avait déjà fait à l'ancien menu. Et « surtout pas » n'est pas
-   ici mais dans Mes goûts : écarter l'horreur est une préférence durable, pas
-   une humeur du soir ; une seule porte, pas deux. */
-function ouvrirFiltres(){
-  /* E5 — la feuille lit et écrit le BROUILLON, jamais l'état appliqué. Seul le
-     type reste pris sur `ui.disc` : sa puce vit hors de la feuille, et c'est
-     lui qui décide de la liste des genres et des envies proposées. */
-  const d = brouillon();
-  const quoi = (DISC_TYPES.find(t=>t.id===ui.disc.type)||{}).label || '';
-  const puces = (liste, actif, action) => '<div class="fchips">'+liste.map(x=>
-    '<button class="chip '+(actif(x)?'on':'')+'" onclick="'+action(x)+'">'+
-      esc(x.label)+'</button>').join('')+'</div>';
-
-  let h = '<h3 id="feuilfiltres">Filtres</h3><div class="small muted" style="margin-top:-4px">'+
-    'Ces réglages s\'appliquent à <b>'+esc(quoi.toLowerCase())+'</b>.</div>';
-
-  /* 1. Le large. Adrien : « soit une recherche micro soit une recherche
-        macro ». Le genre est l'axe large — c'est lui qui répond à « montre-moi
-        de la comédie » quand on n'a rien de plus précis en tête. */
-  const genres = genresAffiches();
-  h += blocPliable('genres', 'En gros',
-    d.genres.length ? d.genres.join(', ').toLowerCase() : '',
-    '<div class="small muted" style="margin:-2px 0 9px">Le rayon : comédie, '+
-      'thriller, science-fiction…</div>'+
-    (genres.length
-      ? '<div class="fchips">'+genres.map((g,i)=>
-          '<button class="chip '+(d.genres.indexOf(g.nom)>=0?'on':'')+'" onclick="bascGenre('+i+')">'+
-            esc(g.nom)+'</button>').join('')+'</div>'
-      : '<div class="small muted">Les genres arrivent avec les premiers résultats.</div>'));
-
-  /* E4 — juste sous « En gros », là où le geste a eu lieu et sans avoir à
-     défiler. Un seul autre type possible aujourd'hui : les films. */
-  if(ui.disc.typeForce)
-    h += '<div class="fforce">Les filtres s\'appliquent aux <b>séries</b>. '+
-      '<button onclick="basculerTypeFiltre(\'movie\')">Changer pour les films</button></div>';
-
-  /* 2. Le précis. Il vient APRÈS le large, dans l'ordre où l'on pense :
-        « une comédie » d'abord, « de braquage » ensuite. */
-  const envies = enviesAffichees();
-  if(envies.length)
-    h += blocPliable('envies', 'Plus précisément',
-      d.envies.length ? d.envies.length+' envie'+(d.envies.length>1?'s':'') : '',
-      '<div class="small muted" style="margin:-2px 0 9px">Le sujet : un braquage, '+
-        'une enquête, une boucle temporelle…</div>'+
-      '<div class="fchips">'+envies.map((e,i)=>
-        '<button class="chip '+(d.envies.indexOf(e.id)>=0?'on':'')+'" onclick="bascEnvie('+i+')">'+
-          esc(e.label)+'</button>').join('')+'</div>'+
-      (d.envies.length
-        ? '<div class="small muted" style="margin-top:8px">Il suffit qu\'un titre corresponde à '+
-          '<b>une</b> de ces envies. <button class="lienplus" style="margin:0" '+
-          'onclick="viderEnvies()">Tout décocher</button></div>'
-        : ''));
-
-  /* Le trait d'union entre les deux niveaux : croiser un genre et une envie
-     donne l'intersection — vérifié en direct, « comédie » seul rend 173 456
-     titres, « comédie » + « enquête policière » en rend 379. C'est ce que la
-     phrase doit dire, sinon on croirait à une addition. */
-  if(d.genres.length && d.envies.length)
-    h += '<div class="small muted" style="margin:2px 0 4px">'+
-      'Tu cherches <b>'+esc(d.genres.join(' ou ').toLowerCase())+'</b> qui parle de <b>'+
-      esc(d.envies.map(id=>(envieParId(id)||{}).label).filter(Boolean).join(' ou ').toLowerCase())+
-      '</b>.</div>';
-
-  /* 3. Le reste, replié : utile, mais pas à chaque fois. */
-  const per = DISC_PERIMETRES.find(x=>x.id===d.perimetre) || DISC_PERIMETRES[0];
-  h += blocPliable('quand', 'De quelle époque', per.court,
-    puces(DISC_PERIMETRES, x=>d.perimetre===x.id, x=>'setDiscPerimetre(\''+x.id+'\')')+
-    '<div class="small muted" style="margin-top:8px">'+
-      (d.perimetre==='tout' ? 'Tout le catalogue, sans limite de date.'
-       : d.perimetre==='recent' ? 'Uniquement ce qui est sorti depuis '+DISC_FENETRE+' jours.'
-       : 'Uniquement les titres de cette période.')+'</div>');
-
-  h += blocPliable('plates', 'Sur mes plateformes',
-    d.plates.length ? (d.plates.length>2 ? d.plates.length+' plateformes'
-                                         : d.plates.map(p=>p.nom).join(' ou ')) : '',
-    blocFiltrePlates());
-
-  h += blocPliable('ordre', 'Dans quel ordre',
-    (DISC_TRIS.find(t=>t.id===d.tri)||{}).court || '',
-    puces(DISC_TRIS, x=>d.tri===x.id, x=>'setDiscTri(\''+x.id+'\')')+
-    (d.tri === 'note'
-      ? '<div class="small muted" style="margin-top:8px">Les titres qui ont moins de '+
-        DISC_VOTES_MINI+' votes sont écartés : sans ça, un 10 sur 10 noté par trois '+
-        'personnes passerait devant tout le reste. Passe sur <b>Les plus populaires</b> '+
-        'pour les voir aussi.</div>'
-      : ''));
-
-  h += blocPliable('note', 'Note minimale',
-    (d.noteMin ? d.noteMin+' et +' : ''),
-    '<div class="fchips">'+DISC_NOTES.map(n=>
-      '<button class="chip '+(d.noteMin===n.v?'on':'')+'" onclick="setDiscNote('+n.v+')">'+
-        esc(n.label)+'</button>').join('')+'</div>');
-
-  /* Les genres écartés vivent dans Mes goûts, et l'écran doit le dire :
-     sans ça, on chercherait « surtout pas » ici jusqu'à la fin des temps. */
-  const exclus = (db.gouts && db.gouts.exclus) || [];
-  h += '<div class="small muted" style="margin-top:16px">'+
-    (exclus.length
-      ? 'Tu ne vois jamais : <b>'+esc(exclus.join(', '))+'</b>. '
-      : 'Pour écarter un genre une fois pour toutes, ')+
-    '<button class="lienplus" style="margin:0" onclick="closeSheet();go(\'gouts\',{from:\'discover\'})">'+
-      (exclus.length ? 'Changer dans Mes goûts' : 'passe par Mes goûts')+'</button></div>';
-
-  /* E5 — le bouton dit ce qu'il va appliquer. « Voir les résultats » seul ne
-     disait pas qu'une requête était en attente ; avec le compte, la feuille
-     assume d'être un formulaire qu'on valide. */
-  const n = compteCriteres(d);
-  h += '<button class="btn" style="margin-top:18px" onclick="voirResultats()">Voir les résultats'+
-       (n ? ' ('+n+' critère'+(n>1?'s':'')+')' : '')+'</button>';
-  if(n) h += '<button class="opt" onclick="resetFiltres()">Tout effacer</button>';
-  openSheet(h, 'filtres');
-}
-
-/* E2 — `ouvrirChamp` et `fermerChamp` ont disparu avec la puce loupe. Le champ
-   est là en permanence : il n'y a plus rien à ouvrir ni à refermer, seulement à
-   vider (`viderRecherche`). */
-
-/* Les deux boutons « Chercher un titre » des écrans vides. Le champ existe
-   déjà : il n'y a qu'à y amener la personne, et là seulement le clavier est
-   demandé — c'est elle qui vient de le réclamer. */
-function viserChamp(){
-  const el = document.getElementById('q');
-  if(!el) return;
-  el.focus();
-  window.scrollTo({ top:0, behavior:'smooth' });
-}
-
-function champRecherche(){
-  const t = ui.disc.type;
-  const quoi = t==='anime' ? "Chercher un animé…"
-             : discMedia()==='tv' ? "Chercher une série…" : "Chercher un film…";
-  return '<div class="qbar">'+I.search+
-    '<input type="search" id="q" enterkeyhint="search" autocomplete="off" autocorrect="off" '+
-    'placeholder="'+quoi+'" value="'+esc(ui.searchQ)+'" oninput="onSearchInput(this.value)" '+
-    'onkeydown="if(event.key===\'Enter\'){this.blur();searchNow()}">'+
-    '<button class="qclear '+(ui.searchQ?'':'masque')+'" onclick="viderRecherche()">'+I.close+'</button>'+
-  '</div>';
-}
 
 /* ---------------------------------------------------------------------------
    Découvrir a deux états, et un seul tap les sépare.
@@ -1239,14 +696,20 @@ function champRecherche(){
 --------------------------------------------------------------------------- */
 /* Chaque puce a désormais sa vitrine : Tout mêle séries, films et animés, les
    trois autres cadrent. La grille filtrée n'apparaît que si un filtre mord. */
+/* DEPUIS LE RETRAIT DE LA FEUILLE (§3.1), PLUS RIEN NE POSE DE FILTRE : cette
+   fonction rend donc toujours vrai, et la grille (`discBody`, `chargerDecouverte`,
+   `discParams`) n'est plus atteignable depuis l'interface.
+   Elle N'A PAS été supprimée, et c'est délibéré : c'est le moteur de Découvrir,
+   pas la feuille, et le lot qui refera le chapitre 3 décidera de son sort. Le
+   retrait demandé ici portait sur les deux portes d'entrée, pas sur le moteur. */
 function vitrineVisible(){
-  return !enRecherche() && !filtresActifs();
+  return !filtresActifs();
 }
 
 /* Une diapositive du carrousel : grande image, la raison de sa présence,
    le titre, et les deux actions. Cinq d'affilée, que l'on balaie du pouce. */
 function diapoVedette(x){
-  const bouts = [year(x.date), x.note ? '\u2605 '+(Math.round(x.note*10)/10) : ''].filter(Boolean);
+  const bouts = [year(x.date), x.note ? '★ '+(Math.round(x.note*10)/10) : ''].filter(Boolean);
   const img = srcImage(x.bandeau,'w780') || srcImage(x.affiche,'w342');
   const item = x.media === 'tv' ? db.shows[x.id] : db.movies[x.id];
   return '<div class="diapo">'+
@@ -1346,7 +809,7 @@ function vitrineBody(){
   if(!suggestions.vedettes.length && !rangees.length)
     return '<div class="empty">'+I.boussole+'<h3>Rien à proposer '+esc(dansCettePuce())+'</h3>'+
       '<p>Ajoute une série ou un film : les suggestions se règlent sur ce que tu regardes.</p>'+
-      '<button class="btn ghost" onclick="viserChamp()">Chercher un titre</button></div>';
+      '<button class="btn ghost" onclick="go(\'search\')">Chercher un titre</button></div>';
 
   let html = carteInvitGouts() + carrouselVedettes(suggestions.vedettes) +
              barreSuggPlates() + blocProfilCourt();
@@ -1496,7 +959,7 @@ function amorcageBody(){
     '<div class="wrap">'+
       '<button class="btn block"'+(reste ? ' disabled' : '')+' onclick="finirAmorcage()">'+
         (reste ? 'Encore '+reste+' titre'+(reste>1?'s':'') : 'C\'est bon, montre-moi')+'</button>'+
-      '<button class="btn ghost" style="width:100%;margin-top:9px" onclick="viserChamp()">'+
+      '<button class="btn ghost" style="width:100%;margin-top:9px" onclick="go(\'search\')">'+
         'Je préfère chercher un titre</button>'+
     '</div>'+
     '<div style="height:14px"></div>';
@@ -1836,34 +1299,23 @@ function dansCettePuce(){
 }
 
 function viewDiscover(){
-  const d = ui.disc, cherche = enRecherche(), vitr = vitrineVisible();
-  /* E2 — LE CHAMP EST TOUJOURS LÀ. Il vivait derrière une puce de 33 px sans
-     libellé, glissée dans une rangée qui défile, et `go()` la refermait dès
-     qu'on quittait l'écran : le geste le plus fréquent de l'app était le plus
-     caché. Il occupe maintenant sa ligne, sous le titre, au-dessus des puces.
-     Pas de focus automatique : le clavier ne doit pas surgir sans qu'on l'ait
-     demandé — ouvrir Découvrir n'est pas vouloir taper. */
-  const sub = champRecherche() +
-    '<div class="chips types">'+
-      DISC_TYPES.map(t=>
-        '<button class="chip '+(d.type===t.id?'on':'')+'" onclick="setDiscType(\''+t.id+'\')">'+
-          t.label+'</button>').join('')+'</div>'+
-    /* Le résumé n'a de sens que lorsqu'on filtre ou qu'on cherche : au repos,
-       il répétait « Toutes » sans rien dire. On le MASQUE au lieu de le retirer
-       — le sortir du DOM en pleine frappe emporterait le focus du champ. */
-    /* E1 — la ligne de résumé reste visible en vitrine QUAND UN TRI EST ACTIF :
-       le tri ne bascule plus sur la grille, il faut donc autre chose pour dire
-       qu'il est en place. Sans réglage, elle reste masquée — au repos elle
-       répétait « Toutes » sans rien dire. */
-    '<div class="resume'+((vitr && d.tri === 'populaire') ? ' masque' : '')+'">'+
-      '<b>'+esc(cherche ? resumeRecherche() : (vitr ? resumeTri() : resumeFiltres()))+'</b>'+
-      '<button class="rx'+(cherche?' masque':'')+'" onclick="resetFiltres()" '+
-        'aria-label="Tout effacer">'+I.close+'</button></div>';
-  /* Les filtres ne s'appliquent pas à une recherche par titre : le bouton s'efface. */
-  const bouton = '<button class="iconbtn '+(filtresActifs()?'actif ':'')+(cherche?'masque':'')+
-    '" id="fbtn" onclick="ouvrirFiltres()">'+I.filtre+'</button>';
-  return header('Découvrir', {right:bouton, sub:sub}) + needKeyBanner() +
-    '<div id="dres">'+(cherche ? searchBody() : (vitr ? vitrineBody() : discBody()))+'</div>' +
+  /* §3.1 — DEUX RETRAITS, ET IL NE RESTE QUE LES PUCES.
+     Conséquence directe de la règle « Découvrir sert à découvrir, Recherche
+     sert à trouver » :
+       · LE CHAMP DE RECHERCHE PAR TITRE est parti. Deux portes pour la même
+         chose, c'en était une de trop ; il vit maintenant dans Recherche, où
+         il cherche aussi les personnes.
+       · LA FEUILLE DE FILTRES (envies, durée, note, tri) est partie elle
+         aussi. Un filtre, c'est de l'intention — donc de la Recherche.
+     Ce qui disparaît avec elles : la ligne de résumé, qui ne résumait que des
+     filtres, et le bouton qui les ouvrait.
+     Découvrir devient un écran qu'on PARCOURT, pas qu'on interroge. */
+  const sub = '<div class="chips types">'+
+    DISC_TYPES.map(t=>
+      '<button class="chip '+(ui.disc.type===t.id?'on':'')+'" onclick="setDiscType(\''+t.id+'\')">'+
+        t.label+'</button>').join('')+'</div>';
+  return header('Découvrir', {sub:sub}) + needKeyBanner() +
+    '<div id="dres">'+(vitrineVisible() ? vitrineBody() : discBody())+'</div>' +
     '<div style="height:20px"></div>';
 }
 
@@ -1882,16 +1334,6 @@ function centrerTypeActif(){
   r.scrollTo({ left: Math.max(0, cible), behavior:'auto' });
 }
 
-function libelleCherche(){
-  const t = ui.disc.type;
-  if(t === 'tout')  return 'les séries et les films';
-  if(t === 'anime') return 'les animés';
-  return discMedia()==='tv' ? 'les séries' : 'les films';
-}
-function resumeRecherche(){
-  return 'Recherche dans '+libelleCherche()+' · « '+(ui.searchQ||'').trim()+' »';
-}
-
 function discBody(){
   const d = ui.disc;
   if(d.loading && !d.res.length)
@@ -1906,7 +1348,7 @@ function discBody(){
         ? 'Rien de tel sur '+(d.plates.length>2 ? 'ces plateformes' : esc(d.plates.map(p=>p.nom).join(' ou ')))+
           '. Ajoute une plateforme, ou élargis la note et les genres.'
         : 'Élargis la note minimale ou retire un genre.')+'</p>'+
-      '<button class="btn ghost" onclick="ouvrirFiltres()">Ouvrir les filtres</button></div>';
+      '<button class="btn ghost" onclick="go(\'search\')">Aller dans Recherche</button></div>';
   return '<div class="grid">'+d.res.map(r=>carteTitre(r, discMedia())).join('')+'</div>'+
     (d.page < d.pages
       ? '<div class="plus"><button class="btn ghost" onclick="chargerDecouverte(true)"'+
