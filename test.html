@@ -970,26 +970,96 @@ window.MODE_TEST = true;
     egal(db.gouts.animeSous, [], 'des sous-genres survivent à une famille abandonnée');
   });
 
+  /* LES VRAIES LISTES TMDB, films ET séries, en fr-FR. La version précédente de
+     ce test ne remplissait que celle des films et vidait délibérément celle des
+     séries : elle validait exactement la moitié où le lot était juste, et
+     bénissait l'angle mort qui a produit le défaut ci-dessous. */
+  const GENRES_FILM = [
+    {id:28,nom:'Action'},{id:12,nom:'Aventure'},{id:16,nom:'Animation'},
+    {id:35,nom:'Comédie'},{id:80,nom:'Crime'},{id:99,nom:'Documentaire'},
+    {id:18,nom:'Drame'},{id:10751,nom:'Familial'},{id:14,nom:'Fantastique'},
+    {id:36,nom:'Histoire'},{id:27,nom:'Horreur'},{id:10402,nom:'Musique'},
+    {id:9648,nom:'Mystère'},{id:10749,nom:'Romance'},{id:878,nom:'Science-Fiction'},
+    {id:10770,nom:'Téléfilm'},{id:53,nom:'Thriller'},{id:10752,nom:'Guerre'},
+    {id:37,nom:'Western'}
+  ];
+  /* TMDB ne traduit pas les genres de séries qui n'ont pas d'équivalent film :
+     ils arrivent en anglais, même en fr-FR. Ce n'est pas une coquille. */
+  const GENRES_SERIE = [
+    {id:10759,nom:'Action & Adventure'},{id:16,nom:'Animation'},{id:35,nom:'Comédie'},
+    {id:80,nom:'Crime'},{id:99,nom:'Documentaire'},{id:18,nom:'Drame'},
+    {id:10751,nom:'Familial'},{id:10762,nom:'Kids'},{id:9648,nom:'Mystère'},
+    {id:10763,nom:'News'},{id:10764,nom:'Reality'},{id:10765,nom:'Sci-Fi & Fantasy'},
+    {id:10766,nom:'Soap'},{id:10767,nom:'Talk'},{id:10768,nom:'War & Politics'},
+    {id:37,nom:'Western'}
+  ];
+  function avecGenresTMDB(fn){
+    const avant = { tv: genresTMDB.tv, movie: genresTMDB.movie };
+    genresTMDB.movie = GENRES_FILM; genresTMDB.tv = GENRES_SERIE;
+    try{ return fn(); } finally { genresTMDB.tv = avant.tv; genresTMDB.movie = avant.movie; }
+  }
+
   /* Les libellés de l'étape Style DOIVENT être des noms de genres TMDB :
      `genreParNom` compare le nom stocké au nom rendu par TMDB, et un libellé
      inventé serait accepté à l'écran puis ignoré en silence par le moteur.
      Seul « Sport » fait exception, assumée et signalée. */
-  test('les genres proposés sont des noms que TMDB reconnaît', ()=>{
-    const avant = { tv: genresTMDB.tv, movie: genresTMDB.movie };
-    genresTMDB.movie = [
-      {id:28,nom:'Action'},{id:12,nom:'Aventure'},{id:16,nom:'Animation'},
-      {id:35,nom:'Comédie'},{id:80,nom:'Crime'},{id:99,nom:'Documentaire'},
-      {id:18,nom:'Drame'},{id:10751,nom:'Familial'},{id:14,nom:'Fantastique'},
-      {id:36,nom:'Histoire'},{id:27,nom:'Horreur'},{id:10402,nom:'Musique'},
-      {id:9648,nom:'Mystère'},{id:10749,nom:'Romance'},{id:878,nom:'Science-Fiction'},
-      {id:53,nom:'Thriller'},{id:10752,nom:'Guerre'},{id:37,nom:'Western'}
-    ];
-    genresTMDB.tv = [];
-    try{
+  test('les genres proposés sont des noms que TMDB reconnaît (films)', ()=>{
+    avecGenresTMDB(()=>{
       const orphelins = INSC_GENRES.filter(n => genreParNom('movie', n) == null);
       egal(orphelins, ['Sport'],
            'un libellé ne correspond à aucun genre TMDB : il serait enregistré puis ignoré');
-    } finally { genresTMDB.tv = avant.tv; genresTMDB.movie = avant.movie; }
+    });
+  });
+
+  /* LE DÉFAUT QUI A COÛTÉ LE PLUS CHER. TMDB n'emploie pas les mêmes noms côté
+     séries. La déduction lisait « Action & Adventure » ou « Sci-Fi & Fantasy »,
+     ne les trouvait pas dans sa liste, et les jetait sans rien dire : quelqu'un
+     qui tapait six séries ou animés arrivait sur « Ton style » avec zéro puce
+     cochée. Le pire cas est l'animé, dont le second genre est TOUJOURS l'un de
+     ces noms-là. */
+  test('un titre de série ou d\'animé rend toujours un genre utilisable', ()=>{
+    avecGenresTMDB(()=>{
+      const CAS = [
+        ['Game of Thrones',      'tv', [10765,18,10759]],
+        ['The Walking Dead',     'tv', [10759,18,10765]],
+        ['One Piece',            'tv', [16,10759,35]],
+        ['L\'Attaque des Titans','tv', [16,10759,18]],
+        ['Naruto',               'tv', [16,10759]],
+        ['Stranger Things',      'tv', [18,9648,10765]],
+        ['Inception',         'movie', [28,878,12]]
+      ];
+      CAS.forEach(([nom, media, ids])=>{
+        const g = inscGenrePrincipal({ id:1, genre_ids:ids }, media);
+        vrai(g && INSC_GENRES.indexOf(g) >= 0,
+             nom + ' rend « ' + (g||'rien') + ' », que la liste de l\'écran ne connaît pas');
+      });
+      /* Un animé pur (aucun genre en dehors d'Animation) garde « Animation »
+         plutôt que de ne rien rendre du tout. */
+      egal(inscGenrePrincipal({ id:1, genre_ids:[16] }, 'tv'), 'Animation');
+      /* Et un titre dont AUCUN genre n'a d'équivalent ne rend rien, plutôt
+         qu'un nom qui serait jeté plus loin. */
+      egal(inscGenrePrincipal({ id:1, genre_ids:[10766,10767] }, 'tv'), '');
+    });
+  });
+
+  test('la déduction du style tient sur un profil fait de séries et d\'animés', ()=>{
+    inscVierge();
+    db.inscription = { vue:'inscTitres', debut:1, finie:false, genres:{} };
+    avecGenresTMDB(()=>{
+      /* Le scénario exact du rapport de relecture. */
+      const CAS = [[10765,18,10759],[10759,18,10765],[10765,10759],
+                   [16,10759,35],[16,10759,18],[16,10759]];
+      sansEcran(()=>{
+        CAS.forEach((ids, i)=>{
+          db.inscription.genres['tv:'+i] = inscGenrePrincipal({ id:i, genre_ids:ids }, 'tv');
+          inscBascTitre('tv', i);
+        });
+      });
+      const deduits = inscGenresDeduits();
+      vrai(deduits.length > 0, 'six séries ou animés aimés ne produisent aucun genre');
+      sansEcran(()=> viewInscStyle());
+      vrai(db.gouts.genres.length > 0, '« Ton style » arrive vide après six titres');
+    });
   });
 
   /* Empiler les résultats bruts donnerait vingt thrillers d'affilée — le même
@@ -1036,9 +1106,13 @@ window.MODE_TEST = true;
      l'inscription, c'est redemander la même chose deux fois de suite. */
   test('finir l\'inscription n\'ouvre pas une seconde grille de jaquettes', ()=>{
     inscVierge();
-    db.inscription = { vue:'inscFin', debut:1, finie:false };
+    db.inscription = { vue:'inscFin', debut:1, finie:false, genres:{} };
     db.gouts.amorcageFait = false; db.gouts.platesDemande = false;
     vrai(besoinAmorcage(), 'le cas de départ ne tient plus : rien à démontrer');
+    /* Le parcours a récolté quelque chose : c'est la condition pour refermer
+       la grille d'amorçage. Sans avis, elle doit RESTER ouverte — c'est le
+       cas voisin, tenu par son propre test. */
+    sansEcran(()=> inscBascTitre('tv', 1396));
     sansEcran(()=> inscTerminer());
     vrai(!besoinAmorcage(), 'la grille d\'amorçage se rouvre après l\'inscription');
     vrai(db.gouts.platesDemande === true, 'la question des plateformes serait reposée');
@@ -1048,6 +1122,63 @@ window.MODE_TEST = true;
   /* `db.inscription` n'existe QUE pendant le parcours : une base ancienne n'a
      pas cette clé, et personne ne doit être dérouté vers l'inscription au
      démarrage sur la foi d'un champ absent. */
+  /* RÉGRESSION. Qui saute tout le parcours n'a plus AUCUN profil — et éteindre
+     en plus la grille de secours de Découvrir le laisserait sans rattrapage,
+     alors qu'il en avait un avant ce lot. Sa seule issue serait « Mes goûts »,
+     au fond des réglages, qu'il n'ira pas chercher. */
+  test('sauter tout le parcours laisse la grille de secours ouverte', ()=>{
+    inscVierge();
+    db.inscription = { vue:'inscFin', debut:1, finie:false, genres:{} };
+    db.gouts.amorcageFait = false;
+    vrai(besoinAmorcage(), 'le cas de départ ne tient plus');
+    sansEcran(()=> inscTerminer());
+    vrai(besoinAmorcage(), 'la grille de secours a été éteinte alors que rien n\'a été récolté');
+    /* La question des plateformes, elle, a bien été posée : on ne la repose pas. */
+    vrai(db.gouts.platesDemande === true, 'la question des plateformes serait reposée');
+  });
+
+  /* Le bouton retour d'Android ramène à l'avatar ; réappuyer sur « Continuer »
+     repasse par `demarrerInscription`. Les titres aimés survivaient, la mémoire
+     des genres non — « Ton style » arrivait vide par ce chemin-là aussi. */
+  test('repasser par l\'avatar ne perd pas la mémoire des genres', ()=>{
+    inscVierge();
+    db.inscription = { vue:'inscTitres', debut:1, finie:false,
+                       genres:{ 'movie:1':'Drame', 'movie:2':'Comédie' } };
+    sansEcran(()=> demarrerInscription());
+    egal(db.inscription.genres, { 'movie:1':'Drame', 'movie:2':'Comédie' },
+         'la mémoire des genres a été effacée en repassant par le départ');
+  });
+
+  /* « Aucune » est une réponse, pas un défaut. La tuile arrivait cochée avant
+     que la personne ait rien dit : l'écran affirmait un choix à sa place. */
+  test('la tuile « Aucune » ne s\'allume qu\'une fois choisie', ()=>{
+    inscVierge();
+    db.inscription = { vue:'inscPlates', debut:1, finie:false, genres:{} };
+    const avant = { tv: platesTMDB.tv, movie: platesTMDB.movie };
+    platesTMDB.movie = [{ id:8, nom:'Netflix', logo:'/n.jpg', rang:1 }];
+    platesTMDB.tv = [];
+    try{
+      const lire = ()=>{
+        const b = document.createElement('div');
+        b.innerHTML = sansEcran(()=> viewInscPlates());
+        return b.querySelector('.ipl.aucune').className;
+      };
+      vrai(lire().indexOf('on') < 0, '« Aucune » est allumée avant toute réponse');
+      sansEcran(()=> inscAucunePlate());
+      vrai(lire().indexOf('on') >= 0, '« Aucune » ne s\'allume pas quand on la choisit');
+      /* Cocher un service dédit « Aucune » : les deux ne peuvent pas être vrais. */
+      sansEcran(()=> inscBascPlate(8));
+      vrai(!inscAucuneDite(), '« Aucune » survit à la sélection d\'un service');
+      /* Et le récapitulatif ne met pas un choix dans la bouche de quelqu'un. */
+      inscVierge();
+      db.inscription = { vue:'inscFin', debut:1, finie:false, genres:{} };
+      const fin = document.createElement('div');
+      fin.innerHTML = sansEcran(()=> viewInscFin());
+      vrai(fin.textContent.indexOf('non renseignées') >= 0,
+           'le récapitulatif annonce « aucune » sans qu\'on l\'ait dit');
+    } finally { platesTMDB.tv = avant.tv; platesTMDB.movie = avant.movie; }
+  });
+
   test('une base sans db.inscription ne déclenche aucune reprise', ()=>{
     inscVierge();
     vrai(!inscriptionEnCours(), 'une base neuve se croit en cours d\'inscription');

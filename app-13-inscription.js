@@ -237,8 +237,15 @@ function demarrerInscription(){
      sans cette mémoire les titres aimés au premier tour perdraient leur genre —
      et l'inscription peut être reprise après la fermeture de l'app.
      Sans lui, l'étape Style arrive VIDE, et tout son intérêt disparaît :
-     corriger est plus rapide que composer (§5.6). */
-  db.inscription = { vue:'inscTitres', debut: Date.now(), finie:false, genres:{} };
+     corriger est plus rapide que composer (§5.6).
+
+     La mémoire EXISTANTE est reprise, jamais recréée : le bouton retour
+     d'Android ramène à l'écran de l'avatar, et réappuyer sur « Continuer »
+     repasse ici. Repartir d'un objet vide effaçait les genres alors que les
+     titres aimés, eux, survivaient — « Ton style » arrivait vide par ce
+     chemin-là aussi. */
+  db.inscription = { vue:'inscTitres', debut: Date.now(), finie:false,
+                     genres: (db.inscription && db.inscription.genres) || {} };
   inscStylePreRempli = false;
   inscGrille = { etat:'froid', err:'', fournee:0, titres:[], vus:{}, encours:false };
   saveDB();
@@ -286,8 +293,14 @@ function inscTerminer(){
     g.platesDemande = true;
     /* La grille d'amorçage de Découvrir (`besoinAmorcage`, app-11) est une
        SECONDE grille de jaquettes. La laisser s'ouvrir juste après celle de
-       l'inscription serait redemander la même chose deux fois de suite. */
-    g.amorcageFait = true;
+       l'inscription serait redemander la même chose deux fois de suite.
+       MAIS SEULEMENT SI LE PARCOURS A RÉCOLTÉ QUELQUE CHOSE. Sinon on éteint
+       le filet de sécurité de quelqu'un qui vient précisément de ne rien
+       donner : trois « Je verrai plus tard » d'affilée, et il arrivait sur
+       Découvrir sans profil ET sans grille de rattrapage, alors qu'avant ce
+       lot il en avait une. Sa seule issue aurait été « Mes goûts », au fond
+       des réglages, qu'il n'ira pas chercher. C'était une régression. */
+    if(inscNbAimes()) g.amorcageFait = true;
     toucheGouts();
   }
   if(typeof oublierSuggestions === 'function') oublierSuggestions();
@@ -371,19 +384,67 @@ function inscNormaliser(r, media){
            genre: inscGenrePrincipal(r, media) };
 }
 
+/* TMDB N'EMPLOIE PAS LES MÊMES NOMS DE GENRES POUR LES FILMS ET POUR LES
+   SÉRIES. Côté séries il dit « Action & Adventure », « Sci-Fi & Fantasy »,
+   « War & Politics », « Kids » — quatre noms qui n'existent pas côté films,
+   et qui ne peuvent donc pas figurer dans `INSC_GENRES`.
+
+   Sans cette table, la déduction de l'étape Style lisait un de ces noms, ne le
+   retrouvait pas dans sa liste, et le jetait EN SILENCE. Mesuré sur du vrai :
+   quelqu'un qui tapait Game of Thrones, The Walking Dead, The Mandalorian,
+   One Piece, L'Attaque des Titans et Naruto arrivait sur « Ton style » avec
+   ZÉRO puce cochée. Il venait de donner six réponses et l'écran suivant
+   faisait comme s'il n'avait rien dit — exactement ce que ce lot existe pour
+   éviter. Le cas des animés était le pire : leur second genre est toujours
+   l'un de ces quatre-là, donc un animé ne rapportait jamais rien.
+
+   `Sci-Fi & Fantasy` couvre chez TMDB ce que les films séparent en
+   « Science-Fiction » et « Fantastique ». On retient Science-Fiction : les
+   deux libellés se ramènent de toute façon au même identifiant côté séries,
+   le choix ne change que le mot affiché.
+
+   NOTE POUR LE MOTEUR — cette table règle la DÉDUCTION, pas la recherche.
+   `genreParNom` (app-04) ignore toujours onze des dix-neuf libellés dès qu'il
+   cherche une série : cocher « Horreur » ne rendra jamais une série d'horreur.
+   Ce défaut est antérieur à ce lot (l'écran « Mes goûts » l'a déjà) et se
+   règle dans app-04, hors du périmètre de ce lot : le compte rendu donne le
+   correctif exact, en trois lignes et pour toute l'app. */
+const INSC_GENRE_TV = {
+  'Action & Adventure': 'Action',
+  'Sci-Fi & Fantasy':   'Science-Fiction',
+  'War & Politics':     'Guerre',
+  'Kids':               'Familial'
+};
+
+/* Le libellé de la liste de l'écran qui correspond à un nom de genre TMDB, ou
+   rien du tout si ce nom n'a pas d'équivalent (« Soap », « Talk », « News »,
+   « Reality », « Téléfilm »). Rendre un nom qui sera jeté plus loin, c'est
+   perdre l'information sans que personne ne s'en aperçoive. */
+function inscLabelGenre(nom){
+  if(!nom) return '';
+  if(INSC_GENRES.indexOf(nom) >= 0) return nom;
+  return INSC_GENRE_TV[nom] || '';
+}
+
 /* Le genre dominant, en clair. Il ne sert qu'à ÉTALER la grille et à
-   pré-remplir l'étape Style — jamais à filtrer quoi que ce soit. */
+   pré-remplir l'étape Style — jamais à filtrer quoi que ce soit.
+   Il rend TOUJOURS un libellé de `INSC_GENRES`, ou rien. */
 function inscGenrePrincipal(r, media){
   const ids = r.genre_ids || [];
   const liste = (typeof genresTMDB === 'object' && genresTMDB[media]) || [];
+  let animation = '';
   for(let i = 0; i < ids.length; i++){
     const g = liste.find(x => x.id === ids[i]);
+    const label = inscLabelGenre(g && g.nom);
+    if(!label) continue;
     /* « Animation » sur un animé ne dit rien de plus que la colonne où il est
-       déjà rangé : on préfère le genre suivant quand il y en a un. */
-    if(g && !/^animation$/i.test(g.nom)) return g.nom;
+       déjà rangé : on préfère le genre suivant quand il y en a un. On le garde
+       tout de même sous le coude — mieux vaut « Animation » que rien si aucun
+       autre genre du titre n'a d'équivalent. */
+    if(/^animation$/i.test(label)){ animation = label; continue; }
+    return label;
   }
-  const p = liste.find(x => x.id === ids[0]);
-  return p ? p.nom : '';
+  return animation;
 }
 
 /* Étaler sur les genres, sans jamais deux fois le même d'affilée si on peut
@@ -794,8 +855,13 @@ function viewInscPlates(){
         (logo ? '<img loading="lazy" src="'+logo+'" alt="">' : '')+
         '<span>'+esc(p.nom)+'</span></button>';
     }).join('')+
-    /* « Aucune » est une réponse pleine et entière, pas un abandon. */
-    '<button class="ipl aucune'+(choisies.length ? '' : ' on')+'" '+
+    /* « Aucune » est une réponse pleine et entière, pas un abandon — mais elle
+       ne s'allume QUE si on l'a donnée. Elle arrivait cochée d'office, coche
+       verte comprise, avant que la personne ait dit quoi que ce soit :
+       l'écran affirmait une réponse à sa place, et un récapitulatif qui
+       annonce « Plateformes : aucune » derrière un choix qu'on n'a pas fait
+       est exactement le genre de détail qui fait douter de tout le reste. */
+    '<button class="ipl aucune'+(!choisies.length && inscAucuneDite() ? ' on' : '')+'" '+
       'onclick="inscAucunePlate()">Aucune</button>'+
   '</div>';
 
@@ -803,20 +869,48 @@ function viewInscPlates(){
     '<b>même partagé avec quelqu\'un</b>. Beaucoup regardent sur le compte d\'un proche '+
     'et ne le déclarent pas.</div></div>';
 
-  return html + inscPied(choisies.length ? 'Continuer' : 'Je n\'en ai aucune',
-                         'inscAller(\'inscFin\')', 'Je verrai plus tard');
+  /* Le bouton dit ce qu'il fait. « Je n'en ai aucune » EST la réponse, donc il
+     l'enregistre — sinon on lit une phrase à l'écran et l'app comprend autre
+     chose. Pour ne rien répondre du tout, « Je verrai plus tard » est juste
+     en dessous, et il est toujours là. */
+  return html + inscPied(
+    (choisies.length || inscAucuneDite()) ? 'Continuer' : 'Je n\'en ai aucune',
+    'inscFinirPlates()', 'Je verrai plus tard');
+}
+
+function inscFinirPlates(){
+  if(!mesPlates().length && !inscAucuneDite()) inscNoterAucune(true);
+  inscAller('inscFin');
+}
+
+/* « Aucune » a-t-elle été DITE ? À distinguer d'une liste vide, qui veut dire
+   « je n'ai pas encore répondu ». La réponse vit dans `db.inscription`, donc
+   elle survit à une fermeture de l'app au milieu du parcours et disparaît
+   avec lui — aucune clé de plus dans les goûts, où elle ferait doublon avec
+   `platesDemande`. */
+function inscAucuneDite(){
+  return !!(db.inscription && db.inscription.aucune);
+}
+function inscNoterAucune(v){
+  if(db.inscription){ db.inscription.aucune = !!v; saveDB(); }
 }
 
 /* On délègue à `bascMaPlate` (app-04) : c'est lui qui tient le format de
    `db.gouts.plates`, resème les filtres et date les goûts. Le dupliquer ici
    ferait diverger les deux écrans à la première correction. */
 function inscBascPlate(id){
+  /* Cocher un service dédit « Aucune » : les deux ne peuvent pas être vrais. */
+  inscNoterAucune(false);
   bascMaPlate(id);
 }
-/* « Aucune » vide la sélection. Rien de plus : `platesDemande` dit déjà que la
-   question a été posée, une liste vide après coup VEUT DIRE « aucune ». Une
-   clé de plus pour la même information finirait par la contredire. */
+/* « Aucune » vide la sélection et retient qu'elle a été choisie. La liste vide
+   ne suffit pas à porter l'information : elle ne distingue pas « je n'ai
+   aucun abonnement » de « je n'ai pas encore répondu », et c'est justement
+   cette confusion qui allumait la tuile avant toute réponse.
+   `platesDemande`, lui, ne dit que « la question a été posée » — il est écrit
+   à la fin du parcours et vaut pour les deux cas. */
 function inscAucunePlate(){
+  inscNoterAucune(!inscAucuneDite());
   if(typeof viderMesPlates === 'function') return viderMesPlates();
   db.gouts.plates = []; toucheGouts(); render();
 }
@@ -852,7 +946,12 @@ function viewInscFin(){
           ? (g.genres || []).join(', ') : 'aucun — je devinerai')+
         ((g.animeSous || []).length ? ligne('Côté animés', g.animeSous.join(', ')) : '')+
         ligne('Jamais proposé', (g.exclus || []).length ? g.exclus.join(', ') : 'rien')+
-        ligne('Plateformes', plates.length ? plates.map(inscNomPlate).join(', ') : 'aucune')+
+        /* « aucune » est une réponse, « non renseigné » en est une autre. Les
+           confondre, c'est mettre dans la bouche de quelqu'un un choix qu'il
+           n'a pas fait, sur l'écran même qui lui rend compte de ce qu'il a
+           dit. */
+        ligne('Plateformes', plates.length ? plates.map(inscNomPlate).join(', ')
+                           : inscAucuneDite() ? 'aucune' : 'non renseignées')+
       '</div>'+
     '</div>';
 
