@@ -127,6 +127,9 @@ window.MODE_TEST = true;
     db.avis = { tv:{}, movie:{} };
     db.avisRetires = { tv:{}, movie:{} };
     db.podium = { film:[], serie:[], anime:[], maj:0 };
+    /* R1 — le classement global. Sans lui, un test qui joue un duel hériterait
+       des scores du test précédent : ils ne sont plus jetés à la fin. */
+    db.classement = { film:{}, serie:{}, anime:{}, maj:0 };
     db.profil = { couleur:'corail', embleme:'lettre' };
     db.pseudo = ''; db.auth = null; db.v = 2;
   }
@@ -1015,17 +1018,94 @@ window.MODE_TEST = true;
     try{ fn(); } finally { window.tmdb = vrai_; }
   }
 
-  test('le duel écrit un podium de dix au plus, du meilleur au moins bon', ()=>{
+  /* R1 · point 11 — le podium n'est PLUS écrit par la session : il est projeté
+     depuis `db.classement`, filtré sur trois duels joués, coupé à dix. */
+  test('le duel projette un podium de dix au plus, du meilleur au moins bon', ()=>{
     baseVierge();
     for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
     ouvrirDuel('film');
     horsLigne(()=>{
-      /* On force un classement lisible plutôt que de jouer douze duels au hasard. */
-      duel.paquet.forEach((t,i)=>{ duel.scores['movie:'+t.id] = 2000 - i; });
+      /* On force un classement lisible plutôt que de jouer douze duels au hasard.
+         Tous à trois duels joués : c'est le seuil d'entrée au podium. */
+      duel.paquet.forEach((t,i)=>{ db.classement.film[String(t.id)] = { s:2000 - i, n:3 }; });
       const attendu = duel.paquet.slice(0,10).map(t=>String(t.id));
       terminerDuel();
       egal(db.podium.film, attendu);
       vrai(db.podium.maj > 0, 'le podium n\'est pas daté : la synchro ne saura pas l\'arbitrer');
+    });
+    fermerDuel();
+  });
+
+  test('un titre en dessous de trois duels est classé, mais pas exposé au podium', ()=>{
+    baseVierge();
+    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
+    ouvrirDuel('film');
+    horsLigne(()=>{
+      /* Le n° 1 par le score n'a joué qu'une fois : il a gagné par chance.
+         Deux autres ont vraiment joué. */
+      db.classement.film['1'] = { s:9000, n:1 };
+      db.classement.film['2'] = { s:1200, n:3 };
+      db.classement.film['3'] = { s:1100, n:7 };
+      terminerDuel();
+      egal(db.podium.film, ['2','3'],
+           'un titre qui a gagné une fois par chance coiffe un titre qui a joué quinze fois');
+      egal(db.classement.film['1'].n, 1, 'le titre a été déclassé au lieu d\'être seulement caché');
+    });
+    fermerDuel();
+  });
+
+  test('le score survit à la partie : rejouer ne repart pas de 1000', ()=>{
+    baseVierge();
+    for(let i=1;i<=11;i++) db.movies[i] = film(i, ['Drame']);
+    ouvrirDuel('film');
+    duel.paire = [ { media:'movie', id:'1' }, { media:'movie', id:'2' } ];
+    duel.scores['movie:1'] = 1000; duel.scores['movie:2'] = 1000;
+    appliquerVote(0);
+    const apres = db.classement.film['1'].s;
+    vrai(apres > 1000, 'le gagnant n\'a rien gagné dans le classement global');
+    egal(db.classement.film['1'].n, 1, 'le duel joué n\'a pas été compté');
+    egal(db.classement.film['2'].n, 1, 'le duel joué n\'a pas été compté pour le perdant');
+    fermerDuel();
+    /* Une nouvelle partie : le score de départ vient du classement, pas d'un
+       bonus reconstruit depuis le podium. C'était toute la cause de l'immobilité. */
+    ouvrirDuel('film');
+    egal(duel.scores['movie:1'], apres, 'la partie a jeté le travail de la précédente');
+    egal(duel.scores['movie:11'], 1000, 'un titre jamais rencontré ne démarre pas à 1000');
+    fermerDuel();
+  });
+
+  test('un titre du podium ne démarre plus avec une avance de 120 points', ()=>{
+    baseVierge();
+    for(let i=1;i<=11;i++) db.movies[i] = film(i, ['Drame']);
+    /* Un podium hérité de la v85, sans aucun classement derrière : c'est
+       exactement l'état d'une base qui vient de migrer. */
+    db.podium.film = ['1','2','3']; db.podium.maj = 1;
+    poserAvis('movie', 2, 1);
+    ouvrirDuel('film');
+    egal(duel.scores['movie:1'], 1000, 'le n° 1 sortant repart avec une avance');
+    egal(duel.scores['movie:2'], 1000, 'un 👍 donne encore un bonus de départ');
+    fermerDuel();
+  });
+
+  test('une session sert au moins quatre duels « neuf contre podium »', ()=>{
+    baseVierge();
+    for(let i=1;i<=20;i++) db.movies[i] = film(i, ['Drame']);
+    /* Cinq titres bien installés au podium, quinze qui n'ont jamais joué. */
+    db.podium.film = ['1','2','3','4','5']; db.podium.maj = 1;
+    ['1','2','3','4','5'].forEach(id=>{ db.classement.film[id] = { s:1200, n:9 }; });
+    db.classement.maj = 1;
+    ouvrirDuel('film');
+    horsLigne(()=>{
+      let neufs = 0;
+      for(let k=0; k<DUEL_TAILLE && duel.paire; k++){
+        const [a, b] = duel.paire;
+        const pod = t => db.podium.film.indexOf(String(t.id)) >= 0;
+        const zero = t => !db.classement.film[String(t.id)];
+        if((zero(a) && pod(b)) || (zero(b) && pod(a))) neufs++;
+        duel.faits++; duelSuivant();
+      }
+      vrai(neufs >= 4, 'seulement ' + neufs + ' duel(s) neuf contre podium : le classement '+
+           'ne bougera pas plus qu\'avant');
     });
     fermerDuel();
   });
@@ -1039,6 +1119,60 @@ window.MODE_TEST = true;
     vrai(db.gouts.pasVus.indexOf('movie:1') >= 0, 'rien n\'est retenu : il reviendra demain');
     egal(avisDe('movie', 1), 0, '« pas vu » a été pris pour un avis');
     fermerDuel();
+  });
+
+  /* R1 · point 12 — « Encore une chose » ne parle que du duel qui vient de
+     finir. Avant, elle prenait le paquet PUIS toute la bibliothèque : Blue
+     Exorcist revenait en tête juste après avoir été départagé, et le reste de
+     la liste n'avait été vu nulle part dans la session. */
+  test('la liste de rattrapage ne contient que les titres passés à l\'écran', ()=>{
+    baseVierge();
+    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
+    ouvrirDuel('film');
+    /* On rejoue une session lisible : trois paires, six titres vus. */
+    duel.vus = ['1','2','3','4','5','6'].map(id=>({ media:'movie', id:id, nom:'F'+id, date:null }));
+    const l = titresARattraper().map(t=>t.id);
+    egal(l.length, 6, 'la liste déborde du duel : elle est repartie dans la bibliothèque');
+    /* Les titres vus EN DERNIER en haut : l'ordre suit le duel. */
+    egal(l, ['6','5','4','3','2','1'], 'l\'ordre ne suit pas le duel');
+    fermerDuel();
+  });
+
+  test('un titre déjà pouçé ne figure pas dans la liste de rattrapage', ()=>{
+    baseVierge();
+    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
+    ouvrirDuel('film');
+    poserAvis('movie', 2, 1);
+    poserAvis('movie', 3, -1);
+    duel.vus = ['1','2','3','4'].map(id=>({ media:'movie', id:id, nom:'F'+id, date:null }));
+    egal(titresARattraper().map(t=>t.id), ['4','1'],
+         'on redemande un avis à quelqu\'un qui vient de le donner');
+    /* Et un titre récusé pendant la partie ne revient pas non plus.
+       `duelPasVu` enchaîne sur le duel suivant, donc de nouveaux titres passent
+       à l'écran : on repose la même liste de quatre pour ne mesurer que ça. */
+    duelPasVu('movie', 4);
+    duel.vus = ['1','2','3','4'].map(id=>({ media:'movie', id:id, nom:'F'+id, date:null }));
+    egal(titresARattraper().map(t=>t.id), ['1'],
+         'on demande « tu l\'as aimé ? » sur un titre qu\'on vient de dire ne pas avoir vu');
+    fermerDuel();
+  });
+
+  test('liste de rattrapage vide ⇒ l\'écran est sauté, pas affiché à vide', ()=>{
+    baseVierge();
+    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
+    ouvrirDuel('film');
+    duel.vus = ['1','2'].map(id=>({ media:'movie', id:id, nom:'F'+id, date:null }));
+    poserAvis('movie', 1, 1); poserAvis('movie', 2, -1);
+    egal(titresARattraper().length, 0, 'le test ne prouve rien : la liste n\'est pas vide');
+    /* Le résultat doit alors proposer « Terminer », jamais « Continuer → ». */
+    duel.ecran = 'resultat'; duel.classe = []; duel.podiumPret = false;
+    const boite = document.createElement('div');
+    boite.innerHTML = ecranDuelResultat();
+    vrai(boite.textContent.indexOf('Continuer') < 0,
+         '« Continuer → » mène à un écran qui ne demande rien');
+    /* Et s'y rendre quand même referme la session au lieu d'afficher le vide. */
+    ouvrirRattrapage();
+    vrai(!duel.actif, 'l\'écran vide s\'est affiché');
   });
 
   test('un titre au nom truqué ne produit aucun gestionnaire exécutable', ()=>{
@@ -1271,10 +1405,10 @@ window.MODE_TEST = true;
 
   groupe('Lot A — la synchro');
 
-  test('payload emporte les avis, leurs effacements et le podium', ()=>{
+  test('payload emporte les avis, leurs effacements, le podium et le classement', ()=>{
     baseVierge();
     const p = payload();
-    ['avis','avisRetires','podium'].forEach(k=>{
+    ['avis','avisRetires','podium','classement'].forEach(k=>{
       if(p[k] === undefined) throw new Error(k+' ne monte pas au serveur');
     });
   });
@@ -1368,6 +1502,98 @@ window.MODE_TEST = true;
     db.podium.film = ['550']; db.podium.maj = 1;
     vrai(explicationProfil().podium.indexOf('Fight Club') >= 0,
          'le podium des films nomme un titre qui n\'a jamais été départagé');
+  });
+
+  /* ---------------------------------------------------------------------------
+     R1 · point 11 — LA FUSION DU CLASSEMENT
+
+     C'est le point le plus délicat du lot, et le seul endroit où une erreur
+     efface des mois de duels sans que rien ne s'affiche. La propriété à tenir
+     est simple à dire : LA FUSION NE FAIT JAMAIS PERDRE DE DUELS.
+  --------------------------------------------------------------------------- */
+  const clAvecN = (o)=>{ const r = {}; Object.keys(o).forEach(k=>{ r[k] = o[k].n; }); return r; };
+
+  test('le classement se fusionne titre par titre : le plus de duels gagne', ()=>{
+    baseVierge();
+    db.classement.film = { '1':{s:1200,n:9}, '2':{s:900,n:1} };
+    db.classement.maj = 1000;
+    fusionnerClassement({ classement:{ film:{
+      '1':{s:1500,n:2},        // moins de duels : refusé, même avec un meilleur score
+      '2':{s:1400,n:7},        // plus de duels : gagne
+      '3':{s:1100,n:4}         // n'existe que là-bas : conservé tel quel
+    }, serie:{}, anime:{}, maj:2000 } });
+    egal(db.classement.film['1'], { s:1200, n:9 }, 'un classement moins informé a gagné');
+    egal(db.classement.film['2'], { s:1400, n:7 }, 'des duels ont été perdus');
+    egal(db.classement.film['3'], { s:1100, n:4 }, 'une clé du distant a été jetée');
+    egal(db.classement.maj, 2000, '`maj` n\'a pas pris le plus grand des deux');
+  });
+
+  test('la fusion du classement est idempotente : synchroniser deux fois ne dégrade rien', ()=>{
+    baseVierge();
+    db.classement.film = { '1':{s:1200,n:9}, '2':{s:900,n:1} };
+    const paquet = { classement:{ film:{ '1':{s:1500,n:2}, '2':{s:1400,n:7}, '3':{s:1100,n:4} },
+                                  serie:{}, anime:{}, maj:2000 } };
+    fusionnerClassement(paquet);
+    const apres1 = JSON.stringify(db.classement);
+    fusionnerClassement(paquet);
+    egal(db.classement, JSON.parse(apres1), 'la seconde synchro a changé le classement');
+    vrai(!fusionnerClassement(paquet), 'la seconde synchro se croit encore porteuse d\'un changement');
+  });
+
+  test('aucun duel n\'est perdu, quel que soit l\'ordre des appareils', ()=>{
+    /* Le téléphone et la tablette ont chacun joué de leur côté. Peu importe qui
+       se synchronise le premier : chaque titre doit finir avec le plus grand
+       nombre de duels des deux, et aucune clé ne doit disparaître. */
+    const A = { '1':{s:1200,n:9}, '2':{s:900,n:1},  '4':{s:1000,n:5} };
+    const B = { '1':{s:1500,n:2}, '2':{s:1400,n:7}, '3':{s:1100,n:4} };
+    const attendu = { '1':9, '2':7, '3':4, '4':5 };
+
+    baseVierge();
+    db.classement.film = JSON.parse(JSON.stringify(A));
+    fusionnerClassement({ classement:{ film:JSON.parse(JSON.stringify(B)), maj:0 } });
+    egal(clAvecN(db.classement.film), attendu, 'des duels ont été perdus dans un sens');
+
+    baseVierge();
+    db.classement.film = JSON.parse(JSON.stringify(B));
+    fusionnerClassement({ classement:{ film:JSON.parse(JSON.stringify(A)), maj:0 } });
+    egal(clAvecN(db.classement.film), attendu, 'des duels ont été perdus dans l\'autre sens');
+  });
+
+  test('la fusion du classement n\'imite pas celle du podium : rien ne se remplace en bloc', ()=>{
+    /* Jouer les films sur le téléphone puis les séries sur la tablette. Avec un
+       remplacement en bloc sur la date — la règle du podium — le classement des
+       films disparaîtrait, définitivement et sans un mot. */
+    baseVierge();
+    db.classement.film = { '11':{s:1300,n:6} };
+    db.classement.maj = 1000;
+    fusionnerClassement({ classement:{ film:{}, serie:{ '99':{s:1250,n:4} }, anime:{}, maj:5000 } });
+    egal(db.classement.film['11'], { s:1300, n:6 }, 'le classement des films a été effacé');
+    egal(db.classement.serie['99'], { s:1250, n:4 }, 'le classement des séries n\'est pas arrivé');
+  });
+
+  test('la migration crée le classement sans jamais détruire le podium', ()=>{
+    baseVierge();
+    /* L'état exact d'une base qui arrive de la v85 : un podium, pas de classement. */
+    db.podium = { film:['550','551'], serie:[], anime:[], maj:1234 };
+    delete db.classement;
+    reparerAvis();
+    egal(db.podium.film, ['550','551'], 'le podium hérité a été détruit par la migration');
+    egal(db.podium.maj, 1234, 'la date du podium a été écrasée');
+    egal(db.classement, { film:{}, serie:{}, anime:{}, maj:0 },
+         'le classement n\'a pas été créé, ou pas vide');
+  });
+
+  test('reparerAvis remet en forme un classement abîmé sans jeter ce qui est lisible', ()=>{
+    baseVierge();
+    db.classement = { film:{ '1':{s:1200,n:3}, '2':{s:'beaucoup',n:2},
+                             '3':{s:1100}, '4':{s:1050,n:-4} }, maj:'hier' };
+    reparerAvis();
+    egal(db.classement.film['1'], { s:1200, n:3 }, 'une entrée saine a été touchée');
+    vrai(!db.classement.film['2'], 'un score qui n\'en est pas un a été gardé');
+    egal(db.classement.film['3'], { s:1100, n:0 }, 'un compteur absent n\'a pas été comblé');
+    egal(db.classement.film['4'], { s:1050, n:0 }, 'un compteur négatif a été gardé');
+    egal(db.classement.maj, 0, 'une date qui n\'en est pas une a été gardée');
+    egal(db.classement.serie, {}, 'une famille manquante n\'a pas été créée');
   });
 
   test('reparerAvis jette un avis qui n\'en est pas un', ()=>{
