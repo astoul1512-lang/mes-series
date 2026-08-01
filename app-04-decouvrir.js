@@ -388,9 +388,42 @@ function discMedia(){ return ui.disc.type === 'movie' ? 'movie' : 'tv'; }
 function isoIlYA(jours){ return new Date(Date.now() - jours*86400000).toISOString().slice(0,10); }
 function isoDansN(jours){ return new Date(Date.now() + jours*86400000).toISOString().slice(0,10); }
 
+/* LOT C — les cinq genres de films que TMDB nomme autrement côté séries.
+
+   Les goûts sont enregistrés sous un seul nom (`db.gouts.genres`), et ce nom
+   vient forcément de l'une des deux taxonomies. Côté films TMDB dit « Action »
+   et « Science-Fiction » ; côté séries il dit « Action & Adventure » et
+   « Sci-Fi & Fantasy ». Sans cette table, quelqu'un qui coche « Action » n'a
+   JAMAIS reçu une série d'action : le nom ne se retrouvait pas dans la liste
+   des séries, `genreParNom` rendait `null`, et l'appelant filtrait
+   silencieusement. C'était vrai de l'écran « Mes goûts » bien avant le lot C.
+
+   Les six autres libellés de films — Histoire, Horreur, Musique, Romance,
+   Sport, Thriller — n'ont réellement AUCUN équivalent en série chez TMDB : la
+   taxonomie des séries ne les connaît pas du tout. Rien ne peut les sauver
+   ici ; l'écran d'inscription le dit maintenant à qui les coche.
+
+   `INSC_GENRE_TV` (app-13) tient la correspondance dans l'autre sens, pour la
+   déduction. Les deux tables sont courtes et chacune vit là où elle sert. */
+const GENRE_SERIE = {
+  'action':          'Action & Adventure',
+  'aventure':        'Action & Adventure',
+  'science-fiction': 'Sci-Fi & Fantasy',
+  'fantastique':     'Sci-Fi & Fantasy',
+  'guerre':          'War & Politics'
+};
+
+/* Le nom EXACT est toujours essayé en premier : la traduction n'est qu'un
+   repli. C'est ce qui garantit qu'aucun appel ne change de résultat — seuls
+   des `null` deviennent des identifiants, jamais l'inverse. */
 function genreParNom(media, nom){
   const l = genresTMDB[media] || [];
-  const g = l.find(x => (x.nom||'').toLowerCase() === nom.toLowerCase());
+  const cle = String(nom == null ? '' : nom).toLowerCase();
+  let g = l.find(x => (x.nom||'').toLowerCase() === cle);
+  if(!g && media === 'tv' && GENRE_SERIE[cle]){
+    const equiv = GENRE_SERIE[cle].toLowerCase();
+    g = l.find(x => (x.nom||'').toLowerCase() === equiv);
+  }
   return g ? g.id : null;
 }
 

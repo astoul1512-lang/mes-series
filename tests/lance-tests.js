@@ -33,18 +33,18 @@ const BASE = process.env.BASE || 'http://localhost:8099';
    qui échoue ne bloque pas le démarrage, et elle journalise. */
 const CONSOLE_ATTENDUE = [/migration \d+ en échec/];
 
-/* DOUZE fichiers, pas onze. `app-12-recherche.js` a été ajouté en v83/v84 sans
-   entrer dans cette liste : le contrôle anti-collision ne l'a jamais lu, et une
-   collision dans ce fichier serait passée inaperçue — c'est-à-dire exactement
-   le genre de panne que ce contrôle existe pour attraper (app-01 / app-05 le
-   30/07 : chaque fichier passait `node --check`, l'app ne démarrait plus).
-   Signalé par le lot 0, qui n'avait pas ce fichier dans son périmètre.
-   Vérifié à l'ajout : aucune collision préexistante. */
+/* ATTENTION — cette liste doit contenir TOUS les fichiers chargés par
+   `index.html`, sinon ce contrôle regarde à côté sans jamais le dire.
+   `app-12-recherche.js` y manquait depuis la v83 : le lot 0 l'a signalé sans
+   pouvoir le corriger (hors de son périmètre), c'est réparé ici en même temps
+   qu'on inscrit `app-13-inscription.js`. Le fichier a été ajouté à la liste
+   AVANT d'écrire une ligne du lot C, pour que le contrôle serve à quelque
+   chose pendant l'écriture et pas seulement après. */
 const FICHIERS = [
   'app-01-noyau.js','app-02-outils.js','app-03-vues.js','app-04-decouvrir.js',
   'app-05-plateformes.js','app-06-serie.js','app-07-partage.js',
-  'app-08-reglages.js','app-09-notifications.js','app-10-sorties.js',
-  'app-11-gouts.js','app-12-recherche.js'
+  'app-08-reglages.js','app-09-notifications.js','app-10-sorties.js','app-11-gouts.js',
+  'app-12-recherche.js','app-13-inscription.js'
 ];
 
 /* Déclarations de PREMIER NIVEAU seulement : une colonne 0 pour `function`,

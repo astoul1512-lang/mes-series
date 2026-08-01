@@ -961,6 +961,109 @@
   .dact{display:flex;gap:9px}
   .dact .btn{flex:1}
 
+  /* ===================== LOT C — le parcours d'inscription ===================== */
+
+  /* Les cinq étapes d'effort du parcours. Une jauge VISIBLE EN PERMANENCE
+     (§5.2) : sans elle, on ne sait pas si l'on remplit trois écrans ou trente,
+     et c'est ce qui fait abandonner. Fine et discrète — elle informe, elle ne
+     décore pas. */
+  .ijauge{display:flex;gap:4px;padding:calc(14px + var(--safe-t)) 16px 4px}
+  .ijauge i{flex:1;height:3px;border-radius:2px;background:var(--line);transition:background .3s}
+  .ijauge i.on{background:var(--accent)}
+
+  .iwrap{padding-bottom:6px}
+  .ititre{font-size:25px;font-weight:800;letter-spacing:-.5px;line-height:1.15;margin:12px 0 6px}
+  .itxt{color:var(--muted);font-size:13.5px;line-height:1.5;margin:0}
+
+  /* L'encadré d'explication : le même objet que `.note` de la maquette. Il sert
+     à trois choses différentes — dire ce qu'on a déduit, dire pourquoi l'animé
+     a un second niveau, dire que rien n'est obligatoire. */
+  .inote{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+    padding:12px 13px;font-size:12.5px;color:var(--muted);line-height:1.5}
+  .inote b{color:var(--text)}
+
+  /* Le pied du parcours. Il hérite de `.gbarre` (goûts, plateformes) : une
+     seule grammaire pour « valider et continuer » dans toute l'app. */
+  .ipied .ilien{display:block;width:100%;text-align:center;padding:11px 8px 2px}
+
+  /* LE COMPTEUR, COLLANT. Il commente pendant qu'on défile — posé en haut de
+     page, son message ne serait lu qu'une fois, et il n'aurait plus rien à
+     encourager passé la troisième rangée.
+     Il montre COMBIEN ON A PRIS, jamais combien il faudrait prendre : annoncer
+     « 5, c'est bien pour démarrer » fixe une cible, et l'utilisateur s'arrête
+     à 5 (§5.5). */
+  .icompte{position:sticky;top:0;z-index:30;background:var(--bg);
+    padding:6px 16px 10px;display:flex;align-items:baseline;gap:8px}
+  .icompte b{font-size:19px;font-weight:800;font-variant-numeric:tabular-nums;
+    color:var(--muted);transition:color .2s}
+  .icompte b.on{color:var(--ok)}
+  .icompte span{color:var(--muted);font-size:12.5px;line-height:1.3}
+
+  /* LA GRILLE DE JAQUETTES. Trois colonnes : en dessous les affiches sont trop
+     grandes pour en balayer cinquante, au-dessus on ne reconnaît plus rien —
+     et la reconnaissance est TOUT ce que cet écran demande. */
+  .igrille{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;padding:0 16px 8px}
+  .ijq{display:block;width:100%;text-align:left;position:relative}
+  .ijaff{position:relative;width:100%;aspect-ratio:2/3;border-radius:9px;overflow:hidden;
+    border:1.5px solid var(--line);background:var(--surface2);transition:.14s}
+  .ijaff img,.ijaff .ph{width:100%;height:100%;object-fit:cover;display:block}
+  /* Le titre est POSÉ SUR l'affiche, dans un dégradé, plutôt qu'en dessous :
+     une ligne de texte sous chaque jaquette allongerait la grille d'un tiers
+     pour une information qu'on ne lit que sur les titres qu'on ne reconnaît
+     pas — c'est-à-dire ceux qu'on ne prendra pas. */
+  .ijnom{position:absolute;left:0;right:0;bottom:0;z-index:2;padding:14px 7px 6px;
+    font-size:10.5px;font-weight:700;line-height:1.2;color:#fff;
+    text-shadow:0 1px 6px #000;
+    background:linear-gradient(to top,rgba(0,0,0,.88),transparent)}
+  /* Non choisi : légèrement en retrait. Choisi : net, cerclé, et marqué d'une
+     coche. Le retrait fait ressortir la sélection sans rien cacher. */
+  .ijq:not(.on) .ijaff{opacity:.62}
+  .ijq.on .ijaff{opacity:1;border-color:var(--ok);transform:scale(.955)}
+  /* La pastille est portée par l'AFFICHE et non par le bouton : l'affiche se
+     réduit légèrement quand on la choisit, et la pastille doit suivre ce
+     mouvement plutôt que rester plantée dans le coin du bouton.
+     Une coche dessinée à coups de dégradés a été essayée : à 22 pixels elle
+     rendait un gribouillis illisible. Le caractère fait le travail, et c'est
+     déjà celui des tuiles de plateformes — une seule coche dans toute l'app. */
+  .ijq.on .ijaff::after{content:'✓';position:absolute;top:5px;right:5px;z-index:3;
+    width:22px;height:22px;border-radius:50%;background:var(--ok);color:#07070a;
+    font-size:13px;font-weight:800;line-height:1;
+    display:flex;align-items:center;justify-content:center}
+
+  /* LES PLATEFORMES. Des tuiles logo, pas des lignes de texte : on reconnaît un
+     service à son logo avant de le lire, et l'écran se parcourt d'un coup d'œil
+     au lieu de se lire ligne à ligne (§5.7). */
+  .iplats{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+  .ipl{position:relative;aspect-ratio:1.5;border-radius:12px;background:var(--surface2);
+    border:2px solid var(--line);display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:6px;padding:8px;transition:.13s;opacity:.72}
+  .ipl img{width:34px;height:34px;border-radius:8px;object-fit:cover}
+  .ipl span{font-size:11px;font-weight:700;color:var(--muted);text-align:center;line-height:1.2}
+  .ipl.on{opacity:1;border-color:var(--accent);background:var(--accent-dim)}
+  .ipl.on span{color:var(--text)}
+  .ipl.on::after{content:'✓';position:absolute;top:4px;right:5px;width:16px;height:16px;
+    border-radius:50%;background:var(--accent);color:#fff;font-size:10px;font-weight:800;
+    display:flex;align-items:center;justify-content:center}
+  /* « Aucune » est une réponse pleine et entière, pas un abandon : elle a la
+     même tuile que les autres, sans logo. */
+  .ipl.aucune{opacity:1;font-weight:650}
+
+  /* L'ÉCRAN DE FIN. Le récapitulatif de la récolte : l'utilisateur vient de
+     donner trois minutes, il doit voir ce que ça a produit avant même d'entrer
+     (§5.8). */
+  .ifini{display:flex;flex-direction:column;align-items:center;text-align:center;
+    padding:34px 20px 0}
+  .icoche{width:74px;height:74px;border-radius:50%;background:#3ecf8e1f;
+    border:2px solid #3ecf8e77;color:var(--ok);display:flex;align-items:center;
+    justify-content:center;margin-bottom:18px}
+  .icoche svg{width:32px;height:32px}
+  .irecap{width:100%;margin-top:22px;background:var(--surface);border:1px solid var(--line);
+    border-radius:12px;padding:6px 14px;text-align:left}
+  .irl{display:flex;justify-content:space-between;gap:14px;padding:9px 0;font-size:13.5px;
+    border-bottom:1px solid var(--line)}
+  .irl:last-child{border-bottom:0}
+  .irl span{color:var(--muted);flex:none}
+  .irl b{font-weight:700;text-align:right}
   /* ===================== LOT A — le signal d'appréciation et le moteur de goût ===================== */
 
   /* ---------- La barre « tu as aimé ? » ----------

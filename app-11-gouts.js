@@ -683,8 +683,21 @@ function passeOrigine(x, cadre, perso){
    un genre écarté, jamais deux fois le même, et le cadre de la puce. */
 function tamiser(liste, vus, cadre, perso){
   const hors = (db.gouts && db.gouts.exclus) || [];
-  const idsHors = hors.map(nom => genreParNom('tv', nom) || genreParNom('movie', nom))
-                      .filter(x => x != null);
+  /* LOT C — LES DEUX identifiants, pas le premier trouvé. Ce tamis passe sur
+     des films ET sur des séries mêlés ; ne retenir qu'un identifiant par genre
+     écarté ne protégeait donc qu'une famille sur deux. « Pas d'horreur »
+     écartait les films d'horreur et laissait passer les séries.
+     Le `||` d'origine masquait le problème tant que `genreParNom('tv', …)`
+     rendait `null` sur les genres de films : depuis qu'il sait traduire
+     (`GENRE_SERIE`, app-04), il aurait renvoyé l'identifiant SÉRIE et cessé de
+     protéger les films — l'inverse exact du défaut, sur une consigne que la
+     personne a donnée explicitement. On prend les deux, une fois chacun. */
+  const idsHors = [];
+  hors.forEach(nom=>{
+    [genreParNom('tv', nom), genreParNom('movie', nom)].forEach(id=>{
+      if(id != null && idsHors.indexOf(id) < 0) idsHors.push(id);
+    });
+  });
   return liste.filter(x=>{
     if(!x) return false;
     if(cadre.medias.indexOf(x.media) < 0) return false;
