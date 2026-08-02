@@ -94,6 +94,17 @@ function render(){
      recalculé au retour. C'est ici et pas dans `go()` : la plupart des
      redessins ne changent pas d'écran, et ce sont eux qu'il faut ignorer. */
   if(view !== 'follow') oublierOrdreRattrapage();
+  /* POINT 12 — la recherche plein écran appartient à « Mon profil » et à lui
+     seul. Sans cette ligne, quitter l'écran pendant qu'elle est ouverte (geste
+     de retour, onglet du bas, notification) la laissait armée : on revenait
+     plus tard sur son profil et c'est le champ de recherche qui s'affichait,
+     sans qu'on ait rien demandé. Elle est ici plutôt que dans `go()` parce que
+     `render()` est le seul passage obligé — un `go()` oublié quelque part ne
+     peut pas contourner ce rangement. */
+  if(view !== 'profile' && typeof pf12 !== 'undefined' && pf12.ouvert){
+    rangerRecentPf12(); avorterPf12(); pf12.ouvert = false; pf12.q = '';
+    pf12.pers = null; pf12.persEtat = ''; pf12.persErr = '';
+  }
   /* C4.3 — la position horizontale des rails est relevée avant d'écraser le
      DOM, et remise juste après. Ici plutôt que dans `go()` seul : la plupart
      des redessins ne changent pas d'écran (cocher un épisode, ajouter un film)
@@ -112,7 +123,12 @@ function render(){
     /* Lot C — les quatre étapes de l'inscription sont dans le même cas que
        l'avatar : il n'y a qu'une chose à faire, et une barre du bas y
        proposerait de quitter le parcours au milieu d'une question. */
-    || (typeof INSC_VUES === 'object' && !!INSC_VUES[view]));
+    || (typeof INSC_VUES === 'object' && !!INSC_VUES[view])
+    /* POINT 12 — la recherche de « Mon profil » s'ouvre en PLEIN écran, et
+       plein écran veut dire sans la barre du bas : mesuré clavier levé (300 px),
+       elle laisse voir 1 résultat sur 7 en place contre 4 sur 7 ici. Les 64 px
+       de la barre sont la dernière chose à rendre aux résultats. */
+    || (view === 'profile' && typeof pf12 !== 'undefined' && pf12.ouvert));
   app.classList.remove('enter','back');
   /* Le retour à deux couches gère lui-même son mouvement : pas d'animation par-dessus. */
   if(sansAnim){ sansAnim = false; navDir = 'none'; }
@@ -152,7 +168,16 @@ function render(){
     if(typeof centrerTypeActif === 'function') centrerTypeActif();
     /* La vitrine et la grille filtrée ont chacune leur chargement : on ne
        dépense des requêtes que pour l'état réellement affiché. */
-    if(typeof vitrineVisible === 'function' && vitrineVisible()) chargerSuggestions();
+    /* La garde manquait ici, et elle existait juste en dessous pour la grille :
+       un ajout depuis Découvrir déclenchait DEUX calculs de vitrine — l'un par
+       `veilleBiblio` dans `saveDB`, l'autre par ce `render()` — soit une
+       vingtaine de requêtes TMDB dont la moitié était jetée sans être peinte.
+       `chargerSuggestions` sait déjà se relancer si la bibliothèque bouge
+       pendant un calcul (`c.perime`) : rien n'est perdu.
+       Revue de stabilité du 02/08, constat A1-2. */
+    if(typeof vitrineVisible === 'function' && vitrineVisible()){
+      if(typeof suggEnCours !== 'function' || !suggEnCours()) chargerSuggestions();
+    }
     else if(!ui.disc.charge && !ui.disc.loading) chargerDecouverte();
   }
 }
@@ -467,6 +492,52 @@ function carteRattrapage(s, nx, retard){
   '</div>';
 }
 
+/* ===========================================================================
+   POINT 12 — MON PROFIL
+
+   Trois défauts corrigés d'un coup, plus un correctif de fluidité. Les
+   décisions et leurs mesures sont écrites ici parce que c'est le seul endroit
+   où quelqu'un les relira avant de « simplifier » ce fichier.
+
+   A. LE GRAND NOMBRE EST RETIRÉ (02/08). L'écran affichait « 118 séries » —
+      `Object.keys(db.shows).length`, TOUT, y compris ce qu'on n'a jamais
+      commencé et ce qu'on a mis en pause — à cinq centimètres d'une puce
+      « Séries 88 » qui, elle, écarte `avoir` et `pause`. Trente d'écart sur le
+      même écran : pour qui lit les deux, l'un des deux ment. Le grand nombre ne
+      servait nulle part ailleurs, il part. Les chiffres de la ligne du dessous
+      RESTENT : épisodes, jours de visionnage, séries finies ne se contredisent
+      pas, ne se lisent nulle part ailleurs, et ils sont la seule récompense de
+      l'écran.
+
+   B. ON POUVAIT AVOIR 383 FILMS ET AUCUN MOYEN D'EN RETROUVER UN. Des jaquettes
+      rangées par date de visionnage, rien d'autre : ni recherche, ni tri, ni
+      filtre. D'où la « barre sobre » (squelette A, variante A2) : une seule
+      ligne, trois boutons qui DISENT LEUR ÉTAT — « Trier · A→Z », « Filtrer · 2 ».
+      A2 a été retenue parce que c'est la seule variante mesurée dont la grille
+      NE BOUGE PAS quand on pose un filtre : 369 px dans les deux cas, contre
+      412 → 453 px pour A1.
+
+   C. LE CERCLE NE PASSAIT PAS L'ÉCHELLE. Une bulle de 62 px par personne en
+      rangée horizontale : à dix, c'est un défilement latéral qui masque la
+      moitié des gens sans le dire. Remplacé par UNE ligne — les avatars en
+      pile, « et 8 autres », un appui qui mène à l'écran du cercle existant.
+
+   D. LA FLUIDITÉ. Toucher une puce appelait `render()`, qui rejouait tout
+      l'écran, dont la boucle sur les ~7 000 épisodes de la bibliothèque
+      (18 ms sur un poste de bureau, ~55 ms sur iPhone) — pour un changement qui
+      ne concerne QUE la grille du bas. `peindreProfil` ne réécrit que la zone
+      des cartes et l'état `on` des puces, sur le modèle de `peindreDisc` et
+      `peindreRech`.
+
+   CE QUI N'EST PAS FAIT, ET POURQUOI :
+     · La grille « Films » pose 382 `<img>` en une seule écriture (154 Ko de
+       HTML). Une pagination réglerait ça mais ajouterait un bouton visible :
+       c'est un changement de parcours, il n'est pas validé. Non implémenté.
+     · « Quand la recherche trouve nettement une personne et presque aucun
+       titre, la section Titres se réduit à une ligne » : piste non tranchée,
+       délibérément NON implémentée. La section Titres garde sa place pleine.
+=========================================================================== */
+
 /* ---------- Vue : Mon profil ---------- */
 function lastWatchedAt(s){
   return memo('l'+s.id, ()=>{
@@ -476,7 +547,558 @@ function lastWatchedAt(s){
   });
 }
 
+/* L'état de l'écran, hors de `ui` : il est entièrement local au point 12 et
+   n'a aucune raison d'être relu par un autre écran. `ouvert` est la recherche
+   plein écran, `yAvant` la position de lecture à laquelle « Annuler » ramène. */
+let pf12 = { ouvert:false, yAvant:0, q:'', tri:'recent',
+             filtres:{ genre:[], epoque:[], plate:[], nonnotes:false },
+             pers:null, persEtat:'', persErr:'', recents:null };
+let pf12Timer = null, pf12Seq = 0, pf12Abort = null;
+
+const PF12_TRIS = [['recent','Récents'], ['ancien','Anciens'], ['az','A→Z'], ['za','Z→A']];
+/* Le champ DOIT dire où il cherche : sans ça, la recherche de la bibliothèque
+   et celle de l'onglet Recherche (qui, elle, fouille tout le catalogue TMDB)
+   deviennent indistinguables une fois le reste de l'écran effacé. */
+const PF12_OU = { series:'mes séries', films:'mes films',
+                  avoir:'ce que je veux voir', pause:'mes séries en pause' };
+
+/* ---------------------------------------------------------------------------
+   LES LISTES DE L'ÉCRAN
+
+   Un seul format pour tout ce qui suit — { m:'tv'|'movie', o:objet } — parce
+   que trier, filtrer et chercher doivent traiter une série et un film de la
+   même manière. C'est ce qui évite de réécrire quatre fois la même règle.
+--------------------------------------------------------------------------- */
+function listesProfil(){
+  const S = Object.values(db.shows), F = Object.values(db.movies);
+  const sr = s => ({ m:'tv', o:s });
+  const fm = f => ({ m:'movie', o:f });
+  return {
+    series: S.filter(s=>{ const st = statutSerie(s); return st!=='avoir' && st!=='pause'; }).map(sr),
+    films:  F.filter(f=> statutFilm(f)==='vu').map(fm),
+    avoir:  S.filter(s=> statutSerie(s)==='avoir').map(sr)
+             .concat(F.filter(f=> statutFilm(f)==='avoir').map(fm)),
+    pause:  S.filter(s=> statutSerie(s)==='pause').map(sr)
+  };
+}
+const titrePf12 = x => (x.m === 'tv' ? x.o.name : x.o.title) || '';
+const datePf12  = x => (x.m === 'tv' ? x.o.first : x.o.date) || '';
+const cartePf12 = x => x.m === 'tv' ? showCard(x.o) : movieCard(x.o);
+/* « Récents » ne veut pas dire la même chose d'un onglet à l'autre, et c'est
+   voulu : une série en pause n'a pas de dernier épisode pertinent, elle a une
+   date de mise de côté. Chaque onglet garde donc EXACTEMENT l'ordre qu'il avait
+   avant le point 12 — le tri par défaut ne change rien à ce qu'on voyait. */
+function quandPf12(x, onglet){
+  if(onglet === 'pause') return x.o.pauseLe || 0;
+  if(onglet === 'avoir') return x.o.addedAt || 0;
+  return x.m === 'tv' ? lastWatchedAt(x.o) : (x.o.watchedAt || 0);
+}
+function trierPf12(l, onglet){
+  const c = l.slice();
+  if(pf12.tri === 'az' || pf12.tri === 'za'){
+    c.sort((a,b)=> titrePf12(a).localeCompare(titrePf12(b), 'fr', { sensitivity:'base' }));
+    if(pf12.tri === 'za') c.reverse();
+    return c;
+  }
+  c.sort((a,b)=> quandPf12(b, onglet) - quandPf12(a, onglet));
+  if(pf12.tri === 'ancien') c.reverse();
+  return c;
+}
+
+/* ---------------------------------------------------------------------------
+   LES FILTRES — QUATRE AXES, ET LEUR CONTENU N'EST PAS VALIDÉ
+
+   La feuille « Filtrer » n'a jamais été dessinée. Les quatre axes ci-dessous
+   sont ceux qui étaient PRESSENTIS — genre, époque, plateforme, jamais notés —
+   et rien de plus : pas un cinquième, pas de sous-rubrique. Tant que le dessin
+   n'est pas arbitré, ce code tient la place sans l'occuper.
+
+   Une limite honnête : la bibliothèque ne stocke une plateforme QUE pour les
+   séries (`show.network`, posé par `chargerSerie`). Un film enregistré porte
+   `id, title, poster, backdrop, date, runtime, overview, genres, note, seen…`
+   et aucune chaîne. L'axe « plateforme » ne mord donc que sur les séries, et la
+   feuille ne propose que ce qui existe réellement dans l'onglet ouvert plutôt
+   que d'afficher une rubrique vide.
+--------------------------------------------------------------------------- */
+function genresPf12(x){
+  return Array.isArray(x.o.genres) ? x.o.genres.filter(g => typeof g === 'string' && g) : [];
+}
+function decenniePf12(x){
+  const a = parseInt(String(datePf12(x)).slice(0,4), 10);
+  return a ? Math.floor(a/10)*10 : 0;
+}
+function platePf12(x){
+  return (x.m === 'tv' && typeof x.o.network === 'string') ? x.o.network : '';
+}
+/* « Jamais notés » lit les pouces de Mes goûts (`db.avis`), pas la note TMDB :
+   c'est CE QUE TU N'AS PAS ENCORE DIT qu'on cherche, pas ce que le monde pense. */
+function notePf12(x){
+  return (typeof avisDe === 'function') ? avisDe(x.m, x.o.id) !== 0 : false;
+}
+function passeFiltresPf12(x){
+  const f = pf12.filtres;
+  if(f.genre.length  && !genresPf12(x).some(g => f.genre.indexOf(g) >= 0)) return false;
+  if(f.epoque.length && f.epoque.indexOf(decenniePf12(x)) < 0) return false;
+  if(f.plate.length  && f.plate.indexOf(platePf12(x)) < 0) return false;
+  if(f.nonnotes && notePf12(x)) return false;
+  return true;
+}
+/* Le bouton compte des AXES, pas des cases : « Filtrer · 2 » se lit « deux
+   critères », ce qui reste vrai qu'on ait coché un genre ou trois. */
+function nbFiltresPf12(){
+  const f = pf12.filtres;
+  return (f.genre.length?1:0) + (f.epoque.length?1:0) + (f.plate.length?1:0) + (f.nonnotes?1:0);
+}
+/* Les choix proposés sortent des titres réellement présents dans l'onglet
+   ouvert : une feuille qui propose « Western » à quelqu'un qui n'en a aucun
+   fabrique des culs-de-sac. */
+function optionsPf12(l){
+  const g = {}, e = {}, p = {};
+  l.forEach(x=>{
+    genresPf12(x).forEach(n=>{ g[n] = (g[n]||0) + 1; });
+    const d = decenniePf12(x); if(d) e[d] = (e[d]||0) + 1;
+    const n = platePf12(x);    if(n) p[n] = (p[n]||0) + 1;
+  });
+  const parNombre = (t) => (a,b)=> (t[b] - t[a]) || a.localeCompare(b, 'fr');
+  return {
+    genres:  Object.keys(g).sort(parNombre(g)).slice(0, 14).map(n => [n, g[n]]),
+    epoques: Object.keys(e).map(Number).sort((a,b)=> b - a).map(n => [n, e[n]]),
+    plates:  Object.keys(p).sort(parNombre(p)).slice(0, 12).map(n => [n, p[n]])
+  };
+}
+
+function ouvrirFiltresPf12(){
+  const brut = listesProfil()[ui.profTab] || [];
+  const o = optionsPf12(brut);
+  const f = pf12.filtres;
+  const n = brut.filter(passeFiltresPf12).length;
+  const bouton = (axe, val, libelle, cnt, actif) =>
+    '<button class="ch'+(actif?' on':'')+'" onclick="basculerFiltrePf12(\''+escJs(axe)+'\',\''+
+      escJs(String(val))+'\')">'+esc(libelle)+
+      (cnt ? ' <span class="pf12cnt">'+cnt+'</span>' : '')+'</button>';
+  const bloc = (titre, corps) => corps
+    ? '<div class="pf12fbloc"><h4>'+esc(titre)+'</h4><div class="choix">'+corps+'</div></div>' : '';
+
+  let h = '<h3>Filtrer</h3>';
+  h += bloc('Genre', o.genres.map(([nom, c]) =>
+        bouton('genre', nom, nom, c, f.genre.indexOf(nom) >= 0)).join(''));
+  h += bloc('Époque', o.epoques.map(([an, c]) =>
+        bouton('epoque', an, 'Années '+String(an).slice(2), c, f.epoque.indexOf(an) >= 0)).join(''));
+  h += bloc('Plateforme', o.plates.map(([nom, c]) =>
+        bouton('plate', nom, nom, c, f.plate.indexOf(nom) >= 0)).join(''));
+  h += bloc('Ce que je n’ai pas jugé',
+        bouton('nonnotes', 1, 'Jamais notés', 0, f.nonnotes));
+  /* Une feuille de filtres qui ne propose rien est un piège : on dit pourquoi
+     plutôt que d'ouvrir un panneau vide. */
+  if(!o.genres.length && !o.epoques.length && !o.plates.length)
+    h += '<p class="small muted">Rien à filtrer ici : ces titres ne portent ni genre, '+
+         'ni date, ni chaîne.</p>';
+  h += '<div class="choix pf12fpied">'+
+       '<button class="ch raz" onclick="viderFiltresPf12()">Tout effacer</button></div>'+
+       '<button class="btn pf12fok" onclick="closeSheet()">Voir '+
+         (n ? 'les '+n+' titre'+(n>1?'s':'') : 'la grille')+'</button>';
+  openSheet(h, 'filtres-profil');
+}
+function basculerFiltrePf12(axe, val){
+  const f = pf12.filtres;
+  if(axe === 'nonnotes') f.nonnotes = !f.nonnotes;
+  else {
+    const v = (axe === 'epoque') ? Number(val) : String(val);
+    const i = f[axe].indexOf(v);
+    if(i >= 0) f[axe].splice(i, 1); else f[axe].push(v);
+  }
+  /* La feuille se redessine à sa position de lecture : `openSheet` garde le
+     défilement d'un panneau déjà ouvert, c'est exactement le cas prévu. */
+  ouvrirFiltresPf12();
+  peindreProfil();
+}
+function viderFiltresPf12(depuisGrille){
+  pf12.filtres = { genre:[], epoque:[], plate:[], nonnotes:false };
+  if(depuisGrille) closeSheet(); else ouvrirFiltresPf12();
+  peindreProfil();
+}
+function ouvrirTriPf12(){
+  openSheet('<h3>Trier</h3><div class="choix">'+PF12_TRIS.map(([id, l])=>
+    '<button class="ch'+(pf12.tri === id ? ' on' : '')+'" onclick="poserTriPf12(\''+
+      escJs(id)+'\')">'+esc(l)+'</button>').join('')+'</div>', 'tri-profil');
+}
+function poserTriPf12(t){ pf12.tri = t; closeSheet(); peindreProfil(); }
+
+/* ---------------------------------------------------------------------------
+   LA BARRE SOBRE
+
+   `white-space:nowrap` sur les trois boutons n'est PAS cosmétique et la mesure
+   est faite : sans lui, « Trier · Récents » passe à la ligne à 113 px de large
+   et la barre CHANGE DE HAUTEUR selon l'ordre choisi — l'écran bougeait pour un
+   simple changement de tri. La règle est dans `.css-point12.css`, elle ne se
+   retire pas.
+--------------------------------------------------------------------------- */
+function barreProfil(){
+  const nf = nbFiltresPf12();
+  const tri = (PF12_TRIS.find(t => t[0] === pf12.tri) || PF12_TRIS[0])[1];
+  return '<div class="pf12barre">'+
+    '<button class="pf12b" onclick="ouvrirRechPf12()">'+I.search+'<span>Chercher</span></button>'+
+    '<button class="pf12b" onclick="ouvrirTriPf12()">Trier · <em>'+esc(tri)+'</em></button>'+
+    '<button class="pf12b'+(nf?' on':'')+'" onclick="ouvrirFiltresPf12()">Filtrer'+
+      (nf ? ' · <em>'+nf+'</em>' : '')+'</button>'+
+  '</div>';
+}
+
+/* ---------------------------------------------------------------------------
+   LA LIGNE « MON CERCLE »
+
+   Ce qui était là : une bulle de 62 px par personne, en rangée qui défile. À
+   dix abonnements, la moitié des gens est hors de l'écran et rien ne le dit.
+   Ce qui est là maintenant : une ligne, les avatars en pile, deux prénoms et
+   « et N autres ». L'écran du cercle, lui, existait déjà — on y mène.
+--------------------------------------------------------------------------- */
+function ligneCerclePf12(){
+  if(!signedIn() || !partage.suivis || !partage.suivis.length) return '';
+  const l = partage.suivis;
+  const noms = l.slice(0, 2).map(p => String(p.pseudo || '').trim()).filter(Boolean);
+  const reste = l.length - noms.length;
+  const sous = noms.join(', ') + (reste > 0 ? ' et '+reste+' autre'+(reste>1?'s':'') : '');
+  return '<button class="pf12cercle" onclick="ouvrirAbos()">'+
+    '<span class="pf12pile">'+l.slice(0, 4).map(p => avatarDe(p)).join('')+'</span>'+
+    '<span class="pf12ct"><b>Mon cercle</b><span>'+esc(sous || (l.length+' personne'+(l.length>1?'s':'')))+
+      '</span></span>'+
+    '<span class="pf12fl">'+I.caret+'</span>'+
+  '</button>';
+}
+
+/* ---------------------------------------------------------------------------
+   LA RECHERCHE — ELLE S'OUVRE EN PLEIN ÉCRAN, PAS EN PLACE
+
+   Mesuré, clavier à sa hauteur réelle (300 px) : en place — l'en-tête, le
+   cercle et les puces gardent le haut, le clavier prend le bas — il reste UN
+   résultat visible sur sept. En plein écran, quatre sur sept. Le champ monte en
+   haut, tout le reste s'efface, et la barre du bas se retire (voir `render`).
+
+   Deux sections, dans cet ordre et jamais fondues :
+     · « Titres » lit `db.shows` / `db.movies` et RIEN D'AUTRE. Instantanée,
+       elle marche en avion.
+     · « Avec [personne] » demande le réseau. Elle le MONTRE — un rond qui
+       tourne sur son titre de section — parce qu'une section qui apparaît une
+       seconde plus tard sans prévenir se lit comme un bug.
+
+   POURQUOI LE RÉSEAU EST INÉVITABLE ICI : la bibliothèque NE STOCKE PAS le
+   casting (vérifié — un film enregistré porte `id, title, poster, backdrop,
+   date, runtime, overview, genres, note, seen…`, aucun acteur). Chercher un
+   acteur localement est donc impossible. Le chemin est celui que les rangées
+   « Avec X » de Découvrir empruntent déjà, et c'est le même code qu'on
+   réutilise : `/search/multi` pour résoudre le nom (le relais accepte aussi
+   `/search/person`, mais `/search/multi` rend les titres ET les personnes en
+   UNE requête — voir `chercherTitre`), puis `/person/{id}/combined_credits`,
+   puis `rangerFilmographie` (app-05) pour dédoublonner et écarter les passages
+   où la personne joue son propre rôle, puis croisement avec la bibliothèque.
+   Deux requêtes, films et séries d'un coup.
+--------------------------------------------------------------------------- */
+const PF12_CLE_RECENTS = 'ms.pf12.recents';
+function lireRecentsPf12(){
+  if(pf12.recents) return pf12.recents;
+  let l = [];
+  try{ l = JSON.parse(localStorage.getItem(PF12_CLE_RECENTS) || '[]'); }catch(e){}
+  pf12.recents = Array.isArray(l) ? l.filter(x => typeof x === 'string' && x).slice(0, 6) : [];
+  return pf12.recents;
+}
+function poserRecentPf12(q){
+  const l = lireRecentsPf12().filter(x => x.toLowerCase() !== q.toLowerCase());
+  l.unshift(q);
+  pf12.recents = l.slice(0, 6);
+  try{ localStorage.setItem(PF12_CLE_RECENTS, JSON.stringify(pf12.recents)); }catch(e){}
+}
+/* On ne retient QUE les recherches qui ont trouvé quelque chose : une frappe
+   restée bredouille n'a rien à réapprendre à personne, et la liste des
+   dernières recherches se remplirait de fautes de frappe. */
+function rangerRecentPf12(){
+  const q = String(pf12.q || '').trim();
+  if(q.length < 2) return;
+  if(!pf12.pers && !titresPf12(q).length) return;
+  poserRecentPf12(q);
+}
+
+/* Les accents ne doivent pas décider : « Amelie » trouve « Amélie ». */
+function normPf12(s){
+  s = String(s == null ? '' : s).toLowerCase();
+  try{ s = s.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }catch(e){}
+  return s;
+}
+/* La recherche par titre est bornée à l'onglet ouvert — c'est ce que le
+   placeholder promet (« Chercher dans mes films »), et une promesse d'écran se
+   tient. Elle IGNORE en revanche le tri et les filtres de la barre : chercher
+   un titre qu'on ne retrouve plus ne doit pas se heurter à un filtre posé dix
+   minutes plus tôt et oublié depuis. */
+function titresPf12(q){
+  const n = normPf12(q);
+  if(n.length < 2) return [];
+  return (listesProfil()[ui.profTab] || [])
+    .filter(x => normPf12(titrePf12(x)).indexOf(n) >= 0)
+    .sort((a,b)=>{
+      const pa = normPf12(titrePf12(a)).indexOf(n), pb = normPf12(titrePf12(b)).indexOf(n);
+      return (pa - pb) || titrePf12(a).localeCompare(titrePf12(b), 'fr');
+    })
+    .slice(0, 18);
+}
+
+function avorterPf12(){
+  clearTimeout(pf12Timer);
+  pf12Seq++;
+  if(pf12Abort){ try{ pf12Abort.abort(); }catch(e){} pf12Abort = null; }
+}
+function saisiePf12(v){
+  pf12.q = v;
+  clearTimeout(pf12Timer);
+  const q = String(v == null ? '' : v).trim();
+  if(q.length < 2){
+    avorterPf12();
+    pf12.pers = null; pf12.persEtat = ''; pf12.persErr = '';
+    peindreProfil();
+    return;
+  }
+  /* La section Titres est repeinte TOUT DE SUITE : elle n'a rien à attendre du
+     réseau, et la faire patienter avec l'autre serait mentir sur son coût. */
+  pf12.pers = null; pf12.persEtat = 'attente'; pf12.persErr = '';
+  peindreProfil();
+  pf12Timer = setTimeout(()=> chercherPersonnePf12(q), 320);
+}
+async function chercherPersonnePf12(q){
+  const seq = ++pf12Seq;
+  const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  pf12Abort = ctrl;
+  const sig = ctrl ? { signal:ctrl.signal } : null;
+  try{
+    const d = await tmdb('/search/multi', { query:q, include_adult:'false' }, sig);
+    if(seq !== pf12Seq) return;
+    const p = (d.results || [])
+      .filter(x => x && x.media_type === 'person' && x.name)
+      .sort((a,b)=> (b.popularity||0) - (a.popularity||0))[0];
+    if(!p){ pf12.pers = null; pf12.persEtat = 'rien'; peindreProfil(); return; }
+    /* La personne est nommée avant que sa filmographie soit là : le titre de
+       section peut déjà dire QUI on a reconnu, et le rond continue de tourner. */
+    pf12.pers = { id:p.id, nom:p.name, photo:p.profile_path || null,
+                  charge:false, total:0, chez:[] };
+    peindreProfil();
+    const c = await tmdb('/person/'+p.id+'/combined_credits', null, sig);
+    if(seq !== pf12Seq) return;
+    const roles = rangerFilmographie(c);
+    const chez = [];
+    roles.forEach(r=>{
+      const o = (r.media === 'tv') ? db.shows[r.id] : db.movies[r.id];
+      if(o) chez.push({ m:r.media, o:o });
+    });
+    pf12.pers.charge = true;
+    pf12.pers.total = roles.length;
+    pf12.pers.chez = chez;
+    pf12.persEtat = 'ok';
+    peindreProfil();
+  }catch(e){
+    if((e && e.name === 'AbortError') || seq !== pf12Seq) return;
+    pf12.pers = null; pf12.persEtat = 'err';
+    pf12.persErr = (e && e.message === 'BADKEY') ? 'Service indisponible' : 'Pas de connexion';
+    peindreProfil();
+  }
+}
+function relancerPersonnePf12(){
+  const q = String(pf12.q || '').trim();
+  if(q.length < 2) return;
+  pf12.persEtat = 'attente'; pf12.persErr = '';
+  peindreProfil();
+  chercherPersonnePf12(q);
+}
+/* Le compte du bouton est CALCULÉ, jamais approximé : ce que la personne a
+   tourné moins ce qu'on en possède. */
+function ouvrirActeurPf12(id){
+  rangerRecentPf12();
+  fermerRechPf12(true);
+  if(typeof ouvrirActeur === 'function') ouvrirActeur(id);
+}
+function reprendreRecentPf12(q){
+  saisiePf12(q);
+  render();                                   // le champ doit porter le texte repris
+  const i = document.getElementById('pf12q');
+  if(i){ i.focus(); try{ i.setSelectionRange(q.length, q.length); }catch(e){} }
+}
+
+function ouvrirRechPf12(){
+  pf12.ouvert = true;
+  pf12.yAvant = window.scrollY || 0;
+  pf12.q = ''; pf12.pers = null; pf12.persEtat = ''; pf12.persErr = '';
+  render();
+  window.scrollTo(0, 0);
+  const i = document.getElementById('pf12q');
+  if(i) i.focus();
+}
+function fermerRechPf12(sansRendu){
+  rangerRecentPf12();
+  avorterPf12();
+  pf12.ouvert = false;
+  pf12.q = ''; pf12.pers = null; pf12.persEtat = ''; pf12.persErr = '';
+  if(sansRendu) return;
+  render();
+  window.scrollTo(0, pf12.yAvant || 0);
+}
+
+/* L'écran vide n'est pas blanc : il montre les dernières recherches, et il dit
+   ce que chacune des deux sections coûte. */
+function videRechPf12(){
+  const r = lireRecentsPf12();
+  let h = '';
+  if(r.length)
+    h += '<div class="sectitle">Tes dernières recherches</div>'+
+      r.map(q => '<button class="pf12rec" onclick="reprendreRecentPf12(\''+escJs(q)+'\')">'+
+        I.search+'<span>'+esc(q)+'</span>'+I.caret+'</button>').join('');
+  h += '<div class="pf12note">La recherche par titre est instantanée : elle lit ta '+
+       'bibliothèque, sans réseau. La recherche par personne, elle, doit demander sa '+
+       'filmographie — elle arrive une seconde après.</div>';
+  return h;
+}
+function sectionPersonnePf12(){
+  const p = pf12.pers;
+  if(!p){
+    if(pf12.persEtat === 'attente')
+      return '<div class="sectitle pf12sec">Personnes<span class="spin pf12spin"></span></div>';
+    if(pf12.persEtat === 'err')
+      return '<div class="sectitle pf12sec">Personnes</div>'+
+        '<div class="pf12vide">'+esc(pf12.persErr)+'. Chercher une personne demande le '+
+        'réseau — les titres ci-dessus, non. '+
+        '<button class="lienplus" onclick="relancerPersonnePf12()">Réessayer</button></div>';
+    return '';
+  }
+  if(!p.charge)
+    return '<div class="sectitle pf12sec">Avec '+esc(p.nom)+'<span class="spin pf12spin"></span></div>'+
+      '<div class="pf12qui"><span class="pf12rond">'+
+        (p.photo ? posterEl(p.photo, 'w185', '', p.nom) : esc((p.nom||'?').charAt(0)))+'</span>'+
+      '<span><b>'+esc(p.nom)+'</b><span>on cherche ce que tu as de lui…</span></span></div>';
+  const reste = Math.max(0, p.total - p.chez.length);
+  /* Les DEUX comptes dans le titre : ce que tu en as, et sur combien. Sans le
+     second, « 6 » ne veut rien dire. */
+  return '<div class="sectitle pf12sec pf12deux">'+
+      '<span>Avec '+esc(p.nom)+'<span class="cnt">'+p.chez.length+'</span></span>'+
+      '<span class="pq">sur '+p.total+' au total</span></div>'+
+    (p.chez.length
+      ? '<div class="pgrid pf12trois">'+p.chez.map(cartePf12).join('')+'</div>'
+      : '<div class="pf12vide">Rien de cette personne dans ta bibliothèque.</div>')+
+    (reste
+      ? '<button class="pf12filmo" onclick="ouvrirActeurPf12('+Number(p.id)+')">'+
+        'Voir sa filmographie · '+reste+' titre'+(reste>1?'s':'')+' que tu n’as pas →</button>'
+      : '');
+}
+function corpsRechPf12(){
+  const q = String(pf12.q || '').trim();
+  if(q.length < 2) return videRechPf12();
+  const t = titresPf12(q);
+  /* La section Titres garde sa place pleine même quand elle ne trouve presque
+     rien. La réduire à une ligne dès qu'une personne se dessine est une piste
+     NON TRANCHÉE : elle n'est délibérément pas implémentée ici. */
+  let h = '<div class="sectitle pf12sec">Titres<span class="cnt">'+t.length+'</span></div>';
+  h += t.length
+    ? '<div class="pgrid pf12trois">'+t.map(cartePf12).join('')+'</div>'
+    : '<div class="pf12vide">Aucun titre de '+esc(PF12_OU[ui.profTab] || 'ta bibliothèque')+
+      ' ne s’appelle comme ça.</div>';
+  return h + sectionPersonnePf12() + '<div style="height:26px"></div>';
+}
+function ecranRechPf12(){
+  const ou = PF12_OU[ui.profTab] || 'ma bibliothèque';
+  return '<div class="pf12plein">'+
+    '<div class="pf12champ">'+
+      '<div class="pf12z">'+I.search+
+        '<input type="search" id="pf12q" enterkeyhint="search" autocomplete="off" '+
+          'autocorrect="off" autocapitalize="off" spellcheck="false" '+
+          'placeholder="Chercher dans '+esc(ou)+'" value="'+esc(pf12.q)+'" '+
+          'oninput="saisiePf12(this.value)" '+
+          'onkeydown="if(event.key===\'Enter\')this.blur()">'+
+      '</div>'+
+      '<button class="pf12an" onclick="fermerRechPf12()">Annuler</button>'+
+    '</div>'+
+    '<div id="pf12res">'+corpsRechPf12()+'</div>'+
+  '</div>';
+}
+
+/* ---------------------------------------------------------------------------
+   LE REPEINT PARTIEL — même modèle que `peindreDisc` et `peindreRech`
+
+   Ce que ça évite : `render()` refait `viewProfile` en entier, donc la boucle
+   sur ~7 000 épisodes qui calcule les trois chiffres de l'en-tête (18 ms poste
+   de bureau, ~55 ms iPhone). Or changer de puce, d'ordre ou de filtre ne touche
+   QUE la grille : ces trois chiffres ne bougent pas.
+   `entrerRendu`/`sortirRendu` encadrent le repeint pour que `progress`,
+   `isFinished` et `lastWatchedAt` gardent leur mémo — sans quoi on aurait
+   déplacé le coût au lieu de le supprimer.
+--------------------------------------------------------------------------- */
+function peindreProfil(){
+  if(view !== 'profile') return;
+  if(pf12.ouvert){
+    const r = document.getElementById('pf12res');
+    if(!r) return render();
+    entrerRendu();
+    try{ r.innerHTML = corpsRechPf12(); } finally { sortirRendu(); }
+    return;
+  }
+  const z = document.getElementById('pfcards');
+  if(!z) return render();
+  entrerRendu();
+  try{ z.innerHTML = barreProfil() + cartesProfil(); } finally { sortirRendu(); }
+  const ch = document.getElementById('pfchips');
+  if(ch) ch.querySelectorAll('.chip').forEach(b =>
+    b.classList.toggle('on', b.getAttribute('data-tab') === ui.profTab));
+}
+function setTabProfil(t){
+  if(ui.profTab === t) return;
+  ui.profTab = t;
+  peindreProfil();
+}
+function setAvoirTriPf12(t){
+  if(ui.avoirTri === t) return;
+  ui.avoirTri = t;
+  peindreProfil();
+}
+
+function cartesProfil(){
+  const onglet = ui.profTab;
+  let base = listesProfil()[onglet] || [];
+  let h = '';
+  if(onglet === 'avoir'){
+    /* « À voir » mélange séries et films : un petit filtre permet de ne garder
+       que l'un des deux. Il n'apparaît que s'il y a effectivement les deux. */
+    const nbS = base.filter(x => x.m === 'tv').length;
+    const nbF = base.length - nbS;
+    const quoi = ui.avoirTri || 'tout';
+    if(nbS && nbF)
+      h += '<div class="souschips">'+
+        [['tout','Tout',base.length],['series','Séries',nbS],['films','Films',nbF]].map(([id,l,n])=>
+          '<button class="chip '+(quoi===id?'on':'')+'" onclick="setAvoirTriPf12(\''+escJs(id)+'\')">'+
+          esc(l)+' <span style="opacity:.65">'+n+'</span></button>').join('')+'</div>';
+    if(!base.length)
+      return h + emptyProf('Rien en attente',
+        'Les séries ajoutées mais pas commencées et les films « à voir » se rangent ici.');
+    base = base.filter(x => quoi === 'tout' ? true
+                          : quoi === 'series' ? x.m === 'tv' : x.m === 'movie');
+    if(!base.length)
+      return h + emptyProf(quoi === 'series' ? 'Aucune série en attente' : 'Aucun film en attente',
+        'Change de filtre juste au-dessus.');
+  } else if(!base.length){
+    if(onglet === 'series')
+      return emptyProf('Aucune série commencée', 'Coche un épisode et la série apparaîtra ici.');
+    if(onglet === 'films')
+      return emptyProf('Aucun film vu', 'Marque un film comme vu depuis la recherche.');
+    return emptyProf('Aucune série en pause', 'Une série mise de côté se range ici, sans rien perdre.');
+  }
+  const l = trierPf12(base.filter(passeFiltresPf12), onglet);
+  /* Un filtre qui vide la grille doit se DÉFAIRE depuis la grille : renvoyer
+     chercher la feuille pour comprendre pourquoi l'écran est vide, c'est le
+     genre de cul-de-sac que le point 12 corrige ailleurs. */
+  if(!l.length)
+    return h + '<div class="empty" style="padding:38px 24px">'+
+      '<h3>Aucun titre ne passe tes filtres</h3>'+
+      '<p>Deux critères se croisent rarement. Retires-en un, ou repars de zéro.</p>'+
+      '<button class="btn ghost" onclick="viderFiltresPf12(1)">Tout afficher</button></div>';
+  return h + '<div class="pgrid">'+l.map(cartePf12).join('')+'</div>';
+}
+
 function viewProfile(){
+  /* La recherche prend tout l'écran : rien d'autre n'est peint. */
+  if(pf12.ouvert) return ecranRechPf12();
+
   let epCount = 0, minutes = 0, doneShows = 0;
   Object.values(db.shows).forEach(s=>{
     allEpisodes(s,true).forEach(ep=>{
@@ -484,26 +1106,13 @@ function viewProfile(){
     });
     if(isFinished(s)) doneShows++;
   });
-  const seenMovies = Object.values(db.movies).filter(m=>m.seen);
-  seenMovies.forEach(m=> minutes += (m.runtime||100));
+  Object.values(db.movies).filter(m=>m.seen).forEach(m=> minutes += (m.runtime||100));
 
-  const startedShows = Object.values(db.shows)
-    .filter(s=>{ const st = statutSerie(s); return st!=='avoir' && st!=='pause'; })
-    .sort((a,b)=>lastWatchedAt(b)-lastWatchedAt(a));
-  const watchedMovies = Object.values(db.movies).filter(m=>statutFilm(m)==='vu')
-    .sort((a,b)=>(b.watchedAt||0)-(a.watchedAt||0));
-  const toWatch = [].concat(
-    Object.values(db.shows).filter(s=>statutSerie(s)==='avoir').map(s=>({type:'show', o:s})),
-    Object.values(db.movies).filter(m=>statutFilm(m)==='avoir').map(m=>({type:'movie', o:m}))
-  );
-
-  const enPause = Object.values(db.shows).filter(s=>statutSerie(s)==='pause')
-    .sort((a,b)=>(b.pauseLe||0)-(a.pauseLe||0));
-
-  const tabs = [['series','Séries',startedShows.length],
-                ['films','Films',watchedMovies.length],
-                ['avoir','À voir',toWatch.length]];
-  if(enPause.length) tabs.push(['pause','En pause',enPause.length]);
+  const L = listesProfil();
+  const tabs = [['series','Séries',L.series.length],
+                ['films','Films',L.films.length],
+                ['avoir','À voir',L.avoir.length]];
+  if(L.pause.length) tabs.push(['pause','En pause',L.pause.length]);
   /* la puce « En pause » disparaît quand la dernière série reprend : on ne laisse pas
      l'onglet sélectionné pointer dans le vide */
   if(!tabs.some(t=>t[0]===ui.profTab)) ui.profTab = 'series';
@@ -515,9 +1124,12 @@ function viewProfile(){
      Le fond est fait de TES affiches, floutées : le profil devient la fiche
      de ta bibliothèque, et il est différent chez chacun. Sans affiche, on
      retombe sur un dégradé sobre plutôt que sur un trou noir.
+
+     LE COMPTEUR DE SÉRIES A ÉTÉ RETIRÉ le 02/08 (point 12, décision A) : il
+     comptait `db.shows` en entier et contredisait de trente unités la puce
+     « Séries » posée juste dessous, qui écarte `avoir` et `pause`.
   --------------------------------------------------------------------- */
   const qui = (db.pseudo||'').trim();
-  const nbSeries = Object.keys(db.shows).length;
   const nbAbonnes = (partage.abonnes||[]).length;
   const nbAbos = (partage.suivis||[]).length;
 
@@ -545,7 +1157,6 @@ function viewProfile(){
       '<button class="panneau" onclick="go(\'moi\',{from:\'profile\'})" aria-label="Changer d\'avatar">'+
         avatarMoi('gros')+'</button>'+
       '<div class="pcompts">'+
-        compteur(nbSeries, 'série'+(nbSeries>1?'s':''), '') +
         compteur(nbAbonnes, 'abonné'+(nbAbonnes>1?'s':''), 'ouvrirAbos()') +
         compteur(nbAbos, 'abonnement'+(nbAbos>1?'s':''), 'ouvrirAbos()') +
       '</div>'+
@@ -556,51 +1167,17 @@ function viewProfile(){
       ' finie'+(doneShows>1?'s':'')+'</div>'+
   '</div></div>';
 
-  /* Les visages de tes abonnements, juste sous l'identité : un tap ouvre la
-     bibliothèque de la personne, comme avant. */
-  if(signedIn() && partage.suivis.length){
-    html += '<div class="aborow">'+partage.suivis.slice(0,10).map(p=>
-      '<button class="abomini" onclick="ouvrirBiblio(\''+p.id+'\')">'+
-        avatarDe(p)+'<span>'+esc(p.pseudo)+'</span></button>').join('')+
-      '<button class="abomini" onclick="ouvrirAbos()">'+
-        '<div class="avatar plus">'+I.plus+'</div><span>Gérer</span></button>'+
-    '</div>';
-  }
+  html += ligneCerclePf12();
 
-  html += '<div class="chips" style="padding-top:12px">'+tabs.map(([id,l,n])=>
-    '<button class="chip '+(ui.profTab===id?'on':'')+'" onclick="ui.profTab=\''+id+'\';render()">'+
-    l+' <span style="opacity:.65">'+n+'</span></button>').join('')+'</div>';
+  html += '<div class="chips" id="pfchips" style="padding-top:12px">'+tabs.map(([id,l,n])=>
+    '<button class="chip '+(ui.profTab===id?'on':'')+'" data-tab="'+esc(id)+'" '+
+    'onclick="setTabProfil(\''+escJs(id)+'\')">'+
+    esc(l)+' <span style="opacity:.65">'+n+'</span></button>').join('')+'</div>';
 
-  let cards = '';
-  if(ui.profTab==='series'){
-    if(!startedShows.length) cards = emptyProf('Aucune série commencée', 'Coche un épisode et la série apparaîtra ici.');
-    else cards = '<div class="pgrid">'+startedShows.map(showCard).join('')+'</div>';
-  } else if(ui.profTab==='films'){
-    if(!watchedMovies.length) cards = emptyProf('Aucun film vu', 'Marque un film comme vu depuis la recherche.');
-    else cards = '<div class="pgrid">'+watchedMovies.map(movieCard).join('')+'</div>';
-  } else if(ui.profTab==='pause'){
-    if(!enPause.length) cards = emptyProf('Aucune série en pause', 'Une série mise de côté se range ici, sans rien perdre.');
-    else cards = '<div class="pgrid">'+enPause.map(showCard).join('')+'</div>';
-  } else {
-    /* « À voir » mélange séries et films : un petit filtre permet de ne garder
-       que l'un des deux. Il n'apparaît que s'il y a effectivement les deux. */
-    const nbS = toWatch.filter(x=>x.type==='show').length;
-    const nbF = toWatch.length - nbS;
-    const quoi = ui.avoirTri || 'tout';
-    const liste = toWatch.filter(x=> quoi==='tout' ? true
-                                   : quoi==='series' ? x.type==='show' : x.type==='movie');
-    if(nbS && nbF){
-      cards += '<div class="souschips">'+
-        [['tout','Tout',toWatch.length],['series','Séries',nbS],['films','Films',nbF]].map(([id,l,n])=>
-          '<button class="chip '+(quoi===id?'on':'')+'" onclick="ui.avoirTri=\''+id+'\';render()">'+
-          l+' <span style="opacity:.65">'+n+'</span></button>').join('')+'</div>';
-    }
-    if(!toWatch.length) cards += emptyProf('Rien en attente', 'Les séries ajoutées mais pas commencées et les films « à voir » se rangent ici.');
-    else if(!liste.length) cards += emptyProf(quoi==='series'?'Aucune série en attente':'Aucun film en attente',
-                                              'Change de filtre juste au-dessus.');
-    else cards += '<div class="pgrid">'+liste.map(x=> x.type==='show' ? showCard(x.o) : movieCard(x.o)).join('')+'</div>';
-  }
-  return html + cards + '<div style="height:26px"></div>';
+  /* Le nœud identifié : la barre et la grille, et rien d'autre. C'est tout ce
+     que `peindreProfil` réécrit. */
+  return html + '<div id="pfcards">'+ barreProfil() + cartesProfil() +'</div>'+
+    '<div style="height:26px"></div>';
 }
 
 function emptyProf(title, sub){

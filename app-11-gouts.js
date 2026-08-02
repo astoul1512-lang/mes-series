@@ -20,9 +20,21 @@
 function migrerGouts(){
   if(!db.gouts || typeof db.gouts !== 'object') db.gouts = {};
   const g = db.gouts;
-  /* Les genres que l'on aime, choisis à la main. Vide = on déduit. */
+  /* Les genres que l'on aime, choisis à la main. Vide = on déduit.
+
+     POINT 11 (02/08) — CETTE CLÉ EST REMPLACÉE PAR `genresFam`, ET ELLE RESTE.
+     Elle n'est plus écrite par cet écran ; elle l'est encore par l'inscription
+     (app-13), et elle est encore LUE en repli partout (voir `genresDeclares`).
+     Elle est conservée telle quelle PENDANT UNE VERSION, pour qu'un retour en
+     arrière reste possible : la sauvegarde en ligne d'Adrien la contient, et
+     une base restaurée depuis un appareil resté en v86 doit continuer de
+     marcher. On la retirera quand plus rien ne pourra la ramener. */
   if(!Array.isArray(g.genres)) g.genres = [];
-  /* Les genres que l'on ne veut plus voir, quoi qu'en dise la déduction. */
+  /* Les genres que l'on ne veut plus voir, quoi qu'en dise la déduction.
+     UNE SEULE LISTE, et pas trois : « jamais d'horreur » ne se dit pas par
+     famille. `tamiser` la fait déjà valoir sur les deux taxonomies à la fois
+     (les DEUX identifiants, voir le commentaire du LOT C là-bas), donc rien ne
+     manque. Le point 11 ne parle que des genres AIMÉS. */
   if(!Array.isArray(g.exclus)) g.exclus = [];
   /* Les acteurs favoris : {id, nom}. C'est la seule chose qu'on ne sait pas
      deviner sans aller chercher le casting de toute la bibliothèque. */
@@ -67,6 +79,241 @@ function migrerGouts(){
      indéfiniment. Ce n'est pas un avis : ça ne dit rien du goût, seulement que
      la bibliothèque se trompe sur ce titre. */
   if(!Array.isArray(g.pasVus)) g.pasVus = [];
+  /* POINT 2 (02/08) — LES TITRES RÉPONDUS 🤷, sous la forme « media:id ».
+     C'est une VRAIE réponse — « je l'ai vu, il ne m'a rien fait, ne me le
+     redemande pas » — et non l'absence d'avis, qui existait déjà.
+
+     POURQUOI ICI ET PAS DANS `db.avis`. Le brief demandait de rouvrir le
+     contrat `v: 1 | -1` pour y écrire `v: 0`. Deux fonctions d'app-01
+     l'interdisent, et app-01 est hors du périmètre de ce lot :
+       · `reparerAvis` SUPPRIME tout avis dont le `v` ne vaut ni 1 ni -1, et
+         elle tourne à CHAQUE lancement — un 🤷 posé le soir aurait disparu au
+         matin, et la question serait revenue ;
+       · `fusionnerAvis` IGNORE à la réception tout avis dont le `v` ne vaut ni
+         1 ni -1 — le 🤷 ne serait donc jamais arrivé sur le second appareil,
+         même en montant dans `payload()`.
+     Écrire `v: 0` dans `db.avis` revenait donc à écrire dans un seau percé.
+     `db.gouts` est porté par la synchro (`payload()` l'emporte en entier), il
+     appartient à ce fichier, et `reparerAvis` n'y touche pas : le 🤷 y survit
+     au redémarrage ET au changement de téléphone. Contrepartie assumée, la
+     même que pour `pasVus` et `graines` : les goûts se remplacent EN BLOC sur
+     LE 🤷 A DÉMÉNAGÉ : il vit dans `db.avis`, avec `v: 0`, comme le contrat
+     rouvert au point 2 le demande — il se fusionne donc ligne à ligne, comme
+     les deux pouces, et pas en bloc sur une date. Cette clé n'existe plus que
+     le temps de reverser les bases écrites entre deux versions de ce lot. */
+  migrerNeutres();
+  /* POINT 11 (02/08) — les trois listes de genres déclarés. La recopie de
+     l'ancienne clé se fait dans `migrerGenresFam`, appelée ici ET à chaque
+     modification des goûts : l'inscription écrit encore `g.genres` APRÈS ce
+     démarrage-ci, et une migration qui ne tournerait qu'au lancement laisserait
+     les trois listes vides jusqu'au lendemain. */
+  migrerGenresFam();
+}
+
+/* ===========================================================================
+   POINT 11 (02/08) — TROIS LISTES DE GENRES DÉCLARÉS, UNE PAR FAMILLE
+
+   Adrien, le 02/08 : « je propose qu'il y ait des genres pour les séries, pour
+   les films et pour les animés, comme ça l'un n'impacte pas l'autre. »
+
+   CE QUE ÇA RÉPARE, ET QUI NE SE VOYAIT PAS. `db.gouts.genres` était UNE seule
+   liste, alimentée par les DEUX taxonomies de TMDB, qui ne se recouvrent pas.
+   Il a fallu une table de traduction (`GENRE_SERIE`, app-04) pour faire passer
+   un nom d'un média à l'autre — et le commentaire de cette table admet que SIX
+   libellés de films n'ont AUCUN équivalent en séries : Histoire, Horreur,
+   Musique, Romance, Sport, Thriller. Cocher « Horreur » ne produisait donc rien
+   du côté des séries, EN SILENCE. Avec trois listes, chacune parle sa propre
+   langue et il n'y a plus de genre orphelin : le défaut disparaît à la racine
+   au lieu d'être rattrapé par une table.
+
+   TROIS FAMILLES, LES MÊMES QUE PARTOUT AILLEURS — `film`, `serie`, `anime` :
+   celles des puces de la Recherche (`RECH_FAMILLES`, app-12), celles du duel
+   (`DUEL_FAMILLES`, plus bas), celles que `genreUtile(nom, famille)` (app-04)
+   attend. Un seul vocabulaire sert partout, et c'est ce qui permet de réutiliser
+   les mêmes puces à l'écran.
+
+   ET LES ANIMÉS NE PARLENT PAS LA MÊME LANGUE QUE LES DEUX AUTRES. Le code le
+   dit déjà en tête de `RECH_ANIMES` (app-12) : « le genre TMDB ne dit
+   littéralement rien d'un animé, tout y est étiqueté Animation + Action &
+   Adventure ». Proposer la liste des genres de séries sur les animés, ce serait
+   offrir trois cases qui disent toutes la même chose. La liste « animés » est
+   donc celle des SOUS-GENRES PAR MOTS-CLÉS mesurés le 31/07 — shōnen, seinen,
+   shōjo, isekai, mecha, tranche de vie, psychologique, dark fantasy, sport —
+   LUE dans `RECH_ANIMES` et pas recopiée ici. Deux vocabulaires, un par nature
+   de famille ; c'est assumé et c'est écrit à chaque endroit qui les croise.
+=========================================================================== */
+
+const GOUT_FAMILLES = ['film','serie','anime'];
+
+/* Le média TMDB d'une famille. Les animés sont des séries, comme partout
+   ailleurs dans le dépôt (`cadreSugg('anime')`, `RECH_FAMILLES`). */
+function mediaFamilleGout(famille){ return famille === 'film' ? 'movie' : 'tv'; }
+
+/* ---------- Faire passer un nom d'une taxonomie à l'autre ----------
+
+   AUCUNE DE CES TROIS FONCTIONS NE LIT `genresTMDB`, et ce n'est pas un détail :
+   `genresTMDB` n'est pas persisté, il se charge par le réseau à la demande
+   (`chargerGenres`, app-04). Or la migration tourne AU DÉMARRAGE, avant toute
+   requête. Une traduction qui aurait interrogé `genreParNom` aurait rendu
+   `null` sur tout et VIDÉ les goûts d'Adrien au premier lancement. On ne se
+   sert donc que de tables statiques, toutes déjà écrites ailleurs. */
+
+/* Ce nom appartient-il à la SEULE taxonomie des séries ? La réponse est déjà
+   écrite : `GENRE_FR` (app-04) recense exactement les sept libellés que TMDB
+   laisse en anglais côté séries — Action & Adventure, Kids, News, Reality,
+   Soap, Talk, War & Politics — et ce sont précisément ceux que la taxonomie des
+   films ne connaît pas. Un nom traduit par `libelleGenre` est donc un nom de
+   série, et aucun de ces sept n'a besoin d'être recopié ici. */
+function estGenreSerieSeul(nom){
+  return typeof libelleGenre === 'function' && libelleGenre(nom) !== nom;
+}
+
+/* Le même goût, dit dans la langue des FILMS — ou rien du tout quand il n'existe
+   pas de ce côté (News, Reality, Soap, Talk). `genreCanon` (app-04) ramène les
+   trois libellés de séries qui ont un jumeau film ; `INSC_GENRE_TV` (app-13) en
+   ajoute un quatrième que `genreCanon` ne connaît pas, Kids → Familial. */
+function nomGenreFilm(nom){
+  let n = (typeof genreCanon === 'function') ? genreCanon(nom) : nom;
+  if(estGenreSerieSeul(n) && typeof INSC_GENRE_TV !== 'undefined' && INSC_GENRE_TV[n])
+    n = INSC_GENRE_TV[n];
+  return estGenreSerieSeul(n) ? '' : n;
+}
+
+/* Le même goût, dit dans la langue des SÉRIES — ou rien du tout pour les six
+   orphelins. C'est LE cas que le point 11 existe pour rendre visible : ils ne
+   sont pas traduits en silence, ils ne franchissent tout simplement pas la
+   frontière, et la liste « séries » ne les propose donc jamais. */
+function nomGenreSerie(nom){
+  if(estGenreSerieSeul(nom)) return nom;              // déjà un libellé de séries
+  const film = nomGenreFilm(nom);
+  if(!film) return nom;
+  const orphelins = (typeof INSC_GENRES_FILM_SEUL !== 'undefined') ? INSC_GENRES_FILM_SEUL : [];
+  if(orphelins.indexOf(film) >= 0) return '';
+  return (typeof GENRE_SERIE === 'object' && GENRE_SERIE[String(film).toLowerCase()]) || film;
+}
+
+/* ---------- Les sous-genres d'animé ----------
+   Lus dans `RECH_ANIMES` (app-12), jamais recopiés : c'est la même mesure du
+   31/07 qui sert à la Recherche et à cet écran, et deux listes qui divergent
+   valent moins que pas de liste du tout. */
+function sousGenresAnime(){
+  return (typeof RECH_ANIMES !== 'undefined' && Array.isArray(RECH_ANIMES)) ? RECH_ANIMES : [];
+}
+/* La clé de `db.gouts.animeSous` (posée par l'inscription, app-13) vers
+   l'identifiant de `RECH_ANIMES`. Les deux listes disent la même chose avec des
+   clés différentes — l'inscription écrit « tranche de vie », la Recherche
+   l'appelle `tranche` et l'affiche « tranche de vie ». On rapproche donc sur
+   l'identifiant PUIS sur le mot affiché, accents ôtés : `shonen` doit retrouver
+   « shōnen », et le macron ne se devine pas au clavier. */
+function cleSousGenreAnime(cle){
+  const c = (typeof normPf12 === 'function') ? normPf12(cle) : String(cle||'').toLowerCase();
+  if(!c) return '';
+  const s = sousGenresAnime().find(x=>{
+    const id = (typeof normPf12 === 'function') ? normPf12(x.id) : String(x.id).toLowerCase();
+    const mot = (typeof normPf12 === 'function') ? normPf12(x.mot) : String(x.mot||'').toLowerCase();
+    return id === c || mot === c;
+  });
+  return s ? s.id : '';
+}
+
+/* ---------- LA MIGRATION ----------
+
+   L'ancienne liste est recopiée dans les trois, et LA COPIE N'ÉCRASE JAMAIS :
+   elle ajoute ce qui manque. C'est ce qui garantit la promesse — aucun goût
+   déclaré ne disparaît à la mise à jour — sans reprendre au passage un genre
+   que la personne vient de décocher à la main.
+
+   ELLE SE REJOUE QUAND L'ANCIENNE CLÉ BOUGE, et pas seulement au premier
+   démarrage : `genresFamDe` retient la signature des deux clés d'origine
+   (`genres` et `animeSous`) telles qu'elles étaient à la dernière copie. C'est
+   ce qui fait que l'inscription — qui écrit encore `g.genres`, et APRÈS le
+   démarrage — pré-remplit bien les trois listes sans qu'on ait à toucher à son
+   parcours. Deux `join` par appel : on peut se permettre de la rejouer à chaque
+   modification des goûts. */
+function migrerGenresFam(){
+  const g = db.gouts;
+  if(!g || typeof g !== 'object') return false;
+  if(!g.genresFam || typeof g.genresFam !== 'object' || Array.isArray(g.genresFam))
+    g.genresFam = {};
+  GOUT_FAMILLES.forEach(f=>{ if(!Array.isArray(g.genresFam[f])) g.genresFam[f] = []; });
+  const sign = (g.genres||[]).join('§') + '#' + (g.animeSous||[]).join('§');
+  if(g.genresFamDe === sign) return false;
+  GOUT_FAMILLES.forEach(f=>{
+    goutsAnciensVers(f).forEach(n=>{
+      if(g.genresFam[f].indexOf(n) < 0) g.genresFam[f].push(n);
+    });
+  });
+  g.genresFamDe = sign;
+  return true;
+}
+
+/* Ce que l'ancienne clé donne pour une famille. Séparé de la migration pour une
+   raison précise : c'est AUSSI le repli de lecture (voir `genresDeclares`), et
+   la traduction doit être la même des deux côtés — sinon une base non encore
+   migrée et la même base migrée ne diraient pas la même chose. */
+function goutsAnciensVers(famille){
+  const g = db.gouts || {};
+  const out = [];
+  if(famille === 'anime'){
+    (g.animeSous||[]).forEach(c=>{
+      const id = cleSousGenreAnime(c);
+      if(id && out.indexOf(id) < 0) out.push(id);
+    });
+    return out;
+  }
+  (g.genres||[]).forEach(n=>{
+    const t = famille === 'serie' ? nomGenreSerie(n) : nomGenreFilm(n);
+    if(t && out.indexOf(t) < 0) out.push(t);
+  });
+  return out;
+}
+
+/* LA LISTE DÉCLARÉE D'UNE FAMILLE — le seul point d'entrée en lecture.
+
+   Tant que la migration n'a jamais tourné (`genresFamDe` absent), c'est
+   l'ancienne clé qui fait foi, traduite à la volée. Ce repli n'est pas une
+   commodité de transition : la sauvegarde en ligne peut à tout moment ramener
+   un `db.gouts` écrit par un appareil resté en v86, et `fusionnerDB` remplace
+   le bloc EN ENTIER (app-01). Sans ce repli, une synchro venue de l'ancien
+   téléphone viderait les trois listes.
+
+   Une fois la migration passée, la liste de la famille fait foi MÊME VIDE : on
+   doit pouvoir tout décocher sans que l'ancienne clé ne ressuscite les cases. */
+function genresDeclares(famille){
+  const g = db.gouts || {};
+  const l = (g.genresFam || {})[famille];
+  if(g.genresFamDe != null && Array.isArray(l)) return l.slice();
+  if(Array.isArray(l) && l.length) return l.slice();
+  return goutsAnciensVers(famille);
+}
+
+/* Les mots-clés TMDB des sous-genres d'animé déclarés, prêts pour `with_keywords`.
+   C'est ce qui fait que la troisième liste SERT à quelque chose : sans elle, on
+   aurait ajouté un écran de cases qui ne pilote rien. Les identifiants viennent
+   de `RECH_ANIMES`, ils ont été mesurés, ils ne se devinent pas. Le « | » est un
+   OU chez TMDB — « shōnen OU mecha » décrit ce qu'on voulait dire, le ET ne
+   décrirait presque rien. */
+function motsClesAnimeRetenus(){
+  const out = [];
+  genresDeclares('anime').forEach(id=>{
+    const s = sousGenresAnime().find(x => x.id === id);
+    if(s && s.mots && out.indexOf(s.mots) < 0) out.push(s.mots);
+  });
+  return out.join('|');
+}
+
+/* Combien de genres ont été déclarés, toutes familles confondues et SANS
+   compter deux fois le même. « Action » côté films et « Action & Adventure »
+   côté séries sont un seul goût : les additionner referait le défaut du point 8
+   des retours de la v85, en chiffres cette fois. */
+function genresDeclaresFondus(){
+  const out = [];
+  ['film','serie'].forEach(f=> genresDeclares(f).forEach(n=>{
+    const c = (typeof genreCanon === 'function') ? genreCanon(n) : n;
+    if(out.indexOf(c) < 0) out.push(c);
+  }));
+  genresDeclares('anime').forEach(id=>{ if(out.indexOf(id) < 0) out.push(id); });
+  return out;
 }
 
 /* B8 — toute modification des goûts est datée. C'est cet horodatage, et lui
@@ -75,7 +322,18 @@ function migrerGouts(){
    une fonction plutôt que de le poser à la main dans les sept endroits qui
    modifient : le huitième aurait été oublié. */
 function toucheGouts(){
-  if(db.gouts) db.gouts.maj = Date.now();
+  if(db.gouts){
+    /* POINT 11 — LA MIGRATION SE REJOUE ICI, et c'est le meilleur endroit du
+       fichier pour la poser : c'est déjà le passage obligé de toute
+       modification des goûts, y compris celles de l'inscription (app-13, qui
+       écrit encore `g.genres`). Le raisonnement qui a fait naître cette
+       fonction — « passer par une fonction plutôt que de le poser à la main
+       dans les sept endroits qui modifient : le huitième aurait été oublié » —
+       vaut mot pour mot pour la recopie. Elle ne fait rien quand rien n'a
+       bougé : deux `join` et une comparaison de chaînes. */
+    migrerGenresFam();
+    db.gouts.maj = Date.now();
+  }
   saveDB();
 }
 
@@ -103,6 +361,78 @@ function avisDe(media, id){
 const aAime    = (media, id)=> avisDe(media, id) === 1;
 const aPasAime = (media, id)=> avisDe(media, id) === -1;
 
+/* ---------- POINT 2 (02/08) — LE TROISIÈME ÉTAT, 🤷 ----------
+   Adrien : « je veux pouvoir sélectionner neutre, parce que dire que je n'aime
+   pas c'est quand même assez fort ». Le §1.6 décrivait déjà trois états, mais
+   le troisième n'avait AUCUNE cible à l'écran : on ne l'atteignait qu'en ne
+   touchant à rien. Une réponse qu'on ne peut pas donner n'est pas une réponse,
+   c'est un abandon.
+
+   Ce que 🤷 vaut, et c'est tout l'équilibre du point :
+     · POIDS 1, exactement comme l'absence d'avis — `avisDe` rend 0 sur un 🤷,
+       donc `poidsTitre` rend `POIDS_NEUTRE` sans qu'une ligne change. Neutre ne
+       pénalise pas, sinon ce serait un 👎 déguisé et personne ne l'utiliserait ;
+     · le titre SORT des listes qui redemandent un avis — c'est le rôle de
+       `aRepondu`, et la seule chose que 🤷 change vraiment ;
+     · le titre RESTE dans le duel : il a un ORDRE, il n'a pas de SIGNE. C'est
+       la distinction que tout ce fichier tient depuis le lot A. */
+/* LE 🤷 VIT DANS `db.avis`, AVEC `v: 0` — c'est le contrat rouvert au point 2,
+   et il l'est aux trois endroits qui le lisent : `reparerAvis` ne l'efface plus
+   au démarrage, `fusionnerAvis` le fait traverser la synchro, et `payload()`
+   emportait déjà `db.avis`. Le ranger ailleurs aurait marché aussi, mais aurait
+   créé une seconde source de vérité sur la même question — et une réponse à
+   « tu as aimé ? » qui ne se fusionne pas ligne à ligne comme les deux autres.
+   MIGRATION : les bases qui portent une liste `db.gouts.neutres` (elle n'a
+   existé qu'entre deux versions de ce lot) sont reversées dans `db.avis` au
+   premier passage, puis la clé est vidée. Aucun 🤷 n'est perdu. */
+function migrerNeutres(){
+  const g = db.gouts;
+  if(!g || !Array.isArray(g.neutres) || !g.neutres.length) return;
+  db.avis = db.avis || { tv:{}, movie:{} };
+  g.neutres.forEach(cle=>{
+    const i = String(cle).indexOf(':');
+    if(i < 0) return;
+    const m = cle.slice(0, i), id = cle.slice(i + 1);
+    if(m !== 'tv' && m !== 'movie') return;
+    db.avis[m] = db.avis[m] || {};
+    if(!db.avis[m][id]) db.avis[m][id] = { v:0, quand: Date.now() };
+  });
+  g.neutres = [];
+}
+function estNeutre(media, id){
+  const a = db.avis && db.avis[media];
+  const e = a && a[id];
+  return !!(e && e.v === 0);
+}
+/* « A-t-on déjà répondu sur ce titre ? » — 👍, 👎 ou 🤷. À ne pas confondre avec
+   `avisDe(...) !== 0`, qui répond « ce titre porte-t-il un signe ? ». Les deux
+   questions étaient la même tant qu'il n'y avait que deux réponses ; elles ne
+   le sont plus, et c'est là que se cachent les régressions de ce point. */
+function aRepondu(media, id){
+  return avisDe(media, id) !== 0 || estNeutre(media, id);
+}
+function retirerNeutre(media, id){
+  if(db.avis && db.avis[media] && db.avis[media][id] && db.avis[media][id].v === 0)
+    delete db.avis[media][id];
+}
+/* Poser 🤷. Repasser le même bouton l'ANNULE, comme les deux pouces : trois
+   cibles, un seul geste de retour, le même partout.
+   `apresAvis` n'est PAS appelé quand on ne fait qu'ajouter un 🤷 : il périme la
+   vitrine entière, donc une quinzaine de requêtes TMDB — or un neutre pèse
+   exactement ce que pesait l'absence d'avis, la vitrine ne bougerait pas d'un
+   titre. On enregistre, et c'est tout. Le cas où le profil bouge vraiment — un
+   👍 ou un 👎 remplacé par un 🤷 — passe par `retirerAvis`, qui périme déjà. */
+function poserNeutre(media, id){
+  if(estNeutre(media, id)){ retirerNeutre(media, id); saveDB(); return 0; }
+  /* Deux réponses ne coexistent pas sur un même titre. */
+  if(avisDe(media, id) !== 0) retirerAvis(media, id);
+  db.avis = db.avis || { tv:{}, movie:{} };
+  db.avis[media] = db.avis[media] || {};
+  db.avis[media][String(id)] = { v:0, quand: Date.now() };
+  saveDB();
+  return 0;
+}
+
 /* Poser un avis. Repasser le même pouce l'ANNULE — c'est le seul geste de
    retour disponible sur la barre, qui n'a pas de bouton « Annuler », et c'est
    aussi ce qui permet de reprendre un 👎 depuis « Écartés » d'un seul appui. */
@@ -116,6 +446,9 @@ function poserAvis(media, id, v){
   /* Un avis posé efface la trace de son effacement : sinon la synchro suivante
      verrait un effacement plus récent que l'avis et le reprendrait. */
   if(db.avisRetires && db.avisRetires[media]) delete db.avisRetires[media][cle];
+  /* POINT 2 — un pouce chasse le 🤷 posé avant lui. Sans ça un titre porterait
+     deux réponses à la fois, et les écrans se contrediraient l'un l'autre. */
+  if(estNeutre(media, id)){ retirerNeutre(media, id); toucheGouts(); }
   apresAvis();
   return v;
 }
@@ -325,7 +658,11 @@ function resumeGouts(){
   if(!goutsManuels() && !aimes) return 'Automatique, d\'après ce que tu regardes';
   const bouts = [];
   if(aimes) bouts.push(aimes + ' titre'+(aimes>1?'s':'')+' aimé'+(aimes>1?'s':''));
-  if((g.genres||[]).length)  bouts.push(g.genres.length + (g.genres.length>1?' genres':' genre'));
+  /* POINT 11 — les trois listes fondues sur le nom canonique : « 4 genres »
+     plutôt que « 7 genres » chez quelqu'un qui a coché Action et Comédie et
+     dont la migration les a recopiés dans deux familles. */
+  const nGenres = genresDeclaresFondus().length;
+  if(nGenres)                bouts.push(nGenres + (nGenres>1?' genres':' genre'));
   if((g.acteurs||[]).length) bouts.push(g.acteurs.length + (g.acteurs.length>1?' acteurs':' acteur'));
   if((g.exclus||[]).length)  bouts.push(g.exclus.length + ' écarté'+(g.exclus.length>1?'s':''));
   return bouts.join(' · ');
@@ -334,7 +671,8 @@ function resumeGouts(){
 /* Le profil est-il réglé à la main, ou déduit ? Sert à l'écran des réglages. */
 function goutsManuels(){
   const g = db.gouts || {};
-  return (g.genres||[]).length > 0 || (g.acteurs||[]).length > 0 || (g.exclus||[]).length > 0;
+  return genresDeclaresFondus().length > 0 ||
+         (g.acteurs||[]).length > 0 || (g.exclus||[]).length > 0;
 }
 
 /* ---------- Ce que l'app déduit toute seule ---------- */
@@ -362,11 +700,37 @@ function genresDeduits(){
    valait pour la déduction, où la queue de liste n'est que du bruit ; appliqué
    aux choix d'Adrien, il en jetait quatre sur sept sans rien dire. */
 const GENRES_DEDUITS_MAX = 3;
-function genresRetenus(){
+/* POINT 11 — ELLE PREND DÉSORMAIS UNE FAMILLE, et rend la liste DANS LA LANGUE
+   DE CETTE FAMILLE : des noms de genres TMDB pour `film` et `serie`, des
+   identifiants de sous-genres (`shonen`, `mecha`…) pour `anime`. Demander une
+   famille, c'est justement dire dans quelle langue on veut la réponse.
+
+   L'APPEL SANS FAMILLE SURVIT, ET IL FAUT DIRE POURQUOI : deux appelants vivent
+   dans `app-12-recherche.js`, qui n'appartient pas à ce lot et que personne ne
+   doit toucher à deux mains. Le repli est L'UNION DE `film` ET `serie`, jamais
+   la seule liste des films — un appelant qui ne précise rien n'a aucune raison
+   de perdre en silence la moitié d'un profil, et l'union redonne exactement ce
+   que l'ancienne liste unique produisait. Les animés en sont EXCLUS, et c'est
+   le contraire d'un oubli : leurs identifiants de sous-genres ne sont pas des
+   noms de genres TMDB, et les verser dans une liste que l'appelant passera à
+   `genreParNom` reviendrait à lui glisser des `null` sans le dire — exactement
+   la faute silencieuse que ce point existe pour supprimer.
+   Les deux appels d'app-12 sont nommés dans le compte rendu du lot ; ils
+   devront prendre une famille dès que ce fichier sera rouvert. */
+function genresRetenus(famille){
   const g = db.gouts || {};
-  const manuels = (g.genres||[]).length > 0;
-  const base = manuels ? g.genres.slice() : genresDeduits().slice(0, GENRES_DEDUITS_MAX);
   const hors = g.exclus || [];
+  if(!famille){
+    const u = [];
+    ['film','serie'].forEach(f => genresRetenus(f).forEach(n=>{ if(u.indexOf(n) < 0) u.push(n); }));
+    return u;
+  }
+  /* Les sous-genres d'animé ne sont pas des genres : `exclus` ne les connaît
+     pas et ne peut pas les filtrer. Rien à déduire non plus — la bibliothèque
+     ne porte aucun mot-clé — donc c'est le déclaré, ou rien. */
+  if(famille === 'anime') return genresDeclares('anime');
+  const dec = genresDeclares(famille);
+  const base = dec.length ? dec : genresDeduits().slice(0, GENRES_DEDUITS_MAX);
   return base.filter(x => hors.indexOf(x) < 0);
 }
 
@@ -551,6 +915,11 @@ function cleSugg(){
   const tri = (ui.disc && ui.disc.tri) || 'populaire';
   return t + '|' + tri;
 }
+/* « Un calcul de vitrine est-il déjà en route pour la puce affichée ? »
+   `render()` s'en sert pour ne pas en lancer un second alors que `veilleBiblio`
+   vient déjà d'en déclencher un. Constat A1-2. */
+function suggEnCours(){ const c = cacheSugg[cleSugg()]; return !!(c && c.enCours); }
+
 function suggCourantes(){
   const k = cleSugg();
   if(!cacheSugg[k]) cacheSugg[k] = suggVide();
@@ -587,14 +956,29 @@ function signatureGouts(){
   Object.keys(db.shows || {}).forEach(id=>{
     const s = db.shows[id];
     mel(Number(id) || 0);
-    mel(isFinished(s) ? 2 : (progress(s).watched ? 1 : 0));
+    /* `isFinished` appelle `progress`, et `progress` était rappelé juste après :
+       deux passes complètes sur les épisodes de chaque série. Or `signatureGouts`
+       est appelée depuis `saveDB`, donc HORS rendu — le mémo de `memo()` ne joue
+       pas. On calcule `progress` une fois et on en déduit les deux réponses ;
+       la valeur de hachage est rigoureusement identique.
+       Revue de stabilité du 02/08, constat A2-2. */
+    const p = progress(s);
+    const fini = p.total > 0 && p.watched === p.total &&
+                 (s.status === 'Ended' || s.status === 'Canceled') && !s.next;
+    mel(fini ? 2 : (p.watched ? 1 : 0));
   });
   Object.keys(db.movies || {}).forEach(id=>{
     mel(Number(id) || 0);
     mel(db.movies[id].seen ? 2 : 1);
   });
   const g = db.gouts || {};
-  mel((g.genres||[]).length); mel((g.exclus||[]).length); mel((g.acteurs||[]).length);
+  /* POINT 11 — LES TROIS LISTES, séparément. Compter l'ancienne clé unique
+     aurait laissé la vitrine servir son calcul de la veille à quelqu'un qui
+     vient de cocher deux genres côté séries : la longueur de `g.genres`, elle,
+     n'aurait pas bougé d'une unité. Chaque famille pèse à sa place — sans quoi
+     décocher un genre de films et en cocher un de séries se compenserait. */
+  GOUT_FAMILLES.forEach((f, i) => mel(genresDeclares(f).length * (i + 1)));
+  mel((g.exclus||[]).length); mel((g.acteurs||[]).length);
   /* Les plateformes comptent aussi : changer d'abonnement change ce qu'on peut
      regarder ce soir, et donc ce que la vitrine doit proposer. Les identifiants
      entrent dans le calcul, pas seulement leur nombre — échanger Netflix contre
@@ -735,6 +1119,91 @@ function entrelacerSugg(paquets){
     paquets.forEach(p => { if(i < p.length) out.push(p[i]); });
   return out;
 }
+
+/* ---------------------------------------------------------------------------
+   POINT 10 (02/08) — UNE RANGÉE DE DÉCOUVRIR SE REMPLIT VRAIMENT
+
+   Adrien : « pourquoi j'ai que 2 suggestions, c'est pas logique… » — la rangée
+   « Dans l'esprit de Le Diable s'habille en Prada » montrait deux affiches puis
+   la tuile « Tout voir ».
+
+   LA CAUSE. Chaque rangée ne demandait qu'UNE SEULE PAGE à TMDB (`page:'1'` en
+   dur dans les cinq requêtes de `chargerSuggestions`). Une page vaut vingt
+   titres au plus. Passe ensuite le tamis, qui retire ce qui est déjà dans la
+   bibliothèque (383 films et 116 séries chez Adrien), les genres écartés, ce
+   qu'une rangée servie plus tôt a déjà pris, et la proposition du jour retirée
+   de sa rangée d'origine. Il reste deux titres. PLUS ON UTILISE L'APP, PLUS LES
+   RANGÉES MAIGRISSENT — l'inverse exact de ce qu'on veut. Et l'incohérence
+   saute aux yeux parce que « Tout voir » ne ment pas : la grille dépliée, elle,
+   enchaîne déjà ses pages (`chargerRangee`).
+
+   LA RÈGLE APPLIQUÉE ICI EST DÉJÀ ÉCRITE AILLEURS — point 21 des retours de la
+   v85, pour la Recherche : « une fournée se remplit vraiment. Si un retrait
+   côté client vide une page, on va chercher la suivante jusqu'à atteindre la
+   cible ou jusqu'à ce que TMDB n'ait plus rien. On n'affiche pas une fournée
+   courte en espérant que personne ne remarque. » Elle n'avait jamais été
+   appliquée aux rangées de Découvrir.
+
+   AUCUN PLANCHER N'EST POSÉ, et c'est une décision explicite d'Adrien du 02/08 :
+   « on l'affiche quand même ». Une rangée honnêtement remplie qui ne rend que
+   deux titres s'affiche avec ses deux titres — une rangée courte dit quelque
+   chose de vrai (« sur ce thème, tu as déjà presque tout vu »), la masquer
+   cacherait une information à sa place. Ce qui change ici est UNIQUEMENT le
+   remplissage.
+--------------------------------------------------------------------------- */
+/* Le même garde-fou que la Recherche (`RECH_PAGES_MAX`) et que le tamis de
+   Découvrir (`DISC_PAGES_MAX`) : trois pages par source, jamais plus. Au-delà
+   ce n'est plus un remplissage, c'est une cascade réseau — et une rangée qui
+   reste courte après soixante titres examinés est courte pour de bon. */
+const SUGG_PAGES_MAX = 3;
+/* La cible : ce que le rail montre avant la tuile « Tout voir ». En dessous, la
+   rangée a l'air amputée ; au-dessus, on paie des requêtes pour des vignettes
+   que personne ne fera défiler jusqu'au bout. On lit la valeur d'app-04 plutôt
+   que d'en écrire une seconde qui se désynchroniserait. */
+const SUGG_CIBLE = (typeof RANGEE_APERCU === 'number') ? RANGEE_APERCU : 10;
+
+/* Un FLUX : une requête `/discover` et l'endroit où l'on en est. `tampon` porte
+   ce qui a été reçu et pas encore tamisé — le tamis ne peut pas se faire à la
+   réception, il dépend de ce que les rangées servies plus tôt ont déjà pris. */
+function fluxSugg(media, p, l, pages){
+  return { media:media, p:p, tampon:l || [], page:1, pages:pages || 1 };
+}
+/* La page suivante du même flux. Une source muette est traitée comme une source
+   ÉPUISÉE et non comme une erreur : on garde ce qu'on a et on n'insiste pas,
+   exactement ce que fait `sourceDouce` partout ailleurs. */
+async function pageSuivanteSugg(f){
+  const p = Object.assign({}, f.p, { page:String(f.page + 1) });
+  const d = await sourceDouce(tmdb('/discover/'+f.media, p));
+  f.page++;
+  if(!d){ f.pages = f.page; return; }
+  f.pages = d.total_pages || f.pages;
+  f.tampon = f.tampon.concat((d.results || []).map(x => normaliser(x, f.media)));
+}
+/* LE REMPLISSAGE D'UNE RANGÉE. On tamise ce qu'on a, et tant que le compte n'y
+   est pas on va chercher la page suivante — jusqu'à la cible, jusqu'au bout de
+   la source, ou jusqu'au garde-fou.
+   Les flux d'une même rangée (films et séries, le plus souvent) avancent
+   ENSEMBLE, en parallèle : une rangée coûte donc au plus deux allers-retours de
+   plus, pas deux par média. Les rangées, elles, se remplissent l'une après
+   l'autre — obligatoire, puisqu'elles se partagent `vus` et que la première
+   servie garde les titres. Une rangée déjà pleine à la page 1 ne coûte RIEN de
+   plus qu'avant : c'est le cas d'une bibliothèque encore petite. */
+async function remplirSugg(flux, vus, cadre, perso, cible){
+  const paquets = flux.map(()=>[]);
+  for(let tour = 1; ; tour++){
+    flux.forEach((f, i)=>{
+      if(!f.tampon.length) return;
+      paquets[i] = paquets[i].concat(
+        tamiser(f.tampon.splice(0, f.tampon.length), vus, cadre, perso));
+    });
+    const pris = paquets.reduce((n, p)=> n + p.length, 0);
+    if(pris >= cible || tour >= SUGG_PAGES_MAX) break;
+    const restants = flux.filter(f => f.page < f.pages);
+    if(!restants.length) break;                 // TMDB n'a plus rien : on s'arrête là
+    await Promise.all(restants.map(f => pageSuivanteSugg(f)));
+  }
+  return entrelacerSugg(paquets).slice(0, SUGG_MAX);
+}
 /* ---------------------------------------------------------------------------
    Les sections d'une vitrine
 
@@ -782,7 +1251,21 @@ function sectionsPourPuce(type){
 function genresDeFamille(famille){
   const g = db.gouts || {};
   const hors = g.exclus || [];
-  if((g.genres||[]).length) return g.genres.filter(x => hors.indexOf(x) < 0);
+  /* POINT 11 — LA LISTE DE CETTE FAMILLE, plus la liste unique. Avant, un genre
+     coché s'imposait aux trois sections à la fois : cocher « Horreur » pour ses
+     films imposait « Horreur » aux séries, où le genre n'existe pas, et la
+     section séries partait sans aucun genre. Chaque famille lit la sienne.
+
+     LES ANIMÉS NE PASSENT PAS PAR ICI, exprès. Leur liste déclarée tient des
+     sous-genres par mots-clés, pas des noms de genres TMDB, et cette fonction
+     rend des noms de genres — à ses appelants, qui les passent à `genreParNom`
+     (`requeteSection`) ou les comparent aux genres d'une bibliothèque partagée
+     (`cercleDepuisBiblios`). La déclaration d'animé ne s'y substitue donc pas :
+     elle S'AJOUTE, sous forme de mots-clés, dans `requeteSection`. */
+  if(famille !== 'anime'){
+    const dec = genresDeclares(famille);
+    if(dec.length) return dec.filter(x => hors.indexOf(x) < 0);
+  }
 
   const poids = {};
   Object.values(db.shows).forEach(s=>{
@@ -838,6 +1321,14 @@ function requeteSection(sec){
     const ids = [anim, autre].filter(x => x != null);
     if(!ids.length) return null;
     p.with_genres = ids.join(',');
+    /* POINT 11 — CE QUE LA TROISIÈME LISTE PILOTE RÉELLEMENT. Sans cette ligne,
+       déclarer « shōnen » n'aurait rien changé à la section des animés : le
+       genre TMDB ne sépare rien de ce côté (tout y est Animation + Action &
+       Adventure), et c'est précisément pour ça que la liste « animés » tient
+       des mots-clés. Ils s'ajoutent au genre plutôt que de le remplacer —
+       « animation japonaise ET (shōnen OU mecha) ». */
+    const mots = motsClesAnimeRetenus();
+    if(mots) p.with_keywords = mots;
   } else {
     const ids = noms.map(n=>genreParNom(media,n)).filter(x => x != null);
     if(ids.length) p.with_genres = ids.join('|');
@@ -912,7 +1403,12 @@ const GENRE_PLURIEL = {
 };
 function titreRangeeGenre(nom){
   const p = GENRE_PLURIEL[String(nom || '').toLowerCase()];
-  if(!p) return 'Ce que tu aimes le plus souvent : ' + nom;
+  /* POINT 16 — le repli montrait le nom TMDB brut, donc « Ce que tu aimes le
+     plus souvent : War & Politics » au milieu d'une phrase française. La table
+     ci-dessus couvre les genres connus ; `libelleGenre` (app-04) rattrape ce
+     qu'elle ne couvre pas, aujourd'hui et le jour où TMDB en ajoutera un. */
+  if(!p) return 'Ce que tu aimes le plus souvent : ' +
+    ((typeof libelleGenre === 'function') ? libelleGenre(nom) : nom);
   return p.charAt(0).toUpperCase() + p.slice(1) + ' pour toi';
 }
 
@@ -1234,11 +1730,16 @@ async function chargerSuggestions(force){
     const dec = decennieVitrine();
 
     const demandes = [];
+    /* POINT 10 — la page 1 part comme avant, en parallèle avec tout le reste :
+       elle sera consommée de toute façon, et c'est elle qui dit combien de pages
+       TMDB a en réserve. Ce qui change est APRÈS, au dépouillement. */
     sections.forEach(sec=>{
       const r = requeteSection(sec);
-      if(!r) return demandes.push(Promise.resolve({ kind:'section', sec:sec, l:[] }));
+      if(!r) return demandes.push(Promise.resolve({ kind:'section', sec:sec, flux:null }));
       demandes.push(sourceDouce(tmdb('/discover/'+r.media, r.p))
-        .then(d => ({ kind:'section', sec:sec, l:(d&&d.results||[]).map(x=>normaliser(x, r.media)) })));
+        .then(d => ({ kind:'section', sec:sec,
+                      flux: fluxSugg(r.media, r.p, (d&&d.results||[]).map(x=>normaliser(x, r.media)),
+                                     d && d.total_pages) })));
     });
 
     /* Les recommandations d'un titre servent DEUX rangées — « Dans l'esprit
@@ -1280,7 +1781,9 @@ async function chargerSuggestions(force){
       } else p.with_genres = String(gid);
       Object.assign(p, filtreMesPlates());
       demandes.push(sourceDouce(tmdb('/discover/'+m, p))
-        .then(d => ({ kind:'genre', media:m, l:(d&&d.results||[]).map(x=>normaliser(x, m)) })));
+        .then(d => ({ kind:'genre', media:m,
+                      flux: fluxSugg(m, p, (d&&d.results||[]).map(x=>normaliser(x, m)),
+                                     d && d.total_pages) })));
     });
 
     /* §3.4 rangée 6 — le cercle. Aucune requête TMDB : la matière est déjà là. */
@@ -1291,7 +1794,9 @@ async function chargerSuggestions(force){
     cadre.medias.forEach(m=>{
       const r = requeteIncont(m, dec);
       demandes.push(sourceDouce(tmdb('/discover/'+m, r.p))
-        .then(d => ({ kind:'incont', media:m, l:(d&&d.results||[]).map(x=>normaliser(x, m)) })));
+        .then(d => ({ kind:'incont', media:m,
+                      flux: fluxSugg(m, r.p, (d&&d.results||[]).map(x=>normaliser(x, m)),
+                                     d && d.total_pages) })));
     });
 
     /* §3.4 rangée 8 — ce qui est lançable ce soir, sur les abonnements déclarés. */
@@ -1299,7 +1804,9 @@ async function chargerSuggestions(force){
       const r = requetePlatesRangee(m);
       if(!r) return;
       demandes.push(sourceDouce(tmdb('/discover/'+m, r.p))
-        .then(d => ({ kind:'plates', media:m, l:(d&&d.results||[]).map(x=>normaliser(x, m)) })));
+        .then(d => ({ kind:'plates', media:m,
+                      flux: fluxSugg(m, r.p, (d&&d.results||[]).map(x=>normaliser(x, m)),
+                                     d && d.total_pages) })));
     });
     /* Les nouveautés, sur chaque média du cadre de la puce. */
     cadre.medias.forEach(m=>{
@@ -1316,7 +1823,9 @@ async function chargerSuggestions(force){
       }
       Object.assign(p, filtreMesPlates());
       demandes.push(sourceDouce(tmdb('/discover/'+m, p))
-        .then(d => ({ kind:'nouv', media:m, l:(d&&d.results||[]).map(x=>normaliser(x, m)) })));
+        .then(d => ({ kind:'nouv', media:m,
+                      flux: fluxSugg(m, p, (d&&d.results||[]).map(x=>normaliser(x, m)),
+                                     d && d.total_pages) })));
 
       /* Ce qui n'est pas encore sorti : à partir de demain, SANS borne haute.
          Pas de plancher de votes ni de tri par note — ces titres n'en ont
@@ -1354,8 +1863,11 @@ async function chargerSuggestions(force){
        Du plus personnel au plus générique, exactement comme le §3.4 range
        l'écran. */
     const parKind = k => rep.filter(r => r && r.kind === k);
-    const recos = {};
-    parKind('reco').forEach(r=>{ recos[r.cle] = r.l || []; });
+    /* Nom local distinct du cache global `recos` d'app-05 : deux choses
+       différentes portaient le même nom, et le contrôle anti-collision ne
+       peut pas voir un masquage local. Constat A4-2. */
+    const recosSection = {};
+    parKind('reco').forEach(r=>{ recosSection[r.cle] = r.l || []; });
 
     /* 2 — Ce que tes favoris ont en commun. Un titre n'entre que s'il est
        proposé par AU MOINS DEUX favoris : c'est le « en commun » du titre, et
@@ -1377,7 +1889,7 @@ async function chargerSuggestions(force){
       const compte = {};
       favoris.forEach(t=>{
         const vusIci = {};
-        (recos[t.media+':'+t.id] || []).forEach(x=>{
+        (recosSection[t.media+':'+t.id] || []).forEach(x=>{
           if(!x) return;
           const k = x.media+':'+x.id;
           if(vusIci[k]) return; vusIci[k] = 1;    // un favori ne vote qu'une fois
@@ -1396,7 +1908,7 @@ async function chargerSuggestions(force){
     /* 1 — Dans l'esprit de X */
     let espritPret = null;
     if(esprit){
-      const l = tamiser(recos[esprit.media+':'+esprit.id] || [], vus, cadre, true).slice(0, SUGG_MAX);
+      const l = tamiser(recosSection[esprit.media+':'+esprit.id] || [], vus, cadre, true).slice(0, SUGG_MAX);
       if(l.length) espritPret = { titre:esprit.nom, id:esprit.id, media:esprit.media,
                                   signal:esprit.signal, famille:esprit.famille, l:l };
     }
@@ -1422,20 +1934,27 @@ async function chargerSuggestions(force){
       acteurPret = l.length ? { id:acteurPret.id, titre:acteurPret.titre, l:l } : null;
     }
 
+    /* POINT 10 — les rangées de `/discover` sont désormais REMPLIES, une par
+       une, dans l'ordre d'affichage. L'ordre compte autant qu'avant : `vus` est
+       partagé, la première servie garde les titres, et une rangée qui va
+       chercher une page de plus ne prend jamais la place d'une rangée plus
+       personnelle affichée au-dessus d'elle. */
+    const fluxDe = k => parKind(k).map(r => r.flux).filter(Boolean);
+
     /* 4 — Des drames pour toi */
     let genrePret = null;
     if(genreT){
-      const paq = parKind('genre').map(r => tamiser(r.l || [], vus, cadre, false));
-      const l = entrelacerSugg(paq).slice(0, SUGG_MAX);
+      const l = await remplirSugg(fluxDe('genre'), vus, cadre, false, SUGG_CIBLE);
       if(l.length) genrePret = { nom:genreT.nom, titre:titreRangeeGenre(genreT.nom), l:l };
     }
 
     /* 5 — Des séries / des films / des animés pour toi */
     const sectionsPretes = [];
-    parKind('section').forEach(r=>{
-      const l = tamiser(r.l || [], vus, r.sec.cadre, false).slice(0, SUGG_MAX);
+    for(const r of parKind('section')){
+      if(!r.flux) continue;
+      const l = await remplirSugg([r.flux], vus, r.sec.cadre, false, SUGG_CIBLE);
       if(l.length) sectionsPretes.push({ cle:r.sec.cle, titre:r.sec.titre, l:l });
-    });
+    }
 
     /* 6 — Vu par tes proches */
     let cerclePret = null;
@@ -1447,25 +1966,18 @@ async function chargerSuggestions(force){
     /* 7 — Les incontournables de la décennie du jour */
     let incontPret = null;
     {
-      const paq = parKind('incont').map(r => tamiser(r.l || [], vus, cadre, false));
-      const l = entrelacerSugg(paq).slice(0, SUGG_MAX);
+      const l = await remplirSugg(fluxDe('incont'), vus, cadre, false, SUGG_CIBLE);
       if(l.length) incontPret = { cle:dec.cle, titre:dec.titre, l:l };
     }
 
     /* 8 — Sur Netflix et Max */
     let platesPret = null;
     {
-      const paq = parKind('plates').map(r => tamiser(r.l || [], vus, cadre, false));
-      const l = entrelacerSugg(paq).slice(0, SUGG_MAX);
+      const l = await remplirSugg(fluxDe('plates'), vus, cadre, false, SUGG_CIBLE);
       if(l.length) platesPret = { titre:titreRangeePlates(), l:l };
     }
 
-    const paqNouv = [];
-    parKind('nouv').forEach(r=>{
-      const l = tamiser(r.l || [], vus, cadre, false).slice(0, 20);
-      if(l.length) paqNouv.push(l);
-    });
-    const nouv = entrelacerSugg(paqNouv);
+    const nouv = await remplirSugg(fluxDe('nouv'), vus, cadre, false, SUGG_CIBLE);
 
     /* « Bientôt » : on ne mélange pas les médias un pour un comme ailleurs —
        c'est la DATE qui range la rangée. Une affiche est exigée : un titre
@@ -1510,7 +2022,11 @@ async function chargerSuggestions(force){
   suggCourantes();
   /* La bibliothèque a bougé pendant le calcul : on repasse. */
   if(c.perime){ chargerSuggestions(); return; }
-  if(view === 'discover' && typeof peindreDisc === 'function') peindreDisc();
+  /* La PUCE compte autant que l'écran : toucher « Films » pendant que la
+     vitrine de « Tout » se calcule faisait repeindre l'écran avec la fournée
+     qu'on venait de quitter. Constat A3-4. */
+  if(view === 'discover' && type === ((ui.disc && ui.disc.type) || 'tout') &&
+     typeof peindreDisc === 'function') peindreDisc();
 }
 
 /* Les rangées de la vitrine, dans l'ordre où elles s'affichent. L'ordre des
@@ -1760,7 +2276,9 @@ function rangeeParCle(cle){
 const LIB_FAMILLE = { serie:'séries', film:'films', anime:'animés' };
 function explicationProfil(court){
   const g = db.gouts || {};
-  const manuels = (g.genres||[]).length > 0;
+  /* POINT 11 — « tu as choisi ces genres toi-même » ne se lit plus sur
+     l'ancienne clé unique mais sur les trois listes réunies. */
+  const manuels = genresDeclaresFondus().length > 0;
   /* Le panneau doit décrire ce qui alimente RÉELLEMENT les sections : le profil
      de genres par famille, et non plus une poignée de titres de départ. C'est
      la question d'Adrien — « je ne sais pas ce que l'app croit savoir » — et la
@@ -1884,7 +2402,10 @@ function coucheAvis(){
      de regretter. */
 function proposerAvis(media, id, fait){
   if(!id || !fait) return;
-  if(avisDe(media, id) !== 0) return;
+  /* POINT 2 — `aRepondu` et non `avisDe(...) !== 0` : un 🤷 veut dire « ne me le
+     redemande pas », et c'est même sa seule raison d'être. Le tester comme une
+     absence d'avis reposerait la question à chaque fin de saison. */
+  if(aRepondu(media, id)) return;
   const p = { media:media, id:String(id), fait:fait };
   if(avisEnFile.some(x => x.media === p.media && x.id === p.id)) return;
   if(typeof undoData !== 'undefined' && undoData){ avisEnFile.push(p); return; }
@@ -1919,7 +2440,7 @@ function reculerAvis(){
 }
 
 function montrerAvis(p){
-  if(avisDe(p.media, p.id) !== 0) return;   // répondu entre-temps, d'un autre écran
+  if(aRepondu(p.media, p.id)) return;       // répondu entre-temps, d'un autre écran
   /* Le toast occupe le même bas d'écran, avec un z-index plus fort : « Marqué
      comme vu ✓ » recouvrait pendant deux secondes le fait et le pouce 👎 de la
      question qu'il venait lui-même de déclencher. La barre dit mieux la même
@@ -1929,11 +2450,25 @@ function montrerAvis(p){
   const el = coucheAvis();
   el.innerHTML =
     '<div class="bacol"><span>'+esc(p.fait)+'</span><small>Tu as aimé&nbsp;?</small></div>'+
+    /* POINT 2 (02/08) — TROIS CIBLES, ET DANS L'ORDRE 👍 · 🤷 · 👎.
+       Adrien : « je préfère l'ordre suivant : 👍 🤷 👎 ». La phrase se lit dans
+       le sens de la lecture, du oui au non, et la sortie est AU MILIEU : trois
+       marches d'une même échelle, pas deux camps plus une option.
+       L'ordre change ICI ET DANS `ecranRattrapage` EN MÊME TEMPS — deux écrans
+       qui posent la même question dans deux ordres différents, et on répond de
+       travers une fois sur deux.
+       Coût assumé, mesuré : 👍 passe le plus à gauche, donc le plus loin du
+       pouce droit, alors que c'est la réponse la plus fréquente. Et la barre
+       perd 44 px de texte (217 → 172 px pour le titre) : rien ne casse.
+       Les boutons GARDENT leurs 38 × 34 px et leur rayon de 9 — une maquette
+       les avait passés à 46 × 46 et Adrien l'a vu tout de suite. */
     '<div class="bapouces">'+
-      '<button class="bapouce non" aria-label="Je n\'ai pas aimé" '+
-        'onclick="repondreAvis(-1)">👎</button>'+
       '<button class="bapouce oui" aria-label="J\'ai aimé" '+
         'onclick="repondreAvis(1)">👍</button>'+
+      '<button class="bapouce cl1bof" aria-label="Sans avis" '+
+        'onclick="repondreAvis(0)">🤷</button>'+
+      '<button class="bapouce non" aria-label="Je n\'ai pas aimé" '+
+        'onclick="repondreAvis(-1)">👎</button>'+
     '</div>'+
     '<button class="bacroix" aria-label="Fermer sans répondre" '+
       'onclick="fermerAvis()">'+I.close+'</button>';
@@ -1953,11 +2488,16 @@ function repondreAvis(v){
   const p = avisAffiche;
   if(!p) return;
   fermerAvis();
-  poserAvis(p.media, p.id, v);
+  /* POINT 2 — 0 est une RÉPONSE, pas un « rien ». Elle ne passe donc pas par
+     `poserAvis`, qui la lirait comme un effacement. */
+  if(v === 0) poserNeutre(p.media, p.id); else poserAvis(p.media, p.id, v);
   /* Un message court, et qui dit à quoi ça sert. « Enregistré » n'apprend
-     rien ; ce qui donne envie de recommencer, c'est de voir que ça compte. */
+     rien ; ce qui donne envie de recommencer, c'est de voir que ça compte.
+     Le 🤷 dit ce qu'il fait vraiment : il ne pèse rien, il fait taire la
+     question. Promettre autre chose ferait de lui un demi-👎. */
   toast(v === 1 ? '👍 Noté — ça guidera tes suggestions'
-                : '👎 Noté — on t\'en proposera moins comme ça');
+     : v === -1 ? '👎 Noté — on t\'en proposera moins comme ça'
+                : '🤷 Noté — on ne te le redemandera plus');
   if(typeof render === 'function') render();
 }
 
@@ -2127,7 +2667,11 @@ const DUEL_FAMILLES = [
 const DUEL_VIDE = { actif:false, famille:null, paquet:[], scores:{}, joues:{},
                     faits:0, paire:null, choix:null, ecran:'jeu',
                     classe:[], sugg:null, rattrapage:[], vus:[], neufs:0,
-                    podiumPret:false, tete:null };
+                    podiumPret:false, tete:null,
+                    /* POINT 1 — combien de lignes de classement sont ouvertes
+                       sous le podium. Posé par `terminerDuel`, pas ici : la
+                       valeur se déduit de `CL_JUSQUA`, déclaré plus bas. */
+                    montre:0 };
 let duel = Object.assign({}, DUEL_VIDE);
 
 /* QUI ENTRE DANS LE JEU. Un titre vu y entre, qu'il porte un 👍 ou rien du
@@ -2208,7 +2752,18 @@ function fermerDuel(){
    premier appui sur « retour » était mangé par `goBack`, le geste de bord
    restait désarmé partout, et revenir dans Mes goûts rouvrait l'arène au lieu
    de l'écran. Le podium, lui, est déjà enregistré : on ne perd rien d'acquis. */
-function oublierDuel(){ duel = Object.assign({}, DUEL_VIDE); }
+/* Le vote est appliqué 320 ms après l'appui, le temps que la carte gagnante
+   s'éclaire. Quitter l'écran dans cet intervalle rangeait la session AVANT
+   l'échéance : la carte s'était éclairée sous les yeux de l'utilisateur, et le
+   duel n'était jamais compté. On solde le vote en attente avant d'effacer.
+   Revue de stabilité du 02/08, constat A3-8. */
+function oublierDuel(){
+  if(duel && duel.actif && duel.choix && duel.paire){
+    const i = duel.paire.findIndex(t => cleDuel(t) === duel.choix);
+    if(i >= 0){ try{ appliquerVote(i, true); }catch(e){} }
+  }
+  duel = Object.assign({}, DUEL_VIDE);
+}
 
 /* ADVERSAIRES CHOISIS, PAS TIRÉS AU HASARD. Les premiers duels au hasard —
    on n'a aucun repère — puis on fait s'affronter les titres qui se tiennent :
@@ -2295,7 +2850,11 @@ function duelVote(i){
   render();
   setTimeout(()=> appliquerVote(i), 320);
 }
-function appliquerVote(i){
+/* `silencieux` : on solde le score sans enchaîner sur le duel suivant ni
+   repeindre. Sert au seul cas d'`oublierDuel`, qui range la session pendant
+   que `go()` est en train de changer d'écran — enchaîner y provoquerait un
+   rendu de trop, sur l'écran qu'on quitte. Constat A3-8. */
+function appliquerVote(i, silencieux){
   if(!duel.actif || !duel.paire) return;
   const g = duel.paire[i], p = duel.paire[1 - i];
   const kg = cleDuel(g), kp = cleDuel(p);
@@ -2322,11 +2881,18 @@ function appliquerVote(i){
      personne vient de déclarer qu'elle le préfère à quelque chose qu'elle aime.
      C'est une déclaration explicite, pas une déduction — et c'est exactement ce
      que la pastille « 👍 déjà aimé » rend visible sur la carte adverse. */
-  if(avisDe(g.media, g.id) === 0 && aAime(p.media, p.id)) poserAvis(g.media, g.id, 1);
+  /* POINT 2 — `aRepondu` et non `avisDe(...) === 0`. Les deux disaient la même
+     chose tant qu'il n'y avait que deux réponses ; depuis le 🤷, non. Un titre
+     sur lequel on a répondu « il ne m'a rien fait » ne devient PAS 👍 parce
+     qu'il gagne un duel : ce serait une déduction posée par-dessus une réponse
+     explicite, exactement ce que toute cette section refuse. L'exception ne
+     vaut que pour un titre sur lequel on n'a jamais rien dit. */
+  if(!aRepondu(g.media, g.id) && aAime(p.media, p.id)) poserAvis(g.media, g.id, 1);
   /* LE GARDE-FOU, et il n'y a rien à écrire pour l'obtenir : le perdant ne
      devient JAMAIS un 👎. Finir dernier parmi quarante titres aimés n'est pas
      un rejet. Le duel donne l'ordre, jamais le signe. */
   duel.faits++;
+  if(silencieux) return;
   duelSuivant();
   render();
 }
@@ -2344,7 +2910,17 @@ function duelPasse(){
    des erreurs. Le titre sort du paquet, pour cette session et pour les
    suivantes : sans mémoire, il faudrait le récuser à chaque fois.
    Ce n'est pas un avis : ça ne dit rien du goût, seulement que la bibliothèque
-   se trompe. Le duel n'est donc pas compté. */
+   se trompe. Le duel n'est donc pas compté.
+
+   POINT 19, 02/08 — PLUS AUCUN ÉCRAN N'APPELLE CETTE FONCTION. Son seul bouton
+   vivait au bas de la feuille du ⓘ, et les trois boutons de cette feuille ont
+   été retirés (« les 3 boutons du bas sont moches, fais la fiche normale avec
+   la possibilité de fermer la fiche, c'est tout »). Le geste n'a AUCUN
+   équivalent ailleurs : « Je ne sais pas / les deux » passe la paire, il ne
+   récuse pas le titre. La disparition est assumée, mais le code ne l'est pas —
+   la fonction reste, entière et testée, parce que sa place naturelle est
+   l'écran du duel, à côté de « Je ne sais pas / les deux », et que la rebrancher
+   coûtera alors une ligne. La supprimer, c'est la réécrire plus tard. */
 function duelPasVu(media, id){
   if(typeof closeSheet === 'function') closeSheet();
   const c = media+':'+String(id);
@@ -2386,8 +2962,7 @@ function terminerDuel(){
      ses trois duels, il est vide : on montre alors l'ordre de la session, qui
      est ce que la personne vient réellement de faire. La phrase du bas dit
      laquelle des deux choses elle est en train de lire. */
-  const parId = {};
-  titresEligiblesDuel(fam).forEach(t=>{ parId[String(t.id)] = t; });
+  const parId = titresParIdDuel(fam);
   duel.paquet.forEach(t=>{ parId[String(t.id)] = t; });
   duel.classe = db.podium[fam].map(id => parId[id]).filter(Boolean);
   duel.podiumPret = duel.classe.length > 0;
@@ -2403,15 +2978,29 @@ function terminerDuel(){
      prend le premier podium non vide dans l'ordre films, séries, animés, pas
      celui qu'on vient de jouer.
      On demande donc directement à la fonction qui alimente la rangée quel titre
-     elle retiendra, et on ne promet que s'il s'agit du nôtre. Lecture seule :
-     rien n'est modifié dans `app-12-recherche.js`, hors de ce lot. */
+     elle retiendra, et on ne promet que s'il s'agit du nôtre.
+
+     LA SOURCE A CHANGÉ AVEC LE POINT 20, et c'est une CORRECTION, pas un
+     rafistolage. On interrogeait `departJeuRech` (app-12), le point de départ
+     du PAQUET DU JEU — qui n'était déjà pas la bonne fonction : la rangée
+     promise est celle de Découvrir, pas une carte du jeu. Le point 20 a
+     supprimé les cinq sources du jeu, et avec elles cette fonction. On demande
+     désormais à `graineEsprit`, qui est LA fonction qui choisit le titre de la
+     rangée « Dans l'esprit de … ». La promesse porte enfin sur ce qu'elle
+     annonce. */
   duel.tete = null;
   if(duel.podiumPret){
     const numeroUn = String((db.podium[fam] || [])[0] || '');
-    const depart = (typeof departJeuRech === 'function') ? departJeuRech() : null;
-    if(depart && String(depart.id) === numeroUn) duel.tete = parId[numeroUn] || null;
+    const depart = (typeof graineEsprit === 'function' && typeof cadreSugg === 'function')
+      ? graineEsprit(cadreSugg('tout')) : null;
+    if(depart && String(depart.id) === numeroUn && depart.famille === fam)
+      duel.tete = parId[numeroUn] || null;
   }
   duel.ecran = 'resultat';
+  /* POINT 1 — la liste repart à sa longueur d'origine à chaque fin de partie :
+     l'avoir allongée la fois d'avant ne dit rien de ce qu'on veut lire cette
+     fois-ci. Les trois premiers sont en affiche, la liste va donc du 4ᵉ au 10ᵉ. */
+  duel.montre = CL_JUSQUA - 3;
   apresAvis();                      // enregistre, et périme la vitrine
   chargerSuggDuel(duel.tete);
   render();
@@ -2464,7 +3053,10 @@ function titresARattraper(){
   const vus = {}, out = [];
   for(let i = (duel.vus || []).length - 1; i >= 0; i--){
     const t = duel.vus[i], c = cleDuel(t);
-    if(vus[c] || recuse.indexOf(c) >= 0 || avisDe(t.media, t.id) !== 0) continue;
+    /* POINT 2 — un 🤷 sort de la liste au même titre qu'un pouce : c'est une
+       réponse donnée, la redemander est exactement la faute que le point 12
+       corrigeait un écran plus tôt. */
+    if(vus[c] || recuse.indexOf(c) >= 0 || aRepondu(t.media, t.id)) continue;
     vus[c] = 1; out.push(t);
   }
   return out.slice(0, RATTRAPAGE_MAX);
@@ -2478,40 +3070,65 @@ function ouvrirRattrapage(){
   duel.ecran = 'rattrapage';
   render();
 }
-/* TROIS ÉTATS : 👍, 👎, et RIEN — qui est le défaut et une réponse parfaitement
-   valide. Repasser le même pouce revient donc au troisième état. */
+/* QUATRE ÉTATS DEPUIS LE POINT 2, et il faut les distinguer : 👍, 👎, 🤷 — une
+   réponse à part entière, enregistrée, qui fait taire la question — et RIEN, le
+   défaut, qui reste valide et ne s'affiche nulle part. Repasser le même bouton
+   ramène toujours à RIEN. */
 function avisRattrapage(media, id, v){
-  poserAvis(media, id, v);
+  if(v === 0) poserNeutre(media, id); else poserAvis(media, id, v);
   render();
 }
 
 /* ---------------------------------------------------------------------------
-   Le synopsis d'un titre, pour la fiche ouverte depuis le duel
+   POINT 19 (02/08) — DE QUOI PEINDRE LA FICHE D'UN TITRE DU DUEL
 
-   Un doute sur l'un des deux titres et on est bloqué : il faut une porte de
-   sortie. La bibliothèque porte déjà le synopsis des titres qu'elle contient ;
-   pour une graine, qui n'y est pas, on va le chercher une fois.
+   La feuille du ⓘ ne montrait qu'un synopsis, et n'allait donc chercher qu'un
+   synopsis. Depuis qu'elle montre LA FICHE (voir `ficheDuel`, plus bas), il lui
+   faut ce que la fiche affiche : image d'ambiance, affiche, note, genres,
+   saisons ou durée. La requête est la même — `/movie/550` — on garde juste la
+   réponse entière au lieu d'en jeter tout sauf une ligne.
+
+   DEUX SOURCES, ET C'EST LA RAISON D'ÊTRE DE CE CACHE. Le paquet du duel
+   mélange des titres de la BIBLIOTHÈQUE (`db.movies`, `db.shows` — qui portent
+   déjà tout ce qu'il faut, `viewMovie` et `viewShow` ne lisent rien d'autre) et
+   des GRAINES de la grille d'inscription, qui ne sont dans aucune des deux :
+   pour celles-là, et pour elles seules, on va voir TMDB. Une fiche déjà en
+   bibliothèque s'affiche donc instantanément et ne coûte aucun aller-retour.
 --------------------------------------------------------------------------- */
-const synopsisDuel = {};             // 'tv:1399' → texte | 'attente' | ''
-function synopsisDe(media, id){
-  const local = media === 'tv' ? db.shows[id] : db.movies[id];
-  if(local && local.overview) return local.overview;
+const fichesDuel = {};               // 'tv:1399' → réponse TMDB | 'attente' | null
+
+/* Rend la fiche TMDB si elle est là, `null` sinon — et lance le chargement au
+   premier appel. L'appelant se dessine sans, et `repeindreDuelFiche` refait
+   l'écran à l'arrivée : c'est la règle des zones asynchrones de la fiche
+   (`chargerFiche`, `chargerRecos`), appliquée ici au reste du contenu. */
+function detailDuel(media, id){
   const k = media+':'+id;
-  if(synopsisDuel[k] === undefined){
-    synopsisDuel[k] = 'attente';
+  if(fichesDuel[k] === undefined){
+    fichesDuel[k] = 'attente';
     tmdb('/'+media+'/'+id)
-      .then(d=>{ synopsisDuel[k] = (d && d.overview) || ''; peindreSynopsisDuel(k); })
-      .catch(()=>{ synopsisDuel[k] = ''; peindreSynopsisDuel(k); });
+      .then(d=>{ fichesDuel[k] = (d && d.id) ? d : null; repeindreDuelFiche(k); })
+      .catch(()=>{ fichesDuel[k] = null; repeindreDuelFiche(k); });
   }
-  return synopsisDuel[k];
+  const d = fichesDuel[k];
+  return (d && d !== 'attente') ? d : null;
 }
-/* `k` est la clé BRUTE, et c'est volontaire : côté fiche l'identifiant est posé
-   par `esc()`, mais le parseur HTML redécode l'attribut, si bien que la valeur
-   réellement portée par le nœud est la clé brute. Échapper ici aussi ferait
-   diverger les deux bouts et le synopsis ne se peindrait plus. */
-function peindreSynopsisDuel(k){
-  const el = document.getElementById('syn-'+k);
-  if(el) el.textContent = synopsisDuel[k] === 'attente' ? '' : (synopsisDuel[k] || '');
+
+/* La clé de la fiche ⓘ ouverte en ce moment. Sans elle, une réponse tardive
+   repeindrait une feuille refermée depuis, ou pire : la feuille de l'AUTRE
+   jaquette, ouverte entre-temps. */
+let duel19Ouverte = '';
+
+/* Le redessin complet plutôt qu'un `textContent` sur le seul synopsis : ce qui
+   arrive avec la réponse, ce sont aussi la note, les genres et le nombre de
+   saisons, c'est-à-dire trois endroits de l'en-tête. `openSheet` conserve la
+   position de lecture d'un panneau déjà ouvert (app-02), donc redessiner ne
+   renvoie personne en haut de la fiche. */
+function repeindreDuelFiche(k){
+  if(k !== duel19Ouverte) return;
+  const s = document.getElementById('sheet');
+  if(!s || !s.classList.contains('show')) return;    // refermée entre-temps
+  const i = k.indexOf(':');
+  ficheDuel(k.slice(0, i), k.slice(i + 1));
 }
 
 /* ---------------------------------------------------------------------------
@@ -2522,8 +3139,12 @@ function peindreSynopsisDuel(k){
    fait aller au bout — un jeu sans fin visible est un jeu qu'on quitte à la
    troisième carte.
 --------------------------------------------------------------------------- */
-function affDuel(t, cls){
-  const src = srcImage(t.affiche, 'w342');
+/* La taille se choisit à l'appel : la même fonction sert la carte du duel
+   (plein cadre), le podium (pleine colonne), la jaquette de 96 px et la
+   vignette de 44 px des listes — pour laquelle un w342 est sept fois trop
+   gros en pixels. Constat A5-4. */
+function affDuel(t, cls, taille){
+  const src = srcImage(t.affiche, taille || 'w342');
   return src
     ? '<img class="'+cls+'" src="'+src+'" alt="" onerror="posterFail(this)">'
     : '<div class="'+cls+' ph">'+esc((t.nom || '?').slice(0, 22))+'</div>';
@@ -2560,28 +3181,384 @@ function ecranDuelJeu(){
   '</div>';
 }
 
-/* LA FICHE, ACCESSIBLE DEPUIS LE DUEL. Deux sorties, et elles comptent autant
-   l'une que l'autre : « C'est celui-là » vote directement — pas de retour en
-   arrière puis de re-visée, on ne casse pas le rythme d'un jeu de quarante
-   secondes — et « Je ne l'ai pas vu » nettoie le paquet.
-   Principe général : chaque fois qu'on demande un avis, il faut pouvoir dire
-   « je ne peux pas répondre ». */
+/* ---------------------------------------------------------------------------
+   POINT 19 (02/08) — LE ⓘ DU DUEL OUVRE LA VRAIE FICHE
+
+   Ce que la feuille montrait : un titre, une année, un synopsis, une
+   bande-annonce, et trois boutons empilés. Ni les genres, ni la note, ni les
+   plateformes, ni les saisons — c'est-à-dire rien de ce qu'on vient chercher
+   quand on hésite entre deux titres. Un résumé, là où l'app a une fiche.
+
+   ON GARDE LA FEUILLE, ON Y MET LA FICHE. Adrien, le 02/08 : « je ne comprends
+   pas la complexité que tu ajoutes à ma demande, qui est simple. Si changer de
+   page est vraiment complexe, peut faire une espèce de popup qui s'ouvre du
+   bas. » La popup du bas existe déjà — c'est cette feuille. Il n'y a donc
+   AUCUNE navigation ici, aucun état de duel à sauver, aucun retour à gérer :
+   LE DUEL N'EST JAMAIS QUITTÉ, il reste derrière, à 3 / 10.
+
+   RIEN N'EST RÉÉCRIT. L'ordre et les blocs sont ceux de `viewMovie` (app-05) —
+   `hero`, `dhead`, la ligne bande-annonce, `actions`, Synopsis,
+   `blocPlateformes`, `zoneCasting`, `zoneRecos` — et ce sont LES MÊMES
+   fonctions. C'est l'argument principal du point : le jour où la fiche change,
+   la feuille change avec elle. Le point 3 (tous les genres, principal en tête)
+   et le point 9 (la bande-annonce en ligne pleine largeur) s'y appliquent sans
+   qu'une ligne d'ici ait à le savoir.
+   Corollaire : on n'AJOUTE rien. Une première maquette y avait glissé un bloc
+   « Dans ton cercle » — « ça n'existe pas sur les fiches actuelles et c'est pas
+   nécessaire ». Ce qui n'est pas sur `viewMovie` / `viewShow` n'est pas ici.
+
+   LES TROIS BOUTONS DU BAS DISPARAISSENT. « les 3 boutons du bas sont moches,
+   fais la fiche normale avec la possibilité de fermer la fiche, c'est tout. »
+   Il reste une croix en haut à droite ; la poignée qu'on tire et l'appui à côté
+   existaient déjà et restent — les trois gestes cohabitent.
+   CE QUE ÇA COÛTE, dit une fois : « C'est celui-là » et « Revenir au duel » ne
+   manquent pas (on referme, on touche la jaquette), mais « Je ne l'ai pas vu »
+   n'a AUCUN équivalent — c'était le seul geste qui retirait un titre du paquet
+   en cours de partie, « Je ne sais pas / les deux » passe la paire sans récuser
+   le titre. Sa disparition est assumée. `duelPasVu` n'est plus appelée par
+   l'app ; elle n'est pas supprimée pour autant (voir sa propre note).
+
+   CHAQUE ⓘ OUVRE SON TITRE, et plus par un index. La version précédente avait
+   besoin de `duel.paire.indexOf(t)` pour son bouton « C'est celui-là » ; le
+   bouton parti, l'index l'est aussi. Le titre est retrouvé par sa clé
+   media+id, celle-là même que `carteDuel` pose sur la jaquette qu'on regarde :
+   il n'existe plus de chemin par lequel les deux jaquettes pourraient se
+   croiser.
+--------------------------------------------------------------------------- */
 function ficheDuel(media, id){
   const t = (duel.paire || []).find(x => x.media === media && String(x.id) === String(id));
   if(!t) return;
-  const i = duel.paire.indexOf(t);
-  const syn = synopsisDe(media, id);
-  const an = t.date ? year(t.date) : '';
+  const tv = media === 'tv';
+  const k = media+':'+id;
+  duel19Ouverte = k;
+
+  /* UN IDENTIFIANT TMDB EST UNE SUITE DE CHIFFRES, et on le vérifie avant de
+     s'en servir. Deux raisons, et la première est un défaut déjà payé une fois :
+     `zoneCasting` et `zoneRecos` (app-05) posent la clé NUE dans leur attribut
+     `id` — la fiche ne s'en émeut pas, ses identifiants viennent de TMDB, mais
+     la feuille du duel a son test là-dessus (« la fiche ⓘ d'un duel n'écrit
+     aucun identifiant brut dans la page »), et app-05 est hors du périmètre de
+     ce point. La seconde : les trois zones lancent un appel réseau sur un chemin
+     bâti avec l'identifiant, qu'il vaut mieux ne pas fabriquer.
+     Tout ce qui n'est pas une suite de chiffres sort d'une sauvegarde abîmée ;
+     une fiche sans casting vaut mieux qu'un attribut inventé. Le même contrôle
+     autorise à poser le nombre nu dans les `onclick` d'action. */
+  const num = /^[0-9]+$/.test(String(id)) ? String(id) : '';
+
+  /* La bibliothèque d'abord, TMDB seulement pour ce qu'elle n'a pas : voir
+     `detailDuel`. Les deux formes sont ramenées ici aux six informations que
+     l'en-tête de la fiche affiche, pour n'écrire l'en-tête QU'UNE FOIS. */
+  const o = tv ? db.shows[id] : db.movies[id];
+  const d = o ? null : detailDuel(media, id);
+  const titre   = (o ? (tv ? o.name : o.title) : (d ? (tv ? d.name : d.title) : '')) || t.nom || '';
+  const fond    = o ? o.backdrop : (d ? d.backdrop_path : null);
+  const affiche = o ? o.poster   : (d ? d.poster_path   : t.affiche);
+  const sortie  = o ? (tv ? o.first : o.date) : (d ? (tv ? d.first_air_date : d.release_date) : t.date);
+  const note    = o ? o.note : (d ? d.vote_average : null);
+  const genres  = o ? (o.genres || []) : (d ? (d.genres || []).map(g => g.name) : []);
+  const syn     = (o ? o.overview : (d ? d.overview : '')) || '';
+  const duree   = o ? o.runtime : (d ? d.runtime : null);
+  const saisons = o ? (o.seasons ? seasonNums(o, true).length : 0) : (d ? d.number_of_seasons : 0);
+  const chaine  = o ? o.network : (d && d.networks && d.networks[0] ? d.networks[0].name : '');
+  const etat    = o ? o.status : (d ? d.status : '');
+
+  /* La ligne sous le titre, telle que les fiches l'écrivent : `viewMovie` pose
+     « année · durée », `viewShow` « année · chaîne · pastille d'état ». Les
+     saisons s'y ajoutent parce que le contenu arrêté le 02/08 les nomme
+     explicitement — sur la fiche série elles vivent dans le bloc `stats`, qui
+     ne fait pas partie des blocs repris ici. */
+  const an = sortie ? year(sortie) : '';
+  let ligne = esc(an);
+  if(tv){
+    if(saisons) ligne += ' · '+saisons+' saison'+(saisons > 1 ? 's' : '');
+    if(chaine) ligne += ' · '+esc(chaine);
+    if(etat) ligne += ' · <span class="badge '+(etat === 'Ended' || etat === 'Canceled' ? 'end' : 'live')+'">'+
+      esc(etat === 'Ended' ? 'Terminée' : etat === 'Canceled' ? 'Annulée' : 'En cours')+'</span>';
+  } else if(duree) ligne += ' · '+duree+' min';
+
+  /* L'ACTION PRINCIPALE, reprise de la fiche qui correspond à l'état du titre,
+     et JAMAIS une qui change d'écran : `addOrOpenShow` (app-04) termine par un
+     `go('show')`, elle quitterait le duel — elle est donc écartée, et une série
+     absente de la bibliothèque n'a pas de bouton ici. C'est le seul manque, et
+     il est préférable à une sortie qu'on n'a pas demandée.
+     Chaque action est suivie d'un `ficheDuel(...)` : l'action redessine l'écran
+     du duel, derrière, mais rien ne redessine la feuille — sans ce rappel, le
+     bouton resterait à « Marquer comme vu » après qu'on l'a touché. */
+  const revenir = ';ficheDuel(\''+escJs(media)+'\',\''+escJs(String(id))+'\')';
+  let actions = '';
+  if(num && !tv){
+    const m = db.movies[id];
+    if(m) actions = '<button class="btn block" style="'+(m.seen ? 'background:var(--ok);color:#08130d' : '')+
+        '" onclick="toggleMovie('+num+')'+revenir+'">'+
+        I.check+(m.seen ? ' Vu le '+fmtDate(new Date(m.watchedAt).toISOString().slice(0,10)) : ' Marquer comme vu')+'</button>';
+    /* Un film hors bibliothèque : `marquerFilmVu` l'ajoute ET pose la question
+       « tu as aimé ? » (lot A) — le même chemin que depuis un aperçu. Pas de
+       rappel de la feuille : l'ajout est asynchrone, le redessin arriverait
+       avant lui. Le toast de `addMovie` fait l'accusé de réception. */
+    else actions = '<button class="btn block" onclick="marquerFilmVu('+num+')">'+
+        I.check+' Marquer comme vu</button>';
+  } else if(num && tv){
+    const s = db.shows[id], nx = s ? nextToWatch(s) : null;
+    if(s && nx && !s.pause) actions = '<button class="btn block" onclick="quickWatch('+num+')'+revenir+'">'+
+        I.check+' Marquer '+codeEp(nx.s, nx.e)+' comme vu</button>';
+  }
+
   openSheet(
-    '<h3>'+esc(t.nom)+'</h3>'+
-    (an ? '<p class="small muted" style="margin:0 0 8px">'+esc(an)+'</p>' : '')+
-    '<div id="syn-'+media+':'+esc(String(id))+'" class="overview" style="margin:0 0 12px">'+
-      esc(syn === 'attente' ? '' : (syn || ''))+'</div>'+
-    zoneBande(media, id)+
-    '<button class="opt" onclick="closeSheet();duelVote('+i+')">C’est celui-là</button>'+
-    '<button class="opt" onclick="duelPasVu(\''+media+'\',\''+escJs(String(id))+'\')">'+
-      'Je ne l’ai pas vu</button>'+
-    '<button class="opt" onclick="closeSheet()">Revenir au duel</button>');
+    /* La croix. Barre de hauteur nulle et collante : elle ne pousse rien vers le
+       bas et reste en vue quand la fiche défile — la feuille atteint son plafond
+       (816 px mesurés) et défile toujours. */
+    '<div class="du19barre"><button class="iconbtn du19x" onclick="closeSheet()" '+
+      'aria-label="Fermer la fiche">'+I.close+'</button></div>'+
+    /* Le conteneur annule le retrait latéral de la feuille : les blocs de la
+       fiche posent leurs propres 16 px, et sans cela ils les paieraient deux
+       fois — l'image d'ambiance la première, qui est pleine largeur. */
+    '<div class="du19fiche">'+
+      '<div class="hero">'+(srcImage(fond, 'w780') ? '<img src="'+srcImage(fond, 'w780')+'" alt="">' : '')+'</div>'+
+      '<div class="dhead">'+posterEl(affiche, 'w342', '', titre)+
+        '<div class="dmeta">'+
+          '<h2>'+esc(titre)+'</h2>'+
+          '<div class="small muted">'+ligne+'</div>'+
+          (note ? '<div style="margin-top:6px"><span class="note">'+I.star+(Math.round(note*10)/10)+'</span></div>' : '')+
+          /* POINT 3 — tous les genres, le principal en tête, par la SEULE
+             fonction de tri des genres de l'app (`genresOrdonnes`, app-04).
+             Elle est appelée ici pour la même raison que sur les trois fiches :
+             une seconde version de la règle serait une divergence de plus. */
+          /* POINT 16 — et le libellé français par-dessus le tri : la fiche du
+             duel affichait « Action & Adventure · Sci-Fi & Fantasy » sur toute
+             série. On traduit ce qu'on montre, pas ce qu'on garde. */
+          '<div class="small muted" style="margin-top:6px">'+
+            esc(genresOrdonnes(genres).map(n =>
+              (typeof libelleGenre === 'function') ? libelleGenre(n) : n).join(' · '))+'</div>'+
+        '</div></div>'+
+      /* POINT 9 — la ligne pleine largeur, entre le bloc du titre et la rangée
+         d'actions. Troisième argument à `true` : c'est la variante de la fiche,
+         et la feuille du duel est une copie de la fiche. */
+      zoneBande(media, id, true)+
+      (actions ? '<div class="actions">'+actions+'</div>' : '')+
+      /* POINT 21 — le bloc d'état « À voir », rendu par la même fonction que les
+         trois fiches. Elle décide seule de s'afficher : rien à répéter ici. */
+      blocAVoir(media, id)+
+      /* `esc` protège la SOURCE de l'identifiant ; le parseur redécode
+         l'attribut, si bien que le nœud porte la clé brute. Ne pas « corriger »
+         l'autre bout. Le bloc est écrit même vide — la fiche est repeinte à
+         l'arrivée du synopsis, et l'emplacement reste retrouvable. */
+      (syn ? '<div class="sectitle">Synopsis</div>' : '')+
+      '<div id="syn-'+media+':'+esc(String(id))+'" class="overview"'+
+        (syn ? ' style="margin-top:0"' : '')+'>'+esc(syn)+'</div>'+
+      (num ? blocPlateformes(media, id) : '')+
+      (num ? zoneCasting(media, id) : '')+
+      (num ? zoneRecos(media, id) : '')+
+    '</div>');
+}
+
+/* ---------------------------------------------------------------------------
+   POINT 1 (02/08) — LE CLASSEMENT, SOUS LE PODIUM ET DANS MES GOÛTS
+
+   Adrien : « en dessous je veux le classement de mes séries de 1 à 10 avec
+   possibilité d'allonger la liste ». L'écran de résultat s'arrêtait à trois
+   affiches médaillées et laissait la moitié basse vide.
+
+   IL N'Y A RIEN À CALCULER. Depuis le lot R1, chaque titre porte son score en
+   permanence dans `db.classement`, `db.podium` n'est qu'une projection des dix
+   premiers, et `classementTrie` rend déjà le classement complet et ordonné. On
+   jetait à l'affichage un travail qu'on garde déjà en base.
+
+   DEUX ÉCRANS, ET ILS NE MONTRENT PAS LA MÊME CHOSE — c'est le cœur de ce qui
+   a été tranché le 02/08 :
+
+   · Sur LE RÉSULTAT DU DUEL, la liste commence à 4 (le podium au-dessus est une
+     image, pas une ligne : le redire ferait doublon), elle se place APRÈS les
+     deux boutons, et les titres pas encore départagés n'y figurent pas — on
+     vient de jouer, on regarde ce qu'on a gagné, pas ce qui reste à faire.
+
+   · Dans MES GOÛTS, la liste part de 1 (plus de podium à ménager), une puce par
+     famille, et les non-départagés sont EN FIN DE LISTE, grisés, sans rang, avec
+     ce qui leur manque. C'est là qu'ils ont un sens : on est venu voir son
+     classement, donc on est prêt à voir ce qui l'empêche d'être complet.
+
+   POURQUOI APRÈS LES BOUTONS, ET C'EST UNE MESURE QUI L'A DÉCIDÉ. Placée avant,
+   la liste repousse « Encore 10 duels » et « Continuer → » de 474 px à 1 106 px,
+   soit hors de l'écran. Or « Continuer → » est la sortie du parcours, celle qui
+   mène à « Encore une chose », l'écran qui récolte les 👍/👎. Un bouton qu'on ne
+   voit plus est une étape qu'on ne fait plus.
+--------------------------------------------------------------------------- */
+/* « De 1 à 10 », mot pour mot. Et le même pas pour chaque « Voir les N
+   suivants » : la liste s'allonge d'une longueur d'écran à la fois. */
+const CL_JUSQUA = 10;
+const CL_PAS = 10;
+
+/* Les titres d'une famille, rangés par identifiant. Le classement ne porte que
+   des identifiants et des scores : l'affiche, le nom et l'année se retrouvent
+   ici. Les graines d'amorçage passent par `titresEligiblesDuel`, donc elles y
+   sont aussi — un classement amputé de ses graines aurait des trous sans
+   raison lisible. */
+function titresParIdDuel(fam){
+  const parId = {};
+  titresEligiblesDuel(fam).forEach(t=>{ parId[String(t.id)] = t; });
+  return parId;
+}
+/* Le classement complet d'une famille, du meilleur au moins bon, en objets
+   affichables. Un titre classé jadis puis sorti du jeu (passé 👎, retiré de la
+   bibliothèque) n'a plus d'objet : il disparaît de la liste au lieu d'y laisser
+   une ligne vide. */
+function classementDuel(fam){
+  const parId = titresParIdDuel(fam);
+  return classementTrie(fam).map(id => parId[id]).filter(Boolean);
+}
+/* Ce qui attend encore. `classementTrie` filtre à `DUEL_MINI_N` duels joués —
+   on reprend LA MÊME constante plutôt que d'en réécrire une seconde, sans quoi
+   les deux listes finiraient par se recouvrir ou laisser un trou. Les plus
+   proches du seuil d'abord : c'est l'ordre dans lequel on peut agir. */
+function attenteClassement(fam){
+  return titresEligiblesDuel(fam)
+    .filter(t => duelsJoues(fam, t.id) < DUEL_MINI_N)
+    .sort((a,b)=> duelsJoues(fam, b.id) - duelsJoues(fam, a.id) ||
+                  (a.nom < b.nom ? -1 : a.nom > b.nom ? 1 : 0));
+}
+/* UNE LIGNE. Le rang, la jaquette, le titre, et SON NOMBRE DE DUELS JOUÉS.
+   Ce dernier n'est pas décoratif : sans lui on ne sait pas si un titre est 4ᵉ
+   parce qu'il a gagné souvent ou parce qu'il a joué une fois. C'est ce qui rend
+   le rang crédible.
+   L'affiche est demandée en w154 : à 38 × 57 px à l'écran, un w342 est presque
+   dix fois trop gros en pixels (constat A5-4). */
+function ligneClassement(t, rang, sous, gris){
+  return '<button class="cl1lig'+(gris ? ' cl1gris' : '')+'" '+
+      'onclick="ouvrirApercuDuel(\''+t.media+'\',\''+escJs(String(t.id))+'\')">'+
+    '<span class="cl1rang">'+esc(rang)+'</span>'+
+    affDuel(t, 'cl1aff', 'w154')+
+    '<span class="cl1txt"><b>'+esc(t.nom)+'</b><span>'+esc(sous)+'</span></span>'+
+  '</button>';
+}
+const ditDuels = n => n + ' duel' + (n > 1 ? 's' : '') + ' joué' + (n > 1 ? 's' : '');
+/* « 2 duels · encore 1 », ou « jamais joué ». On dit ce qui manque, pas
+   seulement qu'il manque quelque chose. */
+function ditAttente(n){
+  return n ? n + ' duel' + (n > 1 ? 's' : '') + ' · encore ' + (DUEL_MINI_N - n)
+           : 'jamais joué';
+}
+/* Le bouton d'allongement, commun aux trois listes. Il annonce COMBIEN il va
+   ouvrir, pas « voir plus » : on sait ce qu'on demande avant de le demander. */
+function boutonPlusClassement(reste, appel){
+  if(reste <= 0) return '';
+  const n = Math.min(CL_PAS, reste);
+  return '<div class="cl1plus"><button class="btn ghost block" onclick="'+appel+'">'+
+    (n > 1 ? 'Voir les '+n+' suivants' : 'Voir le suivant')+'</button></div>';
+}
+
+/* ---------- Sur l'écran de résultat ---------- */
+function allongerClassement(){ duel.montre += CL_PAS; render(); }
+function blocClassementDuel(){
+  /* Podium vide = aucun titre n'a encore ses trois duels, et `ecranDuelResultat`
+     l'explique déjà en toutes lettres juste au-dessus. Une liste de rangs
+     par-dessus cette phrase la contredirait. */
+  if(!duel.podiumPret) return '';
+  /* Les trois qui sont déjà en affiche sortent de la liste — on les retire PAR
+     IDENTIFIANT et non en coupant les trois premiers : `projeterPodium` complète
+     la projection avec l'ancien podium, les deux ordres peuvent donc différer,
+     et couper à l'aveugle ferait réapparaître une médaille en quatrième ligne. */
+  const haut = {};
+  (duel.classe || []).slice(0, 3).forEach(t=>{ haut[String(t.id)] = 1; });
+  const l = classementDuel(duel.famille).filter(t => !haut[String(t.id)]);
+  if(!l.length) return '';
+  const n = Math.max(0, Math.min(duel.montre, l.length));
+  if(!n) return '';
+  return '<div class="sectitle rowt">La suite du classement'+
+      '<span class="cl1aide">'+(l.length + 3)+' titres départagés</span></div>'+
+    '<div class="cl1liste">'+l.slice(0, n).map((t, i)=>
+      ligneClassement(t, i + 4, ditDuels(duelsJoues(duel.famille, t.id)), false)).join('')+
+    '</div>'+
+    boutonPlusClassement(l.length - n, 'allongerClassement()');
+}
+
+/* ---------- Dans Mes goûts ---------- */
+/* `fam` — la puce choisie. `n` et `na` — combien de lignes sont ouvertes dans
+   chacune des deux listes. DEUX compteurs et non un seul : Adrien a 383 films,
+   dont la quasi-totalité n'a jamais été départagée. Une seule liste déroulée
+   d'un bloc, c'est trois cents lignes grises sous un classement de douze. */
+let clGouts = { fam:null, n:CL_JUSQUA, na:CL_PAS };
+/* Une famille n'a de puce que si elle a quelque chose à classer. Sans ce
+   filtre, « Films » s'afficherait vide chez quelqu'un qui n'a joué que ses
+   animés — un onglet qui ne mène à rien passe pour cassé. */
+function famillesClassement(){
+  return DUEL_FAMILLES.filter(f => classementTrie(f.cle).length);
+}
+function famClassementCourante(fams){
+  if(clGouts.fam && fams.some(f => f.cle === clGouts.fam)) return clGouts.fam;
+  return fams[0].cle;
+}
+function choisirFamClassement(cle){
+  /* Changer de famille remet les deux listes à leur longueur d'origine : garder
+     la longueur de la précédente ouvrirait quarante lignes sur une famille
+     qu'on découvre. */
+  clGouts = { fam:cle, n:CL_JUSQUA, na:CL_PAS };
+  render();
+}
+function allongerClassementGouts(quoi){
+  if(quoi === 'attente') clGouts.na += CL_PAS; else clGouts.n += CL_PAS;
+  render();
+}
+function blocClassementGouts(){
+  const fams = famillesClassement();
+  /* Rien de départagé nulle part : la carte d'invitation au duel, juste
+     au-dessus, dit déjà tout ce qu'il y a à dire. */
+  if(!fams.length) return '';
+  const cle = famClassementCourante(fams);
+  const f = DUEL_FAMILLES.find(x => x.cle === cle) || fams[0];
+  const l = classementDuel(cle);
+  const att = attenteClassement(cle);
+  const total = l.length + att.length;
+
+  let html = '<div class="sectitle">Mon classement</div>';
+  /* Une puce par famille — chacune a son classement, et il n'y a aucune raison
+     de mélanger des films et des animés dans un même ordre. Les puces ne
+     s'affichent qu'à partir de deux familles : une seule puce, toujours
+     allumée, ne se choisit pas. */
+  if(fams.length > 1)
+    html += '<div class="wrap" style="padding-top:0"><div class="chips cl1fams">'+
+      fams.map(x=>'<button class="chip '+(x.cle === cle ? 'on' : '')+'" '+
+        'aria-pressed="'+(x.cle === cle)+'" onclick="choisirFamClassement(\''+
+        escJs(x.cle)+'\')">'+esc(x.nom.charAt(0).toUpperCase()+x.nom.slice(1))+
+        '</button>').join('')+'</div></div>';
+
+  /* L'EN-TÊTE DIT OÙ L'ON EN EST, et le bouton est JUSTE DESSOUS : voir ce qui
+     manque donne envie de le combler. La phrase « il ne repart jamais de zéro »
+     n'est pas une formule — c'est la promesse du lot R1, celle qui donne un
+     sens à rejouer, et personne ne pouvait la vérifier avant cet écran. */
+  html += '<div class="wrap" style="padding-top:0"><div class="card cl1tete">'+
+    '<b>Ton classement des '+esc(f.nom)+'</b>'+
+    '<p>'+l.length+' titre'+(l.length > 1 ? 's' : '')+' départagé'+
+      (l.length > 1 ? 's' : '')+' sur '+total+'. Il se complète à chaque partie, '+
+      'il ne repart jamais de zéro.</p>'+
+    (famillesDuel().some(x => x.cle === cle)
+      ? '<button class="btn cl1rejouer" onclick="ouvrirDuel(\''+escJs(cle)+'\')">'+
+          'Départager mes '+esc(f.nom)+' →</button>'
+      : '')+
+  '</div></div>';
+
+  /* LA LISTE PART DE 1 : plus de podium au-dessus à ménager, elle est la seule
+     chose à l'écran. C'est la seule différence de fond avec l'écran de
+     résultat, et elle tient à ce qui l'entoure. */
+  const n = Math.min(clGouts.n, l.length);
+  html += '<div class="cl1liste">'+l.slice(0, n).map((t, i)=>
+      ligneClassement(t, i + 1, ditDuels(duelsJoues(cle, t.id)), false)).join('')+
+    '</div>'+
+    boutonPlusClassement(l.length - n, 'allongerClassementGouts()');
+
+  /* LES NON-DÉPARTAGÉS, EN FIN DE LISTE. Grisés, sans rang, avec ce qui leur
+     manque. Ils n'ont RIEN à faire sur l'écran de résultat — c'est la même
+     donnée, et elle ne dit pas la même chose selon l'endroit où on la lit. */
+  if(att.length){
+    const na = Math.min(clGouts.na, att.length);
+    html += '<div class="sectitle">Pas encore départagés</div>'+
+      '<div class="wrap" style="padding-top:0"><div class="small muted">'+
+        'Un titre entre au classement à partir de '+DUEL_MINI_N+' duels joués. '+
+        'Ceux-là attendent encore.</div></div>'+
+      '<div class="cl1liste">'+att.slice(0, na).map(t=>
+        ligneClassement(t, '—', ditAttente(duelsJoues(cle, t.id)), true)).join('')+
+      '</div>'+
+      boutonPlusClassement(att.length - na, 'allongerClassementGouts(\'attente\')');
+  }
+  return html;
 }
 
 /* Le résultat. Deux blocs, deux fonctions : le podium, c'est la fierté ; les
@@ -2646,6 +3623,10 @@ function ecranDuelResultat(){
         : 'Tes duels sont enregistrés. Un titre entre au podium à partir de '+
           DUEL_MINI_N+' duels joués — encore quelques parties et il se figera.')+
     '</div>'+
+    /* POINT 1 — LE CLASSEMENT, ICI ET PAS PLUS HAUT. Adrien : « je valide le
+       classement après les boutons ». La mesure a tranché : au-dessus, les deux
+       boutons passent de 474 à 1 106 px et sortent de l'écran. */
+    blocClassementDuel()+
   '</div>';
   return html;
 }
@@ -2657,7 +3638,7 @@ function ouvrirApercuDuel(media, id){
   go('preview', { id:id, type:media, from:'gouts' });
   /* Après le rendu : `loadPreview` redessine seul quand la réponse arrive, et
      il ne doit pas courir avant que l'écran existe. */
-  if(typeof loadPreview === 'function') setTimeout(loadPreview, 0);
+  if(typeof loadPreview === 'function') setTimeout(()=> loadPreview(id, media), 0);
 }
 
 function ecranRattrapage(){
@@ -2669,21 +3650,35 @@ function ecranRattrapage(){
     html += '<div class="empty"><p>Tout est déjà qualifié. Rien à faire ici.</p></div>';
   } else {
     html += '<div class="wrap" style="padding-top:0">'+duel.rattrapage.map(t=>{
-      const v = avisDe(t.media, t.id);
+      const v = avisDe(t.media, t.id), bof = estNeutre(t.media, t.id);
+      /* POINT 2 (02/08) — 👍 · 🤷 · 👎, LE MÊME ORDRE QUE LA BARRE. Le libellé
+         est 🤷 et non « Bof » ou « Sans avis » : mesuré, « Sans avis » prend
+         78 px au lieu de 46 et ampute le titre de 134 à 102 px. Un même geste
+         doit porter le même nom aux deux endroits.
+         Les trois cibles gardent les 38 × 34 px de `.rpb` : le titre passe de
+         208 à 164 px, ce qui tient. */
+      const cible = (val, ic, on, lib)=>
+        '<button class="rpb '+ic.cls+(on ? ' on' : '')+'" aria-pressed="'+(!!on)+'" '+
+          'aria-label="'+lib+'" onclick="avisRattrapage(\''+t.media+'\',\''+
+          escJs(String(t.id))+'\','+val+')">'+ic.txt+'</button>';
       return '<div class="rlig">'+
-        affDuel(t, 'rlaff')+
+        affDuel(t, 'rlaff', 'w154')+
         '<div class="rli"><b>'+esc(t.nom)+'</b>'+
           (t.date ? '<span>'+esc(year(t.date))+'</span>' : '')+'</div>'+
         '<div class="rduo">'+
-          '<button class="rpb non'+(v === -1 ? ' on' : '')+'" aria-pressed="'+(v === -1)+'" '+
-            'onclick="avisRattrapage(\''+t.media+'\',\''+escJs(String(t.id))+'\',-1)">👎</button>'+
-          '<button class="rpb oui'+(v === 1 ? ' on' : '')+'" aria-pressed="'+(v === 1)+'" '+
-            'onclick="avisRattrapage(\''+t.media+'\',\''+escJs(String(t.id))+'\',1)">👍</button>'+
+          cible(1,  { cls:'oui',    txt:'👍' }, v === 1,  'J’ai aimé')+
+          cible(0,  { cls:'cl1bof', txt:'🤷' }, bof,      'Sans avis')+
+          cible(-1, { cls:'non',    txt:'👎' }, v === -1, 'Je n’ai pas aimé')+
         '</div></div>';
     }).join('')+'</div>';
   }
+  /* La phrase du bas disait « ce que tu ne touches pas reste non qualifié ».
+     Elle reste vraie, mais elle ne suffit plus : il faut dire ce que fait le
+     bouton du milieu, sinon on le prend pour un demi-👎. */
   html += '<div class="wrap"><div class="card dnote">Rien n\'est obligatoire. '+
-      'Ce que tu ne touches pas reste simplement non qualifié.</div></div>'+
+      'Ce que tu ne touches pas reste simplement non qualifié. '+
+      '<b>🤷</b> est une réponse&nbsp;: le titre ne pèse ni dans un sens ni dans '+
+      'l\'autre, et on ne te le redemandera plus.</div></div>'+
     '<div class="dcta"><button class="btn block" onclick="fermerDuel()">Terminer</button></div>'+
     '<div style="height:24px"></div>';
   return html;
@@ -2745,7 +3740,7 @@ function blocEcartes(){
       '<div class="small muted" style="margin-bottom:8px">Aucune suggestion n\'est '+
         'bâtie sur ces titres. Un appui les remet dans le jeu.</div>'+
       l.map(t=>'<div class="rlig">'+
-        affDuel(t, 'rlaff')+
+        affDuel(t, 'rlaff', 'w154')+
         '<div class="rli"><b>'+esc(t.nom)+'</b><span>👎 écarté</span></div>'+
         '<button class="btn ghost mini" onclick="reprendreEcarte(\''+t.media+'\',\''+
           escJs(String(t.id))+'\')">Remettre</button>'+
@@ -2772,39 +3767,119 @@ let rechActeur = { q:'', res:null, occupe:false, seq:0 };
 /* Une seule tentative de chargement des genres par session : sans ce verrou,
    un écran sans genres se redessinait à l'infini. */
 let goutsGenresDemandes = false;
+/* POINT 11 — LA FAMILLE AFFICHÉE DANS LE BLOC DES GENRES. Une seule liste à la
+   fois : trois blocs de cases empilés referaient exactement le formulaire que
+   le point 5 vient de démonter. Les puces sont les mêmes que celles de la
+   Recherche et du classement, et l'état ne survit pas au rechargement — c'est
+   un point de vue sur une liste, pas un réglage. */
+let goutFam = 'film';
+function choisirGoutFam(cle){
+  if(GOUT_FAMILLES.indexOf(cle) < 0) return;
+  goutFam = cle;
+  render();
+}
 
 /* Tous les genres connus, séries et films confondus, sans doublon de nom. */
+/* Tous les genres connus, séries et films confondus — pour la liste des
+   exclusions, qui reste UNIQUE (« jamais d'horreur » ne se dit pas par famille).
+
+   POINT 8 DES RETOURS v85, ICI AUSSI. La fusion se faisait sur le nom brut :
+   « Action » et « Action & Adventure » donnaient DEUX puces côte à côte pour un
+   seul genre, et cocher l'une laissait l'autre éteinte. Le dédoublonnage se
+   fait maintenant sur le nom CANONIQUE (`genreCanon`, app-04), qui ramène les
+   trois libellés de séries ayant un jumeau film sur ce dernier. Restent les
+   quatre qui n'existent vraiment que côté séries — News, Reality, Soap, Talk —
+   et `libelleGenre` leur donne un nom français à l'affichage. */
 function tousLesGenres(){
   const vus = {}, out = [];
   ['tv','movie'].forEach(m=>{
     (genresTMDB[m]||[]).forEach(g=>{
-      if(vus[g.nom]) return;
-      vus[g.nom] = 1; out.push(g.nom);
+      const c = (typeof genreCanon === 'function') ? genreCanon(g.nom) : g.nom;
+      if(vus[c]) return;
+      vus[c] = 1; out.push(c);
     });
   });
   return out.sort((a,b)=>a.localeCompare(b,'fr'));
 }
 
-function bascGoutGenre(nom){
+/* POINT 11 — LES GENRES PROPOSÉS POUR UNE FAMILLE.
+   Films et séries lisent leur propre taxonomie chez TMDB : c'est toute l'idée
+   du point, la liste des séries ne doit plus être la liste des films traduite
+   à la volée. `genreUtile` (app-04) n'a rien à retirer ici — elle ne vide que
+   la famille « animés », qui ne propose justement pas de genres TMDB — mais
+   elle est appelée quand même, pour que le jour où quelqu'un branchera des
+   genres TMDB sur les animés, la mesure du 02/08 s'applique toute seule. */
+function genresProposes(famille){
+  if(famille === 'anime') return sousGenresAnime().map(s => s.id);
+  const media = mediaFamilleGout(famille);
+  return (genresTMDB[media]||[])
+    .map(g => g.nom)
+    .filter(n => typeof genreUtile !== 'function' || genreUtile(n, famille))
+    .sort((a,b)=>a.localeCompare(b,'fr'));
+}
+
+/* Le libellé affiché d'une entrée, selon la famille. Les animés affichent le
+   mot de `RECH_ANIMES` (« shōnen »), les deux autres passent par `libelleGenre`
+   (POINT 16) : on traduit ce qu'on AFFICHE, jamais ce qu'on enregistre. */
+function libGoutGenre(famille, val){
+  if(famille === 'anime'){
+    const s = sousGenresAnime().find(x => x.id === val);
+    return s ? s.mot : val;
+  }
+  return (typeof libelleGenre === 'function') ? libelleGenre(val) : val;
+}
+
+/* La liste d'une famille, prête à être modifiée. Elle est matérialisée au
+   premier appui : tant que la migration n'a pas tourné, `genresDeclares` rend
+   l'ancienne clé traduite, et pousser dans un tableau vide aurait fait
+   disparaître d'un coup tout ce que la personne voyait coché à l'écran. */
+function listeGoutFam(famille){
   const g = db.gouts;
-  const i = g.genres.indexOf(nom);
-  if(i >= 0) g.genres.splice(i,1); else { g.genres.push(nom); retirerExclu(nom); }
+  if(!g.genresFam || typeof g.genresFam !== 'object' || Array.isArray(g.genresFam))
+    g.genresFam = {};
+  if(!Array.isArray(g.genresFam[famille])) g.genresFam[famille] = [];
+  if(!g.genresFam[famille].length) g.genresFam[famille] = genresDeclares(famille);
+  return g.genresFam[famille];
+}
+
+function bascGoutFamGenre(famille, val){
+  const l = listeGoutFam(famille);
+  const i = l.indexOf(val);
+  if(i >= 0) l.splice(i,1); else { l.push(val); retirerExclu(val); }
   oublierSuggestions(); toucheGouts(); render();
 }
+/* Une exclusion vaut pour les trois familles et pour les deux taxonomies : on
+   la pose donc sur le nom CANONIQUE et on retire le genre de la liste aimée de
+   chaque famille — aimer et écarter à la fois n'a pas de sens, et ça n'en a pas
+   davantage quand les deux affirmations vivent dans deux listes différentes. */
 function bascGoutExclu(nom){
   const g = db.gouts;
-  const i = g.exclus.indexOf(nom);
-  if(i >= 0) g.exclus.splice(i,1);
+  if(estGenreExclu(nom)) retirerExclu(nom);
   else {
     g.exclus.push(nom);
-    const j = g.genres.indexOf(nom);
-    if(j >= 0) g.genres.splice(j,1);          // aimer et écarter à la fois n'a pas de sens
+    GOUT_FAMILLES.forEach(f=>{
+      const l = listeGoutFam(f);
+      [nom, nomGenreFilm(nom), nomGenreSerie(nom)].forEach(v=>{
+        const j = v ? l.indexOf(v) : -1;
+        if(j >= 0) l.splice(j,1);
+      });
+    });
   }
   oublierSuggestions(); toucheGouts(); render();
 }
+/* « Écarté » se lit sur le nom canonique : une base d'avant le point 11 peut
+   contenir « Action & Adventure » là où la puce dit maintenant « Action », et
+   une puce qui ne se rallume pas passe pour un réglage perdu. */
+function estGenreExclu(nom){
+  const c = (typeof genreCanon === 'function') ? genreCanon(nom) : nom;
+  return ((db.gouts && db.gouts.exclus) || [])
+    .some(x => ((typeof genreCanon === 'function') ? genreCanon(x) : x) === c);
+}
 function retirerExclu(nom){
-  const g = db.gouts, i = g.exclus.indexOf(nom);
-  if(i >= 0) g.exclus.splice(i,1);
+  const g = db.gouts;
+  const c = (typeof genreCanon === 'function') ? genreCanon(nom) : nom;
+  g.exclus = (g.exclus||[]).filter(x =>
+    ((typeof genreCanon === 'function') ? genreCanon(x) : x) !== c);
 }
 function retirerActeur(id){
   db.gouts.acteurs = db.gouts.acteurs.filter(a=>String(a.id) !== String(id));
@@ -2891,6 +3966,12 @@ function viewGouts(){
      se corrigent une fois par an. */
   html += carteDuelGouts();
 
+  /* POINT 1 (02/08) — LE CLASSEMENT COMPLET, juste sous l'invitation au duel.
+     C'est la seule place où cette liste sert à quelque chose : on vient ici
+     pour voir ce que l'app croit savoir, le classement EST cette réponse, et
+     les non-départagés disent ce qui l'empêche d'être complet. */
+  html += blocClassementGouts();
+
   /* Le raisonnement complet, écrit noir sur blanc. La version courte de ce même
      bloc est sous le carrousel de la vitrine (§E6, `blocProfilCourt`) ; ici on
      montre en plus le détail des genres déduits famille par famille, puisque
@@ -2905,12 +3986,24 @@ function viewGouts(){
       ].filter(Boolean).join(' et ')+'</div>');
   /* Le détail par famille : c'est ici qu'on le corrige, donc c'est ici qu'il
      doit être le plus explicite. */
+  /* POINT 16 — les noms de genres passent par `libelleGenre` À L'AFFICHAGE.
+     C'est ce panneau qui écrivait « Action & Adventure » et « Soap » au milieu
+     d'une phrase française. Le nom stocké, lui, ne bouge pas d'un caractère. */
+  const libG = n => (typeof libelleGenre === 'function') ? libelleGenre(n) : n;
   p.parFamille.forEach(f=>
-    lignes.push('<div><b>Tes '+esc(f.nom)+'</b> '+esc(f.genres.join(', '))+'</div>'));
+    lignes.push('<div><b>Tes '+esc(f.nom)+'</b> '+esc(f.genres.map(libG).join(', '))+'</div>'));
+  /* POINT 11 — les sous-genres d'animé déclarés ne sont pas des genres TMDB :
+     ils ne peuvent pas entrer dans la ligne « Tes animés » ci-dessus, qui dit
+     ce que la bibliothèque a appris. Ils ont donc leur propre ligne, et elle dit
+     bien qu'ils viennent d'une déclaration. */
+  const sousAnime = genresDeclares('anime');
+  if(sousAnime.length)
+    lignes.push('<div><b>Chez les animés, tu m\'as dit</b> '+
+      esc(sousAnime.map(v => libGoutGenre('anime', v)).join(', '))+'</div>');
   if(p.acteurs.length)
     lignes.push('<div><b>Acteurs surveillés</b> '+esc(p.acteurs.join(', '))+'</div>');
   if(p.exclus.length)
-    lignes.push('<div><b>Genres écartés</b> '+esc(p.exclus.join(', '))+'</div>');
+    lignes.push('<div><b>Genres écartés</b> '+esc(p.exclus.map(libG).join(', '))+'</div>');
   /* LOT A — CE QUI A ÉTÉ DIT, distingué de ce qui a été déduit. C'est
      exactement le reproche d'Adrien — « je ne sais pas ce que l'app croit
      savoir » — et la réponse a changé de nature : une partie du profil n'est
@@ -2947,16 +4040,64 @@ function viewGouts(){
                             pucOrig(true,'Toutes les origines')+'</div>'+
     '</div>';
 
+  /* ===== POINT 11 — J'AIME, UNE FAMILLE À LA FOIS =====
+
+     Une seule liste est visible, mais les deux autres ne doivent pas avoir
+     l'air de ne pas exister : chaque puce porte le nombre de genres déclarés
+     dans SA famille. C'est ce qui rend le sélecteur honnête — on voit d'un coup
+     d'œil qu'on a coché trois genres côté films et rien côté séries, alors
+     qu'un empilement de trois blocs aurait demandé de faire défiler l'écran
+     pour l'apprendre. */
+  const dec = genresDeclares(goutFam);
   html += '<div class="sectitle">J\'aime</div>'+
-    '<div class="chips wrapchips">'+genres.map(n=>
-      '<button class="chip '+(g.genres.indexOf(n)>=0?'on':'')+'" '+
-        'onclick="bascGoutGenre(\''+escJs(n)+'\')">'+esc(n)+'</button>').join('')+
+    '<div class="wrap" style="padding-top:0">'+
+      '<div class="small muted" style="margin-bottom:8px">Chaque famille a sa '+
+        'propre liste&nbsp;: ce que tu coches pour les films ne change rien à '+
+        'tes séries. Côté animés, le genre ne dit rien — c\'est le sous-genre '+
+        'qui compte.</div>'+
+      '<div class="chips cl1fams">'+DUEL_FAMILLES.map(f=>{
+        const n = genresDeclares(f.cle).length;
+        return '<button class="chip '+(f.cle === goutFam ? 'on' : '')+'" '+
+          'aria-pressed="'+(f.cle === goutFam)+'" onclick="choisirGoutFam(\''+
+          escJs(f.cle)+'\')">'+esc(f.nom.charAt(0).toUpperCase()+f.nom.slice(1))+
+          (n ? '<span class="gt11n">'+n+'</span>' : '')+'</button>';
+      }).join('')+'</div>'+
     '</div>';
 
+  const proposes = genresProposes(goutFam);
+  if(!proposes.length)
+    html += '<div class="wrap" style="padding-top:0"><div class="small muted">'+
+      'La liste des genres n\'a pas encore été chargée.</div></div>';
+  else
+    html += '<div class="chips wrapchips">'+proposes.map(v=>
+      '<button class="chip '+(dec.indexOf(v) >= 0 ? 'on' : '')+'" '+
+        'aria-pressed="'+(dec.indexOf(v) >= 0)+'" '+
+        'onclick="bascGoutFamGenre(\''+escJs(goutFam)+'\',\''+escJs(v)+'\')">'+
+        esc(libGoutGenre(goutFam, v))+'</button>').join('')+
+      '</div>';
+
+  /* Les six genres de films que la taxonomie des séries ne connaît pas. On le
+     dit ICI, sur la liste des films, et seulement à qui est concerné : depuis
+     le point 11 ce n'est plus une perte silencieuse — le goût vaut pour les
+     films, il n'est simplement jamais monté dans la liste des séries. */
+  if(goutFam === 'film' && typeof INSC_GENRES_FILM_SEUL !== 'undefined'){
+    const seuls = INSC_GENRES_FILM_SEUL.filter(n => dec.indexOf(n) >= 0);
+    if(seuls.length)
+      html += '<div class="wrap" style="padding-top:8px"><div class="small muted">'+
+        '<b>'+esc(seuls.join(', '))+'</b> '+(seuls.length > 1 ? 'n\'existent' : 'n\'existe')+
+        ' pas chez les séries&nbsp;: je m\'en sers pour tes films, et je ne te '+
+        'les propose pas dans les deux autres listes.</div></div>';
+  }
+
+  /* L'exclusion reste UNE liste pour les trois familles : « jamais d'horreur »
+     ne se dit pas par famille, et `tamiser` la fait déjà valoir sur les deux
+     taxonomies à la fois. */
   html += '<div class="sectitle">Je ne veux pas voir</div>'+
     '<div class="chips wrapchips">'+genres.map(n=>
-      '<button class="chip '+(g.exclus.indexOf(n)>=0?'hors':'')+'" '+
-        'onclick="bascGoutExclu(\''+escJs(n)+'\')">'+esc(n)+'</button>').join('')+
+      '<button class="chip '+(estGenreExclu(n)?'hors':'')+'" '+
+        'aria-pressed="'+estGenreExclu(n)+'" '+
+        'onclick="bascGoutExclu(\''+escJs(n)+'\')">'+
+        esc((typeof libelleGenre === 'function') ? libelleGenre(n) : n)+'</button>').join('')+
     '</div>';
 
   /* LOT A — la reprise des 👎. Placée juste après les genres écartés, parce que

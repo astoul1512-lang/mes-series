@@ -108,6 +108,43 @@ window.MODE_TEST = true;
     }
     sortie.appendChild(d);
   }
+  /* ===== LES CAS ASYNCHRONES =====
+     Trois règles du lot E ne s'éprouvent QUE sur une fonction `async` :
+     le remplissage d'une rangée de Découvrir (`remplirSugg`, point 12) va
+     chercher la page suivante derrière un `await`. Le reste de cette page est
+     synchrone et le reste — on met les cas asynchrones dans une file, jouée
+     APRÈS tous les autres, et le bilan n'est écrit qu'à la fin.
+
+     DEUX GARDE-FOUS, parce qu'un test qui bloque ne dit rien :
+       · chaque cas est couru contre un délai maximum (`ASYNC_MAX`) ;
+       · le lanceur (`tests/lance-tests.js`) attend `window.__testsFinis`
+         plutôt que de lire le bilan à un instant qu'il aurait deviné. */
+  const ASYNC_MAX = 4000;
+  const fileAsync = [];
+  function testAsync(nom, fn){ fileAsync.push({ nom:nom, fn:fn }); }
+  function limite(p, nom){
+    return new Promise((ok, ko2)=>{
+      const t = setTimeout(()=> ko2(new Error('BLOQUÉ : plus de '+ASYNC_MAX+' ms')), ASYNC_MAX);
+      Promise.resolve(p).then(v=>{ clearTimeout(t); ok(v); },
+                              e=>{ clearTimeout(t); ko2(e); });
+    });
+  }
+  async function jouerAsync(){
+    for(const cas of fileAsync){
+      n++;
+      const d = document.createElement('div');
+      try{
+        await limite(cas.fn(), cas.nom);
+        d.className = 't ok'; d.textContent = cas.nom;
+      }catch(e){
+        ko++;
+        d.className = 't ko'; d.textContent = cas.nom;
+        const em = document.createElement('em'); em.textContent = e.message;
+        d.appendChild(em);
+      }
+      sortie.appendChild(d);
+    }
+  }
   function egal(a, b, msg){
     const sa = JSON.stringify(a), sb = JSON.stringify(b);
     if(sa !== sb) throw new Error((msg ? msg+' : ' : '')+'attendu '+sb+', obtenu '+sa);
@@ -2196,21 +2233,32 @@ window.MODE_TEST = true;
     vrai(s.mots.indexOf('|') >= 0, 'les deux mots-clés ne sont pas demandés en OU');
   });
 
+  /* LOT E — `paramsRech(media)` N'EXISTE PLUS. La grille n'est plus « une
+     requête paginée » mais une LISTE DE FLUX. Les trois remplaçantes :
+       · `paramsSocleRech(media)` — ce que TOUTE requête porte (famille,
+         recette mesurée, note, plateformes) ;
+       · `jeuxParamsRech(media)`  — un jeu de paramètres par combinaison
+         (point 6 : l'UNION) ;
+       · `etagesRech()`           — les étages de la SÉQUENCE (point 14).
+     Les règles éprouvées ci-dessous n'ont pas bougé d'un mot : elles changent
+     seulement de point d'entrée. */
   test('une recette part telle qu\'elle a été mesurée', ()=>{
     const r = rechVierge('film');
     r.amb = 'famille';
-    const p = paramsRech('movie');
+    const p = paramsSocleRech('movie');
     egal(p.with_genres, '10751', 'genre');
     egal(p.without_genres, '27,53,80,18', 'genres écartés');
     egal(p['with_runtime.lte'], '115', 'durée');
     egal(p['vote_average.gte'], '6.3', 'note');
     egal(p['vote_count.gte'], '500', 'plancher de votes');
+    /* Rien à décomposer : le socle EST la requête, et il n'y en a qu'une. */
+    egal(jeuxParamsRech('movie').length, 1, 'une recette nue part en plusieurs requêtes');
   });
 
   test('retirer un mot retire son ingrédient, et lui seul', ()=>{
     const r = rechVierge('film');
     r.amb = 'famille'; r.sans = ['duree'];
-    const p = paramsRech('movie');
+    const p = paramsSocleRech('movie');
     vrai(p['with_runtime.lte'] === undefined, 'la durée est restée');
     egal(p.with_genres, '10751', 'le genre a été emporté avec la durée');
     egal(p['vote_count.gte'], '500', 'le plancher invisible a bougé');
@@ -2219,7 +2267,7 @@ window.MODE_TEST = true;
   test('un mot posé à la main l\'emporte sur l\'ingrédient qu\'il recouvre', ()=>{
     const r = rechVierge('film');
     r.amb = 'famille'; r.sans = ['note']; r.note = '8';
-    const p = paramsRech('movie');
+    const p = paramsSocleRech('movie');
     egal(p['vote_average.gte'], '7.5', 'la note de la recette a gagné');
   });
 
@@ -2243,9 +2291,14 @@ window.MODE_TEST = true;
 
   test('la durée ne s\'expédie que sur les films', ()=>{
     const r = rechVierge('serie');
-    r.duree = 'court';
-    const p = paramsRech('tv');
-    vrai(p['with_runtime.lte'] === undefined,
+    r.duree = ['court'];
+    /* La durée se décompose désormais en variantes : c'est `jeuxParamsRech`
+       qui la porte, et sur une série elle ne doit produire AUCUNE borne — ni
+       dans le socle, ni dans un jeu. */
+    egal(paramsSocleRech('tv')['with_runtime.lte'], undefined, 'le socle porte une durée');
+    const jeux = jeuxParamsRech('tv');
+    egal(jeux.length, 1, 'une durée a décomposé la requête sur une série');
+    vrai(!jeux.some(p => p['with_runtime.lte'] !== undefined || p['with_runtime.gte'] !== undefined),
          'une borne de durée est partie sur une série : elle ne veut rien dire');
   });
 
@@ -2287,7 +2340,11 @@ window.MODE_TEST = true;
     egal(poidsAvisRech('movie', 42), 1, 'un titre inconnu doit peser 1');
     egal(avisRech('movie', 42), 0);
     egal(profilGenresRech(), {}, 'un profil vide doit être vide');
-    egal(departJeuRech(), null, 'sans rien, le jeu ne part de nulle part');
+    /* `departJeuRech` a disparu avec les cinq sources du jeu (lot E, point 20) :
+       le paquet EST désormais le résultat de la recherche. La lecture
+       DÉFENSIVE du contrat de données, elle, reste ce qu'elle était. */
+    vrai(typeof window.departJeuRech === 'undefined',
+         'une des cinq sources du jeu traîne encore');
   });
 
   test('les poids sont ceux du contrat : 👍 = 2, rien = 1, 👎 = 0', ()=>{
@@ -2324,23 +2381,25 @@ window.MODE_TEST = true;
     genresTMDB.movie = null;
   });
 
+  /* ===== LOT E — LES CINQ SOURCES DU JEU ONT DISPARU =====
+     `departJeuRech`, `sourceSuivanteRech`, `remplirSourceRech`, `paramsJeuRech`,
+     `demandeAveugleRech`, `respecteDemandeRech`, `genresProfilRech`,
+     `mediaJeuRech` et `vusParProchesRech` n'existent plus : LE PAQUET DU JEU EST
+     LE RÉSULTAT DE LA RECHERCHE. `tirerCarteRech` avance dans `r.res` et, au
+     bout, fait avancer la même pagination que « Voir plus ».
+     Les neuf cas qui éprouvaient ces sources ont donc été SUPPRIMÉS — pas
+     réécrits : ils ne décrivaient plus rien. Ce qui les remplace est plus bas,
+     sous « LOT E — point 20 : la fin de paquet ». Ce qui reste ici est ce qui
+     survit au changement de moteur : ce que le jeu refuse de distribuer. */
   groupe('Recherche — le jeu');
 
-  test('jamais deux cartes de la même source à la suite', ()=>{
-    const r = rechVierge('film');
-    r.jeu = { pool:{ coeur:[t_(1,'movie')], genres:[t_(2,'movie')] }, precedente:'coeur',
-              ecartes:{}, page:{} };
-    egal(sourceSuivanteRech(), 'genres',
-         'le paquet redevient une liste triée dès qu\'il se répète');
-  });
-
-  test('une source épuisée est sautée, jamais bloquante', ()=>{
-    const r = rechVierge('film');
-    r.jeu = { pool:{ coeur:[], genres:[], joker:[t_(5,'movie')] }, precedente:null,
-              ecartes:{}, page:{} };
-    egal(sourceSuivanteRech(), 'joker');
-    r.jeu.pool = { coeur:[], genres:[] };
-    egal(sourceSuivanteRech(), null, 'sans rien à donner, il faut le dire');
+  test('les cinq sources du jeu ont bien disparu, sans laisser d\'orpheline', ()=>{
+    /* Une fonction morte laissée en place est un piège : elle continue de se
+       lire comme un contrat, et le lot suivant la rappelle. */
+    ['departJeuRech','sourceSuivanteRech','remplirSourceRech','paramsJeuRech',
+     'demandeAveugleRech','respecteDemandeRech','genresProfilRech','mediaJeuRech',
+     'vusParProchesRech','jeuDejaVuRech','paramsRech'].forEach(f=>
+      vrai(typeof window[f] === 'undefined', f+' est encore là'));
   });
 
   test('le jeu écarte ce qu\'on a déjà, ce qu\'on vient de voir et un 👎', ()=>{
@@ -2354,29 +2413,13 @@ window.MODE_TEST = true;
     vrai(!jouableRech(t_(4,'movie')), 'un titre marqué 👎 est proposé');
   });
 
-  test('sans critère, le jeu pose ses trois filtres implicites', ()=>{
-    const r = rechVierge('film');
-    genresTMDB.movie = [{id:27,nom:'Horreur'}];
-    db.gouts.plates = [{ id:8, nom:'Netflix', logo:null }];
-    db.gouts.exclus = ['Horreur'];
-    const p = paramsJeuRech('movie');
-    egal(p.with_watch_providers, '8', 'la plateforme déclarée n\'est pas demandée');
-    egal(p.watch_region, 'FR');
-    vrai(String(p.without_genres||'').indexOf('27') >= 0, 'un genre écarté est proposé');
-    genresTMDB.movie = null;
-  });
-
-  test('les genres exclus complètent la recette, ils ne l\'écrasent pas', ()=>{
-    const r = rechVierge('film');
-    genresTMDB.movie = [{id:99,nom:'Documentaire'}];
-    r.amb = 'famille';                       // sa recette pose déjà without_genres
-    db.gouts.exclus = ['Documentaire'];
-    const p = paramsJeuRech('movie');
-    vrai(p.without_genres.indexOf('27,53,80,18') === 0,
-         'les genres écartés de la recette mesurée ont été effacés');
-    vrai(p.without_genres.indexOf('99') >= 0, 'le genre exclu n\'a pas été ajouté');
-    genresTMDB.movie = null;
-  });
+  /* SUPPRIMÉS ICI : « sans critère, le jeu pose ses trois filtres implicites »
+     et « les genres exclus complètent la recette, ils ne l'écrasent pas ».
+     Tous deux portaient sur `paramsJeuRech`, qui n'existe plus — le jeu ne
+     compose plus sa propre requête, il consomme celle de la grille. La règle
+     d'accumulation qu'ils défendaient (`ajouterSansRech`) reste éprouvée, mais
+     là où elle vit désormais : sous « point 14 », par l'étage « réelles » qui
+     ajoute Animation à un `without_genres` déjà rempli par la recette. */
 
   /* ============ Recherche — les points relevés en relecture ============
      Sept défauts ont été trouvés par une relecture indépendante sur la branche.
@@ -2409,19 +2452,26 @@ window.MODE_TEST = true;
     egal(db.movies[42].watchedAt, 1234, 'la date de visionnage a été effacée');
   });
 
-  test('changer un critère pendant la partie vide les paquets', ()=>{
+  /* LOT E — IL N'Y A PLUS DE « PAQUETS ». Le nouveau contrat de `relancerRech`
+     pendant une partie : `r.jeu.i` revient à 0, `r.res` est vidé, la carte est
+     retirée — et `ecartes` est CONSERVÉ, ce qui n'a pas changé. */
+  test('changer un critère pendant la partie remet le paquet à zéro', ()=>{
     const r = rechVierge('film');
-    r.jeu = { pool:{ coeur:[t_(1,'movie')] }, page:{ coeur:3 }, carte:t_(1,'movie'),
-              ecartes:{ 'movie:9':1 }, precedente:'coeur', source:'coeur', occupe:false };
+    r.res = [t_(1,'movie'), t_(2,'movie')];
+    r.jeu = { carte:t_(1,'movie'), media:'movie', i:2, vues:2, fini:true,
+              ecartes:{ 'movie:9':1 }, fiche:{}, plates:[], err:'x',
+              occupe:false, loading:false, anim:'' };
     const vraiTirage = window.tirerCarteRech, vraiRender = window.render;
     let tirages = 0;
     window.tirerCarteRech = function(){ tirages++; };
     window.render = function(){};
     try{ relancerRech(); }
     finally { window.tirerCarteRech = vraiTirage; window.render = vraiRender; }
-    egal(r.jeu.pool, {}, 'les cartes de l\'ancienne demande ont survécu au changement');
-    egal(r.jeu.page, {}, 'les compteurs de page ont survécu');
+    egal(r.res, [], 'les titres de l\'ancienne demande ont survécu au changement');
+    egal(r.jeu.i, 0, 'le curseur du paquet n\'est pas revenu au début');
     egal(r.jeu.carte, null, 'la carte de l\'ancienne demande est restée à l\'écran');
+    egal(r.jeu.fini, false, 'la partie reste déclarée finie alors qu\'on vient d\'élargir');
+    egal(r.flux, null, 'les flux de l\'ancienne demande sont réutilisés');
     egal(tirages, 1, 'aucune carte neuve n\'a été tirée');
     /* Ce qu'on a écarté ce soir le reste : changer d'avis sur un critère ne
        doit pas faire revenir les titres qu'on vient de refuser. */
@@ -2432,27 +2482,24 @@ window.MODE_TEST = true;
   test('sur Animés, le genre choisi s\'ajoute à Animation au lieu d\'être jeté', ()=>{
     const r = rechVierge('anime');
     genresTMDB.tv = [{ id:16, nom:'Animation' }, { id:35, nom:'Comédie' }];
-    const sans = paramsRech('tv');
-    r.genre = 'Comédie';
-    const avec = paramsRech('tv');
-    egal(sans.with_genres, '16', 'la famille Animés ne pose plus son genre');
-    egal(avec.with_genres, '16,35', 'le mot du genre ne change rien à la demande envoyée');
+    egal(paramsSocleRech('tv').with_genres, '16', 'la famille Animés ne pose plus son genre');
+    r.genre = ['Comédie'];
+    const jeux = jeuxParamsRech('tv');
+    egal(jeux.length, 1, 'un seul genre demandé doit tenir en une requête');
+    egal(jeux[0].with_genres, '16,35', 'le mot du genre ne change rien à la demande envoyée');
     /* La virgule est un ET mesuré. C'est le MÉLANGE virgule + barre verticale
        qui est cassé chez TMDB : tout ce qui suit la barre est ignoré en
-       silence. Ce cas garde la porte fermée. */
-    vrai(avec.with_genres.indexOf('|') < 0,
+       silence. Ce cas garde la porte fermée — sur UN genre comme sur DEUX,
+       où la décomposition en deux flux est la seule issue. */
+    vrai(jeux[0].with_genres.indexOf('|') < 0,
          'virgule et barre mélangées : TMDB ignorerait la moitié de la demande');
+    genresTMDB.tv = [{ id:16, nom:'Animation' }, { id:35, nom:'Comédie' },
+                     { id:28, nom:'Action' }];
+    r.genre = ['Comédie', 'Action'];
+    const deux = jeuxParamsRech('tv');
+    egal(deux.length, 2, 'deux genres sur une famille qui en pose déjà un doivent faire deux flux');
+    egal(deux.map(p=>p.with_genres), ['16,35','16,28']);
     genresTMDB.tv = null;
-  });
-
-  test('sur « Tout », le jeu alterne films et séries', ()=>{
-    const r = rechVierge('tout');
-    r.jeu = { bascule:false };
-    egal([mediaJeuRech(), mediaJeuRech(), mediaJeuRech(), mediaJeuRech()],
-         ['movie','tv','movie','tv'], 'le jeu ne propose qu\'un seul type sur « Tout »');
-    r.fam = 'serie';
-    egal(mediaJeuRech(), 'tv', 'une famille explicite doit rester elle-même');
-    r.jeu = null;
   });
 
   test('« Reprendre » ne s\'affiche que si on a composé quelque chose soi-même', ()=>{
@@ -2465,20 +2512,100 @@ window.MODE_TEST = true;
          'un vrai travail de composition n\'est pas proposé au retour');
   });
 
-  test('le marqueur d\'ouverture survit à un retour par l\'historique', ()=>{
-    /* Le bouton retour d'Android et celui du navigateur passent par `popstate`,
-       qui reconstruit `params` depuis l'état d'historique : comparer
-       l'IDENTITÉ de l'objet jetait la phrase sur ces deux chemins-là. Le
-       marqueur, lui, est recopié dans l'état d'historique — donc il revient. */
-    const sauve = params;
+  /* ========== LOT E — POINT 8 : LES QUATRE CHEMINS DE RETOUR ==========
+
+     LE MARQUEUR `params.rechOuvert` N'EXISTE PLUS. Il voyageait dans `params`
+     et se perdait selon le chemin : le retour depuis une fiche de la
+     bibliothèque (`show`) gardait la phrase, celui depuis un aperçu
+     (`preview`) la jetait. Il est remplacé par `arriveeNeuve(vue)` (app-02),
+     qui lit `dernierGo = {vue, dir, historique}` rempli par `go()` — les
+     QUATRE chemins de retour y passent, il n'y a plus rien à perdre en route.
+
+     LE TÉMOIN DU DÉFAUT est la puce « ↩ Reprendre » : elle ne s'écrit que dans
+     `nouvelleOuvertureRech`, au moment de sauvegarder une phrase qu'on
+     remplace. Si elle apparaît au retour, c'est que le retour a été traité
+     comme une ouverture. On l'éprouve donc à l'ÉCRAN et pas seulement sur un
+     booléen.
+
+     On pilote de vrais `go()` plutôt qu'un navigateur : `dir:'back'` couvre la
+     flèche de l'app et le balayage, `{depuisHistorique:true}` couvre le bouton
+     matériel d'Android et celui du navigateur. */
+  function rechPosee(){
+    const r = rechVierge('film');
+    r.amb = 'rigoler'; r.touche = true;        // une phrase composée à la main
+    r.res = [t_(1,'movie'), t_(2,'movie')];
+    r.charge = true; r.total = 351;
+    return r;
+  }
+  function retourVers(depuis, retour){
+    /* `go` repeint : on le musèle, on n'éprouve ici que la navigation. */
+    const vraiRender = window.render, vraiCharger = window.chargerGrilleRech;
+    const sauveV = view, sauveP = params;
+    window.render = function(){};
+    window.chargerGrilleRech = function(){};
     try{
-      params = {};
-      vrai(ouvertureRech(), 'une entrée par la barre du bas doit repartir à neuf');
-      vrai(!ouvertureRech(), 'un redessin du même écran ne doit pas tout remettre à zéro');
-      /* Ce que fait le navigateur : il clone l'état, il ne rend pas l'objet. */
-      params = JSON.parse(JSON.stringify(params));
-      vrai(!ouvertureRech(), 'un retour par l\'historique jette la phrase composée');
-    } finally { params = sauve; }
+      go('search', {});                                    // entrée par l'onglet du bas
+      go(depuis, { id:1399, type:'tv', from:'search' });    // on ouvre un titre
+      retour();                                            // et on revient
+      return ouvertureRech();
+    } finally {
+      window.render = vraiRender; window.chargerGrilleRech = vraiCharger;
+      view = sauveV; params = sauveP;
+    }
+  }
+  /* Les quatre appels sont ceux que fait le code réel :
+       · la flèche de l'app  → `goBack` → `go(cible, …, 'back', {remplacer:true})`
+         (app-02 l.1011) ;
+       · le balayage         → `glisseRetour.terminer` → `go(cible, …, 'back',
+         {depuisHistorique:true})` quand il recule dans la pile (l.1168) ;
+       · `popstate`          → même chose, `{depuisHistorique:true}`.
+     On les rejoue tels quels plutôt que de piloter un navigateur. */
+  [ ['une fiche de la bibliothèque', 'show',    ()=> go('search', {}, 'back', { remplacer:true })],
+    ['un aperçu',                    'preview', ()=> go('search', {}, 'back', { remplacer:true })],
+    ['la flèche de l\'app',          'movie',   ()=> go('search', {}, 'back', { remplacer:true })],
+    ['le balayage ou le bouton matériel', 'show',
+      ()=> go('search', {}, 'back', { depuisHistorique:true })]
+  ].forEach(cas=>{
+    test('point 8 — revenir de '+cas[0]+' ne jette pas la phrase', ()=>{
+      const r = rechPosee();
+      const phrase = phraseTexte();
+      const neuve = retourVers(cas[1], cas[2]);
+      vrai(!neuve, 'le retour est traité comme une ouverture : la phrase est jetée');
+      egal(phraseTexte(), phrase, 'la phrase n\'est pas revenue intacte');
+      egal(r.res.length, 2, 'les résultats déjà chargés ont disparu');
+      egal(r.reprise, null, 'la puce « ↩ Reprendre » a été armée : c\'est le témoin du défaut');
+      const boite = document.createElement('div');
+      boite.innerHTML = blocPhraseRech();
+      vrai(boite.textContent.indexOf('Reprendre') < 0,
+           'la puce « ↩ Reprendre » est à l\'écran après un simple retour');
+    });
+  });
+
+  test('point 8 — une vraie entrée par l\'onglet, elle, repart à neuf', ()=>{
+    /* Le pendant obligatoire : si `arriveeNeuve` répondait toujours « non »,
+       les quatre cas ci-dessus passeraient sans rien prouver. */
+    const vraiRender = window.render;
+    const sauveV = view, sauveP = params;
+    window.render = function(){};
+    try{
+      rechPosee();
+      go('profile', {});
+      go('search', {});
+      vrai(ouvertureRech(), 'venir d\'un autre onglet doit repartir à neuf');
+    } finally { window.render = vraiRender; view = sauveV; params = sauveP; }
+  });
+
+  test('point 8 — le marqueur `params.rechOuvert` a bien disparu', ()=>{
+    const vraiRender = window.render;
+    const sauveV = view, sauveP = params;
+    window.render = function(){};
+    try{
+      rechPosee();
+      go('search', {});
+      ouvertureRech();
+      vrai(!('rechOuvert' in params),
+           'le marqueur qui se perdait selon le chemin est encore posé');
+    } finally { window.render = vraiRender; view = sauveV; params = sauveP; }
   });
 
   /* ======== Recherche — les écritures du jeu, deuxième passe ========
@@ -2518,7 +2645,14 @@ window.MODE_TEST = true;
 
   test('pendant un ajout de série, aucun bouton de la carte ne répond', ()=>{
     const r = rechVierge('serie');
-    r.jeu = { carte:t_(1399,'tv'), media:'tv', pool:{}, page:{}, ecartes:{},
+    /* SANS JAQUETTE, et c'est le seul cas de la page qui peigne une vraie
+       carte : `posterEl` rend une balise `<img src="https://image.tmdb.org/…">`
+       que le navigateur va chercher POUR DE BON, même dans un élément détaché.
+       Elle sortait en erreur de console dans le lanceur, qui compte les erreurs
+       de console comme des échecs. Une affiche absente rend un cadre neutre :
+       rien à charger, et aucun bouton ne change. */
+    const nue = Object.assign(t_(1399,'tv'), { poster_path:null });
+    r.jeu = { carte:nue, media:'tv', i:0, vues:1, ecartes:{}, fini:false,
               occupe:'Saisons 1/3…', fiche:null, plates:null, err:'', anim:'' };
     const boite = document.createElement('div');
     /* `zoneBande` programme un chargement de fiche : sur cette page on teste
@@ -2526,43 +2660,59 @@ window.MODE_TEST = true;
     const vraieZone = window.zoneBande;
     window.zoneBande = function(){ return ''; };
     try{ boite.innerHTML = corpsJeuRech(); } finally { window.zoneBande = vraieZone; }
-    /* « Je l'ai déjà vu » quitte le jeu : le laisser cliquable pendant un
-       téléchargement, c'est rouvrir le chemin de la perte d'épisodes.
-       LOT R2, point 7 : l'action a quitté le coin haut-droit pour la ligne
-       d'actions sous le résumé — c'est `.jvu`, dans `.jmini`. */
-    vrai(boite.querySelector('.jvu[disabled]'),
-         '« Je l\'ai déjà vu » reste cliquable pendant l\'ajout');
+    /* LOT E — « Je l'ai déjà vu » A ÉTÉ RETIRÉ DE LA CARTE (`jeuDejaVuRech`
+       n'existe plus) : il n'avait rien à faire là, on atteint le geste par la
+       fiche. Restent QUATRE boutons, et les quatre doivent être muets pendant
+       le téléchargement d'une série — le laisser cliquable, c'est rouvrir le
+       chemin de la perte d'épisodes. */
+    vrai(!boite.querySelector('.jvu'), '« Je l\'ai déjà vu » est revenu sur la carte');
     egal(boite.querySelectorAll('.jgestes .jg[disabled]').length, 3,
          'les trois gestes du bas ne sont pas tous grisés');
+    /* Le quatrième : « ⓘ La fiche ». Elle QUITTE LE JEU (`ouvrirTitre` → `go`),
+       exactement comme « Je l'ai déjà vu » qui vient d'être retiré — la laisser
+       cliquable laisse un téléchargement finir dans le vide et écraser la série
+       qu'on venait d'ouvrir. C'est le chemin de perte d'épisodes déjà éprouvé
+       par « un téléchargement de série qui se termine trop tard n'écrase rien ». */
+    const carte = [...boite.querySelectorAll('.jmini button, .jgestes .jg')];
+    egal(carte.length, 4, 'la carte ne porte plus quatre boutons');
+    egal(carte.filter(b => !b.hasAttribute('disabled')).map(b => b.textContent.trim()), [],
+         'un bouton de la carte répond encore pendant l\'ajout');
     vrai(boite.textContent.indexOf('Saisons 1/3') >= 0, 'l\'attente n\'est pas dite à l\'écran');
-    /* Et les puces de famille, qui vident les paquets. */
+    /* Et les puces de famille, qui remettent le paquet à zéro. */
     const entete = document.createElement('div');
     entete.innerHTML = puceFamillesRech();
-    egal(entete.querySelectorAll('.chip[disabled]').length, 4,
+    egal(entete.querySelectorAll('.chip[disabled]').length, 5,
          'les puces de famille restent actives pendant l\'ajout');
     r.jeu = null;
   });
 
   test('réappuyer sur l\'onglet Recherche quand on y est déjà ne jette pas la phrase', ()=>{
-    const sauve = params;
+    /* Ce chemin-là ne passe PLUS par un marqueur : c'est le DOM qui répond.
+       Quand `ouvertureRech` s'exécute, `render()` n'a pas encore remplacé
+       l'écran — si `#rres` (la grille) ou `#rjeu` (le jeu) est encore là,
+       c'est qu'on y était déjà. */
+    const vraiRender = window.render;
+    const sauveV = view, sauveP = params;
     const faux = document.createElement('div');
+    window.render = function(){};
     try{
-      params = {};
+      rechPosee();
+      go('profile', {});
+      go('search', {});
       vrai(ouvertureRech(), 'venir d\'un autre onglet doit repartir à neuf');
       /* On est maintenant sur Recherche : l'écran est peint. Réappuyer sur
-         l'onglet rend un `params` neuf — mais ce n'est pas une ouverture. */
+         l'onglet rejoue `go('search', {})` — même vue, mêmes paramètres. */
       faux.id = 'rres';
       document.body.appendChild(faux);
-      params = {};
+      go('search', {});
       vrai(!ouvertureRech(), 'la phrase composée est jetée en réappuyant sur l\'onglet');
-      vrai(params.rechOuvert, 'le marqueur n\'a pas été posé au passage');
       /* Le jeu compte pour la même chose : on y est aussi. */
       faux.id = 'rjeu';
-      params = {};
+      go('search', {});
       vrai(!ouvertureRech(), 'réappuyer sur l\'onglet pendant le jeu remet tout à zéro');
     } finally {
       if(faux.parentNode) faux.parentNode.removeChild(faux);
-      params = sauve;
+      window.render = vraiRender; view = sauveV; params = sauveP;
     }
   });
 
@@ -2601,21 +2751,50 @@ window.MODE_TEST = true;
     vrai(critLibresRech().some(m=>m.cle==='origine'), '« d\'où » manque sur les animés');
   });
 
-  test('« + préciser » ouvre la liste, plus jamais toujours le même mot', ()=>{
+  /* LOT E — POINT 5 : « + préciser » N'OUVRE PLUS LA LISTE.
+     Adrien, 02/08 : « quand on va dans préciser on a vraiment tous les
+     filtres, on n'a plus l'impression d'écrire notre recherche ». La feuille
+     des sept champs a quitté ce chemin — elle ne sert plus qu'au JEU, où la
+     phrase n'est pas à l'écran. « + préciser » ouvre UNE question ; « Peu
+     importe → » passe à la SUIVANTE, ce qui ferme le cul-de-sac du point 19
+     par où il était ouvert. */
+  test('« + préciser » ouvre UNE question, et « Peu importe » mène à la suivante', ()=>{
     const r = rechVierge('film');
     r.amb = null;
     const boite = document.createElement('div');
     boite.innerHTML = blocPhraseRech();
     const b = boite.querySelector('.rmot.vide');
     vrai(b, 'l\'invitation à préciser a disparu');
-    vrai(/ouvrirAjoutRech\(\)/.test(b.getAttribute('onclick')),
-         '« + préciser » impose encore un mot au lieu d\'ouvrir un choix');
-    ouvrirAjoutRech();
+    vrai(/ouvrirPreciserRech\(\)/.test(b.getAttribute('onclick')),
+         '« + préciser » rouvre la liste des sept champs : le point 5 est perdu');
+
+    const file = fileCriteresRech();
+    ouvrirPreciserRech();
     const f = document.getElementById('sheetin');
-    egal(f.querySelectorAll('.rajl').length, critLibresRech().length,
-         'la feuille ne liste pas tous les critères libres');
-    vrai(f.textContent.indexOf('Terminé') >= 0,
-         'aucune sortie « Terminé » : on ne sait pas comment refermer');
+    /* UNE question, pas sept : la feuille ne montre jamais la liste complète. */
+    egal(f.querySelectorAll('.rajl').length, 0,
+         'la liste des sept champs est revenue par « + préciser »');
+    vrai(f.textContent.indexOf(file[0].titre) >= 0,
+         'la première question de la file n\'est pas celle qui s\'ouvre');
+    vrai(f.textContent.indexOf('1 / '+file.length) >= 0,
+         'la ligne « 1 / 7 » ne dit pas où l\'on en est');
+
+    /* « Peu importe → » AVANCE. C'était exactement le cul-de-sac : il ne
+       renseigne rien, donc on retombait indéfiniment sur le même écran. */
+    const vraiRelancer = window.relancerRech;
+    window.relancerRech = function(){};
+    try{ peuImporteRech(file[0].cle); } finally { window.relancerRech = vraiRelancer; }
+    const f2 = document.getElementById('sheetin');
+    vrai(f2.textContent.indexOf(file[1].titre) >= 0,
+         '« Peu importe » rouvre la même question : le cul-de-sac est revenu');
+    vrai(f2.textContent.indexOf('2 / '+file.length) >= 0, 'le rang n\'a pas avancé');
+    /* Et la question laissée libre reste ATTEIGNABLE : on doit pouvoir revenir
+       sur un « peu importe » (correction d'Adrien du 02/08). */
+    vrai(critLibresRech().some(m => m.cle === file[0].cle),
+         'un critère répondu « peu importe » ne revient pas');
+    ouvrirCritereAvantRech(file[1].cle);
+    vrai(document.getElementById('sheetin').textContent.indexOf(file[0].titre) >= 0,
+         'la flèche gauche ne ramène pas à la question précédente');
     closeSheet();
   });
 
@@ -2624,10 +2803,15 @@ window.MODE_TEST = true;
   test('la famille Animés demande l\'animation asiatique en UNE requête', ()=>{
     const r = rechVierge('anime');
     genresTMDB.tv = [{ id:16, nom:'Animation' }];
-    const p = paramsRech('tv');
+    const p = paramsSocleRech('tv');
     egal(p.with_genres, '16', 'le genre Animation n\'est plus la définition du cadre');
     egal(p.with_original_language, 'ja|zh|ko',
          'le OU sur la langue d\'origine a été perdu : mesuré, il fonctionne');
+    /* UNE requête, mot pour mot : la famille ne se décompose pas. */
+    egal(jeuxParamsRech('tv').length, 1, 'la famille Animés part en plusieurs requêtes');
+    /* Et elle ne se partage pas non plus par langue : le rang par origine ne
+       s'applique pas là où le rang 1 est vide par construction. */
+    egal(etagesRech().length, 1, 'la famille Animés a été partagée en étages');
     genresTMDB.tv = null;
   });
 
@@ -2683,10 +2867,14 @@ window.MODE_TEST = true;
          'le mot ne retire rien');
     vrai(motsPhraseRech().some(m=>m.mot === "que je n'ai pas vu"),
          'le mot ne se déplie pas dans la phrase');
-    /* Et il ne part PAS à TMDB, qui ne connaît pas ta bibliothèque. */
-    const p = paramsRech('movie');
-    vrai(!Object.keys(p).some(k=>/pasvu|vu|watched/i.test(k)),
-         'un paramètre inventé est parti à TMDB');
+    /* Et il ne part PAS à TMDB, qui ne connaît pas ta bibliothèque. On le
+       vérifie sur le socle ET sur chaque jeu de l'union : un paramètre inventé
+       glissé dans une variante passerait sous le nez du socle. */
+    const jeux = jeuxParamsRech('movie');
+    egal(jeux.length, 1, 'un mot qui ne part pas à TMDB a décomposé la requête');
+    [paramsSocleRech('movie')].concat(jeux).forEach(p=>
+      vrai(!Object.keys(p).some(k=>/pasvu|vu|watched/i.test(k)),
+           'un paramètre inventé est parti à TMDB'));
   });
 
   test('le compteur ne promet plus un chiffre qu\'il ne tient pas', ()=>{
@@ -2729,8 +2917,10 @@ window.MODE_TEST = true;
     egal(originesRech().map(o=>o.id), ['ja','zh','ko'],
          'les neuf langues absurdes sont revenues, ou la liste juste a disparu');
     genresTMDB.tv = [{ id:16, nom:'Animation' }];
-    r.origine = 'zh';
-    egal(paramsRech('tv').with_original_language, 'zh',
+    r.origine = ['zh'];
+    const jeux = jeuxParamsRech('tv');
+    egal(jeux.length, 1, 'une seule origine doit tenir en une requête');
+    egal(jeux[0].with_original_language, 'zh',
          'demander « chinois » ne change rien à la requête envoyée');
     genresTMDB.tv = null;
     r.fam = 'film';
@@ -2787,7 +2977,7 @@ window.MODE_TEST = true;
   test('« Un classique » se calcule en années glissantes, jamais en date fixe', ()=>{
     const r = rechVierge('serie');
     r.amb = 'tv-classique';
-    const p = paramsRech('tv');
+    const p = paramsSocleRech('tv');
     const attendu = String(new Date().getFullYear() - 15);
     vrai(String(p['first_air_date.lte']||'').indexOf(attendu) === 0,
          'la recette est écrite en date fixe : elle vieillira toute seule');
@@ -2847,54 +3037,21 @@ window.MODE_TEST = true;
     r.jeu = null; genresTMDB.tv = null;
   });
 
-  test('la phrase s\'applique aux cartes « Parce que tu as aimé … »', ()=>{
-    const r = rechVierge('film');
-    genresTMDB.movie = [{ id:35, nom:'Comédie' }, { id:27, nom:'Horreur' }];
-    r.genre = 'Comédie'; r.note = '7';
-    const bon  = { id:1, __media:'movie', genre_ids:[35], vote_average:7.4, release_date:'2015-01-01' };
-    const faux = { id:2, __media:'movie', genre_ids:[27], vote_average:7.4, release_date:'2015-01-01' };
-    const mou  = { id:3, __media:'movie', genre_ids:[35], vote_average:5.1, release_date:'2015-01-01' };
-    vrai(respecteDemandeRech(bon,'movie'),   'une carte conforme est rejetée');
-    vrai(!respecteDemandeRech(faux,'movie'), 'le genre de la phrase n\'est pas appliqué');
-    vrai(!respecteDemandeRech(mou,'movie'),  'la note de la phrase n\'est pas appliquée');
-    genresTMDB.movie = null;
-  });
-
-  test('une source qui ne sait pas respecter la demande rend un tas vide', ()=>{
-    const r = rechVierge('film');
-    vrai(!demandeAveugleRech(), 'une phrase nue devrait être vérifiable');
-    /* C'est le trou exact des films de 1 h 45 servis sur « plus de 2 h 15 » :
-       une liste de résultats ne porte pas la durée. */
-    r.duree = 'long';
-    vrai(demandeAveugleRech(), 'la durée se prétend vérifiable sur une liste');
-    r.duree = null; r.amb = 'vraie';        // recette à mot-clé
-    vrai(demandeAveugleRech(), 'un mot-clé se prétend vérifiable sur une liste');
-    r.amb = null; r.plate = 'mes';
-    vrai(demandeAveugleRech(), 'une plateforme se prétend vérifiable sur une liste');
-  });
-
-  test('le point de départ de « coeur » est du média de la famille', ()=>{
-    const r = rechVierge('serie');
-    db.podium = { film:[603], serie:[], anime:[], maj:0 };
-    db.movies[603] = { id:603, title:'Matrix', genres:[] };
-    egal(departJeuRech('tv'), null,
-         'le jeu partirait d\'un film pour proposer des séries');
-    db.shows[1399] = { id:1399, name:'Le Trône de fer', genres:[], seasons:{}, watched:{} };
-    db.podium.serie = [1399];
-    const d = departJeuRech('tv');
-    vrai(d && d.media === 'tv' && d.id === 1399, 'le départ série n\'est pas retenu');
-  });
-
-  test('le libellé « Dans tes genres » ne dit plus deux fois le même genre', ()=>{
-    rechVierge('film');
-    genresTMDB.tv = [{ id:10759, nom:'Action & Adventure' }];
-    db.gouts.genres = ['Action', 'Action & Adventure', 'Comédie'];
-    /* Côté séries, « Action » et « Action & Adventure » sont le MÊME genre
-       TMDB : `genreParNom` les ramène au même identifiant. */
-    egal(genresProfilRech('tv'), ['Action', 'Comédie'],
-         'l\'étiquette affiche encore « Action et Action & Adventure »');
-    genresTMDB.tv = null;
-  });
+  /* SUPPRIMÉS ICI, ET C'EST LE POINT 20 QUI LES SUPPRIME :
+       · « la phrase s'applique aux cartes “Parce que tu as aimé …” » et
+         « une source qui ne sait pas respecter la demande rend un tas vide » —
+         `respecteDemandeRech` et `demandeAveugleRech` existaient pour rattraper
+         des cartes venues d'AILLEURS que de la grille. Il n'y a plus d'ailleurs :
+         le paquet EST le résultat de la recherche, donc il respecte la phrase
+         par construction. Rien à rattraper, rien à éprouver.
+       · « le point de départ de “coeur” est du média de la famille » —
+         `departJeuRech` a disparu avec la source « coeur ».
+       · « le libellé “Dans tes genres” ne dit plus deux fois le même genre » —
+         la pastille `__pourquoi` a été retirée de la carte : sans sources, une
+         carte n'a plus de raison à afficher. Le point 17 est SANS OBJET ici.
+     Ce que le jeu refuse toujours de distribuer reste éprouvé, plus haut, par
+     « aucune source du jeu ne sort de la famille demandée » et par
+     « le jeu écarte ce qu'on a déjà, ce qu'on vient de voir et un 👎 ». */
 
   groupe('LOT R2 — point 3 : un tap ouvre la vraie fiche');
 
@@ -2911,6 +3068,672 @@ window.MODE_TEST = true;
     vrai(typeof window.peindreDetailRech === 'undefined',
          'l\'aperçu de Recherche est encore là');
     vrai(!FERMETURES['detail-rech'], 'la fermeture de l\'aperçu traîne encore');
+  });
+
+  /* ===========================================================================
+     LOT E — LES VINGT-DEUX POINTS DES RETOURS v87
+
+     Un cas par règle explicitement nommée « obligatoire » ou « cas de test »
+     dans la spec du lot. Ils sont groupés ici, par point, plutôt que dispersés
+     dans les sections d'origine : quand un point revient en discussion, tout
+     ce qui le garde se lit d'un bloc.
+     =========================================================================== */
+
+  groupe('LOT E — point 6 : une requête ou deux flux, et le compteur le dit');
+
+  /* Le cas nommé « obligatoire » par la spec. La MÊME action à l'écran —
+     cocher deux tranches d'époque — prend deux chemins opposés dans le moteur
+     selon que les tranches se touchent ou non. C'est exactement là qu'un lot
+     se tromperait, et ça ne se voit nulle part à l'écran. */
+  test('deux décennies JOINTIVES tiennent en UNE requête, bornes fusionnées', ()=>{
+    const r = rechVierge('film');
+    r.epoque = ['1990s', '2000s'];
+    const jeux = jeuxParamsRech('movie');
+    egal(jeux.length, 1, 'deux tranches jointives sont parties en deux requêtes');
+    egal(jeux[0]['primary_release_date.gte'], '1990-01-01', 'la borne basse a bougé');
+    egal(jeux[0]['primary_release_date.lte'], '2009-12-31', 'la borne haute a bougé');
+  });
+
+  test('deux décennies SÉPARÉES font deux flux — prendre l\'enveloppe serait un mensonge', ()=>{
+    const r = rechVierge('film');
+    r.epoque = ['1990s', '2010s'];
+    const jeux = jeuxParamsRech('movie');
+    egal(jeux.length, 2, 'deux tranches disjointes ont été fondues en une seule');
+    const bornes = jeux.map(p => [p['primary_release_date.gte'], p['primary_release_date.lte']]);
+    egal(bornes, [['1990-01-01','1999-12-31'], ['2010-01-01','2019-12-31']],
+         'l\'enveloppe 1990–2019 ferait entrer les années 2000 en douce');
+  });
+
+  test('deux origines de MÊME nature tiennent en une requête, deux natures en font deux', ()=>{
+    const r = rechVierge('film');
+    /* `français` et `japonais` ne portent qu'un paramètre, le même : ils
+       fondent en `fr|ja`. */
+    r.origine = ['fr', 'ja'];
+    const memeNature = jeuxParamsRech('movie');
+    egal(memeNature.length, 1, '« français ou japonais » est parti en deux requêtes');
+    egal(memeNature[0].with_original_language, 'fr|ja', 'le OU de langue a été perdu');
+    /* `américain` porte DEUX paramètres (`with_origin_country` ET
+       `with_original_language`) : TMDB fait un ET entre paramètres différents,
+       `language=fr|en` ET `country=US` rendrait les américains seuls et
+       perdrait les français en silence. Deux flux, donc. */
+    r.origine = ['fr', 'us'];
+    const deuxNatures = jeuxParamsRech('movie');
+    egal(deuxNatures.length, 2, '« français ou américain » a été écrasé en une requête');
+    vrai(deuxNatures.some(p => p.with_original_language === 'fr' && !p.with_origin_country),
+         'le flux français a disparu');
+    vrai(deuxNatures.some(p => p.with_origin_country === 'US'), 'le flux américain a disparu');
+  });
+
+  /* LE COMPTEUR. Il n'est pas déduit à la main ici : on fait tourner la VRAIE
+     fournée avec un TMDB bouché, et on lit ce que la barre affiche. C'est le
+     seul moyen d'éprouver `F.exact`, qui est posé par `chargerGrilleRech`. */
+  async function fourneeBouchee(){
+    const r = etatRech();
+    const appels = [];
+    const vraiTmdb = window.tmdb, vraiPeindre = window.peindreRech;
+    window.peindreRech = function(){};
+    window.tmdb = async (chemin, p)=>{
+      if(/\/genre\//.test(chemin)) return { genres:[] };
+      appels.push({ chemin:chemin, p:Object.assign({}, p||{}) });
+      return { results:[], total_pages:1, total_results:100 };
+    };
+    try{ await chargerGrilleRech(); }
+    finally { window.tmdb = vraiTmdb; window.peindreRech = vraiPeindre; }
+    return { appels:appels, total:r.total, prefixe:prefixeCompteurRech() };
+  }
+
+  testAsync('point 6 — jointives : compteur EXACT ; séparées : « moins de »', async ()=>{
+    const r = rechVierge('film');
+    r.epoque = ['1990s', '2000s'];
+    const un = await fourneeBouchee();
+    egal(un.prefixe, '', 'une requête unique doit rendre un compteur exact');
+    egal(un.total, 100, 'le total d\'une requête unique n\'est pas celui de TMDB');
+
+    const r2 = rechVierge('film');
+    r2.epoque = ['1990s', '2010s'];
+    const deux = await fourneeBouchee();
+    egal(deux.prefixe, 'moins de ',
+         'deux flux peuvent se recouper : le compteur ne peut plus promettre un chiffre exact');
+    vrai(deux.appels.length > un.appels.length,
+         'deux flux n\'ont pas coûté plus de requêtes qu\'un seul : la décomposition n\'a pas eu lieu');
+  });
+
+  groupe('LOT E — point 14 : l\'épuisement de chaque passe, et la bascule');
+
+  /* Sous « Films », deux partages se combinent : la FORME (prises de vues
+     réelles puis animation) et l'ORIGINE (treize langues puis reste du monde).
+     L'ordre est écrit noir sur blanc dans le point 14 — la forme prime. */
+  function anim13(){ return langues13Rech().join('|'); }
+  function porteGenre(p, id){
+    return String(p.with_genres || '').split(',').indexOf(String(id)) >= 0;
+  }
+
+  test('sans ambiance, « Films » se partage en DEUX étages : 13 langues puis le monde', ()=>{
+    const r = rechVierge('film');
+    genresTMDB.movie = [{ id:16, nom:'Animation' }];
+    const e = etagesRech();
+    egal(e.length, 2, 'le partage par langue n\'a pas eu lieu');
+    egal(e.map(x=>x.langue), ['occ','monde'], 'l\'ordre des deux passes a changé');
+    egal(e.map(x=>x.forme), ['reel','reel'], 'le régime général sous Films est le refus de l\'animation');
+    egal(e[0].flux[0].p.with_original_language, anim13(),
+         'la première passe ne demande pas les treize langues');
+    /* Le compteur ne se lit que sur l'étage « monde » : ses paramètres sont
+       ceux de la recette SANS contrainte de langue, donc son `total_results`
+       est le total de l'ensemble. */
+    egal(e.map(x=>x.compte), [false, true], 'les deux étages comptent : le total serait doublé');
+    vrai(!e[1].flux[0].p.with_original_language, 'l\'étage « monde » traîne une contrainte de langue');
+    vrai(typeof e[1].filtre === 'function',
+         'rien n\'écarte chez nous ce que la passe précédente a déjà servi');
+    /* Les deux passes refusent l'animation : c'est le régime général de Films. */
+    e.forEach(x => x.flux.forEach(f =>
+      vrai(String(f.p.without_genres||'').split(',').indexOf('16') >= 0,
+           'un étage de prises de vues réelles laisse passer l\'animation')));
+    genresTMDB.movie = null;
+  });
+
+  test('une ambiance RELÉGUÉE ouvre QUATRE étages, et dans cet ordre', ()=>{
+    const r = rechVierge('film');
+    genresTMDB.movie = [{ id:16, nom:'Animation' }];
+    /* Les cinq ambiances reléguées : elles perdraient Ghibli, Persépolis ou
+       Valse avec Bachir si l'animation était refusée. Elle passe donc en fin
+       de catalogue — elle ne disparaît pas. */
+    ['reflechir','rigoler','vraie','classique','long'].forEach(id=>{
+      const a = RECH_AMBIANCES.find(x => x.id === id);
+      egal(a && a.anim, 'relegue', id+' : la relégation a été perdue');
+    });
+    r.amb = 'reflechir';
+    const e = etagesRech();
+    egal(e.length, 4, 'les deux partages ne se combinent pas');
+    egal(e.map(x => x.forme+'/'+x.langue),
+         ['reel/occ','reel/monde','anim/occ','anim/monde'],
+         'l\'ordre du point 14 n\'est pas respecté : la forme prime sur l\'origine');
+    /* L'étage « réelles » porte Animation dans `without_genres`… */
+    e.slice(0,2).forEach(x => x.flux.forEach(f=>
+      vrai(String(f.p.without_genres||'').split(',').indexOf('16') >= 0,
+           'l\'étage des prises de vues réelles n\'écarte pas l\'animation')));
+    /* …et l'étage « animation » l'EXIGE, dans `with_genres`, jamais les deux. */
+    e.slice(2).forEach(x => x.flux.forEach(f=>{
+      vrai(porteGenre(f.p, 16), 'l\'étage animation n\'exige pas le genre Animation');
+      vrai(String(f.p.without_genres||'').split(',').indexOf('16') < 0,
+           'l\'étage animation refuse l\'animation : les deux passes rendraient le même vide');
+      /* Le piège des séparateurs : `18|878,16` fait perdre le 878 EN SILENCE
+         chez TMDB. La passe 2 se décompose donc en un flux par genre. */
+      vrai(String(f.p.with_genres).indexOf('|') < 0,
+           'virgule et barre mélangées : TMDB ignorerait la moitié de la demande');
+    }));
+    genresTMDB.movie = null;
+  });
+
+  test('non-régression : une origine posée ferme le partage par langue', ()=>{
+    const r = rechVierge('film');
+    genresTMDB.movie = [{ id:16, nom:'Animation' }];
+    r.origine = ['fr'];
+    const e = etagesRech();
+    egal(e.length, 1, 'le classement par origine s\'applique alors qu\'une origine est demandée');
+    egal(e[0].langue, null, '« un film français » rangerait 100 % de ses résultats au rang 2');
+    egal(e[0].compte, true, 'un étage unique doit compter');
+    r.amb = 'reflechir';
+    egal(etagesRech().length, 2,
+         'le partage de forme doit rester, lui : il ne dépend pas de l\'origine');
+    genresTMDB.movie = null;
+  });
+
+  groupe('LOT E — point 11 : la migration des goûts ne perd rien');
+
+  test('aucun goût déclaré ne se perd, et l\'ancienne clé est conservée', ()=>{
+    baseVierge();
+    /* Des genres traduisibles ET les cinq orphelins nommés par le point 11 :
+       ceux que la taxonomie des séries ne connaît pas. Le défaut d'origine
+       était qu'ils ne produisaient RIEN, en silence. */
+    const anciens = ['Action', 'Comédie', 'Animation', 'Drame',
+                     'Horreur', 'Thriller', 'Romance', 'Histoire', 'Musique'];
+    db.gouts.genres = anciens.slice();
+    db.gouts.animeSous = ['shonen', 'mecha'];
+    delete db.gouts.genresFam; delete db.gouts.genresFamDe;
+    const avant = db.gouts.genres.slice();
+
+    vrai(migrerGenresFam(), 'la migration ne s\'est pas déclenchée');
+
+    const canon = n => (typeof genreCanon === 'function') ? genreCanon(n) : n;
+    const partout = ['film','serie','anime']
+      .reduce((acc, f)=> acc.concat(genresDeclares(f).map(canon)), []);
+    anciens.forEach(n=>
+      vrai(partout.indexOf(canon(n)) >= 0,
+           'GOÛT PERDU À LA MIGRATION : « '+n+' » ne se retrouve dans aucune des trois listes'));
+    /* Les cinq orphelins n'ont pas de jumeau côté séries : ils doivent donc
+       vivre dans la liste « films », et pas s'évaporer. */
+    ['Horreur','Thriller','Romance','Histoire','Musique'].forEach(n=>
+      vrai(genresDeclares('film').map(canon).indexOf(canon(n)) >= 0,
+           'l\'orphelin « '+n+' » a disparu au lieu de rester côté films'));
+    /* Les sous-genres d'animé passent par leur identifiant mesuré. */
+    vrai(genresDeclares('anime').indexOf('shonen') >= 0,
+         'le sous-genre d\'animé « shonen » n\'a pas été repris');
+
+    /* ET L'ANCIENNE CLÉ EST CONSERVÉE À L'IDENTIQUE : une base synchronisée
+       depuis un appareil resté en v86 doit continuer de se lire. */
+    egal(db.gouts.genres, avant, 'la migration a modifié l\'ancienne clé');
+  });
+
+  test('la migration ne se rejoue pas pour rien, mais se rejoue quand l\'ancienne clé bouge', ()=>{
+    baseVierge();
+    db.gouts.genres = ['Comédie'];
+    delete db.gouts.genresFam; delete db.gouts.genresFamDe;
+    vrai(migrerGenresFam(), 'premier passage');
+    vrai(!migrerGenresFam(), 'la migration se rejoue à vide à chaque appel');
+    db.gouts.genres.push('Drame');
+    vrai(migrerGenresFam(), 'l\'inscription écrit encore l\'ancienne clé : il faut la reprendre');
+  });
+
+  groupe('LOT E — point 20 : la fin de paquet, sans rebouclage');
+
+  testAsync('point 20 — tout montré et plus rien à paginer : le paquet est fini', async ()=>{
+    const r = rechVierge('film');
+    /* Deux titres, tous deux DÉJÀ ÉCARTÉS ce soir : c'est le cas qui prouve
+       qu'on ne reboucle pas dessus. */
+    r.res = [t_(1,'movie'), t_(2,'movie')];
+    r.flux = { etages:[], i:0, exact:true };          // plus rien à paginer
+    r.jeu = { carte:t_(1,'movie'), media:'movie', i:0, vues:2, gardes:1,
+              ecartes:{ 'movie:1':1, 'movie:2':1 }, fini:false,
+              fiche:null, plates:null, occupe:false, loading:false, err:'', anim:'' };
+    r.total = 43;
+    egal(resteRech(), false, 'le montage du cas est faux : il reste à paginer');
+    await tirerCarteRech();
+    egal(r.jeu.fini, true, 'LE PAQUET REBOUCLE : la partie ne se termine jamais');
+    egal(r.jeu.carte, null, 'un titre déjà écarté est reproposé');
+    egal(r.jeu.vues, 2, 'un titre écarté a été recompté comme vu');
+    /* Et l'écran le DIT — il ne se contente pas de tourner à vide. */
+    const boite = document.createElement('div');
+    boite.innerHTML = corpsJeuRech();
+    vrai(/Tu as fait le tour/.test(boite.textContent),
+         'l\'écran ne dit pas que le paquet est fini');
+    vrai(/43/.test(boite.textContent), 'le total annoncé n\'est pas rappelé à la fin');
+    vrai(boite.querySelector('.jfbtn'), 'aucune sortie proposée en fin de paquet');
+    /* Rejouer ne relance rien : la fin est stable. */
+    await tirerCarteRech();
+    egal(r.jeu.carte, null, 'une carte est ressortie après la fin du paquet');
+    r.jeu = null;
+  });
+
+  groupe('LOT E — point 21 : « à voir » et « vu » ne cohabitent jamais');
+
+  test('pastilleRech : rien, le signet, ou la coche — jamais deux', ()=>{
+    rechVierge('film');
+    const compte = h =>[/jqavoir/.test(h), /jqchez/.test(h)].filter(Boolean).length;
+
+    egal(pastilleRech(t_(7,'movie'), 'movie'), '',
+         'un titre absent de la bibliothèque porte une pastille');
+
+    db.movies[7] = { id:7, title:'Un film', genres:[], seen:false, addedAt:1 };
+    const aVoir = pastilleRech(t_(7,'movie'), 'movie');
+    egal(statutFilm(db.movies[7]), 'avoir', 'le montage du cas est faux');
+    vrai(/jqavoir/.test(aVoir), 'un film à voir ne porte pas le signet');
+    egal(compte(aVoir), 1, 'UN TITRE PORTE LES DEUX PASTILLES');
+
+    db.movies[7].seen = true; db.movies[7].watchedAt = 1;
+    const vu = pastilleRech(t_(7,'movie'), 'movie');
+    vrai(/jqchez/.test(vu), 'un film vu ne porte pas la coche');
+    egal(compte(vu), 1, 'UN TITRE PORTE LES DEUX PASTILLES');
+
+    /* Côté séries, seul « avoir » vaut le signet : tout le reste veut dire
+       qu'on l'a commencée, donc vue au moins en partie. */
+    db.shows[9] = serie(9, [ep(1,HIER), ep(2,HIER)], {});
+    vrai(/jqavoir/.test(pastilleRech({ id:9 }, 'tv')), 'une série jamais ouverte n\'est pas « à voir »');
+    db.shows[9].watched = { '1x1':1 };
+    const enCours = pastilleRech({ id:9 }, 'tv');
+    vrai(/jqchez/.test(enCours), 'une série commencée n\'est pas marquée');
+    egal(compte(enCours), 1, 'UNE SÉRIE PORTE LES DEUX PASTILLES');
+  });
+
+  test('sur la fiche, marquer vu fait disparaître le bloc d\'état', ()=>{
+    baseVierge();
+    db.movies[7] = { id:7, title:'Un film', genres:[], seen:false, addedAt:1 };
+    const bloc = blocAVoir('movie', 7);
+    vrai(bloc && /Dans ta liste à voir|Ajouté à ta liste/.test(bloc),
+         'un film de la bibliothèque qui n\'est pas vu ne dit pas qu\'il est à voir');
+    db.movies[7].seen = true; db.movies[7].watchedAt = Date.now();
+    egal(blocAVoir('movie', 7), '',
+         'la fiche dit « Vu » ET « Dans ta liste à voir » en même temps');
+  });
+
+  groupe('LOT E — point 13 : le tirage au sort ne perd ni ne duplique');
+
+  test('melangerRech garde exactement les mêmes titres, et son aléa est surchargeable', ()=>{
+    rechVierge('film');
+    const l = [];
+    for(let i = 1; i <= 12; i++) l.push(t_(i,'movie',[35]));
+    const ids = l.map(x=>x.id);
+
+    const vraiAlea = rechAlea;
+    /* Une suite déterministe : deux tirages identiques doivent rendre le même
+       ordre, sinon aucun test d'ordre sur cette grille n'est stable. */
+    const suite = ()=>{ let i = 0; return ()=> ((i = (i * 7 + 3) % 101), i / 101); };
+    try{
+      rechAlea = suite();
+      const a = melangerRech(l);
+      rechAlea = suite();
+      const b = melangerRech(l);
+      egal(a.map(x=>x.id), b.map(x=>x.id),
+           'le même aléa ne rend pas le même ordre : le tirage est irreproductible');
+      egal(a.length, l.length, 'LE TIRAGE A RETIRÉ OU AJOUTÉ UN TITRE');
+      egal(a.map(x=>x.id).slice().sort((p,q)=>p-q), ids.slice().sort((p,q)=>p-q),
+           'un titre a disparu ou a été dupliqué par le tirage');
+      vrai(a.map(x=>x.id).join(',') !== ids.join(','),
+           'le tirage ne mélange rien : l\'ordre de TMDB ressort tel quel');
+      egal(l.map(x=>x.id), ids, 'le tirage a modifié la liste d\'entrée sur place');
+    } finally { rechAlea = vraiAlea; }
+  });
+
+  test('espacerGenresRech conserve la longueur, elle réordonne', ()=>{
+    rechVierge('film');
+    const l = [];
+    for(let i = 1; i <= 9; i++) l.push(t_(i,'movie',[i <= 6 ? 16 : 35]));
+    const out = espacerGenresRech(l);
+    egal(out.length, 9, 'LA RÈGLE A RETIRÉ DES TITRES — elle ne doit que réordonner');
+    egal(out.map(x=>x.id).slice().sort((a,b)=>a-b), [1,2,3,4,5,6,7,8,9],
+         'un titre a disparu ou a été dupliqué');
+  });
+
+  groupe('LOT E — point 4 : le genre principal nomme, il ne retire rien');
+
+  test('les cinq titres mesurés le 02/08 tombent sur le bon genre', ()=>{
+    /* Chacun est un cas réel, relevé sur TMDB. Zorro en particulier : TMDB ne
+       lui donne PAS Western, la règle le range donc déjà en Action — c'était
+       la mémoire qui était en faute, pas l'ordre. */
+    egal(genrePrincipalNom(['Action','Comédie','Crime']), 'Crime', 'Barry Seal');
+    egal(genrePrincipalNom(['Action','Crime','Thriller']), 'Crime', 'Kill Bill');
+    egal(genrePrincipalNom(['Comédie','Romance']), 'Comédie', 'Hitch');
+    egal(genrePrincipalNom(['Animation','Aventure','Comédie','Familial','Fantastique']),
+         'Animation', 'Shrek 2');
+    egal(genrePrincipalNom(['Action','Aventure']), 'Action', 'Le Masque de Zorro');
+    /* Elle ne dépend pas de l'ordre de TMDB : elle lit l'ENSEMBLE. */
+    egal(genrePrincipalNom(['Crime','Action','Comédie']), 'Crime',
+         'le genre principal dépend de l\'ordre dans lequel TMDB les donne');
+    egal(genrePrincipalNom([]), '', 'une liste vide doit rendre une chaîne vide');
+  });
+
+  test('genresOrdonnes rend TOUS les genres, le principal en tête', ()=>{
+    const cinq = ['Aventure','Comédie','Animation','Familial','Fantastique'];
+    const out = genresOrdonnes(cinq);
+    egal(out.length, 5, 'LA LISTE A ÉTÉ TRONQUÉE');
+    egal(out[0], 'Animation', 'le genre qui explique la présence du titre n\'est pas en tête');
+    egal(out.slice().sort(), cinq.slice().sort(), 'un genre a disparu ou a été dupliqué');
+    egal(genresOrdonnes(['Drame']), ['Drame'], 'un genre unique doit ressortir tel quel');
+    egal(genresOrdonnes([]), [], 'une liste vide doit rester vide');
+  });
+
+  groupe('LOT E — point 3 : plus aucune troncature sur la fiche');
+
+  test('une fiche portant cinq genres les affiche tous les cinq', ()=>{
+    baseVierge();
+    const cinq = ['Aventure','Comédie','Animation','Familial','Fantastique'];
+    db.movies[808] = { id:808, title:'Shrek 2', genres:cinq.slice(), poster:'/s.jpg',
+                       date:'2004-05-19', seen:false, addedAt:1, runtime:93 };
+    /* Les quatre zones qui parlent au réseau sont muselées : on éprouve la
+       fiche, pas TMDB. */
+    const vrais = {};
+    ['zoneBande','blocPlateformes','zoneCasting','zoneRecos'].forEach(f=>{
+      vrais[f] = window[f]; window[f] = function(){ return ''; };
+    });
+    const sauveV = view, sauveP = params;
+    let html = '';
+    try{
+      view = 'movie'; params = { id:808, from:'profile' };
+      html = viewMovie();
+    } finally {
+      Object.keys(vrais).forEach(f=>{ window[f] = vrais[f]; });
+      view = sauveV; params = sauveP;
+    }
+    cinq.forEach(g => vrai(html.indexOf(g) >= 0, 'le genre « '+g+' » a été tronqué de la fiche'));
+    /* Et le principal est en tête, pas noyé au milieu. */
+    vrai(html.indexOf('Animation · ') >= 0,
+         'le genre qui explique la présence du titre n\'ouvre pas la ligne');
+  });
+
+  groupe('LOT E — point 2 : le troisième pouce');
+
+  test('un 🤷 sort des listes qui redemandent, reste dans le duel, et ne pénalise pas', ()=>{
+    baseVierge();
+    for(let i = 1; i <= 12; i++) db.movies[i] = film(i, ['Drame']);
+    /* Le poids : EXACTEMENT celui de l'absence d'avis. Un 🤷 qui pénaliserait
+       serait un 👎 déguisé, et personne ne l'utiliserait. */
+    poserNeutre('movie', 1);
+    egal(poidsTitre('movie', 1), poidsTitre('movie', 2),
+         'un 🤷 ne pèse pas comme une absence d\'avis : c\'est un demi-👎');
+    egal(poidsTitre('movie', 1), POIDS_NEUTRE);
+    egal(avisDe('movie', 1), 0, 'un 🤷 porte un signe : il ne doit en porter aucun');
+    vrai(estNeutre('movie', 1), 'le 🤷 n\'a pas été enregistré');
+    vrai(aRepondu('movie', 1), 'un 🤷 est une réponse : la question ne doit plus revenir');
+    vrai(!aRepondu('movie', 2), 'un titre non qualifié se croit répondu');
+
+    /* IL SORT DE LA LISTE QUI REDEMANDE. */
+    duel = Object.assign({}, DUEL_VIDE);
+    duel.vus = [{ media:'movie', id:'1', nom:'F1' }, { media:'movie', id:'2', nom:'F2' }];
+    egal(titresARattraper().map(t=>String(t.id)), ['2'],
+         'on redemande son avis sur un titre où l\'on vient de répondre 🤷');
+
+    /* ET IL RESTE DANS LE DUEL : il a un ORDRE, il n'a pas de SIGNE. */
+    const ids = titresEligiblesDuel('film').map(t=>String(t.id));
+    vrai(ids.indexOf('1') >= 0, 'un 🤷 sort du duel : il n\'a pourtant pas de signe');
+    /* Un 👎, lui, en sort — c'est la ligne de partage. */
+    poserAvis('movie', 3, -1);
+    vrai(titresEligiblesDuel('film').map(t=>String(t.id)).indexOf('3') < 0,
+         'un 👎 reste dans le duel');
+    duel = Object.assign({}, DUEL_VIDE);
+  });
+
+  /* LE CONTRAT DE DONNÉES A ÉTÉ ROUVERT : `v: 1 | 0 | -1`. Trois choses à
+     éprouver, et la spec les demande nommément — « il faut le rouvrir
+     explicitement, et vérifier qu'une base ancienne lue par une version neuve
+     ne s'en trouve pas déplacée ». */
+  test('le 🤷 vit dans db.avis et survit au démarrage', ()=>{
+    baseVierge();
+    db.movies[1] = film(1, ['Drame']);
+    poserNeutre('movie', 1);
+    egal(db.avis.movie['1'].v, 0, 'le 🤷 n\'est pas rangé dans db.avis avec v:0');
+    /* `reparerAvis` tourne à CHAQUE lancement et effaçait tout `v` inconnu :
+       sans la réouverture du contrat, le 🤷 posé le soir disparaissait au
+       matin et la question revenait. */
+    reparerAvis();
+    vrai(estNeutre('movie', 1), 'le 🤷 a été effacé au démarrage suivant');
+  });
+
+  test('une base ancienne n\'est pas déplacée par la réouverture du contrat', ()=>{
+    baseVierge();
+    db.avis = { tv:{ '9':{ v:1, quand:10 } },
+                movie:{ '1':{ v:1, quand:11 }, '2':{ v:-1, quand:12 } } };
+    reparerAvis();
+    egal(db.avis.movie['1'].v, 1);
+    egal(db.avis.movie['2'].v, -1);
+    egal(db.avis.tv['9'].v, 1, 'un avis ancien a bougé alors que rien ne le concerne');
+    /* Et une valeur qui n'est toujours PAS du contrat reste effacée : la porte
+       n'est ouverte que pour le 0. */
+    db.avis.movie['3'] = { v:7, quand:13 };
+    reparerAvis();
+    vrai(!db.avis.movie['3'], 'une valeur hors contrat survit maintenant : la porte est trop large');
+  });
+
+  test('le 🤷 traverse la synchro', ()=>{
+    baseVierge();
+    /* Sans le 0 dans `fusionnerAvis`, il n'arrivait jamais sur le second
+       téléphone — silencieusement, ce qui est le pire des deux. */
+    fusionnerAvis({ avis:{ tv:{}, movie:{ '5':{ v:0, quand: Date.now() } } } });
+    vrai(estNeutre('movie', 5), 'un 🤷 venu d\'un autre appareil est perdu en route');
+  });
+
+  test('un pouce et un 🤷 ne cohabitent jamais sur le même titre', ()=>{
+    baseVierge();
+    db.movies[1] = film(1, ['Drame']);
+    poserNeutre('movie', 1);
+    poserAvis('movie', 1, 1);
+    vrai(!estNeutre('movie', 1), 'le titre porte un 👍 ET un 🤷 : les écrans se contrediront');
+    poserNeutre('movie', 1);
+    egal(avisDe('movie', 1), 0, 'le 👍 a survécu au 🤷 posé par-dessus');
+    /* Repasser le même bouton annule, comme les deux pouces. */
+    poserNeutre('movie', 1);
+    vrai(!estNeutre('movie', 1), 'le 🤷 ne s\'annule pas en le repassant');
+  });
+
+  groupe('LOT E — point 1 : le classement, et il ne dit pas la même chose aux deux endroits');
+
+  /* Une partie finie, avec un classement lisible plutôt que douze duels au
+     hasard : on veut éprouver l'AFFICHAGE, pas le moteur de score. */
+  function partieFinie(n){
+    baseVierge();
+    for(let i = 1; i <= (n || 14); i++) db.movies[i] = film(i, ['Drame']);
+    ouvrirDuel('film');
+    horsLigne(()=>{
+      duel.paquet.forEach((t, i)=>{ db.classement.film[String(t.id)] = { s:2000 - i, n:3 }; });
+      terminerDuel();
+    });
+  }
+
+  test('sur le résultat, la liste commence à 4 et se place APRÈS les deux boutons', ()=>{
+    partieFinie(14);
+    const boite = document.createElement('div');
+    boite.innerHTML = blocClassementDuel();
+    const rangs = [...boite.querySelectorAll('.cl1rang')].map(e=>e.textContent);
+    vrai(rangs.length, 'la moitié basse de l\'écran de résultat est restée vide');
+    egal(rangs[0], '4', 'le podium au-dessus est une image : le redire ferait doublon');
+    egal(rangs.slice(0,3), ['4','5','6'], 'les rangs ne se suivent pas');
+    /* Aucun non-départagé ici : on vient de jouer, on regarde ce qu'on a gagné. */
+    vrai(rangs.indexOf('—') < 0,
+         'les titres pas encore départagés remontent sur l\'écran de résultat');
+
+    /* APRÈS LES BOUTONS, et c'est une mesure qui l'a décidé : placée avant, la
+       liste repousse « Continuer → » de 474 à 1 106 px, soit hors de l'écran. */
+    const html = ecranDuelResultat();
+    const boutons = html.indexOf('dcta');
+    const liste = html.indexOf('La suite du classement');
+    vrai(boutons >= 0 && liste >= 0, 'un des deux blocs a disparu de l\'écran de résultat');
+    vrai(boutons < liste, 'le classement passe devant les boutons : la sortie du parcours sort de l\'écran');
+    fermerDuel();
+  });
+
+  test('dans Mes goûts, la liste part de 1 et les non-départagés ferment la marche', ()=>{
+    partieFinie(14);
+    fermerDuel();
+    /* Trois titres qui n'ont pas atteint le seuil : ils ne doivent pas se
+       mêler au classement, mais ils ne doivent pas disparaître non plus. */
+    for(let i = 20; i <= 22; i++){
+      db.movies[i] = film(i, ['Drame']);
+      db.classement.film[String(i)] = { s:1500, n:1 };
+    }
+    clGouts = { fam:null, n:50, na:50 };
+    const boite = document.createElement('div');
+    boite.innerHTML = blocClassementGouts();
+    const lignes = [...boite.querySelectorAll('.cl1lig')];
+    const rangs = lignes.map(e => e.querySelector('.cl1rang').textContent);
+    egal(rangs[0], '1', 'la liste de Mes goûts ménage un podium qui n\'est pas là');
+    egal(rangs.slice(0,3), ['1','2','3'], 'les rangs ne partent pas de 1');
+    /* Les non-départagés : EN FIN DE LISTE, sans rang, et grisés. */
+    const gris = lignes.filter(e => e.classList.contains('cl1gris'));
+    egal(gris.length, 3, 'les titres pas encore départagés ont disparu de Mes goûts');
+    gris.forEach(e => egal(e.querySelector('.cl1rang').textContent, '—',
+                           'un titre non départagé porte un rang'));
+    const premierGris = lignes.indexOf(gris[0]);
+    egal(premierGris, lignes.length - 3,
+         'les non-départagés sont mêlés au classement au lieu d\'en fermer la marche');
+    vrai(boite.textContent.indexOf('Pas encore départagés') >= 0,
+         'rien ne dit ce que sont ces lignes grises');
+    clGouts = { fam:null, n:CL_JUSQUA, na:CL_PAS };
+  });
+
+  groupe('LOT E — point 10 : les rangées se remplissent, SANS plancher');
+
+  testAsync('une rangée dont la page 1 est mangée par le tamis va chercher la suivante', async ()=>{
+    baseVierge();
+    genresTMDB.movie = []; genresTMDB.tv = [];
+    /* Page 1 : douze titres déjà dans la bibliothèque. Le tamis les retire
+       tous — c'est exactement ce qui arrive avec 383 films chez soi. */
+    const page1 = [];
+    for(let i = 1; i <= 12; i++){
+      db.movies[i] = film(i, ['Drame']);
+      page1.push(normaliser({ id:i, title:'Déjà vu '+i, poster_path:'/p.jpg',
+        release_date:'2015-01-01', vote_average:7, vote_count:900,
+        genre_ids:[], original_language:'en' }, 'movie'));
+    }
+    let pagesDemandees = 0;
+    const vraiTmdb = window.tmdb;
+    window.tmdb = async ()=>{
+      pagesDemandees++;
+      return { total_pages:3, results: Array.from({length:12}, (x, k)=>({
+        id:1000 + pagesDemandees*100 + k, title:'Neuf '+k, poster_path:'/n.jpg',
+        release_date:'2016-01-01', vote_average:7.2, vote_count:900,
+        genre_ids:[], original_language:'en' })) };
+    };
+    let sortie = [];
+    try{
+      const f = fluxSugg('movie', { page:'1' }, page1, 3);
+      sortie = await remplirSugg([f], {}, cadreSugg('movie'), false, SUGG_CIBLE);
+    } finally { window.tmdb = vraiTmdb; }
+    vrai(pagesDemandees >= 1,
+         'LA RANGÉE S\'EST ARRÊTÉE À LA PAGE 1 : plus on utilise l\'app, plus elle maigrit');
+    vrai(sortie.length >= SUGG_CIBLE,
+         'la rangée s\'affiche courte en espérant que personne ne remarque : '+sortie.length+
+         ' titre(s) pour une cible de '+SUGG_CIBLE);
+    vrai(sortie.every(x => x.id > 1000), 'un titre déjà en bibliothèque est ressorti');
+    /* Et le garde-fou tient : on ne part pas en cascade réseau. */
+    vrai(pagesDemandees <= SUGG_PAGES_MAX,
+         'le garde-fou de trois pages par source a sauté : '+pagesDemandees+' requêtes');
+  });
+
+  testAsync('AUCUN PLANCHER : une rangée honnêtement remplie qui rend deux titres s\'affiche', async ()=>{
+    baseVierge();
+    genresTMDB.movie = []; genresTMDB.tv = [];
+    /* La source n'a que deux titres et elle est à sa dernière page : la rangée
+       est courte parce qu'il n'y a rien de plus, pas parce qu'on a mal cherché.
+       Décision explicite d'Adrien le 02/08 : « on l'affiche quand même ». */
+    const deux = [1,2].map(i => normaliser({ id:500+i, title:'Rare '+i, poster_path:'/r.jpg',
+      release_date:'2015-01-01', vote_average:7, vote_count:900,
+      genre_ids:[], original_language:'en' }, 'movie'));
+    let appels = 0;
+    const vraiTmdb = window.tmdb;
+    window.tmdb = async ()=>{ appels++; return { total_pages:1, results:[] }; };
+    let sortie = [];
+    try{
+      const f = fluxSugg('movie', { page:'1' }, deux, 1);
+      sortie = await remplirSugg([f], {}, cadreSugg('movie'), false, SUGG_CIBLE);
+    } finally { window.tmdb = vraiTmdb; }
+    egal(sortie.length, 2, 'une rangée courte a été masquée : c\'est une information cachée');
+    egal(appels, 0, 'on insiste auprès d\'une source qui a déjà tout donné');
+  });
+
+  /* Le pendant côté ÉCRAN — « une rangée de deux titres s'affiche quand même » —
+     est plus bas, dans la section LOT D : il se sert de `vitrineVierge` et de
+     `d_`, qui y sont définis. */
+
+  groupe('LOT E — point 15 : la revue de stabilité');
+
+  test('todayISO est mémorisé — et il ne l\'est pas éternellement', ()=>{
+    const vraiNow = Date.now;
+    try{
+      /* 23 h 59 min 50 s UTC : la seconde d'après on change de jour. */
+      const veille = Date.UTC(2026, 0, 1, 23, 59, 50);
+      _jourISO = null; _jourISOts = 0;
+      Date.now = ()=> veille;
+      const a = todayISO();
+      egal(a, '2026-01-01');
+      egal(todayISO(), a, 'deux appels consécutifs ne rendent pas la même chaîne');
+      /* +20 s : on a changé de jour, mais la mémoire tient encore. C'est le
+         compromis assumé — 7 040 `toISOString` par passe sur la bibliothèque
+         d'Adrien, tous pour la même chaîne. */
+      Date.now = ()=> veille + 20000;
+      egal(todayISO(), a, 'la valeur n\'est pas mémorisée : elle est recalculée à chaque appel');
+      /* +40 s : la mémoire a expiré, le passage de minuit est rattrapé. */
+      Date.now = ()=> veille + 40000;
+      egal(todayISO(), '2026-01-02',
+           'la mémoire ne se périme jamais : la date se figerait pour la session');
+    } finally { Date.now = vraiNow; _jourISO = null; _jourISOts = 0; }
+  });
+
+  test('deux ressources différentes peuvent être occupées EN MÊME TEMPS', ()=>{
+    baseVierge();
+    ui.busy = null;
+    /* L'ancien `ui.busy` était un verrou UNIQUE pour quatre écrans : un ajout
+       de série depuis le jeu bloquait le bouton d'un tout autre écran. */
+    vrai(prendre('jeu:serie'), 'le premier verrou ne se pose pas');
+    vrai(prendre('duel:vote'), 'UN SEUL VERROU POUR TOUTE L\'APP : le défaut A3-2 est revenu');
+    vrai(!prendre('jeu:serie'), 'le même verrou se pose deux fois');
+    vrai(occupe('jeu:serie') && occupe('duel:vote'), 'un verrou posé ne se lit pas');
+    rendre('jeu:serie');
+    vrai(!occupe('jeu:serie'), 'le verrou ne se relâche pas');
+    vrai(occupe('duel:vote'), 'relâcher un verrou relâche les autres');
+    vrai(prendre('jeu:serie'), 'un verrou relâché ne se reprend pas');
+    rendre('jeu:serie'); rendre('duel:vote');
+    vrai(!occupe('duel:vote'));
+  });
+
+  test('oublierDuel SOLDE le vote en attente au lieu de le perdre', ()=>{
+    baseVierge();
+    for(let i = 1; i <= 12; i++) db.movies[i] = film(i, ['Drame']);
+    ouvrirDuel('film');
+    horsLigne(()=>{
+      const a = duel.paquet[0], b = duel.paquet[1];
+      duel.paire = [a, b];
+      duel.choix = cleDuel(a);          // la carte s'est éclairée, l'échéance court encore
+      const avant = duelsJoues('film', a.id);
+      oublierDuel();
+      vrai(duelsJoues('film', a.id) > avant,
+           'LE DUEL EST PERDU : la carte s\'est éclairée sous les yeux et rien n\'a été compté');
+      vrai(!duel.actif, 'la session n\'a pas été rangée');
+      vrai(!duel.choix, 'le choix en attente traîne encore');
+    });
+    duel = Object.assign({}, DUEL_VIDE);
+  });
+
+  test('go() vers un autre écran ferme la barre d\'avis', ()=>{
+    baseVierge();
+    const vraiRender = window.render;
+    const sauveV = view, sauveP = params;
+    window.render = function(){};
+    try{
+      view = 'follow'; params = {};
+      avisAffiche = { media:'movie', id:'42', fait:'Marqué comme vu' };
+      go('profile', {});
+      egal(avisAffiche, null,
+           'la barre « Tu as aimé ? » suit sur l\'écran d\'arrivée : répondre écrirait '+
+           'un avis sur un titre qui n\'est plus nulle part');
+    } finally { window.render = vraiRender; view = sauveV; params = sauveP; avisAffiche = null; }
   });
 
   /* ==================== LOT D — Découvrir ====================
@@ -2976,6 +3799,20 @@ window.MODE_TEST = true;
     c.nouveautes = [d_(3)];
     egal(rangeesSuggerees().map(r=>r.cle), ['nouv'],
          'une case vide produit une rangée : c\'est le plafond qui revient par la fenêtre');
+  });
+
+  /* LOT E — POINT 10, LE PENDANT CÔTÉ ÉCRAN. Une rangée VIDE ne s'affiche pas
+     (ci-dessus) ; une rangée de DEUX titres, si. Il n'y a aucun plancher, et
+     c'est une décision explicite d'Adrien du 02/08 : « on l'affiche quand
+     même ». Une rangée courte dit quelque chose de vrai — « sur ce thème, tu
+     as déjà presque tout vu » — et la masquer cacherait une information. */
+  test('une rangée de deux titres est bien peinte, sans plancher d\'affichage', ()=>{
+    const c = vitrineVierge('tout');
+    c.esprit = { titre:'Whiplash', id:1, media:'movie', signal:'aime', famille:'film',
+                 l:[d_(11), d_(12)] };
+    const r = rangeesSuggerees().find(x => x.cle === 'esprit');
+    vrai(r, 'une rangée de deux titres a été masquée par un plancher');
+    egal(r.l.length, 2, 'la rangée a été amputée');
   });
 
   test('un profil qui démarre voit quatre rangées, pas dix', ()=>{
@@ -3228,12 +4065,23 @@ window.MODE_TEST = true;
     egal(carteProfilPauvre(), '', 'un 👍 et elle doit s\'effacer d\'elle-même');
   });
 
-  /* ==================== Bilan ==================== */
-  const b = document.getElementById('bilan');
-  b.className = 'bilan ' + (ko ? 'rouge' : 'vert');
-  b.textContent = ko ? (ko + ' échec' + (ko>1?'s':'') + ' sur ' + n + ' tests')
-                     : ('Tout passe — ' + n + ' tests');
-  document.title = ko ? (ko + ' échec(s) — Mes Séries') : (n + ' tests OK — Mes Séries');
+  /* ==================== Bilan ====================
+     Écrit UNE FOIS, après la file asynchrone. `window.__testsFinis` est le
+     signal que le lanceur attend : sans lui il lirait un bilan encore
+     provisoire et déclarerait la suite verte avant qu'elle ait fini. */
+  window.__testsFinis = false;
+  function bilan(){
+    const b = document.getElementById('bilan');
+    b.className = 'bilan ' + (ko ? 'rouge' : 'vert');
+    b.textContent = ko ? (ko + ' échec' + (ko>1?'s':'') + ' sur ' + n + ' tests')
+                       : ('Tout passe — ' + n + ' tests');
+    document.title = ko ? (ko + ' échec(s) — Mes Séries') : (n + ' tests OK — Mes Séries');
+  }
+  bilan();                                   // provisoire : la page dit déjà où elle en est
+  jouerAsync().then(()=>{
+    bilan();
+    window.__testsFinis = true;
+  });
 })();
 </script>
 </html>

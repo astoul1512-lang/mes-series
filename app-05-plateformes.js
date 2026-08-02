@@ -6,10 +6,19 @@
 const REGION_PLATO = 'FR';
 const platos = {};                 // clé « tv:1399 » → {abo, lien} · 'attente' · null si échec
 
+/* Les requêtes en vol, par clé. Sans elles, un second appel pendant le
+   chargement repartait avec `platos[k] === 'attente'`, c'est-à-dire sans
+   réponse — ce qui n'avait aucune conséquence tant que seul l'affichage
+   appelait cette fonction, mais en a une depuis que `plateformesDe`
+   (app-10) passe par ce cache. Constat A5-3. */
+const platosEnVol = {};
+
 async function chargerPlateformes(type, id){
   const k = type+':'+id;
+  if(platosEnVol[k]) return platosEnVol[k];
   if(platos[k] !== undefined) return;
   platos[k] = 'attente';
+  platosEnVol[k] = (async ()=>{
   try{
     const d = await tmdb('/'+type+'/'+id+'/watch/providers');
     const r = (d && d.results && d.results[REGION_PLATO]) || {};
@@ -19,6 +28,8 @@ async function chargerPlateformes(type, id){
     };
   }catch(e){ delete platos[k]; }   // on oublie l'échec pour pouvoir réessayer à la prochaine ouverture
   peindrePlateformes(k);
+  })();
+  try{ await platosEnVol[k]; } finally { delete platosEnVol[k]; }
 }
 
 function peindrePlateformes(k){
@@ -199,16 +210,127 @@ function boutonBande(k){
 }
 function peindreBande(k){
   const el = document.getElementById('ba-'+k);
-  if(el) el.innerHTML = boutonBande(k);
+  if(!el) return;
+  el.innerHTML = boutonBande(k);
+  /* POINT 9 — L'ARRIVÉE, ET SEULEMENT L'ARRIVÉE.
+     La classe qui porte l'animation est posée ICI et jamais dans `zoneBande` :
+     c'est le seul moment où la ligne apparaît vraiment. Si `zoneBande` la
+     posait, le moindre redessin de la fiche (ajouter à « À voir », cocher un
+     épisode) rejouerait la croissance sous les yeux de quelqu'un qui n'a rien
+     demandé — une bande-annonce déjà connue est là depuis le premier trait. */
+  if(el.innerHTML) el.classList.add('fi9arr');
 }
-/* Emplacement réservé : le bouton n'apparaît que si une bande-annonce existe. */
-function zoneBande(type, id){
+/* Aucun emplacement n'est réservé : le nœud reste VIDE tant qu'on cherche, et
+   `:empty{display:none}` le retire alors complètement du flux (règle du socle
+   pour `.zba`, reprise pour `fi9ba`). Le bouton n'apparaît que si une
+   bande-annonce existe.
+
+   POINT 9, 01/08 — `ligne` demande la LIGNE PLEINE LARGEUR posée entre le bloc
+   du titre et la rangée d'actions : regarder la bande-annonce est une action au
+   même titre que les deux autres, et souvent la première. C'est un paramètre et
+   non une seconde fonction parce que la feuille du duel (`ficheDuel`, app-11)
+   appelle la MÊME zone dans un contexte où la pleine largeur n'a pas de sens ;
+   le rendu du bouton, lui, reste unique — c'est le conteneur qui porte la
+   variante, et `peindreBande` n'a donc rien à savoir de l'écran qui l'appelle. */
+function zoneBande(type, id, ligne){
   const k = type+':'+id;
   setTimeout(()=> chargerFiche(type, id), 0);
   /* `esc` protège la SOURCE ; le parseur redécode l'attribut, si bien que le
      nœud porte la clé brute et que `peindreBande` continue de le retrouver
      avec `k` non échappé. Ne pas « corriger » l'autre bout. */
-  return '<div id="ba-'+esc(k)+'" class="zba">'+boutonBande(k)+'</div>';
+  return '<div id="ba-'+esc(k)+'" class="'+(ligne ? 'fi9ba' : 'zba')+'">'+boutonBande(k)+'</div>';
+}
+
+/* ---------------------------------------------------------------------------
+   POINTS 9 ET 21 — L'ÉTAT « À VOIR », ÉCRIT UNE SEULE FOIS
+
+   Le reproche du 02/08, vidéo à l'appui sur « Demon Slayer : La Forteresse
+   Infinie » : « quand je clique sur "à voir" ce n'est pas suffisamment visuel,
+   on ne sait pas qu'on l'a ajouté à notre liste. […] quand tu retournes sur la
+   fiche, impossible de savoir qu'il est dans ta liste. » Le bouton était écrit
+   sans condition : rigoureusement identique avant et après, un message de deux
+   secondes, et aucun moyen de retirer.
+
+   PARTI PRIS C, validé le 02/08 (« je valide la proposition C ») : un bloc posé
+   JUSTE SOUS les deux boutons — pas de ruban en haut de fiche, qui était la
+   proposition D de la même maquette. C'est la maquette du parcours en sept
+   écrans qui fait foi, et son bouton s'appelle mot pour mot « C — le bloc sous
+   les boutons » : les deux actions restent donc en place. C'est aussi la seule
+   lecture qui laisse « Marquer vu » atteignable depuis un titre déjà rangé dans
+   la liste à voir — sans quoi le passage de « à voir » à « vu », qui est la
+   garantie n°4 du parcours, n'aurait aucun chemin sur la fiche.
+
+   TROIS ÉCRANS, UNE SEULE FONCTION. `viewPreview`, `viewMovie` et `viewShow`
+   affichaient déjà le même en-tête avec les mêmes défauts ; deux blocs qui se
+   ressemblent, c'est exactement le défaut que ce lot corrige ailleurs.
+
+   LE VOCABULAIRE A ÉTÉ VÉRIFIÉ, et il l'a été deux fois parce qu'il a été faux
+   une fois : un titre à voir relève de `statutFilm(m) === 'avoir'` (ou de
+   `statutSerie` à zéro épisode vu) et se retrouve dans MON PROFIL, onglet
+   « À voir » — `listesProfil().avoir`, app-03. Pas « En cours », qui est le
+   libellé de `asuivre`.
+
+   L'EXCLUSIVITÉ EST GARANTIE PAR LE STATUT LUI-MÊME, et non par une condition
+   écrite à la main ici : le bloc ne s'affiche que si `statut(o) === 'avoir'`.
+   Marquer un film vu bascule `statutFilm` sur 'vu', cocher le premier épisode
+   bascule `statutSerie` sur 'asuivre', mettre en pause bascule sur 'pause' —
+   dans les trois cas le bloc disparaît au redessin suivant, sans que personne
+   ait à y penser. Un titre ne peut pas être à la fois à voir et vu.
+--------------------------------------------------------------------------- */
+
+/* Le seul mot qui change entre l'ajout et les retrouvailles : « Ajouté à ta
+   liste / Annuler » au moment du geste, « Dans ta liste à voir / Retirer »
+   ensuite. Ce n'est pas un état persistant — c'est la mémoire du geste qu'on
+   vient de faire, et elle meurt avec l'écran. Deux gardes, parce qu'il n'existe
+   aucun crochet de sortie d'écran hors de `go()`, qui n'est pas de ce lot :
+   l'écran doit être le MÊME (vue et titre), et le geste doit être récent. Au
+   rechargement de l'app la variable n'existe plus, donc « dix jours plus tard »
+   dit toujours « Dans ta liste à voir » — c'est la garantie n°2 du parcours. */
+let avoirFrais = null;                      // { cle, vue, ref, t } · null = rien de frais
+const AVOIR_FRAIS_MS = 90000;
+
+function ajoutAVoirFrais(media, id){
+  const f = avoirFrais;
+  return !!(f && f.cle === media+':'+String(id) && f.vue === view &&
+            f.ref === String(params.id || '') && Date.now() - f.t < AVOIR_FRAIS_MS);
+}
+
+/* LE BLOC. Une seule fonction, appelée par les trois fiches. Elle décide seule
+   de s'afficher ou non : les appelants n'ont aucune condition à répéter. */
+function blocAVoir(media, id){
+  const o = media === 'tv' ? db.shows[id] : db.movies[id];
+  if(!o || statut(o) !== 'avoir') return '';
+  const frais = ajoutAVoirFrais(media, id);
+  return '<div class="fi9etat">'+
+    '<span class="fi9ic">'+I.bookmark+'</span>'+
+    '<span class="fi9tx"><b>'+(frais ? 'Ajouté à ta liste' : 'Dans ta liste à voir')+'</b>'+
+      '<i>Sur ton profil, onglet « À voir »</i></span>'+
+    /* `escJs` pour TOUTE chaîne posée dans un `onclick` — la règle du projet,
+       appliquée ici comme ailleurs même quand les valeurs sont sûres. */
+    '<button class="fi9rm" onclick="retirerDeLaListeAVoir(\''+escJs(media)+'\',\''+
+      escJs(String(id))+'\')">'+(frais ? 'Annuler' : 'Retirer')+'</button>'+
+  '</div>';
+}
+
+/* Ajouter un film à la liste à voir. Le détour par une fonction d'ici existe
+   pour une seule raison : marquer le geste comme frais AVANT qu'`addMovie`
+   (app-04, hors périmètre) ne repeigne l'écran, sans quoi le bloc s'afficherait
+   déjà dans sa forme durable au moment même de l'ajout. */
+function ajouterAVoir(id){
+  avoirFrais = { cle:'movie:'+String(id), vue:view, ref:String(params.id || ''), t:Date.now() };
+  addMovie(id, false);
+}
+
+/* RETIRER — ce chemin n'existait nulle part avant le 02/08. Il ne réinvente
+   rien : `removeMovie` et `removeShow` savent déjà retirer un titre, prévenir,
+   et quitter la fiche quand elle disparaît avec lui. Le nom est long exprès :
+   il dit de quelle liste on sort, et il ne se confond avec aucun des deux. */
+function retirerDeLaListeAVoir(media, id){
+  avoirFrais = null;
+  const n = Number(id);
+  const ref = isFinite(n) ? n : id;
+  if(media === 'tv') removeShow(ref);
+  else removeMovie(ref);
 }
 /* ---------- Lecteur ----------
    Le lecteur prend tout l'écran, sur fond noir : la vidéo occupe la plus grande
@@ -316,9 +438,24 @@ function viewPreview(){
         (!isTv && d.runtime ? ' · '+d.runtime+' min' : '')+'</div>'+
       (note ? '<div style="margin-top:6px"><span class="note">'+I.star+note+'</span>'+
         '<span class="tiny muted" style="margin-left:6px">'+(d.vote_count||0)+' votes</span></div>' : '')+
-      '<div class="small muted" style="margin-top:6px">'+esc((d.genres||[]).map(g=>g.name).slice(0,3).join(' · '))+'</div>'+
-      zoneBande(isTv?'tv':'movie', d.id)+
+      /* POINT 3, 02/08 — TOUS les genres, et le principal EN TÊTE.
+         La troncature à trois faisait mentir la fiche : « Envie de rigoler »
+         sortait *Kung Fu Panda 4* en premier résultat, et sa fiche annonçait
+         « Action · Aventure · Animation » sans le mot « Comédie ». L'app se
+         contredisait sous les yeux de celui qui cherche, alors que la recherche
+         avait raison — TMDB classe bien ce film en comédie. `genresOrdonnes`
+         (app-04) est la MÊME fonction que celle qui nomme le genre principal
+         ailleurs : une seconde version de la règle serait exactement la
+         divergence que ce lot combat. */
+      '<div class="small muted" style="margin-top:6px">'+
+        esc(genresOrdonnes((d.genres||[]).map(g=>g.name)).join(' · '))+'</div>'+
     '</div></div>';
+
+  /* POINT 9 — la bande-annonce quitte le bloc du titre, où elle était le plus
+     petit bouton de l'écran (`btn ghost mini`, sous la ligne des genres) pour
+     ce qui est souvent la première chose qu'on veut faire. Elle passe en ligne
+     pleine largeur, ici : entre le bloc du titre et la rangée d'actions. */
+  html += zoneBande(isTv?'tv':'movie', d.id, true);
 
   /* Boutons d'action */
   if(isTv){
@@ -343,18 +480,37 @@ function viewPreview(){
       : '<button class="btn" id="addbtn" onclick="addOrOpenShow('+d.id+')">'+I.plus+' Ajouter à ma liste</button>')
       +'</div>'+
       (enPause ? '<div class="wrap" style="padding:8px 16px 0"><div class="tiny muted center">'+
-        'En pause : elle n\'apparaît ni dans « À rattraper » ni dans le calendrier.</div></div>' : '');
+        'En pause : elle n\'apparaît ni dans « À rattraper » ni dans le calendrier.</div></div>' : '')+
+      /* POINT 21 — une série ajoutée mais dont aucun épisode n'est coché est,
+         elle aussi, dans l'onglet « À voir » du profil (`listesProfil`). Elle a
+         donc droit au même bloc et au même « Retirer » : l'état ne dépend pas du
+         média, il dépend du statut. */
+      blocAVoir('tv', d.id);
   } else {
     const m = db.movies[d.id];
+    const vu = !!(m && m.seen);
     html += '<div class="actions">'+
       /* LOT A — `marquerFilmVu` plutôt que `addMovie(id, true)` : marquer un
          film vu doit poser la question « tu as aimé ? », d'où qu'on le fasse.
          Le détour existe parce que `addMovie` vit dans app-04, hors du
          périmètre de ce lot. */
-      '<button class="btn" style="'+(m&&m.seen?'background:var(--ok);color:#08130d':'')+'" onclick="marquerFilmVu('+d.id+')">'+
-        I.check+(m&&m.seen?' Déjà vu':' Marquer vu')+'</button>'+
-      '<button class="btn ghost" onclick="addMovie('+d.id+',false)">'+I.bookmark+' À voir</button>'+
-    '</div>';
+      '<button class="btn" style="'+(vu?'background:var(--ok);color:#08130d':'')+'" onclick="marquerFilmVu('+d.id+')">'+
+        I.check+(vu?' Déjà vu':' Marquer vu')+'</button>'+
+      /* POINT 21 — trois formes pour la seconde action, et jamais deux à la fois.
+         · film vu : RIEN. Proposer « À voir » à côté d'un « Déjà vu » vert
+           laisserait croire qu'un titre peut être les deux, ce que le parcours
+           validé le 02/08 interdit explicitement.
+         · film déjà dans la liste : un témoin, pas un bouton. Il dit où le geste
+           a eu lieu ; le seul chemin de retrait est le lien du bloc juste
+           dessous, pour qu'il n'y en ait qu'un et qu'il porte un nom.
+         · sinon : le bouton, qui passe par `ajouterAVoir` et non plus par
+           `addMovie` en direct. */
+      (vu ? ''
+          : m && statutFilm(m) === 'avoir'
+            ? '<span class="btn ghost fi9dans" aria-disabled="true">'+I.bookmark+' Dans ma liste</span>'
+            : '<button class="btn ghost" onclick="ajouterAVoir('+d.id+')">'+I.bookmark+' À voir</button>')+
+    '</div>'+
+    blocAVoir('movie', d.id);
   }
 
   /* Chiffres clés */
@@ -416,7 +572,11 @@ async function chargerActeur(id){
   }catch(e){
     gens[id] = { erreur: 'Impossible de charger cette fiche' };
   }
-  if(view === 'acteur') render();
+  /* L'identifiant compte autant que l'écran : ouvrir un second acteur pendant
+     que le premier charge faisait repeindre la fiche de B par la réponse de A —
+     un clignotement, et la position de lecture perdue.
+     Revue de stabilité du 02/08, constat A3-5. */
+  if(view === 'acteur' && String(params.id) === String(id)) render();
 }
 
 /* TMDB répète une même série autant de fois que la personne y a de rôles, et
@@ -538,11 +698,18 @@ function viewMovie(){
     '<div class="dmeta"><h2>'+esc(m.title)+'</h2>'+
       '<div class="small muted">'+esc(year(m.date))+(m.runtime?' · '+m.runtime+' min':'')+'</div>'+
       (m.note?'<div style="margin-top:6px"><span class="note">'+I.star+(Math.round(m.note*10)/10)+'</span></div>':'')+
-      '<div class="small muted" style="margin-top:6px">'+esc((m.genres||[]).slice(0,3).join(' · '))+'</div>'+
-      zoneBande('movie', m.id)+
+      /* POINT 3 — tous les genres, principal en tête. Voir `viewPreview`. */
+      '<div class="small muted" style="margin-top:6px">'+
+        esc(genresOrdonnes(m.genres||[]).join(' · '))+'</div>'+
     '</div></div>';
+  /* POINT 9 — la ligne pleine largeur, entre le bloc du titre et l'action. */
+  html += zoneBande('movie', m.id, true);
   html += '<div class="actions"><button class="btn block" style="'+(m.seen?'background:var(--ok);color:#08130d':'')+
     '" onclick="toggleMovie('+m.id+')">'+I.check+(m.seen?' Vu le '+fmtDate(new Date(m.watchedAt).toISOString().slice(0,10)):' Marquer comme vu')+'</button></div>';
+  /* POINT 21 — un film de la bibliothèque qui n'est pas vu EST un film à voir.
+     Sa fiche ne le disait pas davantage que l'aperçu, et le seul retrait passait
+     par le menu ⋮. Le bloc dit l'état et porte « Retirer ». */
+  html += blocAVoir('movie', m.id);
   if(m.overview) html += '<div class="sectitle">Synopsis</div><div class="overview" style="margin-top:0">'+esc(m.overview)+'</div>';
   html += blocPlateformes('movie', m.id);
   html += zoneCasting('movie', m.id);

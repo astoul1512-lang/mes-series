@@ -249,10 +249,12 @@ function nomDuCercle(id){
 }
 
 function menuRecommander(type, id){
-  const gens = cercle();
+  /* Nom local distinct du cache global `gens` d'app-05 (les fiches de
+     personnes) : deux choses différentes portaient le même nom. Constat A4-2. */
+  const duCercle = cercle();
   const titre = type === 'tv' ? (db.shows[id] && db.shows[id].name)
                               : (db.movies[id] && db.movies[id].title);
-  if(!gens.length) return toast('Personne dans ton cercle pour l\'instant');
+  if(!duCercle.length) return toast('Personne dans ton cercle pour l\'instant');
   /* Déjà conseillé à cette personne : on le dit au lieu de laisser renvoyer
      dans le vide — la contrainte d'unicité côté base ignore le doublon, donc
      sans cette mention le second envoi n'aurait aucun effet visible. */
@@ -260,7 +262,7 @@ function menuRecommander(type, id){
     String(r.vers) === String(p.id) && r.type === type && String(r.tmdb_id) === String(id));
   openSheet('<h3>Recommander</h3>'+
     '<p class="small muted" style="margin:0 0 6px">'+esc(titre || 'Ce titre')+'</p>'+
-    gens.map(p =>
+    duCercle.map(p =>
       '<button class="opt" style="display:flex;align-items:center;gap:12px"'+
         (dejaFait(p) ? ' disabled' : '')+
         ' onclick="closeSheet();recommander(\''+esc(type)+'\','+Number(id)+

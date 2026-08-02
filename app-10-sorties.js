@@ -121,12 +121,21 @@ async function avecDatesFR(films, genre, de, a){
    vérifié. D'où le sens de la section : ce qui vient d'arriver, pas ce qui
    arrivera. Les offres à la pub et les revendeurs sont repliés sur la
    plateforme mère, comme partout dans l'app (PLATES_PUB). */
+/* Cette fonction repartait sur le réseau à CHAQUE appel, alors qu'app-05 tient
+   déjà un cache de la même ressource (`platos`, clé « movie:550 »). Elle est
+   appelée en boucle par « Bientôt », qui se rejoue dès qu'un film suivi entre
+   ou sort : autant de requêtes refaites pour rien, et le bloc « Où le
+   regarder » de la fiche repartait en chargement juste après.
+   Revue de stabilité du 02/08, constat A5-3. Le filtrage et le dédoublonnage
+   sont conservés à l'identique. */
 async function plateformesDe(id){
-  const rep = await tmdb('/movie/' + id + '/watch/providers');
-  const fr = ((rep.results || {}).FR || {});
+  const k = 'movie:' + id;
+  if(typeof chargerPlateformes === 'function') await chargerPlateformes('movie', id);
+  const p = (typeof platos !== 'undefined') ? platos[k] : null;
+  const liste = (p && p !== 'attente' && Array.isArray(p.abo)) ? p.abo : [];
   const noms = [];
-  (fr.flatrate || []).forEach(p => {
-    const nom = (p.provider_name || '').trim();
+  liste.forEach(p2 => {
+    const nom = (p2.provider_name || '').trim();
     if(nom && !PLATES_PUB.test(nom) && noms.indexOf(nom) < 0) noms.push(nom);
   });
   return noms;

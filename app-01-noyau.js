@@ -152,19 +152,31 @@ function saveDB(){
   if(typeof veilleBiblio === 'function') veilleBiblio();
   if(memoryOnly) return;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(()=>{ writeNow().catch(()=>{}); }, 150);
+  /* 150 ms était plus court que l'écriture elle-même (1,3 Mo sérialisés puis
+     posés dans localStorage, qui est synchrone) : le délai ne regroupait donc
+     presque jamais deux gestes, et chaque coche d'épisode payait une écriture
+     complète. À 800 ms, cocher une saison entière n'écrit qu'une fois. Les
+     trois filets restent les mêmes : visibilitychange, pagehide et blur
+     appellent `flushDB`, qui écrit sur-le-champ.
+     Revue de stabilité du 02/08, constat A2-5. */
+  saveTimer = setTimeout(()=>{ writeNow().catch(()=>{}); }, 800);
 }
 async function writeNow(){
   if(memoryOnly) return;
-  const snapshot = JSON.parse(JSON.stringify(db));
+  /* Une seule traversée du graphe. Avant, il y en avait trois pour une même
+     écriture : un `stringify` + un `parse` pour détacher la copie, puis un
+     second `stringify` pour localStorage. Le texte sert aux deux, et c'est lui
+     qu'on relit pour obtenir la copie détachée que réclame IndexedDB.
+     Revue de stabilité du 02/08, constat A2-1. */
+  const texte = JSON.stringify(db);
   /* Le miroir localStorage passe EN PREMIER : c'est la seule écriture synchrone,
      donc la seule qui aboutisse si iOS gèle l'app juste après un geste de fermeture.
      IndexedDB, plus lent mais sans limite de taille, suit. Le mode n'est annoncé
      qu'une fois les deux tentatives faites, pour ne jamais afficher un état
      intermédiaire pendant l'écriture. */
   let okLS = false, okIDB = false;
-  try{ localStorage.setItem(KEY, JSON.stringify(snapshot)); okLS = true; }catch(e){}
-  try{ await idbSet(snapshot); okIDB = true; }catch(e){}
+  try{ localStorage.setItem(KEY, texte); okLS = true; }catch(e){}
+  try{ await idbSet(JSON.parse(texte)); okIDB = true; }catch(e){}
   const ok = okLS || okIDB;
   storageMode = okIDB ? 'idb' : okLS ? 'ls' : storageMode;
   if(!ok){
@@ -221,8 +233,11 @@ async function tmdb(path, params, extra){
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 
 /* Récupère la série + toutes ses saisons (par paquets de 20 via append_to_response) */
-async function fetchShowFull(id, onStep){
-  const base = await tmdb('/tv/'+id);
+/* `base0` : la fiche de base quand l'appelant l'a déjà — l'aperçu vient de la
+   charger, et on la redemandait au réseau juste après.
+   Revue de stabilité du 02/08, constat A5-2. */
+async function fetchShowFull(id, onStep, base0){
+  const base = base0 || await tmdb('/tv/'+id);
   const nums = (base.seasons||[]).map(s=>s.season_number).sort((a,b)=>a-b);
   const seasons = {};
   for(let i=0;i<nums.length;i+=20){
@@ -335,7 +350,17 @@ function reparerAvis(){
     if(!db.avis[m] || typeof db.avis[m] !== 'object'){ db.avis[m] = {}; n++; return; }
     Object.keys(db.avis[m]).forEach(id=>{
       const a = db.avis[m][id];
-      if(!a || (a.v !== 1 && a.v !== -1)){ delete db.avis[m][id]; n++; return; }
+      /* POINT 2 — LE CONTRAT DE DONNÉES EST ROUVERT, EXPLICITEMENT.
+         Il disait `v: 1 | -1` ; il dit désormais `v: 1 | 0 | -1`. Le 0 est le
+         🤷 : « je l'ai vu, il ne m'a rien fait, ne me le redemande pas ». Ce
+         n'est PAS l'absence d'avis — l'absence, c'est l'absence de la clé.
+         Sans cette ligne, un 🤷 posé le soir était EFFACÉ au lancement suivant
+         et la question revenait : `reparerAvis` tourne à chaque démarrage.
+         Une base ANCIENNE n'en est pas déplacée : elle ne contient que des 1 et
+         des -1, qui restent valides à l'identique. Et une base NEUVE lue par
+         une version ANCIENNE perdrait ses 🤷 — c'est le prix d'un retour en
+         arrière, il est borné à ce seul champ et il est assumé. */
+      if(!a || (a.v !== 1 && a.v !== 0 && a.v !== -1)){ delete db.avis[m][id]; n++; return; }
       if(typeof a.quand !== 'number'){ a.quand = 0; n++; }
     });
   });
@@ -820,7 +845,9 @@ function fusionnerAvis(rem){
     const ra = (rem.avis && rem.avis[m]) || {};
     Object.keys(ra).forEach(id=>{
       const a = ra[id];
-      if(!a || (a.v !== 1 && a.v !== -1)) return;
+      /* Le 🤷 traverse la synchro comme les deux autres. Sans cette valeur, il
+         n'arrivait jamais sur le second téléphone — silencieusement. */
+      if(!a || (a.v !== 1 && a.v !== 0 && a.v !== -1)) return;
       const quand = Number(a.quand) || 0;
       const ici = db.avis[m][id];
       if(ici && (ici.quand || 0) >= quand) return;
@@ -988,7 +1015,13 @@ async function syncNow(silent){
 function scheduleSync(){
   if(!syncReady() || !signedIn()) return;
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(()=> syncNow(true), 4000);
+  /* Une synchro sérialise la bibliothèque entière (~1,3 Mo chez Adrien) et la
+     téléverse. À 4 secondes, toute série de gestes espacés de plus de quatre
+     secondes payait ce prix — d'où des à-coups sans rapport apparent avec ce
+     qu'on vient de faire. À 15 secondes, rien n'est perdu : l'écriture LOCALE
+     est déjà faite (`saveDB`), et `syncNow` est rejoué à l'ouverture.
+     Revue de stabilité du 02/08, constat A2-4. */
+  syncTimer = setTimeout(()=> syncNow(true), 15000);
 }
 
 /* ============================ Partage par abonnement ============================ */

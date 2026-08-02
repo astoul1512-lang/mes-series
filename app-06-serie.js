@@ -20,9 +20,18 @@ function viewShow(){
         ' · <span class="badge '+(s.status==='Ended'||s.status==='Canceled'?'end':'live')+'">'+
         esc(s.status==='Ended'?'Terminée':s.status==='Canceled'?'Annulée':'En cours')+'</span></div>'+
       (s.note?'<div style="margin-top:6px"><span class="note">'+I.star+(Math.round(s.note*10)/10)+'</span></div>':'')+
-      '<div class="small muted" style="margin-top:6px">'+esc((s.genres||[]).slice(0,3).join(' · '))+'</div>'+
-      zoneBande('tv', s.id)+
+      /* POINT 3, 02/08 — TOUS les genres, et le principal EN TÊTE. La fiche
+         tronquait à trois et cachait ainsi le genre qui explique la présence du
+         titre dans une ambiance. `genresOrdonnes` (app-04) est la seule règle de
+         tri des genres de l'app : on la réutilise telle quelle. */
+      '<div class="small muted" style="margin-top:6px">'+
+        esc(genresOrdonnes(s.genres||[]).join(' · '))+'</div>'+
     '</div></div>';
+
+  /* POINT 9 — la bande-annonce n'est plus le plus petit bouton de l'écran,
+     coincé sous les genres : ligne pleine largeur, entre le bloc du titre et la
+     rangée d'actions. Le troisième argument demande cette variante. */
+  html += zoneBande('tv', s.id, true);
 
   if(s.pause){
     html += '<div class="wrap" style="padding-bottom:0"><div class="card enpause">'+
@@ -55,6 +64,15 @@ function viewShow(){
       '<div style="font-weight:700;margin-top:2px">'+codeEp(s.next.s,s.next.e)+' · '+esc(s.next.n||'')+'</div>'+
       '<div class="small" style="color:var(--accent);margin-top:2px">'+fmtDate(s.next.d)+'</div></div></div>';
   }
+
+  /* POINT 21 — le bloc d'état, juste sous la rangée d'actions, et rendu par la
+     MÊME fonction que les deux fiches film (`blocAVoir`, app-05). Une série sans
+     aucun épisode coché vaut `statutSerie === 'avoir'` : elle est dans l'onglet
+     « À voir » du profil, au même titre qu'un film non vu, et rien ne le disait.
+     L'exclusivité tient toute seule : cocher le premier épisode fait passer le
+     statut à `asuivre` et le bloc disparaît au redessin — de même qu'une mise en
+     pause, qui a déjà sa propre carte plus haut. */
+  html += blocAVoir('tv', s.id);
 
   html += '<div class="stats">'+
     '<div class="stat"><b>'+p.watched+'/'+p.total+'</b><span>épisodes vus</span></div>'+
@@ -223,8 +241,8 @@ async function cocherDepuisApercu(id, n, e){
        consulter la liste, pas demander à changer d'écran. */
     return tapEp(id, n, e);
   }
-  if(ui.busy) return;
-  ui.busy = true;
+  if(!prendre('serie:'+id)) return;
+  const ecranDepart = view;
   toast('Ajout de la série…');
   try{
     const s = await fetchShowFull(id);
@@ -232,12 +250,15 @@ async function cocherDepuisApercu(id, n, e){
     s.watched[key(n, e)] = Date.now();
     s.updated = Date.now();
     db.shows[id] = s; saveDB();
-    ui.busy = false;
+    rendre('serie:'+id);
+    toast('« '+s.name+' » ajoutée · '+codeEp(n,e)+' vu');
+    /* Même règle qu'`addOrOpenShow` : on ne déplace personne après coup.
+       Revue de stabilité du 02/08, constat A3-1. */
+    if(view !== ecranDepart){ render(); return; }
     go('show', ou);
     versLesSaisons();
-    toast('« '+s.name+' » ajoutée · '+codeEp(n,e)+' vu');
   }catch(err){
-    ui.busy = false; render();
+    rendre('serie:'+id); render();
     toast('Impossible d\'ajouter cette série');
   }
 }

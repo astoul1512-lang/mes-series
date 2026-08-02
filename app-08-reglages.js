@@ -32,15 +32,52 @@ function viewSettings(){
       '<div class="tiny muted">'+(depuis ? 'Membre depuis '+depuis : 'Bienvenue')+'</div>'+
     '</div></div></div>';
 
-  html += '<div class="sectitle">Mon compte</div><div class="wrap" style="padding-top:0">'+
+  /* POINT 22 (02/08, parti pris A) — l'ordre suit l'usage, pas l'historique du
+     fichier. « Mes goûts » était la 8ᵉ ligne alors que c'est la plus ouverte :
+     elle passe en tête. Et les titres nomment enfin l'usage du groupe —
+     « Application » ne disait rien, puisque tout est l'application.
+     Aucune entrée n'est ajoutée ni retirée : seuls l'ordre, les groupes, les
+     titres et l'emplacement des paragraphes changent. */
+  html += '<div class="sectitle">Ce que l\'app me propose</div><div class="wrap" style="padding-top:0">'+
+    ligne('Mes goûts', resumeGouts(), "go('gouts',{from:'settings'})", I.coeur)+
+    /* Le commentaire d'origine justifiait d'ÉLOIGNER cette ligne de
+       « Mes abonnements », dont le nom ressemblait trop à « Mes plateformes ».
+       La cause est corrigée à la source (02/08) : « Mes abonnements » s'appelle
+       désormais « Mon cercle », mot que l'app emploie déjà partout ailleurs
+       (voir `dans_mon_cercle()` et /supabase/migrations/004_dans_mon_cercle.sql).
+       Plus de collision de noms, donc plus aucune raison de disperser l'écran :
+       ne défaites pas ce rangement au nom de l'ancienne raison, elle est fausse. */
+    ligne('Mes plateformes', resumePlates(), "go('plates',{from:'settings'})", I.tv)+
+    ligne('Notifications', resumeNotif(), "go('notifs',{from:'settings'})", I.cloche)+
+    /* La langue flottait seule, sous un paragraphe, sans groupe. Elle rejoint
+       celui auquel elle appartient : c'est un réglage de ce que l'app propose. */
+    '<label class="fld"><span>Langue des fiches</span>'+
+      '<select id="lang" onchange="saveSettings()">'+
+        /* I10.3 — « fr-FR » est un code de programmeur. La valeur envoyée à TMDB
+           ne change pas ; seul l'intitulé lu par la personne change. */
+        LANGUES.map(l=>'<option value="'+l.v+'" '+(db.lang===l.v?'selected':'')+'>'+l.t+'</option>').join('')+
+      '</select></label>'+
+  '</div>';
+
+  /* Le compte de proches suivis n'est pas calculé ici : `partage.suivis` est
+     déjà rempli par `chargerPartage()` au démarrage. On l'affiche s'il est là,
+     on ne déclenche RIEN pour l'obtenir — cet écran ne doit pas dépendre du
+     réseau pour se dessiner. */
+  const nbSuivis = (typeof partage === 'object' && partage.charge) ? partage.suivis.length : 0;
+  html += '<div class="sectitle">Moi et mes proches</div><div class="wrap" style="padding-top:0">'+
     ligne('Modifier mon profil', 'Prénom, avatar ou photo',
           "go('moi',{from:'settings'})", I.user)+
+    /* POINT 22 (02/08) — SEUL renommage de ce point : « Mes abonnements » →
+       « Mon cercle ». La destination et le code ne bougent pas : c'est toujours
+       `ouvrirAbosDepuisReglages()` et l'écran `abos`. */
+    ligne('Mon cercle',
+          signedIn() ? 'La bibliothèque de tes proches'+
+                       (nbSuivis ? ' · '+nbSuivis+' abonnement'+(nbSuivis>1?'s':'') : '')
+                     : 'Nécessite un compte',
+          "ouvrirAbosDepuisReglages()", I.user)+
     ligne(signedIn() ? 'Compte et synchronisation' : 'Sauvegarder en ligne',
           signedIn() ? esc(db.auth.email||'') : 'Tes séries à l\'abri, sur tous tes appareils',
           "go('account',{from:'settings'})", I.refresh)+
-    ligne('Mes abonnements',
-          signedIn() ? 'La bibliothèque de tes proches' : 'Nécessite un compte',
-          "ouvrirAbosDepuisReglages()", I.user)+
   '</div>';
 
   const nbShows = Object.keys(db.shows).length;
@@ -51,7 +88,10 @@ function viewSettings(){
      fichier d'export est bien sa seule copie. */
   const oldExport = !db.syncedAt &&
                     (!db.lastExport || (Date.now()-db.lastExport) > 30*86400000);
-  html += '<div class="sectitle">Mes données</div><div class="wrap" style="padding-top:0">'+
+  /* Les trois bandeaux restent EN TÊTE de ce groupe et n'ont pas suivi le
+     paragraphe explicatif vers le bas : ils annoncent une donnée en danger,
+     donc ils doivent être lus avant qu'on décide de ne pas exporter. */
+  html += '<div class="sectitle">Sauvegarde et entretien</div><div class="wrap" style="padding-top:0">'+
     (memoryOnly ? '<div class="banner" style="margin:0 0 14px">Le stockage du navigateur est indisponible ici : '+
       '<b>tes données seront perdues à la fermeture</b>. Ouvre l\'app depuis une vraie adresse (https) pour la sauvegarde automatique, ou exporte régulièrement.</div>'
      /* F4 — le basculement sur IndexedDB seul était silencieux. Il n'est pas
@@ -65,8 +105,6 @@ function viewSettings(){
      : (nbShows && oldExport ? '<div class="banner" style="margin:0 0 14px">'+
         (db.lastExport ? 'Dernière sauvegarde il y a plus d\'un mois.' : 'Tu n\'as jamais fait de sauvegarde.')+
         ' <b>Exporte ton fichier de temps en temps</b> : c\'est ta seule copie de secours si tu changes de téléphone.</div>' : '')))+
-    '<div class="tiny muted" style="margin:0 0 12px">Le fichier contient ta bibliothèque et tes '+
-      'réglages. Il ne contient aucun mot de passe ni identifiant de connexion.</div>'+
     ligne('Exporter une sauvegarde',
           db.lastExport ? 'Dernière : '+fmtDate(new Date(db.lastExport).toISOString().slice(0,10))
                         : 'Ta bibliothèque et tes réglages, sans identifiants',
@@ -76,6 +114,20 @@ function viewSettings(){
     '<input type="file" id="imp" accept="application/json,.json" style="display:none" onchange="importData(this)">'+
     ligne('Actualiser toutes les séries', 'Nouveaux épisodes et affiches',
           "refreshAll()", I.refresh)+
+  '</div>';
+
+  /* Le paragraphe coupait la liste en deux, entre le titre du groupe et la
+     première action. Il passe SOUS le groupe : c'est une précision qu'on lit
+     après avoir vu ce qu'on peut faire, pas un préambule à traverser. */
+  html += '<div class="wrap tiny muted" style="padding-top:0;padding-bottom:10px">'+
+    'Le fichier contient ta bibliothèque et tes réglages. Il ne contient aucun '+
+    'mot de passe ni identifiant de connexion.</div>';
+
+  /* POINT 22 (02/08) — « Tout effacer » sort du groupe et finit seul, en bas.
+     Il était collé à « Actualiser toutes les séries », une action banale et
+     répétable : le voisinage suggérait qu'il l'était aussi. Le libellé, le
+     sous-titre et la confirmation de `wipe()` ne changent pas. */
+  html += '<div class="wrap" style="padding-top:0">'+
     /* I10.2 — le sous-titre disait « de cet appareil ». C'était faux : `doWipe`
        appelle `markDeleted` sur chaque titre, donc la suppression remonte au
        serveur et redescend sur tous les appareils. Un libellé qui minimise une
@@ -84,33 +136,22 @@ function viewSettings(){
           "wipe()", I.close, true)+
   '</div>';
 
-  html += '<div class="sectitle">Application</div><div class="wrap" style="padding-top:0">'+
-    ligne('Mes goûts', resumeGouts(), "go('gouts',{from:'settings'})", I.coeur)+
-    /* Rangé ici, sous « Application », et NON dans « Mon compte » : le groupe
-       du haut contient déjà « Mes abonnements », qui désigne les proches qu'on
-       suit. Deux lignes voisines nommées presque pareil pour deux choses sans
-       rapport, c'est exactement le désordre que cet écran a fini par ranger. */
-    ligne('Mes plateformes', resumePlates(), "go('plates',{from:'settings'})", I.tv)+
-    ligne('Notifications', resumeNotif(), "go('notifs',{from:'settings'})", I.cloche)+
-    '<div style="height:14px"></div>'+
-    '<div class="tiny muted" style="margin:0 0 12px">Les affiches, les résumés et les dates '+
-      'de diffusion viennent de TMDB. Tu n\'as rien d\'autre à configurer.</div>'+
-    '<label class="fld"><span>Langue des fiches</span>'+
-      '<select id="lang" onchange="saveSettings()">'+
-        /* I10.3 — « fr-FR » est un code de programmeur. La valeur envoyée à TMDB
-           ne change pas ; seul l'intitulé lu par la personne change. */
-        LANGUES.map(l=>'<option value="'+l.v+'" '+(db.lang===l.v?'selected':'')+'>'+l.t+'</option>').join('')+
-      '</select></label>'+
-  '</div>';
-
   /* I10.1 — « données stockées uniquement sur cet appareil » était faux depuis
      que le compte est obligatoire : tout part dans l'espace en ligne, et un
      proche abonné lit la ligne entière. Une phrase rassurante et fausse est
      pire qu'une phrase exacte : elle empêche de se poser la question. */
+  /* Le paragraphe TMDB coupait lui aussi la liste, juste avant la langue des
+     fiches. Il rejoint le pied de page, qui est déjà l'endroit où l'app dit
+     d'où viennent les données. Son texte est repris MOT POUR MOT, comme celui
+     du pied : ce point ne déplace que des paragraphes, il n'en réécrit aucun.
+     À noter pour un point ultérieur : les deux phrases se recouvrent
+     largement, il y aura une fusion à trancher. */
   html += '<div class="wrap tiny muted center" style="padding-top:6px;padding-bottom:30px">'+
     'Mes Séries · tes données sont sur cet appareil et dans ton espace en ligne. '+
     'Personne d\'autre que toi et les proches que tu as invités n\'y a accès.<br>'+
-    'Données films/séries fournies par TMDB.</div>';
+    'Données films/séries fournies par TMDB.<br>'+
+    'Les affiches, les résumés et les dates de diffusion viennent de TMDB. '+
+    'Tu n\'as rien d\'autre à configurer.</div>';
   return html;
 }
 

@@ -315,9 +315,9 @@ async function pousserCloches(){
 
 /* Réessayer depuis l'écran des notifications. */
 async function reessayerCloches(){
-  if(ui.busy) return;
-  ui.busy = true; render();
-  try{ await pousserCloches(); } finally { ui.busy = false; render(); }
+  if(!prendre('cloches')) return;
+  render();
+  try{ await pousserCloches(); } finally { rendre('cloches'); render(); }
   if(!db.notif.desyncAt) toast('Réglages enregistrés');
 }
 
@@ -536,8 +536,8 @@ function viewNotifications(){
           'en cours d\'enregistrement.')+' Le serveur n\'a pas la dernière version '+
           'de tes alertes.</span></div>'+
         '<button class="btn" style="flex:0 0 auto;padding:9px 16px" '+
-          (ui.busy ? 'disabled ' : '')+'onclick="reessayerCloches()">'+
-          (ui.busy ? '…' : 'Réessayer')+'</button>'+
+          (occupe('cloches') ? 'disabled ' : '')+'onclick="reessayerCloches()">'+
+          (occupe('cloches') ? '…' : 'Réessayer')+'</button>'+
       '</div></div>';
   }
 

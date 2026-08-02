@@ -1566,3 +1566,534 @@
     .d4img{height:250px}
     .d4nom{font-size:23px}
   }
+
+
+/* ===== LOT E — LES VINGT-DEUX POINTS DES RETOURS v87 =====================
+   Le titre est SUR la barre, pas en dessous : le contrôle anti-collision lit
+   l'en-tête de section pour nommer le propriétaire de chaque classe, et une
+   barre nue lui faisait appeler la section « = ». Au deuxième en-tête anonyme,
+   deux sections sans rapport auraient porté le même nom, et le contrôle se
+   serait tu sur une vraie collision.
+   Chaque section porte son numéro de point. Les classes neuves sont préfixées
+   par section (`fi9`, `cl1`, `pf12`, `gt11`, `du19`) : le contrôle
+   anti-collision de `tests/lance-tests.js` ne lit que les redéclarations NUES,
+   et le dépôt a déjà payé deux fois le prix d'une classe partagée sans le
+   savoir (`.dinfo`, `.itxt`).
+   ========================================================================= */
+
+/* ---------- rech ---------- */
+/* ===== POINTS 5, 14, 20 ET 21 — L'ONGLET RECHERCHE ===== */
+
+/* --- POINT 5 · B1 : la phrase reste NETTE au-dessus du voile --------------
+   Le voile de `.sheet` est à `z-index:80` et couvre tout. B1 exige que la
+   phrase et son compteur restent lisibles pendant qu'on répond : on les fait
+   passer AU-DESSUS du voile, sans les déplacer d'un pixel — c'est toute la
+   différence entre B1 et B2, et c'est B1 qui a été choisi. L'opacité du voile,
+   elle, ne change pas : 60 %, l'actuelle. */
+body.rphnette .rphrase{position:relative;z-index:82}
+/* Le fond du bloc devient opaque : posé au-dessus d'un voile noir à 60 %, un
+   fond semi-transparent laisserait le voile transparaître et la phrase se
+   lirait plus mal qu'avant. */
+body.rphnette .rphrase{background:#15171e}
+
+/* --- POINT 5 · la navigation de la feuille, variante B ------------------- */
+.rnav{display:flex;align-items:center;gap:10px;margin:0 0 6px}
+.rnav h3{flex:1;text-align:center;margin:0}
+.rfle{width:34px;height:34px;border-radius:10px;background:var(--surface2);
+      border:1px solid var(--line);color:var(--text);font-size:15px;flex:none;
+      display:flex;align-items:center;justify-content:center;font-family:inherit}
+.rfle.mort{opacity:.32}
+.rcompte{text-align:center;font-size:11.5px;color:var(--muted);
+         margin:0 0 12px;letter-spacing:.4px}
+
+/* --- POINT 20 · le compteur « 12 / 43 » de la carte du jeu ---------------- */
+.jcpt{font-size:11.5px;font-weight:800;color:var(--text);flex:none;
+      font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* --- POINT 20 · la fin du paquet ----------------------------------------- */
+.jfini .jfem{font-size:34px;margin-bottom:14px}
+.jfbtn{margin-top:18px;display:flex;flex-direction:column;gap:9px;width:100%}
+.jfbtn .btn{width:100%}
+
+/* --- POINT 21 · les deux pastilles de la grille ---------------------------
+   La pastille cesse de dire « vu » pour un titre qu'on a seulement prévu de
+   voir. Même place, même taille que `.jqchez` (20 px, coin haut-droit) : ce
+   sont bien DEUX PASTILLES, pas deux tailles ni deux emplacements. Le signet
+   bleu porte un pictogramme plus petit que la coche, sans quoi il déborde. */
+.jqavoir{position:absolute;top:6px;right:6px;width:20px;height:20px;
+         border-radius:50%;display:flex;align-items:center;justify-content:center;
+         font-size:10px;font-weight:900;
+         background:var(--accent);color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.45)}
+
+/* ---------- fiche ---------- */
+/* ===== POINTS 3, 9 ET 21 — la fiche ===== */
+  /* ---------------------------------------------------------------------------
+     Toutes les classes neuves sont préfixées `fi9`. Le dépôt a déjà payé deux
+     fois la collision d'un nom nu — `.dinfo` (lot A contre le socle) et `.itxt`
+     (lot C contre le bloc d'invitation) : dans les deux cas, la règle écrite le
+     plus bas gagne et c'est un écran qu'on ne regardait pas qui se dessine de
+     travers. Aucune classe du socle n'est redéclarée nue ici. Ce qui est repris
+     — `.btn`, `.mini`, `.ghost` — l'est par sélecteur composé, ce qui laisse la
+     déclaration d'origine intacte et n'agit que dans le conteneur de ce lot.
+
+     Trois écrans portent cette mise en page et elle est la même pour les trois :
+     `viewPreview` et `viewMovie` (app-05), `viewShow` (app-06).
+  --------------------------------------------------------------------------- */
+
+  /* ---------------------------------------------------------------------------
+     POINT 9 — LA BANDE-ANNONCE, LIGNE PLEINE LARGEUR
+
+     Elle était posée dans le bloc du titre, sous la ligne des genres, en
+     `btn ghost mini` — la plus petite déclinaison de bouton du projet, pour ce
+     qui est souvent la première chose qu'on veut faire. Placement retenu par
+     Adrien le 01/08 : une ligne pleine largeur entre le bloc du titre et la
+     rangée d'actions. Regarder la bande-annonce est une action au même titre
+     que les deux autres, elle a donc le même poids qu'elles.
+
+     Quatre autres placements avaient été comparés. La pastille sur l'affiche a
+     été écartée par la mesure : avec son libellé elle faisait 128 px de large
+     sur une affiche qui en fait 96, et débordait de 32 px ; réduite au seul
+     triangle, elle déplaçait le défaut au lieu de le régler, car une icône
+     seule ne s'apprend nulle part. Le bouton au centre de l'image a été refusé.
+
+     AUCUN EMPLACEMENT N'EST RÉSERVÉ. `boutonBande` rend une chaîne vide tant que
+     la recherche est en cours et quand TMDB n'a rien trouvé ; `:empty` retire
+     alors le conteneur du flux, marge et remplissage compris. Pas de trou avant
+     l'arrivée, et rien du tout quand il n'y a pas de bande-annonce — c'est déjà
+     la règle du socle pour `.zba`, et elle vaut ici pour la même raison.
+  --------------------------------------------------------------------------- */
+  .fi9ba:empty{display:none}
+  /* Le même alignement horizontal que `.actions` (16 px), et l'espace au-dessus
+     du bloc du titre. Le bas est laissé à `.actions`, qui pose déjà ses 16 px. */
+  .fi9ba{padding:14px 16px 0}
+  /* Le conteneur porte la variante, pas le bouton : `boutonBande` reste unique
+     et `peindreBande` n'a rien à savoir de l'écran qui l'appelle. La feuille du
+     duel (app-11), qui utilise la même zone sans `fi9ba`, garde donc son petit
+     bouton d'origine sans qu'une ligne de JS ait à en décider. */
+  .fi9ba .btn{width:100%}
+  .fi9ba .btn.mini{padding:12px 16px;border-radius:11px;font-size:15px;font-weight:650}
+  .fi9ba .btn.mini svg{width:18px;height:18px}
+
+  /* L'ARRIVÉE. L'écran se dessine d'abord sans la ligne, puis elle arrive : à
+     traiter comme une apparition et non comme un emplacement réservé. Elle
+     pousse le contenu d'une soixantaine de pixels — c'est assumé — et la
+     croissance depuis zéro fait lire ce déplacement comme une venue plutôt que
+     comme un sursaut. La classe est posée par `peindreBande` au seul moment où
+     la ligne apparaît vraiment : un redessin de la fiche ne la rejoue pas. */
+  .fi9ba.fi9arr{overflow:hidden;animation:fi9baArrive .3s cubic-bezier(.16,.72,.24,1)}
+  @keyframes fi9baArrive{
+    from{opacity:0;max-height:0;padding-top:0;transform:translateY(-5px)}
+    to{opacity:1;max-height:90px;padding-top:14px;transform:none}
+  }
+
+  /* ---------------------------------------------------------------------------
+     POINTS 9 ET 21 — LE BLOC D'ÉTAT « À VOIR »
+
+     Parti pris C, validé le 02/08 (« je valide la proposition C ») : le bloc
+     sous les boutons, et PAS le ruban en haut de fiche, qui était la
+     proposition D de la même maquette. L'icône signet, « Dans ta liste à voir »
+     et, en dessous, où le retrouver ; un lien « Retirer » à droite. Au moment de
+     l'ajout, le même bloc dit « Ajouté à ta liste » et le lien devient
+     « Annuler » — c'est le seul mot qui change.
+
+     LE BLEU ET NON LE VERT. Le vert, dans toute l'app, veut dire « fait » :
+     c'est la couleur de « Déjà vu », de la coche d'un épisode, de `--ok`. Un
+     titre à voir est PRÉVU, pas fait — la première maquette le peignait en vert
+     et c'était l'ambiguïté même que ce point corrige. Il prend donc l'accent,
+     comme la pastille signet de la grille de Recherche.
+  --------------------------------------------------------------------------- */
+  .fi9etat{display:flex;align-items:center;gap:11px;margin:12px 16px 0;
+    padding:11px 12px;border-radius:12px;
+    background:color-mix(in srgb, var(--accent) 9%, transparent);
+    border:1px solid color-mix(in srgb, var(--accent) 32%, transparent)}
+  /* Les navigateurs qui ignorent `color-mix` retombent sur la teinte fixe. */
+  @supports not (color:color-mix(in srgb, red 50%, transparent)){
+    .fi9etat{background:#3d8bff14;border-color:#3d8bff44}
+  }
+  .fi9ic{width:28px;height:28px;border-radius:9px;flex:none;
+    display:flex;align-items:center;justify-content:center;
+    background:#3d8bff2e;color:#9cc4ff}
+  .fi9ic svg{width:15px;height:15px}
+  .fi9tx{flex:1;min-width:0}
+  .fi9tx b{display:block;font-size:13.5px;font-weight:700;color:#cfe0ff;line-height:1.3}
+  /* Le chemin exact, vérifié dans `listesProfil` (app-03) : un titre à voir
+     s'affiche dans Mon profil, onglet « À voir ». Surtout pas « En cours », qui
+     est le libellé de `asuivre` — l'erreur a déjà été commise une fois. */
+  .fi9tx i{display:block;font-style:normal;font-size:11.5px;font-weight:600;
+    color:#8fb3e8;margin-top:2px;line-height:1.3}
+  .fi9rm{flex:none;font-size:12px;font-weight:700;color:#8fb3e8;
+    text-decoration:underline;padding:6px 2px;margin:-6px 0}
+
+  /* Le témoin qui remplace le bouton « À voir » une fois la décision prise. Il
+     dit où le geste a eu lieu ; il n'agit pas, parce que le seul chemin de
+     retrait doit être celui qui porte un nom — le lien « Retirer » du bloc
+     juste dessous. Deux commandes pour le même effet, c'est une commande de
+     trop, et une seule des deux aurait pu se lire. */
+  /* `.btn.fi9dans` et non `.fi9dans` seul : `.btn.ghost` pose déjà un fond, et
+     un nom de classe unique ne suffirait pas à passer devant lui. */
+  .btn.fi9dans{color:#9cc4ff;
+    background:color-mix(in srgb, var(--accent) 12%, var(--surface2));
+    border:1px solid color-mix(in srgb, var(--accent) 40%, transparent)}
+  @supports not (color:color-mix(in srgb, red 50%, transparent)){
+    .btn.fi9dans{background:#3d8bff1f;border-color:#3d8bff66}
+  }
+  .btn.fi9dans:active{filter:none}
+
+  /* Réglage iOS courant, respecté partout ailleurs dans le projet : on ne fait
+     pas grandir la ligne, elle est simplement là. */
+  @media (prefers-reduced-motion:reduce){
+    .fi9ba.fi9arr{animation:none}
+  }
+
+/* ---------- gouts ---------- */
+/* ===== POINTS 1, 2 ET 10 ===== */
+  /* ---------------------------------------------------------------------------
+     Toutes les classes neuves sont préfixées `cl1`. Le dépôt a déjà payé deux
+     fois la collision d'un nom nu — `.dinfo` (lot A contre le socle) et `.itxt`
+     (lot C contre le bloc d'invitation) — et dans les deux cas c'est un écran
+     qu'on ne regardait pas qui s'est dessiné de travers. Aucune classe du socle
+     n'est redéclarée nue ici : ce qui est repris (`.rpb`, `.bapouce`, `.chip`,
+     `.card`, `.sectitle`, `.btn`) l'est par sélecteur composé, jamais seul.
+
+     LE POINT 10 N'APPORTE AUCUNE RÈGLE : il ne change que le nombre de titres
+     dans une rangée, pas leur dessin.
+  --------------------------------------------------------------------------- */
+
+  /* ---------------------------------------------------------------------------
+     POINT 2 — LE TROISIÈME BOUTON, 🤷
+
+     LES DIMENSIONS NE CHANGENT PAS. `.rpb` et `.bapouce` font 38 × 34 px,
+     rayon 9, aux deux endroits, et ils les gardent : une première maquette les
+     avait passés à 46 × 46 et Adrien l'a vu immédiatement ; un agrandissement à
+     44 × 40 a été proposé le 02/08 et explicitement NON RETENU. Il n'y a donc
+     ici aucune règle de taille — seulement l'état « choisi » du bouton neuf,
+     que le socle ne pouvait pas connaître.
+
+     Le bleu de l'accent plutôt que le vert du 👍 ou l'orange du 👎 : 🤷 n'est ni
+     un demi-oui ni un demi-non, c'est une troisième réponse. Lui donner une
+     nuance de l'un des deux camps le ferait lire comme un jugement tiède.
+  --------------------------------------------------------------------------- */
+  .rpb.cl1bof.on{background:#20293a;border-color:var(--accent)}
+  .bapouce.cl1bof:active,.bapouce.cl1bof:hover{background:#20293a;border-color:var(--accent)}
+
+  /* ---------------------------------------------------------------------------
+     POINT 1 — LE CLASSEMENT
+
+     Une seule ligne pour les deux écrans : le résultat du duel et Mes goûts
+     montrent des choses différentes, mais ils les montrent de la MÊME façon.
+     Deux dessins pour une même donnée, et on ne sait plus qu'on lit la même
+     liste d'un écran à l'autre.
+
+     La ligne reprend les proportions de `.rlig` (liste de rattrapage, titres
+     écartés) : c'est déjà le format « jaquette + texte » du dépôt, à ceci près
+     que la jaquette est plus petite — 38 × 57 au lieu de 44 × 66 — parce qu'une
+     liste de rangs se parcourt à la verticale et que le rang doit tenir devant.
+  --------------------------------------------------------------------------- */
+  .cl1liste{padding:0 16px}
+  .cl1lig{display:flex;align-items:center;gap:12px;width:100%;padding:9px 0;
+    border-bottom:1px solid #191c24;background:none;color:var(--text);text-align:left}
+  .cl1lig:last-child{border-bottom:0}
+  .cl1lig:active{opacity:.6}
+  /* `tabular-nums` : sans lui, « 9 » et « 10 » ne commencent pas à la même
+     abscisse et la colonne de rangs ondule à mesure qu'on allonge la liste. */
+  .cl1rang{flex:0 0 auto;width:24px;text-align:center;font-size:15px;font-weight:800;
+    color:var(--muted);font-variant-numeric:tabular-nums}
+  .cl1aff{width:38px;height:57px;border-radius:6px;flex:0 0 auto;border:1px solid #232734;
+    object-fit:cover;display:block}
+  .cl1aff.ph{display:flex;align-items:center;justify-content:center;font-size:8px;
+    text-align:center;padding:3px;color:var(--muted);background:var(--surface2);
+    overflow:hidden;line-height:1.15}
+  .cl1txt{flex:1;min-width:0}
+  .cl1txt b{display:block;font-size:14px;font-weight:650;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  /* Le nombre de duels joués. Il n'est pas décoratif : sans lui on ne sait pas
+     si un titre est 4ᵉ parce qu'il a gagné souvent ou parce qu'il a joué une
+     fois. C'est ce qui rend le rang crédible — donc il se lit, même en gris. */
+  .cl1txt span{display:block;font-size:11.5px;color:var(--muted);margin-top:2px}
+
+  /* Les non-départagés : grisés, et leur rang est un tiret. L'opacité porte sur
+     la ligne entière, jaquette comprise — griser le seul texte donnerait une
+     affiche pleinement présente sous une mention effacée, ce qui se lit comme
+     un défaut d'affichage plutôt que comme une catégorie. */
+  .cl1gris{opacity:.62}
+  .cl1gris .cl1rang{font-size:12px;font-weight:700}
+
+  /* Le compte à droite du titre de section — « 15 titres départagés ». La mise
+     en ligne existe déjà au socle sous le nom `.sectitle.rowt` : on la réutilise
+     au lieu d'en écrire une seconde, et il ne reste à déclarer que le style du
+     compte lui-même. Il ne reprend ni la casse ni l'interlettrage du titre :
+     c'est une information, pas un second titre. */
+  .cl1aide{font-weight:600;letter-spacing:0;text-transform:none;
+    font-size:11.5px;color:var(--muted)}
+
+  /* « Voir les N suivants ». Pleine largeur, discret : c'est une suite, pas une
+     action. Il annonce combien il ouvre — on sait ce qu'on demande. */
+  .cl1plus{padding:14px 16px 0}
+
+  /* L'en-tête de Mes goûts : où l'on en est, et le bouton qui comble l'écart
+     juste dessous. Voir ce qui manque donne envie de le combler. */
+  .cl1tete{padding:13px 14px;margin:0}
+  .cl1tete b{display:block;font-size:15px;font-weight:750}
+  .cl1tete p{font-size:12.5px;color:var(--muted);margin-top:4px;line-height:1.4}
+  /* Le bouton reprend le bleu de l'accent en fond translucide plutôt qu'en
+     aplat : il est DANS une carte, et un aplat plein y ferait un second appel à
+     l'action concurrent de « Terminé », en bas d'écran. */
+  .cl1rejouer{margin-top:11px;width:100%;display:flex;background:#3d8bff22;
+    border:1px solid #3d8bff55;color:var(--accent);font-size:13px}
+
+  /* Les puces de famille. Elles se partagent la largeur au lieu de défiler :
+     il y en a trois au plus — Films, Séries, Animés — et une puce qu'il faut
+     aller chercher en poussant la rangée n'est pas un choix, c'est un piège. */
+  .cl1fams{padding-bottom:0;overflow:visible}
+  .cl1fams .chip{flex:1;text-align:center;padding-left:6px;padding-right:6px}
+
+/* ---------- point11 ---------- */
+/* ===== POINT 11 — les goûts par famille ===== */
+  /* ---------------------------------------------------------------------------
+     CE FICHIER EST COURT, ET C'EST LE RÉSULTAT RECHERCHÉ.
+
+     Le sélecteur de famille du bloc « J'aime » ne déclare RIEN : il réutilise
+     `.chips cl1fams`, écrit par le point 1 pour les puces du classement, dans
+     le même écran et à quinze centimètres de là. Les deux rangées de puces
+     disent la même chose — Films · Séries · Animés, qui se partagent la largeur
+     au lieu de défiler — et en écrire une seconde version aurait garanti
+     qu'elles divergent au premier réglage. Réutiliser plutôt que réécrire est
+     la règle de la maison ; elle vaut aussi en CSS.
+
+     Les listes de genres réutilisent `.chips wrapchips`, la mention des six
+     genres sans équivalent réutilise `.small muted`. Aucune classe du socle
+     n'est redéclarée nue ici.
+
+     Il ne reste donc qu'une chose à dessiner, et elle est neuve : le compteur
+     porté par chaque puce de famille.
+  --------------------------------------------------------------------------- */
+
+  /* ---------------------------------------------------------------------------
+     LE COMPTEUR DES PUCES DE FAMILLE
+
+     Il n'est pas décoratif, il répare le seul défaut du « une seule liste à la
+     fois » : deux listes sur trois sont cachées, et sans lui rien ne dit
+     qu'elles contiennent quelque chose. « Séries 4 » se lit d'un coup d'œil ;
+     l'empilement de trois blocs que le point 5 vient de démonter demandait de
+     faire défiler l'écran pour apprendre la même chose.
+
+     Il ne s'affiche QUE s'il y a quelque chose à compter (voir `viewGouts`) :
+     un « 0 » sur chaque puce éteinte serait un reproche, pas une information.
+
+     Pas de pastille pleine ni de couleur d'accent : ce chiffre accompagne le
+     mot de la puce, il ne lui fait pas concurrence. Il hérite donc de la
+     couleur du texte de la puce — allumée ou éteinte — et se contente d'être
+     plus petit et légèrement en retrait.
+  --------------------------------------------------------------------------- */
+  .gt11n{margin-left:5px;font-size:11px;font-weight:800;opacity:.62;
+         font-variant-numeric:tabular-nums}
+
+/* ---------- point12 ---------- */
+/* ===== POINT 12 — Mon profil ===== */
+  /* ---------------------------------------------------------------------------
+     Toutes les classes neuves sont préfixées `pf12`. Le dépôt a déjà payé deux
+     fois la collision d'un nom nu — `.dinfo` (lot A contre le socle) et `.itxt`
+     (lot C contre le bloc d'invitation) — et dans les deux cas c'est un écran
+     qu'on ne regardait pas qui s'est dessiné de travers. Aucune classe du socle
+     n'est redéclarée nue ici : ce qui est repris (`.pgrid`, `.sectitle`, `.chip`,
+     `.ch`, `.choix`, `.spin`, `.avatar`, `.empty`) l'est par sélecteur composé,
+     jamais par redéclaration.
+  --------------------------------------------------------------------------- */
+
+  /* ---------------------------------------------------------------------------
+     C — LA LIGNE « MON CERCLE »
+
+     Remplace la rangée d'abonnements : une bulle de 62 px par personne, qui
+     défilait latéralement et masquait la moitié des gens dès dix abonnements
+     sans rien en dire. Ici, une ligne, hauteur fixe, quel que soit le nombre.
+  --------------------------------------------------------------------------- */
+  .pf12cercle{display:flex;align-items:center;gap:11px;width:calc(100% - 32px);
+    margin:12px 16px 0;padding:11px 13px;border-radius:12px;background:var(--surface);
+    border:1px solid var(--line);color:var(--text);text-align:left}
+  .pf12cercle:active{background:var(--surface2)}
+  .pf12pile{display:flex;flex:0 0 auto}
+  /* Les avatars se chevauchent : c'est ce chevauchement qui borne la largeur.
+     Le liseré à la couleur du fond détache chaque visage du précédent. */
+  .pf12pile .avatar{width:30px;height:30px;font-size:12px;border:2px solid var(--bg);
+    margin-left:-9px}
+  .pf12pile .avatar:first-child{margin-left:0}
+  .pf12pile .avatar svg{width:14px;height:14px}
+  .pf12ct{min-width:0;flex:1}
+  .pf12ct b{display:block;font-size:13.5px;font-weight:700}
+  .pf12ct span{display:block;color:var(--muted);font-size:11.5px;margin-top:1px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pf12fl{flex:0 0 auto;color:var(--muted);display:flex}
+  .pf12fl svg{width:16px;height:16px}
+
+  /* ---------------------------------------------------------------------------
+     B — LA BARRE SOBRE (squelette A, variante A2)
+
+     Trois boutons sur UNE ligne, chacun disant son état. A2 a été retenue parce
+     que c'est la seule variante mesurée dont la grille ne bouge pas quand on pose
+     un filtre : 369 px dans les deux cas, contre 412 → 453 px pour A1.
+
+     `white-space:nowrap` N'EST PAS COSMÉTIQUE, ET LA MESURE EST FAITE : sans lui,
+     « Trier · Récents » passe à la ligne à 113 px de large et la barre change de
+     hauteur SELON L'ORDRE CHOISI — l'écran sautait pour un simple changement de
+     tri. Ne pas le retirer.
+  --------------------------------------------------------------------------- */
+  .pf12barre{display:flex;gap:8px;padding:12px 16px 2px}
+  .pf12b{flex:1;min-width:0;background:var(--surface2);border:1px solid var(--line);
+    color:var(--muted);border-radius:11px;padding:11px 8px;font:650 12.5px/1 inherit;
+    font-family:inherit;display:flex;align-items:center;justify-content:center;gap:6px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pf12b em{font-style:normal;color:var(--text);font-weight:700}
+  .pf12b svg{width:14px;height:14px;flex:0 0 auto}
+  .pf12b:active{background:var(--surface)}
+  /* Un filtre posé se voit sans avoir à lire : la couleur d'accent dit qu'il
+     reste quelque chose de branché sur la grille. */
+  .pf12b.on{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
+  .pf12b.on em{color:var(--accent)}
+
+  /* La feuille « Filtrer ». CONTENU NON VALIDÉ : quatre axes pressentis, rien de
+     plus, tant que le dessin n'est pas arbitré. */
+  .pf12fbloc{margin-top:16px}
+  .pf12fbloc h4{font-size:11.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--muted);margin:0 0 9px}
+  .pf12fbloc .ch .pf12cnt{opacity:.55;font-weight:650;margin-left:2px}
+  .pf12fpied{margin-top:18px}
+  .pf12fok{width:100%;margin-top:12px}
+
+  /* ---------------------------------------------------------------------------
+     B — LA RECHERCHE, EN PLEIN ÉCRAN
+
+     Mesuré clavier levé à sa hauteur réelle (300 px) : en place, l'en-tête, le
+     cercle et les puces gardent le haut et il reste 1 résultat visible sur 7 ;
+     en plein écran, 4 sur 7. Le champ monte en haut, tout le reste s'efface.
+  --------------------------------------------------------------------------- */
+  .pf12plein{padding-top:var(--safe-t)}
+  .pf12champ{display:flex;gap:9px;align-items:center;padding:12px 16px 2px}
+  .pf12z{flex:1;min-width:0;display:flex;align-items:center;gap:9px;background:var(--surface2);
+    border:1px solid var(--accent);border-radius:11px;padding:0 13px}
+  .pf12z > svg{width:17px;height:17px;flex:0 0 auto;color:var(--muted)}
+  /* Le champ hérite du style d'input du socle : on ne lui remet qu'un fond
+     transparent et l'absence de bordure, le cadre est porté par `.pf12z`. */
+  .pf12z input{flex:1;min-width:0;background:none;border:0;padding:12px 0;
+    font-size:15px;color:var(--text)}
+  .pf12z input:focus{border:0;outline:none}
+  .pf12z input::-webkit-search-cancel-button{display:none}
+  .pf12an{flex:0 0 auto;color:var(--accent);font:650 13.5px/1 inherit;font-family:inherit;
+    white-space:nowrap;padding:8px 2px}
+
+  /* Le titre de section porte son compte, et le rond qui tourne quand la section
+     dépend du réseau. La section « Avec X » porte DEUX comptes : ce qu'on en a,
+     et sur combien — sans le second, le premier ne veut rien dire. */
+  .pf12sec{display:flex;align-items:center;gap:8px}
+  .pf12sec.pf12deux{justify-content:space-between}
+  .pf12spin{width:11px;height:11px;border-width:1.6px;flex:0 0 auto}
+
+  /* Les résultats sont des jaquettes, TROIS par rangée, du même dessin que la
+     bibliothèque en dessous : on ne change pas de langage entre ce qu'on cherche
+     et ce qu'on trouve. `.pgrid` cale déjà trois colonnes sur un téléphone, mais
+     sur une tablette il en poserait six — le nombre est fixé ici, il fait partie
+     de la décision. La hauteur des cartes ne dépend pas de la longueur du titre :
+     `.pname` du socle réserve deux lignes, toujours. */
+  .pgrid.pf12trois{grid-template-columns:repeat(3,1fr)}
+
+  .pf12vide{padding:22px 24px;text-align:center;color:var(--muted);font-size:13.5px;line-height:1.45}
+  .pf12vide .lienplus{margin-left:4px}
+
+  /* La personne reconnue mais dont la filmographie n'est pas encore arrivée. */
+  .pf12qui{display:flex;gap:11px;align-items:center;padding:2px 16px 6px}
+  .pf12rond{width:44px;height:44px;border-radius:50%;flex:0 0 auto;overflow:hidden;
+    background:var(--surface2);display:grid;place-items:center;font-size:15px;font-weight:800}
+  .pf12rond .poster{width:100%;height:100%;border-radius:0;object-fit:cover}
+  .pf12qui b{display:block;font-size:14.5px;font-weight:700}
+  .pf12qui span span{display:block;font-size:11.5px;color:var(--muted);margin-top:2px}
+
+  /* Le compte de ce bouton est calculé, jamais approximé. */
+  .pf12filmo{width:calc(100% - 32px);margin:12px 16px 0;padding:12px;border-radius:11px;
+    border:1px solid var(--accent);background:var(--accent-dim);color:var(--accent);
+    font:700 13.5px/1.25 inherit;font-family:inherit;display:flex;align-items:center;
+    justify-content:center;gap:8px;text-align:center}
+  .pf12filmo:active{filter:brightness(1.2)}
+
+  /* L'écran vide n'est pas blanc : il montre les dernières recherches. */
+  .pf12rec{display:flex;align-items:center;gap:11px;width:100%;padding:11px 16px;
+    color:var(--text);text-align:left;font-size:14px;font-weight:640}
+  .pf12rec:active{background:var(--surface)}
+  .pf12rec > svg:first-child{width:16px;height:16px;flex:0 0 auto;color:var(--muted)}
+  .pf12rec span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pf12rec > svg:last-child{width:15px;height:15px;flex:0 0 auto;color:var(--muted)}
+  .pf12note{margin:16px 16px 0;padding:11px 13px;border-radius:10px;background:#ffb84d12;
+    border:1px solid #ffb84d3a;font-size:12px;color:#e5c48a;line-height:1.45}
+
+/* ---------- duel19 ---------- */
+/* ===== POINT 19 — le « i » du duel ===== */
+  /* ---------------------------------------------------------------------------
+     Toutes les classes neuves sont préfixées `du19`, et aucune classe du socle
+     n'est redéclarée nue ici : ce qui est repris — `.hero`, `.overview`,
+     `.iconbtn` — l'est par sélecteur composé, sous `.du19fiche` ou avec
+     `.du19x`, ce qui laisse la déclaration d'origine intacte et n'agit que dans
+     la feuille de ce point. Le dépôt a déjà payé deux fois la collision d'un
+     nom nu (`.dinfo`, `.itxt`) : la règle écrite le plus bas gagne, et c'est un
+     écran qu'on ne regardait pas qui se dessine de travers.
+
+     IL N'Y A PRESQUE RIEN À ÉCRIRE, ET C'EST LE RÉSULTAT ATTENDU. La feuille du
+     ⓘ affiche les blocs de la fiche, avec leurs classes : `.hero`, `.dhead`,
+     `.dmeta`, `.actions`, `.sectitle`, `.overview`, `.plats`, `.cast`, plus
+     `.fi9ba` et `.fi9etat` du point 9. Tous sont déjà habillés. Ne restent que
+     deux choses que la fiche n'a jamais eu à régler parce qu'elle occupe l'écran
+     entier : le retrait latéral de la feuille, et une croix pour refermer.
+  --------------------------------------------------------------------------- */
+
+  /* ---------------------------------------------------------------------------
+     LE RETRAIT LATÉRAL DE LA FEUILLE, ANNULÉ
+
+     `.sheetin` pose `padding:18px 16px …` (app.css) — c'est ce qu'il faut pour
+     une liste d'options, et c'est exactement ce qu'il ne faut pas pour une
+     fiche : tous ses blocs posent DÉJÀ leurs propres 16 px (`.dhead`,
+     `.actions`, `.sectitle`, `.overview`, `.plats`, `.cast`…), qui deviendraient
+     32, et l'image d'ambiance, qui est pleine largeur, se retrouverait encadrée
+     de deux bandes de fond.
+
+     La marge négative plutôt qu'une redéclaration du remplissage de `.sheetin` :
+     la même feuille sert les menus, les filtres et les listes de plateformes de
+     toute l'app, et une règle posée sur elle les toucherait tous.
+  --------------------------------------------------------------------------- */
+  .du19fiche{margin:0 -16px}
+  /* Les coins hauts de la feuille sont arrondis (18 px) et l'image d'ambiance
+     est le premier bloc pleine largeur : sans cela elle en dépasserait.
+     La poignée reste au-dessus d'elle, comme sur toutes les autres feuilles. */
+  .du19fiche .hero{border-radius:14px 14px 0 0}
+  /* Le synopsis est écrit même vide — la fiche est repeinte à l'arrivée de la
+     réponse, et l'emplacement doit rester retrouvable entre-temps. `:empty` le
+     retire alors du flux, marge comprise : pas de trou avant l'arrivée. C'est
+     déjà la règle du socle pour `.zba` et celle du point 9 pour `.fi9ba`. */
+  .du19fiche .overview:empty{display:none}
+  /* Le dernier bloc de la fiche colle au bas de la feuille : `.sheetin` pose
+     bien son remplissage bas, mais la marge négative latérale ne le rend pas
+     visible sous une rangée d'affiches qui, elle, ne pose rien. */
+  .du19fiche > :last-child{padding-bottom:6px}
+
+  /* ---------------------------------------------------------------------------
+     LA CROIX
+
+     « les 3 boutons du bas sont moches, fais la fiche normale avec la
+     possibilité de fermer la fiche, c'est tout » (02/08). Les deux autres
+     gestes de fermeture — tirer la poignée, appuyer à côté — existaient déjà et
+     restent ; la croix est le troisième, et le seul qui se voie.
+
+     BARRE DE HAUTEUR NULLE ET COLLANTE. Deux raisons, et aucune n'est
+     décorative : la barre ne doit rien pousser vers le bas (l'image d'ambiance
+     commence en haut de la feuille, comme sur la fiche), et la croix doit rester
+     atteignable quand on défile — la feuille atteint son plafond, 816 px
+     mesurés sur la maquette, et défile toujours. `top:0` la fixe au bord haut de
+     la zone de défilement, c'est-à-dire juste sous la poignée.
+  --------------------------------------------------------------------------- */
+  .du19barre{position:sticky;top:0;height:0;z-index:6}
+  /* `.iconbtn.du19x` et non `.du19x` seul : `.iconbtn` pose déjà la taille et le
+     centrage, on n'ajoute que le placement et le fond. Un nom de classe unique
+     ne suffirait pas à passer devant lui sur les propriétés partagées. */
+  .iconbtn.du19x{position:absolute;right:0;top:2px;
+    background:rgba(7,7,10,.55);border:1px solid rgba(255,255,255,.13);
+    -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+  /* Elle est posée sur l'image d'ambiance, dont la luminosité n'est pas connue à
+     l'avance : le fond sombre et le trait clair valent pour toutes. */
+  .iconbtn.du19x svg{width:17px;height:17px}
+  .iconbtn.du19x:active{background:rgba(7,7,10,.8)}

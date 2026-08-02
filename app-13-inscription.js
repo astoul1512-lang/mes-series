@@ -521,13 +521,16 @@ async function chargerInscTitres(){
          ne fait rien. */
       inscGrille.etat = inscGrille.titres.length ? 'fini' : 'vide';
     }else{
-      const memo = (db.inscription && db.inscription.genres) || null;
+      /* `memo` est le nom de la fonction de mémoïsation du rendu (app-02) :
+         dans ce bloc, écrire `memo('cle', calcul)` — le geste normal du
+         projet — levait « memo is not a function ». Renommé. Constat A4-2. */
+      const genresMemo = (db.inscription && db.inscription.genres) || null;
       brut.forEach(t=>{
         inscGrille.vus[t.media+':'+t.id] = 1;
         /* Le genre est retenu MAINTENANT, pendant qu'on l'a. La fournée
            suivante remplacera `inscGrille.titres` : sans cette mémoire, un
            titre aimé au premier tour n'aurait plus de genre à l'étape Style. */
-        if(memo && t.genre) memo[t.media+':'+t.id] = t.genre;
+        if(genresMemo && t.genre) genresMemo[t.media+':'+t.id] = t.genre;
       });
       inscGrille.titres = inscEtaler(brut);
       inscGrille.fournee = page;
@@ -649,14 +652,14 @@ function inscAllerStyle(){
    Un titre dont on n'a pas le genre est simplement ignoré : mieux vaut trois
    genres justes que quatre dont un inventé. */
 function inscGenresDeduits(){
-  const memo = (db.inscription && db.inscription.genres) || {};
+  const genresMemo = (db.inscription && db.inscription.genres) || {};
   const poids = {};
   inscMigrerAvis();
   ['tv','movie'].forEach(media=>{
     const seau = db.avis[media];
     Object.keys(seau).forEach(id=>{
       if(!seau[id] || seau[id].v !== 1) return;
-      const g = memo[media+':'+id];
+      const g = genresMemo[media+':'+id];
       if(!g || INSC_GENRES.indexOf(g) < 0) return;
       poids[g] = (poids[g] || 0) + 1;
     });

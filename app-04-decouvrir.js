@@ -83,28 +83,49 @@ function versLesSaisons(){
 
 async function addOrOpenShow(id){
   if(db.shows[id]) return go('show',{id:id, from: params.from || 'discover'});
-  if(ui.busy) return;
-  ui.busy = true;
+  if(!prendre('serie:'+id)) return;
+  /* `fetchShowFull` enchaîne une requête plus une par paquet de vingt saisons :
+     plusieurs secondes sur réseau mobile. Pendant ce temps l'utilisateur a pu
+     changer d'écran — et l'app le téléportait alors sur la fiche de la série,
+     plusieurs secondes après son geste. On note d'où l'on part AVANT l'attente,
+     et si l'écran a changé on se contente du toast.
+     Revue de stabilité du 02/08, constat A3-1. */
+  const ecranDepart = view, depuis = params.from || 'discover';
   const btn = document.getElementById('addbtn');
   const setBtn = t=>{ if(btn) btn.innerHTML = '<span class="spin"></span> '+t; };
   if(btn) btn.setAttribute('disabled','');
   setBtn('Chargement des épisodes…');
   try{
-    const s = await fetchShowFull(id, (a,b)=> setBtn('Saisons '+a+'/'+b+'…'));
+    /* La fiche de base est peut-être déjà en main : l'aperçu vient de la
+       charger. Constat A5-2. */
+    const dejaLa = (ui.preview && ui.preview.id === id && ui.preview.data) || null;
+    const s = await fetchShowFull(id, (a,b)=> setBtn('Saisons '+a+'/'+b+'…'), dejaLa);
     s.watched = {}; s.addedAt = Date.now();
     db.shows[id] = s; saveDB();
     toast('« '+s.name+' » ajoutée');
-    ui.busy = false; go('show',{id:id, from: params.from || 'discover'});
+    rendre('serie:'+id);
+    if(view !== ecranDepart){ render(); return; }
+    go('show',{id:id, from: depuis});
     versLesSaisons();
   }catch(e){
-    ui.busy = false; render();
+    rendre('serie:'+id); render();
     toast("Impossible d'ajouter cette série");
   }
 }
 
-async function addMovie(id, seen){
+/* `fiche` : la fiche TMDB quand l'appelant l'a déjà sous les yeux — c'est le
+   cas de l'aperçu, dont tout le rendu est bâti dessus. Sans elle, l'app
+   redemandait au réseau une fiche affichée juste au-dessus, et un appui sur
+   « À voir » échouait hors ligne. Constat A5-1. */
+async function addMovie(id, seen, fiche){
   try{
-    const m = db.movies[id] ? null : await tmdb('/movie/'+id);
+    /* À défaut d'une fiche passée par l'appelant, celle de l'aperçu si c'est le
+       même film : l'écran est entièrement bâti dessus, la redemander au réseau
+       faisait attendre — et échouait hors ligne. */
+    const enMain = fiche ||
+      ((ui.preview && String(ui.preview.id) === String(id) && ui.preview.type === 'movie' &&
+        ui.preview.data && ui.preview.data.id) ? ui.preview.data : null);
+    const m = db.movies[id] ? null : (enMain || await tmdb('/movie/'+id));
     if(m){
       db.movies[id] = { id:m.id, title:m.title, poster:m.poster_path, backdrop:m.backdrop_path,
         date:m.release_date, runtime:m.runtime, overview:m.overview,
@@ -315,12 +336,25 @@ function isoDansN(jours){ return new Date(Date.now() + jours*86400000).toISOStri
 
    `INSC_GENRE_TV` (app-13) tient la correspondance dans l'autre sens, pour la
    déduction. Les deux tables sont courtes et chacune vit là où elle sert. */
+/* MESURÉ LE 02/08, ET ÇA CORRIGE UN TROU RÉEL : sur `/genre/tv/list` en
+   `fr-FR`, TMDB rend « **Science-Fiction & Fantastique** » et non
+   « Sci-Fi & Fantasy ». Les deux orthographes sont donc listées ici — l'app
+   demande toujours `language=fr-FR`, mais un cache déjà rempli en anglais, un
+   repli de TMDB ou un changement de langue rendrait l'autre. Sans la forme
+   française, `genreParNom('tv','Science-Fiction')` rendait `null` : cocher
+   « Science-Fiction » ne produisait rien côté séries, en silence. */
 const GENRE_SERIE = {
   'action':          'Action & Adventure',
   'aventure':        'Action & Adventure',
-  'science-fiction': 'Sci-Fi & Fantasy',
-  'fantastique':     'Sci-Fi & Fantasy',
+  'science-fiction': 'Science-Fiction & Fantastique',
+  'fantastique':     'Science-Fiction & Fantastique',
   'guerre':          'War & Politics'
+};
+/* Les deux orthographes possibles d'un même genre de séries, essayées dans
+   l'ordre. Une seule table, lue par `genreParNom` et par `genreCanon`. */
+const GENRE_SERIE_ALT = {
+  'science-fiction & fantastique': 'sci-fi & fantasy',
+  'sci-fi & fantasy':              'science-fiction & fantastique'
 };
 
 /* Le nom EXACT est toujours essayé en premier : la traduction n'est qu'un
@@ -333,6 +367,10 @@ function genreParNom(media, nom){
   if(!g && media === 'tv' && GENRE_SERIE[cle]){
     const equiv = GENRE_SERIE[cle].toLowerCase();
     g = l.find(x => (x.nom||'').toLowerCase() === equiv);
+    if(!g && GENRE_SERIE_ALT[equiv]){
+      const autre = GENRE_SERIE_ALT[equiv];
+      g = l.find(x => (x.nom||'').toLowerCase() === autre);
+    }
   }
   return g ? g.id : null;
 }
@@ -353,14 +391,117 @@ function genreParNom(media, nom){
 
    Un nom inconnu ressort tel quel : cette fonction normalise, elle ne filtre
    pas. */
+/* La forme FRANÇAISE de la science-fiction des séries manquait, et c'est un
+   défaut mesuré le 02/08 : TMDB rend « Science-Fiction & Fantastique » en
+   `fr-FR`, jamais « Sci-Fi & Fantasy ». La canonisation ne mordait donc pas —
+   un genre non canonisé tombe en dernier dans `GENRE_PRIORITE`, et une série de
+   fantasy pouvait se voir nommée par « Action et aventure ». */
 const GENRE_CANON = {
   'action & adventure':'Action',
   'sci-fi & fantasy':'Science-Fiction',
-  'war & politics':'Guerre'
+  'science-fiction & fantastique':'Science-Fiction',
+  'war & politics':'Guerre',
+  'guerre & politique':'Guerre'
 };
 function genreCanon(nom){
   return GENRE_CANON[String(nom == null ? '' : nom).toLowerCase()] || nom;
 }
+/* ============ POINT 4, LEVIER 2 — LE GENRE PRINCIPAL D'UN TITRE ============
+
+   TMDB NE FOURNIT AUCUN GENRE PRINCIPAL. Pas de champ, pas de pondération, pas
+   de classement : une liste plate. Les trois genres qu'affichait la fiche
+   n'étaient donc pas « les trois principaux », c'étaient les trois premiers
+   d'un rangement qui ne veut rien dire — et c'est ce qui faisait que
+   *Kung Fu Panda 4* n'annonçait nulle part « Comédie ».
+
+   C'est aussi ce qui empêchait la règle anti-monotonie de mordre : elle
+   comparait les titres sur `genre_ids[0]`, et l'animation n'est presque jamais
+   le premier genre chez TMDB (Kung Fu Panda commence par Action, Les Nouveaux
+   Héros par Aventure). Trois dessins animés lui paraissaient donc être trois
+   genres différents.
+
+   L'ORDRE, du plus fort au plus faible ; le genre principal d'un titre est le
+   premier de cette liste qu'il porte :
+
+     1. LA FORME       — Documentaire, Animation. C'est la première chose que
+                         l'œil voit, et c'est précisément celle que TMDB range
+                         rarement en tête.
+     2. LE REGISTRE LOURD — Horreur, Guerre, Western, Crime, Thriller, Mystère,
+                         Histoire, Science-Fiction, Fantastique, Musique.
+     3. LE REGISTRE LÉGER — Comédie, puis Romance.
+     4. LES PASSE-PARTOUT — Action, Aventure, Drame, Familial.
+
+   L'ÉTAGE 2 AU-DESSUS DE LA COMÉDIE EST UNE CORRECTION, PAS UN CHOIX DE DÉPART.
+   La première version mettait Comédie avant Crime ; Adrien l'a mise à l'épreuve
+   sur dix titres et elle est tombée sur *Barry Seal* (Action, Comédie, Crime),
+   rangé en Comédie — c'est-à-dire mot pour mot son reproche initial, « Kill
+   Bill dans comédie ». Règle corrigée : LE GENRE LE PLUS LOURD GAGNE TOUJOURS.
+   Barry Seal → Crime. Kill Bill → Crime. Hitch et American Pie restent Comédie.
+
+   CE GENRE NOMME, IL NE RETIRE JAMAIS RIEN. Shrek reste dans les résultats
+   « familial », Hitch dans « romance ». Les seuls retraits de l'app sont ceux
+   des ambiances, décidés recette par recette, et ils se lisent dans la phrase.
+
+   ZORRO — MESURÉ LE 02/08, ET LA QUESTION SE FERME. TMDB ne donne au *Masque
+   de Zorro* que **Action et Aventure**, aucun Western. La règle le range donc
+   déjà en Action, ce qu'Adrien demandait : rien à arbitrer, aucune ligne à
+   déplacer dans ce tableau. C'était la mémoire qui était en faute, pas l'ordre.
+
+   SPORT N'EXISTE PAS CHEZ TMDB, ni pour les films ni pour les séries. Aucune
+   règle de tri ne peut inventer une étiquette absente : *F1 Le Film* restera
+   Action. Le seul chemin serait le mot-clé, et Adrien a refusé d'ouvrir le
+   point le 02/08 en connaissance de cause.
+
+   ELLE NE DÉPEND PAS DE L'ORDRE DE TMDB : elle lit l'ENSEMBLE des genres du
+   titre et cherche le premier de SA liste à elle. La réserve « l'ordre de
+   `genre_ids` n'est pas forcément celui de `genres` » est donc sans objet ici.
+
+   Les noms sont canonisés (`genreCanon`) avant comparaison : une série porte
+   « Action & Adventure » là où un film porte « Action », et il n'y a qu'une
+   seule table de priorité pour les deux. */
+const GENRE_PRIORITE = [
+  /* 1 — la forme */
+  'Documentaire', 'Animation',
+  /* 2 — le registre lourd */
+  'Horreur', 'Guerre', 'Western', 'Crime', 'Thriller', 'Mystère', 'Histoire',
+  'Science-Fiction', 'Fantastique', 'Musique',
+  /* 3 — le registre léger */
+  'Comédie', 'Romance',
+  /* 4 — les passe-partout */
+  'Action', 'Aventure', 'Drame', 'Familial'
+];
+function rangGenre(nom){
+  const i = GENRE_PRIORITE.indexOf(genreCanon(nom));
+  /* Un genre absent de la liste (Kids, News, Reality, Soap, Talk, Téléfilm)
+     passe en dernier : il nomme moins bien qu'aucun de ceux du tableau. */
+  return i < 0 ? GENRE_PRIORITE.length : i;
+}
+/* Rend le NOM du genre principal parmi une liste de noms. Liste vide → ''. */
+function genrePrincipalNom(noms){
+  const l = (noms || []).filter(n => n);
+  if(!l.length) return '';
+  return l.slice().sort((a,b)=> rangGenre(a) - rangGenre(b))[0];
+}
+/* La même chose à partir d'identifiants TMDB et d'un média — c'est la forme
+   dont se sert la grille de Recherche, qui ne reçoit que des `genre_ids`. */
+function genrePrincipalId(media, ids){
+  const l = (ids || []).map(id => nomGenreParId(media, id)).filter(n => n);
+  const n = genrePrincipalNom(l);
+  if(!n) return null;
+  const g = (genresTMDB[media] || []).find(x => genreCanon(x.nom) === genreCanon(n));
+  return g ? g.id : null;
+}
+/* La liste des genres d'un titre, PRINCIPAL EN TÊTE et le reste derrière, dans
+   l'ordre où TMDB les donne. C'est ce que la fiche affiche (point 3) : tous les
+   genres, jamais tronqués, et celui qui explique la présence du titre en
+   premier. */
+function genresOrdonnes(noms){
+  const l = (noms || []).filter(n => n);
+  if(l.length < 2) return l;
+  const p = genrePrincipalNom(l);
+  return [p].concat(l.filter(n => n !== p));
+}
+
 /* Le libellé d'un identifiant de genre TMDB, dans le média où il a été lu.
    Sert au malus de « Pas pour moi » : on retient un NOM canonique et non un
    identifiant, sans quoi refuser un film d'action ne dirait rien d'une série
@@ -370,11 +511,74 @@ function nomGenreParId(media, id){
   return g ? g.nom : null;
 }
 
+/* ============ POINT 16 — L'ÉCRAN CESSE D'ÊTRE BILINGUE ============
+
+   Repéré sur les captures d'Adrien, pas demandé par lui, puis ouvert comme
+   point à part entière le 02/08 : « pour les puces pour les animés je te laisse
+   faire le nécessaire ! »
+
+   LE CONSTAT. La taxonomie des SÉRIES de TMDB n'est pas entièrement traduite en
+   français et elle était servie telle quelle. Relevé en direct le 02/08 sur
+   `/genre/tv/list?language=fr-FR` : TMDB traduit bien « Comédie »,
+   « Documentaire », « Drame », « Familial », « Mystère » et
+   « Science-Fiction & Fantastique », mais il laisse en anglais « Action &
+   Adventure », « Kids », « News », « Reality », « Soap », « Talk » et
+   « War & Politics ». À côté des autres, l'écran est bilingue.
+
+   ON TRADUIT CE QU'ON AFFICHE, JAMAIS CE QU'ON ENVOIE. L'identifiant expédié à
+   TMDB ne change pas, aucune requête ne change, aucun comportement ne change.
+   C'est un libellé, rien d'autre.
+
+   La table se limite aux SEPT qui ne sont pas traduits : traduire ce que TMDB
+   traduit déjà créerait une seconde source de vérité qui divergerait le jour où
+   TMDB corrigera la sienne. */
+const GENRE_FR = {
+  'action & adventure':'Action et aventure',
+  'kids':'Jeunesse',
+  'news':'Information',
+  'reality':'Téléréalité',
+  'soap':'Feuilleton',
+  'talk':'Talk-show',
+  'war & politics':'Guerre et politique'
+};
+function libelleGenre(nom){
+  return GENRE_FR[String(nom == null ? '' : nom).toLowerCase()] || nom;
+}
+
+/* ===== LES GENRES QUI NE RENDENT RIEN, RETIRÉS APRÈS MESURE =====
+
+   « À MESURER AVANT DE RETIRER », famille par famille : un genre n'est retiré
+   que si la mesure le montre vide ou quasi vide, jamais parce qu'il « semble »
+   hors sujet. C'est la règle de la maison, et elle vaut ici comme ailleurs.
+
+   MESURÉ LE 02/08 sur `/discover/tv`, langues `ja|zh|ko`, genre Animation, avec
+   le plancher de 80 votes de la grille — c'est-à-dire exactement ce que la puce
+   « Animés » demande :
+
+     Documentaire 0 · News 0 · Reality 0 · Soap 0 · Talk 0 · Western 1
+     War & Politics 12 · Familial 19 · Kids 27 · Crime 30 · Mystère 99
+     Drame 254 · Comédie 342 · Action & Adventure 411 · Sci-Fi & Fantasy 444
+
+   LES SIX PREMIERS SONT RETIRÉS de la puce Animés : ils proposent une réponse
+   qui rendra zéro, ou un seul titre. Les suivants sont MINCES et non vides —
+   War & Politics à 12, Familial à 19 — ils restent, et le chiffre est signalé à
+   Adrien plutôt qu'arbitré ici.
+
+   SUR LA PUCE SÉRIES, RIEN N'EST RETIRÉ : mesuré au même moment, le plus maigre
+   est News à 11, puis Talk à 36 et Western à 40. Aucun n'est vide. */
+const GENRES_VIDES_ANIME = ['documentaire','news','reality','soap','talk','western'];
+function genreUtile(nomGenre, famille){
+  if(famille !== 'anime') return true;
+  return GENRES_VIDES_ANIME.indexOf(String(nomGenre || '').toLowerCase()) < 0;
+}
+
 /* Les genres proposés dépendent du type choisi. Pour les animés, « Animation »
    est déjà imposé : inutile de le proposer une deuxième fois. */
 function genresAffiches(){
   const l = genresTMDB[discMedia()] || [];
-  return ui.disc.type === 'anime' ? l.filter(g => (g.nom||'').toLowerCase() !== 'animation') : l;
+  const t = ui.disc.type;
+  return l.filter(g => !(t === 'anime' && (g.nom||'').toLowerCase() === 'animation'))
+          .filter(g => genreUtile(g.nom, t));
 }
 
 /* Les plateformes proposées viennent de TMDB pour la France, classées par
@@ -689,9 +893,12 @@ function setDiscType(t){
   ui.disc.type = t;
   ui.disc.typeForce = false;      // E4 — choix explicite : plus rien à signaler
   render();
-  /* Chacun son chargement : la vitrine au repos, la grille quand on filtre. */
-  if(vitrineVisible()) chargerSuggestions();
-  else chargerDecouverte();
+  /* Chacun son chargement : la vitrine au repos, la grille quand on filtre.
+     La vitrine, elle, a DÉJÀ été lancée par `render()` — la relancer ici la
+     marquait périmée en plein calcul, et tout le travail était refait une
+     seconde fois pour un simple changement de puce.
+     Revue de stabilité du 02/08, constat A1-8. */
+  if(!vitrineVisible()) chargerDecouverte();
 }
 function filtresActifs(){
   const d = ui.disc;
@@ -849,7 +1056,7 @@ function propositionJourHtml(x){
       '<div class="d4meta">'+esc((media==='tv'?'Série':'Film')+(bouts.length?' · '+bouts.join(' · '):''))+'</div>'+
       '<div class="d4pq">'+I.coeur+'<span>'+esc(x.pourquoi || 'À découvrir')+'</span></div>'+
       '<div class="d4act">'+
-        '<button class="btn"'+(ui.busy?' disabled':'')+
+        '<button class="btn"'+(occupe('serie:'+id)?' disabled':'')+
           ' onclick="ajouterProposition('+id+',\''+media+'\')">Ajouter à ma liste</button>'+
         '<button class="btn ghost" onclick="pasPourMoiProposition()">Pas pour moi</button>'+
       '</div>'+
@@ -866,15 +1073,15 @@ function propositionJourHtml(x){
 async function ajouterProposition(id, media){
   if(media !== 'tv') return addMovie(id, false);
   if(db.shows[id]) return;
-  if(ui.busy) return;
-  ui.busy = true; peindreDisc();
+  if(!prendre('serie:'+id)) return;
+  peindreDisc();
   try{
     const s = await fetchShowFull(id);
     s.watched = {}; s.addedAt = Date.now();
     db.shows[id] = s; saveDB();
     toast('« '+s.name+' » ajoutée');
   }catch(e){ toast('Impossible d\'ajouter cette série'); }
-  ui.busy = false;
+  rendre('serie:'+id);
   render();
 }
 
@@ -1523,10 +1730,15 @@ function openPreview(id, type, from){
   /* Toujours un mouvement vers l'avant : depuis une fiche d'acteur aussi, où la
      profondeur nominale de l'écran d'arrivée est pourtant plus faible. */
   go('preview', {id:id, type:type, from:from||'discover'}, 'enter');
-  loadPreview();
+  loadPreview(id, type);
 }
-async function loadPreview(){
-  const id = params.id, type = params.type;
+/* Les cibles se passent en argument. Elles étaient lues au moment du tir, ce
+   qui suffisait tant que l'appel suivait immédiatement le `go` — mais l'entrée
+   directe depuis une notification tire dans un `setTimeout`, et chargeait alors
+   l'aperçu de l'écran ARRIVÉ. Les appels sans argument restent valides.
+   Revue de stabilité du 02/08, constat A3-9. */
+async function loadPreview(id0, type0){
+  const id = id0 != null ? id0 : params.id, type = type0 || params.type;
   try{
     const d = await tmdb('/'+type+'/'+id, { append_to_response:'credits,videos' });
     if(ui.preview.id===id) ui.preview = { id:id, type:type, loading:false, data:d };

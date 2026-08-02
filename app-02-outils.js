@@ -1,6 +1,17 @@
 "use strict";
 /* ============================ Utilitaires ============================ */
-const todayISO = ()=> new Date().toISOString().slice(0,10);
+/* `toISOString` est une des opérations les plus chères du moteur, et `aired` en
+   demandait une PAR ÉPISODE testé : 7 040 appels pour une seule passe sur la
+   bibliothèque d'Adrien, tous rendant la même chaîne. On garde la journée en
+   mémoire trente secondes — le passage de minuit est rattrapé au pire une
+   demi-minute plus tard, sur un écran qui se recalcule de toute façon.
+   Revue de stabilité du 02/08, constat A2-3. */
+let _jourISO = null, _jourISOts = 0;
+const todayISO = ()=>{
+  const n = Date.now();
+  if(!_jourISO || n - _jourISOts > 30000){ _jourISO = new Date(n).toISOString().slice(0,10); _jourISOts = n; }
+  return _jourISO;
+};
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 /* Une chaîne glissée dans un `onclick="f('…')"` traverse DEUX analyseurs : le
    parseur HTML décode d'abord les entités, puis JavaScript lit le littéral.
@@ -119,6 +130,21 @@ function sortirRendu(){
   if(profondeurRendu > 0) profondeurRendu--;
   if(profondeurRendu === 0) memoRendu.clear();
 }
+/* ===== Les verrous d'action, un par ressource =====
+   `occupe` répond « cette action-là est déjà en cours ». `prendre` pose le
+   verrou et rend faux s'il était déjà posé — donc `if(!prendre(cle)) return;`
+   remplace exactement l'ancien `if(ui.busy) return; ui.busy = true;`.
+   `rendre` le relâche, et doit être appelé sur TOUS les chemins de sortie.
+   Revue de stabilité du 02/08, constat A3-2. */
+function occupe(cle){ return !!(ui && ui.busy && ui.busy[cle]); }
+function prendre(cle){
+  if(!ui.busy || typeof ui.busy !== 'object') ui.busy = {};
+  if(ui.busy[cle]) return false;
+  ui.busy[cle] = 1;
+  return true;
+}
+function rendre(cle){ if(ui.busy && typeof ui.busy === 'object') delete ui.busy[cle]; }
+
 function memo(cle, calcul){
   if(!profondeurRendu) return calcul();
   if(memoRendu.has(cle)) return memoRendu.get(cle);
@@ -279,12 +305,31 @@ const cheminImage = p =>
    confiance — les appelants savent déjà retomber sur leur cadre neutre. */
 const srcImage = (p, size) => { const c = cheminImage(p); return c ? esc(IMG(c, size)) : ''; };
 
-function posterEl(path, size, cls, alt){
+/* `pressee` : l'image n'est PAS sous la ligne de flottaison, elle EST l'écran.
+   `loading="lazy"` est juste pour une vignette de rangée et faux pour la carte
+   du jeu, qui occupe toute la hauteur visible : le navigateur avait le droit de
+   retarder sa demande, et c'est une des trois causes du clignotement du
+   point 7. Le duel de Mes goûts avait déjà sa propre balise sans différé — la
+   bonne règle existait dans le dépôt, elle n'était simplement pas appliquée
+   ici. Le défaut reste inchangé pour les quinze autres appels. */
+function posterEl(path, size, cls, alt, pressee){
   const src = srcImage(path, size);
-  if(src) return '<img class="poster '+(cls||'')+'" loading="lazy" onerror="posterFail(this)" src="'+
-    src+'" alt="'+esc(alt||'')+'">';
+  if(src) return '<img class="poster '+(cls||'')+'"'+
+    (pressee ? ' fetchpriority="high" decoding="async"' : ' loading="lazy"')+
+    ' onerror="posterFail(this)" src="'+src+'" alt="'+esc(alt||'')+'">';
   return '<div class="poster ph '+(cls||'')+'">'+esc((alt||'?').slice(0,18))+'</div>';
 }
+/* Demander une image AVANT d'en avoir besoin. Rien à l'écran, rien à nettoyer :
+   le navigateur la met dans son cache HTTP et la balise qui la réclamera plus
+   tard l'aura tout de suite. Sert au jeu de Recherche, où l'affiche EST l'écran
+   et où son arrivée tardive se voit (point 7). */
+const dejaPrechargees = {};
+function precharger(src){
+  if(!src || dejaPrechargees[src]) return;
+  dejaPrechargees[src] = 1;
+  try{ const i = new Image(); i.decoding = 'async'; i.src = src; }catch(e){}
+}
+
 /* Vignette d'épisode : image TMDB si elle existe, sinon un cadre neutre de même taille.
    Chargement différé pour que les longues saisons restent fluides. */
 function epThumb(ep){
@@ -573,7 +618,13 @@ function fragmentVersRoute(frag){
 let view = 'follow';
 let params = {};
 let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searching:false, searchErr:'',
-           openSeasons:{}, busy:false,
+           /* `busy` était UN booléen pour quatre écrans : lancer l'ajout d'une
+              série depuis un aperçu, quitter l'écran, puis toucher « Ajouter »
+              ailleurs ne faisait RIEN — pas de toast, pas de rond, pendant
+              jusqu'à quinze secondes. C'est maintenant un verrou PAR RESSOURCE,
+              posé et rendu par `prendre`/`rendre` ci-dessous.
+              Revue de stabilité du 02/08, constat A3-2. */
+           openSeasons:{}, busy:{},
            /* Quel onglet d'avatar est ouvert : 'embleme', 'photo', ou rien —
               auquel cas on montre celui qui correspond à l'avatar actuel. */
            avatarOnglet:null,
@@ -667,6 +718,14 @@ const ONGLETS_BARRE = ['discover', 'search', 'follow', 'profile'];
 let pileHisto = [], iHisto = -1;
 /* `msv` distingue nos entrées de celles d'un tiers (extension, ancre). */
 const etatHisto = (v, p, i)=> ({ msv:1, i:i, view:v, params:p||{} });
+/* Voir le commentaire dans `go()`. Rempli à chaque navigation, lu par les
+   écrans qui doivent distinguer une ouverture d'un retour. */
+let dernierGo = { vue:null, dir:'none', historique:false };
+/* « Est-on ARRIVÉ sur cet écran, ou y REVIENT-on ? » Un retour, c'est un `dir`
+   à `back` ou un appel venu de l'historique. Tout le reste est une arrivée. */
+function arriveeNeuve(vue){
+  return !(dernierGo.vue === vue && (dernierGo.dir === 'back' || dernierGo.historique));
+}
 /* Nombre d'entrées derrière nous. On ne se fie PAS à `history.length`, qui
    compte aussi les pages visitées avant l'app. */
 const historiqueInterne = ()=> Math.max(0, iHisto);
@@ -718,7 +777,7 @@ function preparerEntreeDirecte(v, p){
     ui.preview = { id: par.id, type: par.type, loading: true, data: null, error: '' };
     /* Après le rendu : `loadPreview` redessine tout seul quand la réponse
        arrive, et il ne doit pas courir avant que l'écran existe. */
-    setTimeout(()=>{ if(typeof loadPreview === 'function') loadPreview(); }, 0);
+    setTimeout(()=>{ if(typeof loadPreview === 'function') loadPreview(par.id, par.type); }, 0);
   }
   return { view: vue, params: par };
 }
@@ -821,6 +880,29 @@ function go(v, p, dir, opts){
      vrai partout ailleurs et confisque le retour dans toute l'app. */
   if(typeof duel !== 'undefined' && duel && duel.actif && view === 'gouts' && v !== 'gouts')
     oublierDuel();
+  /* Trois ressources d'écran survivaient à un changement d'onglet et suivaient
+     l'utilisateur ailleurs. Elles sont rangées ici, au même endroit que le duel,
+     pour qu'il n'y ait qu'UN point de fermeture d'écran dans l'app.
+     Revue de stabilité du 02/08, constats A3-3 et A3-6. */
+  /* La barre « Tu as aimé ? » restait 12 secondes, par-dessus l'écran d'arrivée,
+     et répondre écrivait un avis sur un titre qui n'était plus nulle part. */
+  if(typeof fermerAvis === 'function' && typeof avisAffiche !== 'undefined' && avisAffiche)
+    fermerAvis();
+  /* Le minuteur de frappe de Recherche partait après coup, et sa requête
+     n'était jamais abandonnée : elle retardait celles de l'écran d'arrivée. */
+  if(view === 'search' && v !== 'search' && typeof avorterRech === 'function'){
+    if(typeof rechTimer !== 'undefined') clearTimeout(rechTimer);
+    avorterRech();
+  }
+  /* ===== POINT 8 — DE QUOI UN ÉCRAN PEUT SAVOIR S'IL EST « OUVERT » OU « REVENU »
+     Le dernier `go()`, réduit à ce qui distingue une ouverture d'un retour.
+     Générique volontairement : `go()` n'a pas à connaître les écrans, et un
+     écran n'a pas à deviner d'où il vient en fouillant l'historique.
+     `historique` : l'appel vient de `popstate`. `dir === 'back'` : la flèche de
+     l'app, le geste de glissement, ou le bouton matériel. Les QUATRE chemins de
+     retour passent par l'un ou l'autre — c'est ce qui rend le discriminant
+     complet, là où le marqueur posé dans `params` se perdait sur certains. */
+  dernierGo = { vue: v, dir: navDir, historique: !!opts.depuisHistorique };
   view = v; params = p||{};
   if(typeof hideUndo === 'function') hideUndo();
   render();
@@ -1082,9 +1164,18 @@ const glisseRetour = (function(){
        avaler. C'est la seule entorse au principe « l'historique fait foi », et
        elle est là pour l'image, pas pour la logique. */
     const recule = historiqueInterne() > 0 && miroirJuste();
-    if(recule) popstateAAvaler++;
+    const attendu = recule ? ++popstateAAvaler : 0;
     go(cible, cibleParams, 'back', recule ? { depuisHistorique:true } : { remplacer:true });
-    if(recule) history.back();
+    if(recule){
+      history.back();
+      /* Le compteur restait armé pour toute la session si le `popstate` attendu
+         n'arrivait jamais — page masquée au moment du geste, `history.back()`
+         différé par le navigateur. Le premier vrai retour suivant était alors
+         avalé, et le bouton retour d'Android ne faisait rien. Un `popstate` qui
+         n'est pas venu en une seconde ne viendra plus.
+         Revue de stabilité du 02/08, constat A3-7. */
+      setTimeout(()=>{ if(popstateAAvaler >= attendu) popstateAAvaler = attendu - 1; }, 1000);
+    }
     if(el){
       el.style.transform=''; el.style.opacity=''; el.style.willChange=''; el.style.transition='';
       el.classList.remove('glisse');

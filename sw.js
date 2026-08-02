@@ -75,7 +75,15 @@ self.addEventListener('fetch', e => {
         return res;
       });
 
-    const secours = () => caches.match(req).then(m => m || caches.match('./index.html'));
+    /* Le repli sur `index.html` ne vaut que pour une NAVIGATION. Servi à la
+       place d'un fichier .js absent du cache, il rendait du HTML au navigateur,
+       qui levait « Unexpected token '<' » — et comme app-08-reglages.js est
+       chargé en dernier et porte l'appel `boot()`, l'app ne démarrait pas du
+       tout : écran noir, sans message. Un fichier manquant doit échouer
+       franchement, c'est diagnosticable.
+       Revue de stabilité du 02/08, constat A5-5. */
+    const secours = () => caches.match(req).then(m =>
+      m || (req.mode === 'navigate' ? caches.match('./index.html') : Response.error()));
 
     e.respondWith(new Promise(resolve => {
       let rendu = false;
