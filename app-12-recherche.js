@@ -76,6 +76,10 @@ const RECH_PAGES_MAX = 3;        // jamais plus de 3 requêtes pour remplir
 const RECH_PAGES_TAMIS = 6;
 const RECH_VOTES_MINI = 80;      // plancher de votes de la grille
 const RECH_JEU_STOCK = 6;        // en dessous, une source va chercher la suite
+/* Combien de flux on amorce en parallèle. Au-delà, on enchaîne par paquets :
+   trois cent vingt-quatre requêtes simultanées, c'est une rafale de 429.
+   Relecture du 02/08, défaut 2.5. */
+const RECH_AMORCE_PAR_FOIS = 6;
 
 let rechTimer = null, rechSeq = 0, rechAbort = null, grilleSeq = 0, jeuSeq = 0;
 
@@ -826,6 +830,9 @@ function relancerRech(){
     r.jeu.carte = null; r.jeu.i = 0; r.jeu.vues = 0; r.jeu.fini = false;
     r.jeu.fiche = null; r.jeu.plates = null; r.jeu.err = ''; r.jeu.loading = true;
     render();
+    /* RELECTURE DU 02/08, DÉFAUT 2.1 — le rechargement manquait. Il est posé
+       dans `tirerCarteRech` et non ici : c'est LUI qui a besoin d'un moteur,
+       et tout appelant en profite. Voir la garde `!r.flux` là-bas. */
     tirerCarteRech();
     return;
   }
@@ -1365,6 +1372,18 @@ function etagesRech(){
       });
       etages.push({
         forme: forme, langue: langue, flux: flux,
+        /* Le compteur peut-il rester EXACT sur cet étage ?
+
+           La règle est celle du tableau arrêté par Adrien le 02/08 : dès qu'un
+           critère se décompose en plusieurs flux — origines, époques, durées,
+           genres — le compteur passe à « moins de ». On ne la révise pas ici.
+
+           MAIS LE PARTAGE PAR MÉDIA N'EST PAS UNE UNION DE CRITÈRES. Sur la
+           puce « Tout » sans rien de posé, les deux flux sont « films » et
+           « séries » : ils ne peuvent pas rendre le même titre, et l'écran
+           annonçait quand même « moins de » sans aucune raison. C'est ce
+           cas-là, et lui seul, que la relecture a eu raison de signaler. */
+        recoupe: médias.some(m => jeuxParamsRech(m).length > 1),
         /* Sur le partage d'origine, seul « reste du monde » compte : c'est lui
            qui porte les paramètres non décomposés. */
         compte: langue !== 'occ',
@@ -1441,6 +1460,9 @@ function melangerRech(liste){
    n'ait plus rien. On n'affiche pas une fournée courte en espérant que personne
    ne remarque. Le garde-fou de requêtes reste `RECH_PAGES_MAX` (ou
    `RECH_PAGES_TAMIS` quand un tamis client est actif). */
+/* « Épuisé » veut dire que TMDB n'a plus rien, et rien d'autre. Un échec de
+   transport (429, coupure, dépassement du délai) est un `echec`, qui se
+   retente à la fournée suivante — voir le défaut 2.2 de la relecture. */
 function fluxEpuiseRech(f){ return f.fini || (f.page > 0 && f.page >= f.pages); }
 async function lirePageFluxRech(f, seq){
   if(fluxEpuiseRech(f)) return false;
@@ -1449,6 +1471,7 @@ async function lirePageFluxRech(f, seq){
   const d = await tmdb('/discover/'+f.media, p);
   if(seq !== grilleSeq) return false;
   f.page = f.page + 1;
+  f.echec = false;                       // une lecture réussie efface l'échec
   f.pages = d.total_pages || 1;
   if(f.total == null) f.total = d.total_results || 0;
   const bruts = (d.results || []).filter(x => x && x.poster_path)
@@ -1461,7 +1484,7 @@ async function lirePageFluxRech(f, seq){
    vides. On ne bascule JAMAIS avant : c'est toute la différence entre « à la
    fin du catalogue » et « à la fin de la fournée ». */
 function etageFiniRech(e){
-  return e.flux.every(f => fluxEpuiseRech(f) && !f.tampon.length);
+  return e.flux.every(f => fluxEpuiseRech(f) && !f.tampon.length && !f.echec);
 }
 
 /* ===== LA FOURNÉE ===== */
@@ -1484,21 +1507,52 @@ async function chargerGrilleRech(suite){
     if(!r.flux) r.flux = { etages: etagesRech(), i:0, exact:true };
     const F = r.flux;
 
-    /* PREMIÈRE FOURNÉE — on amorce TOUS les étages d'un coup. Ce n'est pas une
-       dépense : ces pages seront consommées de toute façon, et c'est ce qui
-       donne le total de chaque étage, donc un compteur exact malgré la
-       décomposition. */
+    /* PREMIÈRE FOURNÉE — l'amorçage donne le total de chaque étage, donc un
+       compteur exact malgré la décomposition. Ces pages ne sont pas perdues :
+       elles seront consommées.
+
+       RELECTURE DU 02/08, DÉFAUT 2.5 — MAIS PLUS TOUTES D'UN COUP. C'était un
+       `Promise.all` plat sur TOUS les flux de TOUS les étages, sans plafond :
+       mesuré à 324 requêtes simultanées dans le pire cas réel (puce Animation,
+       tous les genres, trois origines, trois époques, deux durées). C'est le
+       chemin le plus direct vers une rafale de 429 — laquelle déclenchait à son
+       tour le défaut 2.2, et la grille se figeait. On amorce par paquets. */
     if(!suite){
-      await Promise.all(F.etages.map(e => Promise.all(e.flux.map(f => lirePageFluxRech(f, seq).catch(()=>false)))));
-      if(seq !== grilleSeq) return;
-      let total = 0, union = false;
+      const tous = [];
+      F.etages.forEach(e => e.flux.forEach(f => tous.push(f)));
+      for(let k = 0; k < tous.length; k += RECH_AMORCE_PAR_FOIS){
+        await Promise.all(tous.slice(k, k + RECH_AMORCE_PAR_FOIS)
+          .map(f => lirePageFluxRech(f, seq).catch(()=>{ f.echec = true; })));
+        if(seq !== grilleSeq) return;
+      }
+      let total = 0, moinsDe = false, lus = 0, attendus = 0;
       F.etages.forEach(e => {
         if(!e.compte) return;
-        if(e.flux.length > 1) union = true;
-        e.flux.forEach(f => { total += (f.total || 0); });
+        /* DÉFAUT 3.1 — « moins de » ne s'affiche plus dès qu'un étage porte
+           plusieurs flux, mais seulement quand ils peuvent SE RECOUPER. Deux
+           médias (films et séries) et deux tranches d'époque disjointes
+           partitionnent : leur somme est exacte. Ce sont les origines de
+           natures différentes qui se recoupent — une coproduction
+           franco-américaine sort des deux côtés. */
+        if(e.flux.length > 1 && e.recoupe) moinsDe = true;
+        e.flux.forEach(f => { attendus++; total += (f.total || 0); if(f.total != null) lus++; });
       });
+      /* DÉFAUT 3.1 — une requête d'amorçage qui échoue comptait pour zéro sans
+         que rien ne le dise : le bandeau pouvait annoncer « 0 résultat »
+         au-dessus de 42 jaquettes. Un total incomplet s'annonce « moins de ». */
+      /* Comparé aux flux QUI COMPTENT, pas à tous : les étages « 13 langues »
+         ne comptent pas — leur total est un sous-ensemble de celui du monde. */
+      if(lus < attendus) moinsDe = true;
       r.total = total;
-      F.exact = !union;
+      F.exact = !moinsDe;
+      /* DÉFAUT 2.3 — RIEN REÇU N'EST PAS ZÉRO RÉSULTAT. Chaque lecture de page
+         est enveloppée d'un `catch`, ce qui rendait la branche « Pas de
+         connexion » inatteignable : hors ligne, l'écran accusait la phrase
+         (« Rien avec cette phrase, retire un mot ») et le seul bouton offert
+         effaçait tout le travail. C'est une régression de ce lot — avant, la
+         panne remontait. */
+      const luTotal = tous.filter(f => f.total != null).length;
+      if(!luTotal && tous.length) throw new Error('RESEAU');
     }
 
     const tamis = tamisActifRech();
@@ -1507,14 +1561,25 @@ async function chargerGrilleRech(suite){
     (suite ? r.res : []).forEach(x => { dejaVus[x.__media+':'+x.id] = 1; });
 
     let fournee = [], tours = 0;
-    while(fournee.length < RECH_CIBLE && F.i < F.etages.length && tours < toursMax * Math.max(1, F.etages[F.i].flux.length)){
+    const budget = ()=> toursMax * Math.max(1, F.etages[F.i].flux.length);
+    while(fournee.length < RECH_CIBLE && F.i < F.etages.length && tours < budget()){
       const e = F.etages[F.i];
       /* Entrelacement : un titre pris à chaque flux, à tour de rôle. Sans ça,
          « français ou américain » rendrait deux cents français puis deux cents
          américains. */
-      let pris = 0;
+      let pris = 0, lu = false;
       for(const f of e.flux){
-        if(!f.tampon.length && !fluxEpuiseRech(f)){ tours++; await lirePageFluxRech(f, seq).catch(()=>{ f.fini = true; }); if(seq !== grilleSeq) return; }
+        if(!f.tampon.length && !fluxEpuiseRech(f)){
+          tours++; lu = true;
+          /* DÉFAUT 2.2 — UNE COUPURE RÉSEAU N'EST PAS UNE FIN DE CATALOGUE.
+             L'échec marquait le flux « fini » DÉFINITIVEMENT : la grille se
+             figeait, « Voir plus » disparaissait sans message et ne revenait
+             pas même une fois le réseau revenu, pendant que le compteur
+             continuait d'annoncer le total complet. On marque un ÉCHEC, qui se
+             retente ; seul `page >= pages` veut dire « épuisé ». */
+          await lirePageFluxRech(f, seq).catch(()=>{ f.echec = true; });
+          if(seq !== grilleSeq) return;
+        }
         if(!f.tampon.length) continue;
         const x = f.tampon.shift();
         pris++;
@@ -1526,8 +1591,13 @@ async function chargerGrilleRech(suite){
         fournee.push(x);
         if(fournee.length >= RECH_CIBLE) break;
       }
-      if(!pris && etageFiniRech(e)) F.i++;
-      else if(!pris) break;
+      /* DÉFAUT 2.4 — UNE SEULE PAGE IMPRODUCTIVE SUFFISAIT À AFFICHER « RIEN ».
+         La boucle sortait au premier tour sans résultat utilisable, sans avoir
+         dépensé son budget — alors qu'il restait tout le catalogue derrière.
+         On ne sort que si l'étage est fini, ou si plus rien n'a été LU (donc
+         plus rien à espérer de ce tour). */
+      if(etageFiniRech(e)){ F.i++; continue; }
+      if(!pris && !lu) break;
     }
 
     /* LE TIRAGE, une fois par fournée, à l'intérieur du rang courant. Puis la
@@ -1542,6 +1612,7 @@ async function chargerGrilleRech(suite){
     if(seq !== grilleSeq) return;
     r.loading = false; r.charge = true;
     r.err = (e && e.message === 'BADKEY') ? 'Service indisponible' : 'Pas de connexion';
+    r.total = null;
     peindreRech();
   }
 }
@@ -2248,7 +2319,9 @@ function grilleRech(){
   if(r.loading && !r.res.length)
     return '<div class="empty"><span class="spin"></span>'+
            '<p style="margin-top:12px">On cherche…</p></div>';
-  if(!r.res.length && r.charge)
+  /* L'état vide ne s'affiche que s'il ne reste VRAIMENT rien à servir : une
+     page improductive ne veut pas dire un catalogue vide. Défaut 2.4. */
+  if(!r.res.length && r.charge && !resteRech())
     return '<div class="empty">'+I.boussole+'<h3>Rien avec cette phrase</h3>'+
       '<p>Retire un mot — le compteur remontera tout de suite.</p>'+
       '<button class="btn ghost" onclick="viderRech()">Repartir de zéro</button></div>';
@@ -2492,6 +2565,17 @@ async function tirerCarteRech(){
       precharger(prochaineAfficheRech(j.i));
       return;
     }
+    /* RELECTURE DU 02/08, DÉFAUT 2.1 — UN MOTEUR ABSENT N'EST PAS UN PAQUET FINI.
+       Changer un critère pendant la partie remet `r.flux` à zéro. `resteRech()`
+       rendait alors faux, et l'écran annonçait « tu as fait le tour du paquet »
+       sans qu'une seule carte ait été distribuée. On recharge : c'est ici que
+       le besoin naît, donc c'est ici que la garde vit. */
+    if(!r.flux){
+      j.loading = true; peindreJeuRech();
+      await chargerGrilleRech();
+      if(seq !== jeuSeq) return;
+      continue;
+    }
     if(!resteRech()){
       /* LE BOUT DU PAQUET. On ne reboucle pas en silence. */
       j.carte = null; j.loading = false; j.fini = true;
@@ -2576,6 +2660,17 @@ function jeuPlusTardRech(){
     if(typeof addMovie === 'function') addMovie(x.id, false);
     return suivante();
   }
+  /* RELECTURE DU 02/08, DÉFAUT 1.1 — LE VERROU PARTAGÉ MANQUAIT ICI.
+     La revue de stabilité a remplacé le verrou global par un verrou PAR
+     RESSOURCE et l'a posé sur les trois chemins d'ajout existants. Ce
+     quatrième chemin — celui que ce lot venait d'écrire — ne le prenait pas :
+     il était donc invisible des trois autres. Un ajout lancé ici laissait le
+     bouton « Ajouter à ma liste » de Découvrir actif sur la même série, et le
+     second téléchargement revenait écrire par-dessus le premier avec un
+     `watched` vide. C'est EXACTEMENT le chemin de perte d'épisodes que ce
+     projet a déjà payé deux fois. `j.occupe` ne protégeait que le jeu. */
+  if(!prendre('serie:'+x.id)) return;
+  const rendreVerrou = ()=> rendre('serie:'+x.id);
   j.occupe = 'Ajout de la série…';
   /* `render()` et pas `peindreJeuRech()` : les puces de famille vivent dans
      l'en-tête, qui n'est pas repeint par le rendu partiel. Elles doivent se
@@ -2587,12 +2682,14 @@ function jeuPlusTardRech(){
     peindreJeuRech();
   }).then(s=>{
     const pose = poserSerieJeuRech(x.id, s);
+    rendreVerrou();
     if(!etatRech().jeu) return;
     etatRech().jeu.occupe = false;
     render();
     if(pose) toast('« '+s.name+' » ajoutée');
     suivante();
   }).catch(()=>{
+    rendreVerrou();
     if(!etatRech().jeu) return;
     etatRech().jeu.occupe = false; render();
     toast("Impossible d'ajouter cette série");
@@ -2703,7 +2800,11 @@ function corpsJeuRech(){
       '<p>'+(gardes ? 'Tu as gardé '+gardes+' titre'+(gardes>1?'s':'')+' pour plus tard. ' : '')+
         'Élargis ta phrase pour en voir d\'autres, ou reviens à la grille.</p>'+
       '<div class="jfbtn">'+
-        '<button class="btn" onclick="fermerJeuRech();ouvrirAjoutRech(1)">Élargir ma recherche</button>'+
+        /* RELECTURE, DÉFAUT 2.6 — ce bouton fermait le jeu PUIS ouvrait la
+           variante « liste des sept » de la feuille, sur un écran où la phrase
+           EST à l'écran. C'est exactement le formulaire refusé le 02/08. Il
+           ouvre désormais la même porte que « + préciser » : UNE question. */
+        '<button class="btn" onclick="fermerJeuRech();ouvrirPreciserRech()">Élargir ma recherche</button>'+
         '<button class="btn ghost" onclick="fermerJeuRech()">Revenir à la grille</button>'+
       '</div></div>';
   }
@@ -2728,9 +2829,18 @@ function corpsJeuRech(){
          prépare l'écran de fin. Il faisait partie de la colonne validée par
          Adrien le 02/08, il est donc retenu. */
       (etatRech().total != null
-        ? '<span class="jcpt">'+j.vues+' / '+etatRech().total.toLocaleString('fr-FR')+'</span>'
+        /* Le même préfixe que la grille : sans lui, la grille disait « moins de
+           43 » et le jeu « 43 » — deux écrans du même lot qui se contredisent.
+           Défaut 3.1 de la relecture. */
+        ? '<span class="jcpt">'+j.vues+' / '+prefixeCompteurRech()+
+          etatRech().total.toLocaleString('fr-FR')+'</span>'
         : '')+
-      '<button class="chip" onclick="ouvrirAjoutRech(1)">Critères ⚙</button></div>';
+      /* RELECTURE, DÉFAUT 3.7 — grisé pendant un ajout comme les trois gestes
+         du bas : changer un critère jette la carte affichée, et le compteur
+         « tu as gardé N titres » se trouvait incrémenté pour un titre qu'on
+         n'avait pas gardé. */
+      '<button class="chip" onclick="ouvrirAjoutRech(1)"'+(j.occupe?' disabled':'')+
+        '>Critères ⚙</button></div>';
 
   h += '<div class="jcarte'+(j.anim?' part-'+j.anim:'')+'" id="jcarte">'+
       '<div class="jaff">'+posterEl(x.poster_path,'w780','',nom,true)+'</div>'+
@@ -2774,7 +2884,7 @@ function corpsJeuRech(){
                  cours revient écrire par-dessus. Trouvé par le test de ce lot,
                  pas à la relecture. */
               '<button class="btn ghost mini" onclick="ouvrirTitre('+x.id+',\''+media+'\',\'search\')"'+
-              (j.occupe?' disabled':'')+'>'+
+              ((j.occupe || occupe('serie:'+x.id))?' disabled':'')+'>'+
               'ⓘ La fiche</button>'+
               /* LOT R2 — POINT 7. L'action quitte le coin haut-droit et rejoint
                  la ligne d'actions, sous le résumé. En pastille avec une coche,

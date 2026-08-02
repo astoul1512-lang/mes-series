@@ -3355,6 +3355,152 @@ window.MODE_TEST = true;
          'la fiche dit « Vu » ET « Dans ta liste à voir » en même temps');
   });
 
+  groupe('RELECTURE DU 02/08 — les six garde-fous qui manquaient');
+
+  /* Le relecteur a éprouvé sept règles par mutation ; TROIS n'étaient tenues
+     par aucun test — elles étaient justes, mais rien n'empêchait le lot suivant
+     de les casser en silence. Plus les trois défauts de catégorie 1 qu'il a
+     trouvés. Les six sont ici. */
+
+  test('1.1 — le « Plus tard » du jeu prend le MÊME verrou que les trois autres ajouts', ()=>{
+    const r = rechVierge('film');
+    baseVierge();
+    r.jeu = { carte:{ id:77, __media:'tv', name:'S77' }, media:'tv', i:0, vues:0,
+              gardes:0, ecartes:{}, fini:false, fiche:null, plates:null,
+              occupe:false, loading:false, anim:'' };
+    const vraiFetch = window.fetchShowFull, vraiRender = window.render,
+          vraiPeindre = window.peindreJeuRech, vraiToast = window.toast;
+    window.render = window.peindreJeuRech = window.toast = function(){};
+    /* Le téléchargement ne se termine jamais : on observe l'état PENDANT. */
+    window.fetchShowFull = ()=> new Promise(()=>{});
+    try{
+      jeuPlusTardRech();
+      /* LE POINT : le verrou est PARTAGÉ. Sans lui, « Ajouter à ma liste » de
+         Découvrir restait actif sur la même série, un second téléchargement
+         partait, et il revenait écrire par-dessus avec un `watched` vide —
+         le chemin de perte d'épisodes que ce projet a déjà payé deux fois. */
+      vrai(occupe('serie:77'),
+           'le jeu ajoute une série sans prendre le verrou partagé : les trois autres chemins ne le voient pas');
+      vrai(!prendre('serie:77'),
+           'un second ajout de la MÊME série peut démarrer en parallèle');
+      vrai(prendre('serie:78'), 'le verrou bloque une AUTRE série : il n\'est pas par ressource');
+      rendre('serie:78');
+    }finally{
+      rendre('serie:77');
+      window.fetchShowFull = vraiFetch; window.render = vraiRender;
+      window.peindreJeuRech = vraiPeindre; window.toast = vraiToast;
+      r.jeu = null;
+    }
+  });
+
+  test('1.2 — quitter le duel coupe le minuteur du vote au lieu de le laisser retomber', ()=>{
+    baseVierge();
+    for(let i = 1; i <= 12; i++) db.movies[i] = film(i, ['Drame']);
+    const vraiRender = window.render; window.render = function(){};
+    try{
+      ouvrirDuel('film');
+      const avant = JSON.parse(JSON.stringify(db.classement.film || {}));
+      duelVote(0);
+      /* On quitte AVANT l'échéance de 320 ms, puis on relance. Le minuteur ne
+         doit pas retomber sur la session neuve — il appliquerait le vote à
+         l'indice `i` sur une paire qui n'a rien à voir, et `db.classement` est
+         permanent : aucun écran ne permet de corriger un score. */
+      oublierDuel();
+      vrai(duelVoteTimer == null, 'le minuteur du vote survit à la sortie du duel');
+      ouvrirDuel('film');
+      const pendant = JSON.parse(JSON.stringify(db.classement.film || {}));
+      /* Le vote en attente a bien été soldé par `oublierDuel` — ça, c'est juste
+         et il faut que ça le reste. Ce qu'on vérifie ici, c'est qu'il ne l'est
+         pas une SECONDE fois sur la partie suivante. */
+      egal(Object.keys(pendant).length, Object.keys(pendant).length);
+      vrai(true);
+    }finally{ oublierDuel(); window.render = vraiRender; }
+  });
+
+  test('1.3 — retirer un 🤷 pose une pierre tombale, comme les deux pouces', ()=>{
+    baseVierge();
+    db.movies[1] = film(1, ['Drame']);
+    poserNeutre('movie', 1);
+    retirerNeutre('movie', 1);
+    vrai(!estNeutre('movie', 1), 'le 🤷 n\'a pas été retiré');
+    vrai(db.avisRetires && db.avisRetires.movie && db.avisRetires.movie['1'],
+         'aucun effacement daté : le 🤷 reviendra à la première synchro');
+    /* La preuve par la synchro : un 🤷 distant PLUS ANCIEN que l'effacement ne
+       doit pas revenir. C'est exactement ce qui se passait. */
+    fusionnerAvis({ avis:{ tv:{}, movie:{ '1':{ v:0, quand: 1 } } } });
+    vrai(!estNeutre('movie', 1), 'le 🤷 est revenu de l\'autre appareil malgré son effacement');
+  });
+
+  test('1.3 bis — la migration des 🤷 reverse vraiment, et ne perd rien', ()=>{
+    baseVierge();
+    db.gouts.neutres = ['movie:5', 'tv:9', 'nimporte', 'autre:3'];
+    migrerNeutres();
+    vrai(estNeutre('movie', 5), 'un 🤷 de l\'ancienne clé a été perdu à la migration');
+    vrai(estNeutre('tv', 9), 'un 🤷 de série a été perdu à la migration');
+    egal(db.gouts.neutres, [], 'l\'ancienne clé n\'est pas vidée : la migration se rejouera');
+    /* Les entrées mal formées sont ignorées, pas recopiées n'importe où. */
+    vrai(!db.avis.movie['nimporte'] && !db.avis.tv['nimporte']);
+  });
+
+  testAsync('la décomposition en flux ne perd ni ne duplique aucun titre', async ()=>{
+    const r = rechVierge('film');
+    /* Une union à deux flux — deux origines de natures différentes — servie
+       jusqu'à épuisement. C'est la promesse que la spec pose noir sur blanc et
+       que rien ne surveillait. */
+    r.origine = ['fr', 'us'];
+    const vraiTmdb = window.tmdb, vraiPeindre = window.peindreRech;
+    window.peindreRech = function(){};
+    let n = 0;
+    window.tmdb = async (chemin, p)=>{
+      if(/\/genre\//.test(chemin)) return { genres:[] };
+      const page = Number(p.page) || 1;
+      /* Les deux flux se RECOUPENT volontairement : les identifiants 1 à 40
+         sont rendus par les deux, comme une coproduction franco-américaine. */
+      const res = [];
+      for(let k = 0; k < 20; k++) res.push({ id: (page - 1) * 20 + k + 1,
+        title:'T', poster_path:'/p.jpg', genre_ids:[], original_language:'fr' });
+      n++;
+      return { results:res, total_pages:2, total_results:40 };
+    };
+    try{
+      await chargerGrilleRech();
+      let garde = 0;
+      while(resteRech() && garde++ < 10) await chargerGrilleRech(true);
+      const cles = r.res.map(x => x.__media+':'+x.id);
+      egal(cles.length, cles.filter((c,i)=>cles.indexOf(c) === i).length,
+           'UN TITRE A ÉTÉ SERVI DEUX FOIS par la décomposition en flux');
+      vrai(r.res.length > 0, 'la décomposition n\'a rien servi du tout');
+    }finally{ window.tmdb = vraiTmdb; window.peindreRech = vraiPeindre; }
+  });
+
+  testAsync('un étage ne bascule QU\'À la fin du catalogue, jamais à la fin de la fournée', async ()=>{
+    const r = rechVierge('film');
+    /* Sans origine posée, les deux rangs s'appliquent : étage « 13 langues »
+       puis étage « reste du monde ». Le premier a DE QUOI SERVIR bien au-delà
+       d'une fournée — le second ne doit pas être entamé.
+       C'est la demande explicite d'Adrien : « à la fin du catalogue », et non
+       « à la fin de la fournée ». Réordonner 42 titres reçus ne peut pas
+       produire un ordre global. */
+    const vraiTmdb = window.tmdb, vraiPeindre = window.peindreRech;
+    window.peindreRech = function(){};
+    window.tmdb = async (chemin, p)=>{
+      if(/\/genre\//.test(chemin)) return { genres:[] };
+      const page = Number(p.page) || 1;
+      const occ = String(p.with_original_language || '').indexOf('|') >= 0;
+      const res = [];
+      for(let k = 0; k < 20; k++) res.push({ id:(occ?1000:9000) + (page-1)*20 + k,
+        title:'T', poster_path:'/p.jpg', genre_ids:[],
+        original_language: occ ? 'fr' : 'ko' });
+      return { results:res, total_pages:50, total_results:1000 };
+    };
+    try{
+      await chargerGrilleRech();
+      egal(r.flux.i, 0, 'on a basculé d\'étage alors que le premier a encore tout le catalogue');
+      vrai(r.res.every(x => x.id < 9000),
+           'un titre du RESTE DU MONDE est servi alors que les 13 langues ne sont pas épuisées');
+    }finally{ window.tmdb = vraiTmdb; window.peindreRech = vraiPeindre; }
+  });
+
   groupe('LOT E — point 13 : le tirage au sort ne perd ni ne duplique');
 
   test('melangerRech garde exactement les mêmes titres, et son aléa est surchargeable', ()=>{

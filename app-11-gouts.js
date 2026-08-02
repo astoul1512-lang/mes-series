@@ -411,9 +411,19 @@ function estNeutre(media, id){
 function aRepondu(media, id){
   return avisDe(media, id) !== 0 || estNeutre(media, id);
 }
+/* RELECTURE DU 02/08, DÉFAUT 1.3 — IL MANQUAIT LA PIERRE TOMBALE.
+   `retirerAvis` pose une date d'effacement dans `db.avisRetires` ; celle-ci
+   supprimait la clé sans en poser. `fusionnerAvis` faisait donc revenir le 🤷
+   depuis l'autre appareil, qu'aucun effacement daté ne contredisait — et le
+   retirer à nouveau n'y changeait rien, il revenait encore. Un 🤷 est une
+   réponse comme les deux autres : il s'efface comme les deux autres. */
 function retirerNeutre(media, id){
-  if(db.avis && db.avis[media] && db.avis[media][id] && db.avis[media][id].v === 0)
-    delete db.avis[media][id];
+  const cle = String(id);
+  if(!(db.avis && db.avis[media] && db.avis[media][cle] && db.avis[media][cle].v === 0)) return;
+  delete db.avis[media][cle];
+  db.avisRetires = db.avisRetires || { tv:{}, movie:{} };
+  db.avisRetires[media] = db.avisRetires[media] || {};
+  db.avisRetires[media][cle] = Date.now();
 }
 /* Poser 🤷. Repasser le même bouton l'ANNULE, comme les deux pouces : trois
    cibles, un seul geste de retour, le même partout.
@@ -2757,7 +2767,12 @@ function fermerDuel(){
    l'échéance : la carte s'était éclairée sous les yeux de l'utilisateur, et le
    duel n'était jamais compté. On solde le vote en attente avant d'effacer.
    Revue de stabilité du 02/08, constat A3-8. */
+/* La poignée du minuteur de vote — voir `duelVote`. */
+let duelVoteTimer = null;
 function oublierDuel(){
+  /* On coupe AVANT de solder : sans ça, le vote partait deux fois — une fois
+     ici, une fois quand le minuteur retombait. Défaut 1.2 de la relecture. */
+  clearTimeout(duelVoteTimer); duelVoteTimer = null;
   if(duel && duel.actif && duel.choix && duel.paire){
     const i = duel.paire.findIndex(t => cleDuel(t) === duel.choix);
     if(i >= 0){ try{ appliquerVote(i, true); }catch(e){} }
@@ -2848,7 +2863,16 @@ function duelVote(i){
   if(!duel.actif || !duel.paire || duel.choix) return;
   duel.choix = cleDuel(duel.paire[i]);
   render();
-  setTimeout(()=> appliquerVote(i), 320);
+  /* RELECTURE DU 02/08, DÉFAUT 1.2 — CE MINUTEUR N'AVAIT PAS DE POIGNÉE.
+     Quitter l'écran puis relancer « Départager » dans les 320 ms le faisait
+     retomber sur la session NEUVE : le garde `!duel.actif` la laissait passer
+     puisqu'une partie était bien active, et le vote s'appliquait à l'indice `i`
+     sur une paire qui n'avait rien à voir. Deux titres voyaient leur score
+     bouger sans que personne n'ait choisi — et `db.classement` est permanent,
+     il monte dans la synchro, et aucun écran ne permet de corriger un score.
+     On garde la poignée, et `oublierDuel` la coupe. */
+  clearTimeout(duelVoteTimer);
+  duelVoteTimer = setTimeout(()=>{ duelVoteTimer = null; appliquerVote(i); }, 320);
 }
 /* `silencieux` : on solde le score sans enchaîner sur le duel suivant ni
    repeindre. Sert au seul cas d'`oublierDuel`, qui range la session pendant
