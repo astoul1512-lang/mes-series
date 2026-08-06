@@ -87,28 +87,24 @@ let rechTimer = null, rechSeq = 0, rechAbort = null, grilleSeq = 0, jeuSeq = 0;
    Les quatre puces restent en haut, collantes (§4.4). Ce ne sont pas des
    filtres parmi d'autres : c'est le premier mot de la phrase, et c'est lui qui
    décide à quel point de terminaison de TMDB on parle. */
-/* ===== POINT 14 — A1 : « Films » VEUT DIRE PRISES DE VUES RÉELLES =====
+/* ===== POINT 14 (cycle 2), RÉVISÉ PAR LE POINT 1 DU CYCLE 3 =====
 
-   Une cinquième puce, « Animation » : les films d'animation, TOUTES origines
-   (contrairement à « Animés », qui est asiatique par définition). Les deux ne
-   se recouvrent jamais — l'une ne rend que des films, l'autre que des séries.
+   A1 : « Films » veut dire prises de vues réelles — la décision d'Adrien du
+   02/08 (« si on a vu ça en A1 ça veut dire que non ça ne sort pas ») est
+   CONSERVÉE, mais elle devient UN DÉFAUT ET NON UN MUR : cocher explicitement
+   le genre « Animation » dans les filtres la lève (voir
+   `traitementAnimRech`). C'est ce qui a permis de retirer la cinquième puce
+   « Animation », qu'Adrien ne voulait plus (03/08 : « je n'ai jamais demandé
+   de puce animation ») : les films d'animation restent atteignables sous
+   « Films », mais seulement si on les demande.
 
-   Et « Films » cesse de contenir l'animation, exactement comme « Séries »
-   exclut déjà ce que « Animés » contient. Symétrie exacte, et c'est la
-   décision d'Adrien du 02/08 : « si on a vu ça en A1 ça veut dire que non ça
-   ne sort pas ».
-
-   NAMING : « Animés » et « Animation » côte à côte sont proches à l'œil. On
-   les garde parce qu'ils ne désignent pas la même chose et ne se recouvrent
-   pas ; si la confusion se voit à l'usage, c'est un libellé à changer, pas une
-   mécanique. */
+   QUATRE puces, donc — Tout · Films · Séries · Animés — et « Tout » est la
+   famille par défaut : à l'ouverture on voit tout, mélangé. */
 const RECH_FAMILLES = [
   { id:'tout',  label:'Tout',   art:'quelque chose', nom:'titres' },
   { id:'film',  label:'Films',  art:'un film',  media:'movie', reel:true, nom:'films' },
   { id:'serie', label:'Séries', art:'une série', media:'tv',   nom:'séries' },
-  { id:'anime', label:'Animés', art:'un animé', media:'tv', anime:true, nom:'animés' },
-  { id:'animation', label:'Animation', art:"un film d'animation", media:'movie',
-    animFilm:true, nom:"films d'animation" }
+  { id:'anime', label:'Animés', art:'un animé', media:'tv', anime:true, nom:'animés' }
 ];
 /* LOT R2 — points 16 et 20. LES QUATRE PUCES SE PARTAGENT LE CATALOGUE.
    « Animés » ne veut plus dire « japonais » mais « animation asiatique » :
@@ -530,7 +526,10 @@ const RECH_MOTS = [
    mélanger leurs états est la faute que §E1 avait déjà réparée une fois. */
 function etatRech(){
   if(!ui.rech) ui.rech = {
-    fam:'film',
+    /* POINT 1 DU CYCLE 3 — « plutôt que d'arriver sur film j'aimerais qu'on
+       arrive sur tout par défaut » (Adrien, 03/08). Plus rien d'autre ne force
+       la famille : `phraseDuJour`, qui posait `film`, a disparu avec lui. */
+    fam:'tout',
     q:'', qtitres:[], qgens:[], qloading:false, qerr:'',
     /* La phrase. `amb` est une ambiance mesurée ; `sans` liste les ingrédients
        qu'on lui a retirés à la main. Les autres clés sont les mots explicites. */
@@ -639,7 +638,11 @@ function nouvelleOuvertureRech(){
   r.epoque = []; r.duree = []; r.note = null; r.pasvu = null; r.plate = [];
   r.jeu = null;
   r.touche = false;
-  phraseDuJour();
+  /* POINT 1 DU CYCLE 3 — plus de proposition du jour : la phrase s'ouvre VIDE,
+     réduite au sujet (« quelque chose », « un film »… — il vient de
+     `RECH_FAMILLES[].art` et n'est pas un filtre), et la famille repart sur
+     « Tout ». `phraseDuJour()` et sa graine ont disparu avec cette règle. */
+  r.fam = 'tout';
   r.res = []; r.total = null; r.page = 1; r.pages = 1; r.charge = false; r.err = '';
 }
 function reprendreRech(){
@@ -654,32 +657,18 @@ function reprendreRech(){
   relancerRech();
 }
 
-/* LA PHRASE N'EST JAMAIS VIDE (§4.5). À l'ouverture elle porte déjà une
-   proposition plausible. On prend une AMBIANCE mesurée plutôt qu'un assemblage
-   improvisé : elle est garantie de rendre entre 195 et 490 titres, et elle
-   montre d'un coup d'œil que les mots bleus se tapent.
-
-   Elle change chaque jour, comme le reste de l'app (§3.9) : la graine est la
-   date, donc stable dans la journée et différente demain. Et elle penche vers
-   les genres retenus du profil quand il y en a — sans jamais s'y enfermer. */
-function grainePhraseRech(){
-  const s = todayISO();
-  let h = 0;
-  for(let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  return h;
-}
-function phraseDuJour(){
-  const r = etatRech();
-  /* POINT 11 — les goûts déclarés sont désormais RANGÉS PAR FAMILLE. Cette
-     fonction pose `r.fam = 'film'` deux lignes plus bas, et toutes les recettes
-     mesurées sont des films : la famille n'est pas à deviner. */
-  const gouts = (typeof genresRetenus === 'function') ? genresRetenus('film') : [];
-  const proches = RECH_AMBIANCES.filter(a => (a.genresProfil||[]).some(g => gouts.indexOf(g) >= 0));
-  const source = proches.length ? proches : RECH_AMBIANCES;
-  const a = source[grainePhraseRech() % source.length];
-  r.fam = 'film';                       // toutes les recettes mesurées sont des films
-  r.amb = a.id; r.sans = [];
-}
+/* §4.5, RÉVISÉ PAR LE POINT 1 DU CYCLE 3 — LA PHRASE EST VIDE À L'OUVERTURE.
+   L'ancienne règle (« la phrase n'est jamais vide », une ambiance du jour
+   pré-remplie) faisait ouvrir la Recherche avec des filtres qu'on n'a jamais
+   posés : « quand on ouvre l'appli [...] on a des filtres pré-remplis,
+   j'aimerais qu'on ait aucun filtre pré-rempli » (Adrien, 03/08, IMG_3127).
+   À l'ouverture, la phrase ne porte plus que le MOT DE MÉDIA de la famille —
+   « quelque chose » sur Tout, « un film » sur Films, etc. Ce mot n'est pas un
+   filtre : c'est le sujet de la phrase, il vient de `RECH_FAMILLES[].art`.
+   `phraseDuJour()` et `grainePhraseRech()` sont supprimées avec la règle.
+   Sans aucun critère, la grille montre TOUT : les titres du moment, films et
+   séries entrelacés, SANS restriction aux plateformes déclarées — un cas de
+   test le verrouille. */
 
 /* ============================== Les gestes ============================== */
 
@@ -687,6 +676,16 @@ function setFamRech(id){
   const r = etatRech();
   if(r.fam === id) return;
   r.fam = id;
+  /* POINT 3 DU CYCLE 3 — LE MAINTIEN DES ANCIENNES AFFICHES S'ARRÊTE À LA
+     FRONTIÈRE DE LA FAMILLE. La règle du point 5 du cycle 2 (« les affiches
+     précédentes restent à l'écran jusqu'à l'arrivée des nouvelles ») est
+     RESTREINTE ici, pas annulée : elle vaut quand on AFFINE une phrase — poser
+     ou retirer un mot — parce que c'est le même catalogue qui se resserre.
+     Changer de puce, c'est changer de catalogue : garder des séries à l'écran
+     sous la puce « Films » n'est pas une transition douce, c'est un mensonge
+     (vidéo d'Adrien du 03/08, 14:56:19). On vide franchement, et
+     `chargerGrilleRech` affichera l'état de chargement. */
+  r.res = []; r.charge = false;
   /* Une ambiance de film n'a aucun sens sur les séries, un sous-genre d'animé
      aucun sur les films : plutôt que de traîner un réglage invisible qui
      filtrerait la grille sans que rien ne le dise, on le retire. Le reste de
@@ -694,7 +693,7 @@ function setFamRech(id){
      familles et survit. */
   if(r.amb && !ambianceRech(r.amb)){ r.amb = null; r.sans = []; }
   r.genre = []; r.touche = true;
-  /* La durée ne veut rien dire hors d'un film — et « Animation » en est un. */
+  /* La durée ne veut rien dire hors d'un film. */
   if(!familleRech().media || familleRech().media !== 'movie') r.duree = [];
   /* LOT R2 — l'origine n'a pas la même liste sur les animés (japonais, chinois,
      coréen) que partout ailleurs. Une origine qui n'existe plus dans la nouvelle
@@ -1129,11 +1128,9 @@ function paramsSocleRech(media){
     const anim = genreParNom('tv','Animation');
     if(anim != null) p.with_genres = String(anim);
   }
-  /* La puce « Animation » : films, genre 16, TOUTES origines. */
-  if(f.animFilm){
-    const anim = genreParNom('movie','Animation');
-    if(anim != null) p.with_genres = String(anim);
-  }
+  /* (La puce « Animation » et son drapeau `animFilm` ont été retirés au
+     point 1 du cycle 3 : les films d'animation se demandent désormais sous
+     « Films », en cochant le genre — voir `traitementAnimRech`.) */
 
   /* 2. L'ambiance mesurée. Ses paramètres sont recopiés tels quels — sauf le
      REFUS, qui n'est pas un paramètre TMDB mais un mot portant plusieurs
@@ -1335,9 +1332,17 @@ function jeuxParamsRech(media){
 function traitementAnimRech(){
   const f = familleRech();
   /* Le partage de forme n'existe que sous « Films ». Ailleurs il n'a pas de
-     sens : « Séries » garde l'animation occidentale, « Animés » et
-     « Animation » SONT de l'animation, et « Tout » n'exclut rien. */
+     sens : « Séries » garde l'animation occidentale, « Animés » EST de
+     l'animation, et « Tout » n'exclut rien. */
   if(!f.reel) return 'garde';
+  /* POINT 1 DU CYCLE 3 — A1 DEVIENT UN DÉFAUT, PAS UN MUR. Sous « Films »,
+     l'animation reste refusée par défaut — demander un film d'action ne rend
+     toujours pas Kung Fu Panda — SAUF si le genre « Animation » est
+     explicitement coché dans les filtres : alors elle revient, et Ghibli,
+     Pixar et Shrek sont atteignables. Adrien, 03/08 : « dans Films, mais
+     seulement si je les demande ». On regarde le genre AVANT tout le reste. */
+  const anim = genreParNom('movie','Animation');
+  if(anim != null && genresPosesRech('movie').indexOf(anim) >= 0) return 'garde';
   const a = ambianceRech(etatRech().amb);
   return (a && a.anim) ? a.anim : 'refus';
 }
@@ -1822,7 +1827,14 @@ function puceFamillesRech(){
      famille vide les paquets et retire une carte, ce qui laisserait le
      téléchargement en cours se terminer sur un écran qui a changé de sujet. */
   const fige = !!(r.jeu && r.jeu.occupe);
-  return '<div class="chips types" data-rail="fam-rech">'+RECH_FAMILLES.map(f=>
+  /* POINT 3 DU CYCLE 3 — l'identifiant `rpuces` rend la rangée REPEIGNABLE :
+     elle vit dans le sous-titre de l'en-tête, donc HORS de `#rres`, et
+     `peindreRech` ne la réécrivait jamais. La puce allumée restait sur
+     l'ancienne famille pendant que la phrase et la grille changeaient. Les
+     autres morceaux hors de `#rres` sont couverts : le champ (`#q`) est mis à
+     jour par la frappe elle-même — le réécrire ici perdrait le focus — et la
+     croix `.qclear` est déjà basculée par `peindreRech`. */
+  return '<div class="chips types" id="rpuces" data-rail="fam-rech">'+RECH_FAMILLES.map(f=>
     '<button class="chip '+(r.fam===f.id?'on':'')+'"'+(fige?' disabled':'')+
       ' onclick="setFamRech(\''+f.id+'\')">'+esc(f.label)+'</button>').join('')+'</div>';
 }
@@ -1835,6 +1847,11 @@ function peindreRech(){
   const el = document.getElementById('rres');
   if(!el) return render();
   el.innerHTML = corpsRech();
+  /* POINT 3 DU CYCLE 3 — les puces se repeignent AVEC le reste : la puce
+     allumée, le mot de média de la phrase et le média des résultats doivent
+     désigner la même famille à tout instant, y compris pendant le chargement. */
+  const puces = document.getElementById('rpuces');
+  if(puces) puces.outerHTML = puceFamillesRech();
   const c = document.querySelector('.qclear');
   if(c) c.classList.toggle('masque', !etatRech().q);
 }
@@ -2285,7 +2302,10 @@ function ouvrirAjoutRech(tous){
 function genresRech(){
   const l = genresTMDB[mediaRech()] || [];
   const f = familleRech();
-  return l.filter(g => !((f.anime || f.animFilm) && /animation/i.test(g.nom)))
+  /* POINT 1 DU CYCLE 3 — sous « Films », le genre « Animation » doit RESTER
+     proposable : c'est lui qui lève le refus d'A1 (voir `traitementAnimRech`).
+     Seule la famille Animés le retire, où il est la définition du cadre. */
+  return l.filter(g => !(f.anime && /animation/i.test(g.nom)))
           /* POINT 16 — les genres mesurés vides sur la puce Animés ne sont plus
              proposés : offrir une réponse qui rendra zéro est pire que ne rien
              offrir. Le retrait est mesuré, jamais supposé. */

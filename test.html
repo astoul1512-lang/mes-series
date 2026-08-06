@@ -2271,12 +2271,218 @@ window.MODE_TEST = true;
     egal(p['vote_average.gte'], '7.5', 'la note de la recette a gagné');
   });
 
-  test('la phrase n\'est jamais vide à l\'ouverture', ()=>{
+  /* POINT 1 DU CYCLE 3 — la règle §4.5 est RÉVISÉE : ce test vérifiait
+     l'inverse (« la phrase n'est jamais vide »). À l'ouverture, la phrase ne
+     porte plus que le sujet, la famille est « Tout », et rien ne force les
+     plateformes déclarées. */
+  test('cycle 3, point 1 — la phrase est VIDE à l\'ouverture, sur la famille « Tout »', ()=>{
     rechVierge('film');
     nouvelleOuvertureRech();
-    const mots = motsPhraseRech();
-    vrai(mots.length >= 1, 'la phrase est vide : personne ne sait par où commencer');
-    vrai(phraseTexte().indexOf('Je veux') === 0, 'la phrase ne se lit pas');
+    const r = etatRech();
+    egal(r.fam, 'tout', 'la famille par défaut n\'est pas « Tout »');
+    egal(motsPhraseRech().length, 0, 'la phrase porte un mot qui n\'a pas été posé');
+    egal(r.amb, null, 'une ambiance pré-remplie a survécu');
+    egal(phraseTexte(), 'Je veux quelque chose', 'la phrase ne se réduit pas au sujet');
+  });
+
+  test('cycle 3, point 1 — sans critère, aucune requête ne porte les plateformes', ()=>{
+    rechVierge('film');
+    nouvelleOuvertureRech();
+    genresTMDB.tv = [{ id:16, nom:'Animation' }];
+    genresTMDB.movie = [{ id:16, nom:'Animation' }];
+    /* « Tout » interroge les deux médias, entrelacés, sans rien exclure. */
+    const e = etagesRech();
+    const medias = {};
+    e.forEach(x => x.flux.forEach(f => {
+      medias[f.media] = 1;
+      vrai(f.p.with_watch_providers === undefined,
+           'une requête sans critère est restreinte aux plateformes déclarées');
+      vrai(f.p.without_genres === undefined,
+           '« Tout » exclut quelque chose alors qu\'il n\'exclut rien');
+    }));
+    egal(Object.keys(medias).sort().join(','), 'movie,tv',
+         '« Tout » n\'interroge pas les deux médias');
+    genresTMDB.tv = null; genresTMDB.movie = null;
+  });
+
+  test('cycle 3, point 1 — quatre puces, et plus aucune trace d\'`animFilm`', ()=>{
+    egal(RECH_FAMILLES.length, 4, 'il n\'y a pas quatre familles');
+    egal(RECH_FAMILLES.map(f=>f.id).join(','), 'tout,film,serie,anime',
+         'les familles ne sont pas Tout · Films · Séries · Animés');
+    vrai(!RECH_FAMILLES.some(f => f.animFilm), 'le drapeau animFilm subsiste');
+  });
+
+  test('cycle 3, point 1 — sous Films, l\'animation revient si (et seulement si) son genre est coché', ()=>{
+    const r = rechVierge('film');
+    genresTMDB.movie = [{ id:16, nom:'Animation' }, { id:28, nom:'Action' }];
+    /* Sans genre coché : le régime général, le refus — Kung Fu Panda ne sort pas. */
+    egal(traitementAnimRech(), 'refus', 'A1 a disparu : l\'animation sort sans être demandée');
+    /* Genre « Animation » coché : le mur devient une porte. */
+    r.genre = ['Animation'];
+    egal(traitementAnimRech(), 'garde', 'cocher Animation ne lève pas le refus');
+    const jeux = jeuxParamsRech('movie');
+    vrai(jeux.some(p => String(p.with_genres||'').split('|').indexOf('16') >= 0),
+         'le genre coché ne part pas dans la requête');
+    /* Et sous Films toujours : le genre reste PROPOSABLE — c'est lui qui
+       débloque tout. */
+    r.genre = [];
+    vrai(genresRech().some(g => /animation/i.test(g.nom)),
+         'le genre Animation n\'est plus proposé sous Films');
+    genresTMDB.movie = null;
+  });
+
+  test('cycle 3, point 1 — non-régression : les refus d\'ambiance et la relégation tiennent', ()=>{
+    const r = rechVierge('film');
+    genresTMDB.movie = [{ id:16, nom:'Animation' }];
+    r.amb = 'action';
+    egal(traitementAnimRech(), 'refus', 'le refus de l\'ambiance action a sauté');
+    r.amb = 'reflechir';
+    egal(traitementAnimRech(), 'relegue', 'la relégation de « Ça fait réfléchir » a sauté');
+    genresTMDB.movie = null;
+  });
+
+  test('cycle 3, point 3 — changer de puce vide la grille ; poser un mot la garde', ()=>{
+    const r = rechVierge('film');
+    /* (pas `t_` ici : il est déclaré plus bas dans le fichier, hors de portée) */
+    r.res = [{ id:1, __media:'movie', genre_ids:[] }, { id:2, __media:'movie', genre_ids:[] }];
+    r.charge = true;
+    /* Poser un mot : `relancerRech` garde les affiches (point 5 du cycle 2)… */
+    const vraiCharger = window.chargerGrilleRech, vraiRender = window.render;
+    window.chargerGrilleRech = function(){};
+    window.render = function(){};
+    try{
+      relancerRech();
+      egal(r.res.length, 2, 'affiner une phrase a vidé la grille : régression du point 5 du cycle 2');
+      /* …changer de puce : on vide franchement, l\'ancien catalogue ment. */
+      setFamRech('serie');
+      egal(r.res.length, 0, 'les résultats de l\'ancienne famille sont restés à l\'écran');
+      egal(r.charge, false, 'l\'écran croit encore que la grille est chargée');
+    } finally { window.chargerGrilleRech = vraiCharger; window.render = vraiRender; }
+  });
+
+  /* ========== CYCLE 3, POINT 2 — le calendrier d'« En cours » ==========
+     Une série « à voir » DÉJÀ DIFFUSÉE ne remplit plus le calendrier ; une
+     série « à voir » PAS ENCORE diffusée y annonce sa première ; les séries
+     commencées gardent leurs prochains épisodes, sans étiquette. */
+  groupe('Cycle 3, point 2 — « En cours » et les séries à voir');
+
+  function calFollow(){
+    /* Le HTML de l'écran entier : le correctif vit dans la boucle du
+       calendrier de `viewFollow`, on l'éprouve par ce qui est peint. */
+    oublierOrdreRattrapage();
+    return viewFollow();
+  }
+
+  test('une série à voir DÉJÀ diffusée n\'apparaît nulle part', ()=>{
+    baseVierge();
+    /* Le cas de la capture d'Adrien : *Grand Blue Dreaming*, diffusée depuis
+       des années, dans la liste à voir, épisodes futurs annoncés. */
+    db.shows[901] = serie(901, [ep(1, HIER), ep(2, DEMAIN)], {},
+                          { status:'Returning Series', first:'2018-07-14' });
+    const html = calFollow();
+    vrai(html.indexOf('S901') < 0, 'la série à voir déjà diffusée remplit encore le calendrier');
+  });
+
+  test('une série à voir SANS date de première connue n\'apparaît pas non plus', ()=>{
+    baseVierge();
+    db.shows[902] = serie(902, [ep(1, DEMAIN)], {}, { status:'Returning Series' });
+    const html = calFollow();
+    vrai(html.indexOf('S902') < 0,
+         'sans date de première, on doit retenir plutôt que déverser');
+  });
+
+  test('une série à voir PAS ENCORE diffusée annonce sa première — « Premier épisode »', ()=>{
+    baseVierge();
+    const APRES = new Date(Date.now()+8*86400000).toISOString().slice(0,10);
+    db.shows[903] = serie(903, [ep(1, DEMAIN), ep(2, APRES)], {},
+                          { status:'Returning Series', first: DEMAIN });
+    const html = calFollow();
+    vrai(html.indexOf('S903') >= 0, 'la série jamais diffusée a disparu du calendrier');
+    vrai(html.indexOf('Premier épisode') >= 0, 'l\'étiquette « Premier épisode » manque');
+    egal((html.match(/Premier épisode/g)||[]).length, 1,
+         'l\'étiquette doit marquer la première, pas chaque épisode annoncé');
+    vrai(html.indexOf('Pas commencé') < 0, 'l\'ancienne étiquette « Pas commencé » est revenue');
+    /* Et pas dans « À rattraper » : on ne rattrape pas ce qu\'on n\'a pas commencé. */
+    vrai(html.indexOf('rattrap') < 0 || html.split('data-rail="rattrap"').length === 1,
+         'une série jamais commencée est entrée dans « À rattraper »');
+  });
+
+  test('une série COMMENCÉE garde ses prochains épisodes, sans étiquette', ()=>{
+    baseVierge();
+    db.shows[904] = serie(904, [ep(1, HIER), ep(2, DEMAIN)], { '1x1':1 },
+                          { status:'Returning Series', first:'2020-01-01' });
+    const html = calFollow();
+    vrai(html.indexOf('S904') >= 0, 'les prochains épisodes d\'une série en cours ont disparu — '+
+         'c\'est l\'essentiel de ce qu\'Adrien voit ici');
+    vrai(html.indexOf('Premier épisode') < 0 && html.indexOf('Pas commencé') < 0,
+         'une série en cours porte une étiquette qui ne lui revient pas');
+  });
+
+  test('une série en pause reste absente des deux sections', ()=>{
+    baseVierge();
+    db.shows[905] = serie(905, [ep(1, HIER), ep(2, DEMAIN)], { '1x1':1 },
+                          { status:'Returning Series', first: DEMAIN, pause:true });
+    const html = calFollow();
+    vrai(html.indexOf('S905') < 0, 'la pause ne retire plus la série de l\'écran');
+  });
+
+  /* ========== CYCLE 3, POINT 6 — le suivi en retour, côté écran ==========
+     La partie serveur (fonction, déclencheur, absence de policy insert) se
+     vérifie dans Supabase — voir RAPPORT.md. Ici : la réciprocité lue en
+     mémoire, le bouton, la mention, et le bloc d'annonce. */
+  groupe('Cycle 3, point 6 — le suivi en retour');
+
+  function partageDeTest(suivis, abonnes){
+    baseVierge();
+    db.abosIgnores = {};
+    partage.suivis  = suivis  || [];
+    partage.abonnes = abonnes || [];
+    partage.charge = true;
+  }
+  const THOMAS = { id:'uid-thomas', pseudo:'Thomas' };
+
+  test('le bouton « Suivre » : sur mes abonnés non réciproques, et eux seuls', ()=>{
+    partageDeTest([], [THOMAS]);
+    const abonne = ligneAbo(THOMAS, 'suivi');
+    vrai(abonne.indexOf('>Suivre<') >= 0, 'le bouton manque sur un abonné non réciproque');
+    vrai(abonne.indexOf('Vous vous suivez') < 0, 'la mention apparaît sans réciprocité');
+    /* Jamais sur « Mes abonnements » : suivre quelqu'un qu'on suit déjà ne
+       veut rien dire. */
+    partageDeTest([THOMAS], []);
+    vrai(ligneAbo(THOMAS, 'suiveur').indexOf('>Suivre<') < 0,
+         'le bouton apparaît dans « Mes abonnements »');
+  });
+
+  test('la mention « Vous vous suivez » : des deux côtés, et le bouton disparaît', ()=>{
+    partageDeTest([THOMAS], [THOMAS]);
+    const chezAbonnes = ligneAbo(THOMAS, 'suivi');
+    const chezSuivis  = ligneAbo(THOMAS, 'suiveur');
+    vrai(chezAbonnes.indexOf('Vous vous suivez') >= 0, 'la mention manque côté « Mes abonnés »');
+    vrai(chezSuivis.indexOf('Vous vous suivez') >= 0, 'la mention manque côté « Mes abonnements »');
+    vrai(chezAbonnes.indexOf('>Suivre<') < 0,
+         'le bouton apparaît sur une paire déjà réciproque');
+  });
+
+  test('le bloc « X t\'a ajouté » : présent, puis « Ignorer » le ferme SANS toucher la rangée', ()=>{
+    partageDeTest([], [THOMAS]);
+    vrai(blocAnnonceAbo().indexOf('Thomas t\'a ajouté') >= 0, 'le bloc d\'annonce manque');
+    /* « Ignorer » ferme le bloc, jamais le bouton de la rangée : le bloc est
+       un rappel, la rangée est le chemin permanent. */
+    const vraiRender = window.render;
+    window.render = function(){};
+    try{ ignorerAnnonceAbo(THOMAS.id); }
+    finally{ window.render = vraiRender; }
+    egal(blocAnnonceAbo(), '', 'le bloc est revenu après « Ignorer »');
+    vrai(ligneAbo(THOMAS, 'suivi').indexOf('>Suivre<') >= 0,
+         '« Ignorer » a aussi retiré le bouton de la rangée');
+  });
+
+  test('le bloc ne s\'affiche ni sur une paire réciproque, ni avant le chargement', ()=>{
+    partageDeTest([THOMAS], [THOMAS]);
+    egal(blocAnnonceAbo(), '', 'le bloc propose de suivre quelqu\'un qu\'on suit déjà');
+    partageDeTest([], [THOMAS]);
+    partage.charge = false;
+    egal(blocAnnonceAbo(), '', 'le bloc s\'affiche sur des listes pas encore chargées');
   });
 
   test('changer de famille ne laisse pas traîner une recette de film', ()=>{
@@ -2681,7 +2887,9 @@ window.MODE_TEST = true;
     /* Et les puces de famille, qui remettent le paquet à zéro. */
     const entete = document.createElement('div');
     entete.innerHTML = puceFamillesRech();
-    egal(entete.querySelectorAll('.chip[disabled]').length, 5,
+    /* Cycle 3, point 1 : il y a QUATRE puces désormais — on compte sur la
+       source plutôt que sur un nombre en dur. */
+    egal(entete.querySelectorAll('.chip[disabled]').length, RECH_FAMILLES.length,
          'les puces de famille restent actives pendant l\'ajout');
     r.jeu = null;
   });

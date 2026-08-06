@@ -76,6 +76,11 @@ function viewAbos(){
   const vide = t => '<div class="wrap" style="padding-top:0"><div class="card" style="padding:15px;text-align:center">'+
     '<span class="small muted">'+t+'</span></div></div>';
 
+  /* CYCLE 3, POINT 6 — « X t'a ajouté », en tête : la notification peut être
+     refusée, et sur iPhone elle n'existe pas tant que l'app n'est pas sur
+     l'écran d'accueil. Ce bloc est le chemin qui marche toujours. */
+  html += blocAnnonceAbo();
+
   /* I6 — en tête, avant les listes de personnes : c'est la seule chose de cet
      écran qui demande une réponse. */
   html += blocConseilsRecus();
@@ -343,6 +348,49 @@ const GLIS_LARGEUR = 78;       // ce que découvre le glissement, en pixels
 const GLIS_DECLIC = 34;        // au-delà, on ouvre ; en deçà, la ligne se referme
 let glisAbo = { el:null, x0:0, y0:0, base:0, axe:null, ouvert:null };
 
+/* ---------------------------------------------------------------------------
+   CYCLE 3, POINT 6 — la réciprocité, lue en mémoire.
+
+   `partage.suivis` et `partage.abonnes` sont déjà chargés tous les deux : la
+   réciprocité est une simple intersection sur les identifiants, AUCUNE requête
+   supplémentaire. C'est cette lecture qui décide du bouton « Suivre » (jamais
+   sur une paire déjà réciproque) et de la mention « Vous vous suivez » (des
+   deux côtés de l'écran — sans elle on ne sait pas qui est déjà réciproque, et
+   le bouton reviendrait proposer une action déjà faite). */
+function aboReciproque(id){
+  return (partage.suivis  || []).some(x => x && String(x.id) === String(id)) &&
+         (partage.abonnes || []).some(x => x && String(x.id) === String(id));
+}
+
+/* Le bloc d'annonce « X t'a ajouté », calqué sur le motif de
+   `blocConseilsRecus` : un rappel en tête d'écran, avec les deux réponses.
+   « Ignorer » ferme LE BLOC, jamais le bouton de la rangée — le bloc est un
+   rappel, la rangée est le chemin permanent. Le choix est retenu dans `db`
+   pour ne pas réapparaître à chaque ouverture. */
+function blocAnnonceAbo(){
+  if(!partage.charge) return '';
+  const ignores = db.abosIgnores || {};
+  const l = (partage.abonnes || []).filter(p =>
+    p && p.id && !aboReciproque(p.id) && !ignores[p.id]);
+  if(!l.length) return '';
+  return l.map(p =>
+    '<div class="abo6bloc">'+
+      '<div class="abo6l1">'+avatarDe(p, 'moyen')+
+        '<div class="abo6t"><b>'+esc(p.pseudo)+' t\'a ajouté</b>'+
+        '<em>Voit ta bibliothèque</em></div></div>'+
+      '<div class="abo6act">'+
+        '<button class="btn" onclick="suivreEnRetour(\''+escJs(p.id)+'\')">Suivre en retour</button>'+
+        '<button class="btn ghost" onclick="ignorerAnnonceAbo(\''+escJs(p.id)+'\')">Ignorer</button>'+
+      '</div>'+
+    '</div>').join('');
+}
+function ignorerAnnonceAbo(id){
+  if(!db.abosIgnores || typeof db.abosIgnores !== 'object') db.abosIgnores = {};
+  db.abosIgnores[id] = Date.now();
+  saveDB();
+  render();
+}
+
 function ligneAbo(p, role){
   const cle = role+':'+p.id;
   const suit = role === 'suiveur';
@@ -365,6 +413,15 @@ function ligneAbo(p, role){
         '<div class="sname">'+esc(p.pseudo)+'</div>'+
         '<div class="tiny muted">'+(role==='suiveur' ? 'Tu vois sa bibliothèque' : 'Voit ta bibliothèque')+'</div>'+
       '</div>'+
+      /* CYCLE 3, POINT 6 — sur une paire réciproque, la mention, DES DEUX
+         CÔTÉS ; sur un abonné non réciproque, le bouton « Suivre ». Le libellé
+         est « Suivre » tout court : « Le suivre » / « La suivre » ne se devine
+         pas depuis un pseudo. Jamais les deux à la fois, et jamais le bouton
+         sur une paire déjà réciproque. */
+      (aboReciproque(p.id) ? '<span class="abo6recip">↔ Vous vous suivez</span>'
+       : role==='suivi'
+         ? '<button class="btn mini abo6btn" onclick="event.stopPropagation();suivreEnRetour(\''+escJs(p.id)+'\')">Suivre</button>'
+         : '')+
       (role==='suiveur' ? '<span class="ecaret">'+I.caret+'</span>' : '')+
       /* I3 — la seconde porte. L'action ne vivait que derrière un glissement,
          donc derrière `ontouchstart` : sur un ordinateur, se désabonner ou

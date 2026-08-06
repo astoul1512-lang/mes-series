@@ -1175,6 +1175,45 @@ async function utiliserCode(saisi){
   }
 }
 
+/* ---------------------------------------------------------------------------
+   CYCLE 3, POINT 6 — suivre en retour quelqu'un qui nous suit déjà.
+
+   L'INSERTION NE SE FAIT JAMAIS DEPUIS L'APP. La table `abonnements` n'a
+   AUCUNE policy d'écriture, et c'est délibéré (001_partage.sql) : sans cette
+   fermeture, n'importe qui pourrait suivre n'importe qui en devinant un
+   identifiant. La réciprocité se vérifie CÔTÉ SERVEUR, dans
+   `suivre_en_retour()` (migration 011) : la fonction refuse si la cible ne
+   nous suit pas déjà, et insère elle-même sinon. Ne JAMAIS « corriger » un
+   échec d'insertion ici en ajoutant une policy insert sur la table.
+
+   La notification (« X t'a suivi en retour ») part toute seule : le
+   déclencheur de la migration 011 écoute les insertions, celle-ci comme celle
+   d'`utiliser_code()`. */
+async function suivreEnRetour(id){
+  if(!signedIn()) return;
+  if(!prendre('suivre:'+id)) return;      // deux appuis rapides, un seul appel
+  try{
+    await majProfil();
+    await sbFetch('/rest/v1/rpc/suivre_en_retour', { method:'POST',
+      body: JSON.stringify({ cible: id }) });
+    /* Le pseudo est déjà en mémoire (les deux listes sont chargées) : pas de
+       requête de plus pour un toast. Même mot que `utiliser_code()`. */
+    toast('Tu suis maintenant '+nomDuCercle(id));
+    await chargerPartage();
+    render();
+  }catch(e){
+    /* Comme pour `utiliserCode` : un message clair, jamais un message
+       technique. */
+    const m = String(e && e.message || '');
+    if(/PAS_RECIPROQUE/.test(m))      toast('Cette personne ne te suit plus');
+    else if(/NON_CONNECTE/.test(m))   toast('Connecte-toi d\'abord');
+    else if(/SOI_MEME/.test(m))       toast('C\'est toi');
+    else toast('Impossible pour le moment — réessaie');
+  }finally{
+    rendre('suivre:'+id);
+  }
+}
+
 async function rompre(id, jeSuis){
   const q = jeSuis === 'suiveur'
     ? '?suiveur=eq.'+db.auth.uid+'&suivi=eq.'+id

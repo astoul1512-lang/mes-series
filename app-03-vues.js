@@ -200,16 +200,22 @@ function renderNav(){
   /* Les écrans d'inscription n'appartiennent à aucun onglet : la barre du bas
      n'y est pas affichée (classe `accueil`). Ils ne figurent donc pas dans la
      table ci-dessous, et la valeur de repli ne coûte rien. */
+  /* POINT 4A DU CYCLE 3 — `preview` n'est plus associé à Découvrir
+     INCONDITIONNELLEMENT : comme `show` et `movie`, il suit `params.from`,
+     avec Découvrir en repli. Un aperçu ouvert depuis la grille de Recherche
+     arrivait avec `from:'search'` et la barre allumait quand même Découvrir —
+     et l'utilisateur, croyant y être, touchait « Recherche » pour revenir :
+     un chemin de retour que personne n'avait prévu. */
   const TAB_DIRECT = { discover:'discover', search:'search', follow:'follow', profile:'profile',
-    preview:'discover', rangee:'discover',
+    rangee:'discover',
     account:'profile', abos:'profile', biblio:'profile', moi:'profile',
     notifs:'profile', clochettes:'profile' };
   let cur = TAB_DIRECT[view];
   if(!cur){
-    /* show, movie, settings, acteur, gouts : l'onglet est celui d'où l'on vient. */
+    /* show, movie, preview, settings, acteur, gouts : l'onglet est celui d'où l'on vient. */
     cur = TAB_DIRECT[params.from]
        || ((view==='show'||view==='movie') ? 'follow'
-          : view==='acteur' ? 'discover' : 'profile');
+          : (view==='preview'||view==='acteur') ? 'discover' : 'profile');
   }
 
   /* La barre n'est construite qu'une fois, puis seul son état change : c'est
@@ -323,21 +329,41 @@ function viewFollow(){
   }
 
   /* --- Le calendrier : épisodes futurs ET sorties de films, mêlés --- */
-  /* D7 — une série ajoutée mais pas commencée a quand même des dates. Les
-     cacher faisait croire que l'ajout n'avait rien fait : on l'ajoutait, et
-     l'onglet ne mentionnait ni elle ni ses prochains épisodes. C'est de
-     l'information pure, pas du retard.
+  /* D7, RESTREINT PAR LE POINT 2 DU CYCLE 3 — une série ajoutée mais pas
+     commencée a quand même des dates, et les cacher faisait croire que l'ajout
+     n'avait rien fait. Le raisonnement TIENT pour une série qui n'a pas encore
+     commencé à être diffusée : on annonce sa première. IL NE TIENT PLUS pour
+     une série qui tourne depuis quatre saisons : on n'annonce pas une sortie,
+     on déverse un feuilleton — la capture d'Adrien du 03/08 (IMG_3129) montrait
+     *Grand Blue Dreaming* S3E5 « Pas commencé » dans son calendrier.
+     La règle devient donc : une série au statut `avoir` n'entre dans le
+     calendrier que si ELLE-MÊME n'est pas encore sortie (`s.first`, alimenté
+     depuis `first_air_date` par app-01, est aujourd'hui ou dans le futur).
+     Les séries COMMENCÉES (`asuivre`) gardent leurs prochains épisodes — c'est
+     l'essentiel de ce qu'Adrien voit ici (« et il y a aussi les séries en
+     cours bien sûr ») — et n'ont aucune étiquette.
      Elle n'entre PAS dans « À rattraper » pour autant — on ne rattrape pas ce
      qu'on n'a pas commencé, et `statutSerie` garde son sens (P4).
-     « En pause » reste absente des deux : c'est le but de la pause. */
+     « En pause » reste absente des deux : c'est le but de la pause.
+     Le côté films est déjà correct (`chargerBientotPerso` ne retient que des
+     dates à venir) : rien n'y change. */
   const cal = [];
   shows.forEach(s=>{
     const st = statutSerie(s);
     if(st === 'pause') return;
     const pasCommence = st === 'avoir';
-    allEpisodes(s,false).forEach(ep=>{ if(ep.d && ep.d >= t) cal.push({d:ep.d, show:s, ep:ep, neuf:pasCommence}); });
+    /* POINT 2 DU CYCLE 3 — le correctif : une série à voir DÉJÀ DIFFUSÉE ne
+       remplit plus le calendrier. Sans date de première connue, on la traite
+       comme déjà diffusée : mieux vaut une ligne de moins qu'un feuilleton
+       déversé — c'était exactement le défaut. */
+    if(pasCommence && !(s.first && s.first >= t)) return;
+    /* L'étiquette « Premier épisode » ne marque que la PREMIÈRE date d'une
+       série jamais diffusée : sur ses épisodes suivants elle ne dirait rien. */
+    const neufSur = ep => pasCommence && (ep.d === s.first || (ep.s === 1 && ep.e === 1));
+    allEpisodes(s,false).forEach(ep=>{ if(ep.d && ep.d >= t) cal.push({d:ep.d, show:s, ep:ep, neuf:neufSur(ep)}); });
     if(s.next && s.next.d && s.next.d >= t && !(s.seasons[s.next.s]||[]).some(e=>e.e===s.next.e))
-      cal.push({d:s.next.d, show:s, ep:{s:s.next.s, e:s.next.e, n:s.next.n, d:s.next.d}, neuf:pasCommence});
+      cal.push({d:s.next.d, show:s, ep:{s:s.next.s, e:s.next.e, n:s.next.n, d:s.next.d},
+                neuf:neufSur({s:s.next.s, e:s.next.e, d:s.next.d})});
   });
   if(typeof filmsBientot === 'function')
     filmsBientot().forEach(f=> cal.push({d:f.dfr, film:f}));
@@ -408,10 +434,11 @@ function ligneEpisodeCal(s, ep, pasCommence){
     '<div class="epinfo">'+
       '<div class="epname">'+esc(s.name)+'</div>'+
       '<div class="epsub">'+codeEp(ep.s,ep.e)+' · '+esc(ep.n||'')+
-        /* D7 — la pastille distingue ce qui n'est pas commencé de ce qu'on
-           suit vraiment : sans elle, une série ajoutée hier et une série en
-           cours depuis six mois auraient exactement la même ligne. */
-        (pasCommence ? '<span class="pasdeb">Pas commencé</span>' : '')+'</div>'+
+        /* POINT 2 DU CYCLE 3 — l'étiquette ne marque plus que des séries
+           JAMAIS diffusées (tranché le 03/08) : « Pas commencé » deviendrait
+           absurde — évidemment qu'elle n'est pas commencée, elle n'existe pas
+           encore. Elle annonce donc ce qu'elle est : la première. */
+        (pasCommence ? '<span class="pasdeb">Premier épisode</span>' : '')+'</div>'+
     '</div></div>';
 }
 
