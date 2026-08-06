@@ -283,6 +283,38 @@ Deno.serve(async (req) => {
     }
   }
 
+  // --- Mode « un utilisateur, un message » (cycle 3, point 6) ----------------
+  // Appelé par le déclencheur `abonnement_notifie` (migration 011), avec le
+  // MÊME secret que le planificateur — la vérification vient d'avoir lieu
+  // ci-dessus. Il envoie UN message aux appareils d'UNE personne, et rend la
+  // main : le balayage complet, en dessous, n'est pas touché — même format
+  // `Annonce`, même `envoyer`, même gestion des appareils expirés.
+  if (demande.direct && typeof demande.direct === 'object') {
+    const d = demande.direct;
+    if (!d.user_id || !d.titre) {
+      return new Response(JSON.stringify({ erreur: 'direct: user_id et titre requis' }),
+        { status: 400, headers: { ...CORS, 'Content-Type': 'application/json' } });
+    }
+    const { data: app } = await sb.from('push_appareils')
+      .select('id, endpoint, p256dh, auth, echecs').eq('user_id', d.user_id);
+    if (!app?.length) {
+      // Personne d'abonné côté push : ce n'est pas une erreur, le bloc dans
+      // l'app est le chemin qui marche toujours.
+      return new Response(JSON.stringify({ direct: true, appareils: 0, envoye: false }),
+        { headers: { ...CORS, 'Content-Type': 'application/json' } });
+    }
+    const ok = await envoyer(app, {
+      cle: String(d.cle || 'direct-' + d.user_id),
+      titre: String(d.titre).slice(0, 120),
+      corps: String(d.corps || '').slice(0, 240),
+      // `url` est un fragment de l'app (« #/abonnements ») : on n'ouvre jamais
+      // une adresse dictée de l'extérieur, seulement l'app elle-même.
+      url: APP + '#/' + String(d.url || 'abonnements').replace(/^[#/]+/, '')
+    });
+    return new Response(JSON.stringify({ direct: true, appareils: app.length, envoye: ok }),
+      { headers: { ...CORS, 'Content-Type': 'application/json' } });
+  }
+
   const bilan = { personnes: 0, annonces: 0, envois: 0, erreurs: [] as string[] };
 
   const { data: reglages } = await sb.from('push_reglages').select('user_id, quand, films');

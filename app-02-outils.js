@@ -750,9 +750,17 @@ function paramsCibleRetour(){
   const e = miroirJuste() ? pileHisto[iHisto - 1] : null;
   return e ? e.params : paramsRetour(currentBack());
 }
-/* Le `popstate` déclenché par NOTRE propre `history.back()` quand l'écran a
-   déjà été rendu (geste de retour) : il n'y a plus rien à faire, on l'avale. */
-let popstateAAvaler = 0;
+/* POINT 4C DU CYCLE 3 — LE COMPTEUR `popstateAAvaler` A ÉTÉ SUPPRIMÉ.
+   Il avalait le `popstate` découlant de notre propre `history.back()` après un
+   rendu manuel, borné par un garde-fou d'une seconde — UN PARI SUR LE TEMPS.
+   Pari perdu de temps en temps : un `popstate` tardif était rejoué comme un
+   vrai retour (l'écran remontait en haut de page et se redessinait), ou un
+   vrai retour ultérieur était avalé (un écran sautait). Reproduit par
+   `tests/nav-cycle3.js` avant correction.
+   Le retour du geste passe désormais par l'historique ET PAR LUI SEUL : voir
+   `poser()` (le rendu attend le `popstate`) et, dans l'écouteur `popstate`, la
+   garde « même écran » qui absorbe sans re-rendre un événement décrivant
+   l'écran déjà affiché. */
 
 /* ===================== C3 — l'entrée directe =====================
    Destination retenue quand on arrive par un lien sans être connecté : elle est
@@ -858,7 +866,14 @@ function inscrireHistorique(v, p, remplacer){
 
 function go(v, p, dir, opts){
   opts = opts || {};
-  if(view===v && JSON.stringify(params)===JSON.stringify(p||{})){ window.scrollTo(0,0); render(); return; }
+  if(view===v && JSON.stringify(params)===JSON.stringify(p||{})){
+    /* Réappuyer sur l'onglet où l'on est déjà remonte en haut : c'est voulu.
+       POINT 4 DU CYCLE 3 — mais quand l'appel vient de l'HISTORIQUE (un
+       `popstate` qui décrit l'écran déjà affiché), remonter en haut perdrait
+       la position sans qu'aucun geste ne l'ait demandé. */
+    if(!opts.depuisHistorique) window.scrollTo(0,0);
+    render(); return;
+  }
   const ancienneVue = view;
   if(LISTES[view]) memDefil[cleDefil(view)] = window.scrollY || 0;
   memoriserRails();
@@ -1045,16 +1060,25 @@ window.addEventListener('popstate', function(e){
     try{ history.pushState(etatHisto(view, params, iHisto), '', adresseCourante()); }catch(err){}
     return;
   }
-  /* Retour déjà rendu par le geste de glissement : l'écran est le bon, il ne
-     reste qu'à laisser l'historique se replacer. */
-  if(popstateAAvaler > 0){
-    popstateAAvaler--;
-    const st0 = e.state;
-    if(st0 && st0.msv) iHisto = st0.i;
-    return;
-  }
+  /* POINT 4C DU CYCLE 3 — un retour de geste est en vol : ce `popstate` est le
+     sien, c'est LUI qui rend l'écran d'arrivée (la couche du dessous l'affiche
+     déjà, donc sans éclair). Plus de compteur à avaler, plus de pari. */
+  if(typeof glisseRetour === 'object' && glisseRetour && glisseRetour.retourConsomme
+     && glisseRetour.retourConsomme(e)) return;
   const st = e.state;
   if(st && st.msv){
+    /* POINT 4C DU CYCLE 3 — LA GARDE « MÊME ÉCRAN ». Un `popstate` qui décrit
+       l'écran DÉJÀ affiché n'a rien à rendre : c'est la fin de course d'un
+       retour déjà rendu (le secours du geste, quand le navigateur a différé
+       `history.back` au-delà du délai). On se recale sur son rang et c'est
+       tout — le rejouer via `go()` re-rendait l'écran et le renvoyait en haut
+       de page (reproduit par `tests/nav-cycle3.js`). Deux entrées voisines ne
+       peuvent pas être identiques (`go()` refuse d'empiler l'écran courant) :
+       cette garde ne peut donc pas absorber une vraie navigation. */
+    if(st.view === view && JSON.stringify(st.params || {}) === JSON.stringify(params || {})){
+      iHisto = st.i;
+      return;
+    }
     const sens = st.i < iHisto ? 'back' : 'enter';
     iHisto = st.i;
     go(st.view, st.params, sens, { depuisHistorique:true });
@@ -1082,9 +1106,14 @@ const glisseRetour = (function(){
   const PARALLAXE = 0.28;                    // part de la largeur dont l'arrivée est décalée
   const VOILE = 0.3;                         // noir posé sur l'arrivée au repos
   let couche = null, voile = null, cible = null, cibleParams = {}, largeur = 0, frame = 0, d = 0, fini = false;
+  /* POINT 4C DU CYCLE 3 — le retour en vol : entre le relâchement du geste et
+     le `popstate` qui rendra l'écran d'arrivée, la couche du dessous reste
+     affichée. `attente` porte la destination, la couche à nettoyer, et un
+     secours si le navigateur ne donne jamais suite. */
+  let attente = null;
 
   const app = ()=> document.getElementById('app');
-  const enCours = ()=> !!couche;
+  const enCours = ()=> !!couche || !!attente;
 
   /* Prépare la couche du dessous avec l'écran d'arrivée. */
   function preparer(){
@@ -1093,7 +1122,7 @@ const glisseRetour = (function(){
        relâchement va mener. `currentBack()` déduisait la cible de `params.from`,
        qui peut désigner un autre écran que celui d'où l'on vient réellement. */
     const dest = cibleRetour();
-    if(!dest || couche) return false;
+    if(!dest || couche || attente) return false;
     cible = dest;
     cibleParams = paramsCibleRetour() || {};
     largeur = window.innerWidth || 375;
@@ -1149,33 +1178,75 @@ const glisseRetour = (function(){
 
   /* Fin du mouvement : la couche cède la place au vrai rendu, d'un seul bloc,
      donc sans clignotement. */
+  /* POINT 4C DU CYCLE 3 — LE PARI EST SUPPRIMÉ, PAS ALLONGÉ. L'ancien code
+     rendait l'écran à la main, reculait ensuite dans l'historique, et armait
+     un compteur (garde-fou d'une seconde) pour avaler le `popstate` à venir.
+     Deux rendus possibles pour un seul retour : c'est le mécanisme commun aux
+     constats B, C et D, reproduit par `tests/nav-cycle3.js`.
+     Désormais, quand le retour passe par l'historique, C'EST LE `popstate` QUI
+     REND — un seul chemin, un seul rendu. Pas d'éclair pour autant : la couche
+     du dessous, qui montre déjà l'écran d'arrivée à la bonne position, reste
+     affichée jusqu'à ce rendu (`retourConsomme`). Si le navigateur a différé
+     `history.back` (page masquée), un secours rend à la main après 900 ms, et
+     le `popstate` tardif est absorbé par la garde « même écran » de
+     l'écouteur — sans re-rendre, sans re-défiler. */
+  function nettoyerRetour(rv){
+    const el = app();
+    if(el){
+      el.style.transform=''; el.style.opacity=''; el.style.willChange=''; el.style.transition='';
+      el.classList.remove('glisse');
+    }
+    if(rv.couche) rv.couche.remove();
+    if(rv.voile) rv.voile.remove();
+  }
+  /* Appelée par l'écouteur `popstate` (app-02, plus haut) : vrai si ce
+     `popstate` est celui d'un retour de geste en vol — alors c'est ici qu'on
+     rend l'écran d'arrivée et qu'on retire la couche. */
+  function retourConsomme(e){
+    if(!attente) return false;
+    const rv = attente; attente = null;
+    clearTimeout(rv.secours);
+    const st = e && e.state;
+    sansAnim = true;
+    if(st && st.msv){ iHisto = st.i; go(st.view, st.params, 'back', { depuisHistorique:true }); }
+    else go(rv.cible, rv.params, 'back', { depuisHistorique:true });
+    nettoyerRetour(rv);
+    return true;
+  }
   function poser(){
     if(fini) return;
     fini = true;
     const el = app();
     if(frame){ cancelAnimationFrame(frame); frame = 0; }
     if(el) el.style.transition = 'none';
-    sansAnim = true;
-    /* L'écran est rendu TOUT DE SUITE : la couche du dessous est retirée juste
-       après, et attendre le `popstate` — qui arrive au tour de boucle suivant —
-       laisserait voir un éclair de l'écran qu'on vient de quitter.
-       On rend donc à la main, sans écrire l'historique, puis on recule pour de
-       vrai ; le `popstate` qui en découle n'a plus rien à faire et se fait
-       avaler. C'est la seule entorse au principe « l'historique fait foi », et
-       elle est là pour l'image, pas pour la logique. */
     const recule = historiqueInterne() > 0 && miroirJuste();
-    const attendu = recule ? ++popstateAAvaler : 0;
-    go(cible, cibleParams, 'back', recule ? { depuisHistorique:true } : { remplacer:true });
     if(recule){
+      /* Le retour passe par l'historique, et par lui seul. La couche reste à
+         l'écran (elle montre déjà la destination, à la bonne position de
+         lecture) ; le `popstate` — qui arrive au tour de boucle suivant —
+         déclenche le rendu et le nettoyage via `retourConsomme`. */
+      const rv = { cible: cible, params: cibleParams, couche: couche, voile: voile };
+      rv.secours = setTimeout(()=>{
+        /* Le navigateur n'a pas donné suite (page masquée, `history.back`
+           différé) : on rend à la main et on recule le miroir nous-mêmes. Si
+           le `popstate` finit par arriver, il décrira l'écran désormais
+           affiché et la garde « même écran » l'absorbera sans rien rejouer. */
+        if(attente !== rv) return;
+        attente = null;
+        iHisto = Math.max(0, iHisto - 1);
+        sansAnim = true;
+        go(rv.cible, rv.params, 'back', { depuisHistorique:true });
+        nettoyerRetour(rv);
+      }, 900);
+      attente = rv;
+      couche = null; voile = null; cible = null; d = 0;
       history.back();
-      /* Le compteur restait armé pour toute la session si le `popstate` attendu
-         n'arrivait jamais — page masquée au moment du geste, `history.back()`
-         différé par le navigateur. Le premier vrai retour suivant était alors
-         avalé, et le bouton retour d'Android ne faisait rien. Un `popstate` qui
-         n'est pas venu en une seconde ne viendra plus.
-         Revue de stabilité du 02/08, constat A3-7. */
-      setTimeout(()=>{ if(popstateAAvaler >= attendu) popstateAAvaler = attendu - 1; }, 1000);
+      return;
     }
+    /* Rien derrière : entrée directe sur cet écran, le retour ne passe pas par
+       l'historique. Rendu immédiat, comme avant. */
+    sansAnim = true;
+    go(cible, cibleParams, 'back', { remplacer:true });
     if(el){
       el.style.transform=''; el.style.opacity=''; el.style.willChange=''; el.style.transition='';
       el.classList.remove('glisse');
@@ -1233,7 +1304,7 @@ const glisseRetour = (function(){
     return true;
   }
 
-  return { suivre, terminer, remettre, jouer, enCours };
+  return { suivre, terminer, remettre, jouer, enCours, retourConsomme };
 })();
 
 /* Balayage depuis le bord gauche pour revenir en arrière */

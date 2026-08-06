@@ -648,6 +648,32 @@ function collisionsCss(src){
     await page.close();
   }
 
+  /* --- 8. CYCLE 3, POINT 6 — AUCUNE POLICY D'ÉCRITURE SUR `abonnements` ---
+     La fermeture de 001 (« on ne s'abonne QUE par utiliser_code() ») est ce
+     qui empêche de s'abonner à quelqu'un dont on connaîtrait l'uid. Le point 6
+     ajoute une fonction serveur, PAS une policy : ce contrôle statique refuse
+     qu'une migration en ouvre une, aujourd'hui ou plus tard. */
+  {
+    const fs = require('fs'), chemin = require('path');
+    const dossier = chemin.join(__dirname, '..', 'supabase', 'migrations');
+    const soucis = [];
+    fs.readdirSync(dossier).filter(f => /\.sql$/.test(f)).forEach(f=>{
+      const sql = fs.readFileSync(chemin.join(dossier, f), 'utf8')
+        /* Les commentaires ne comptent pas : ils citent la règle. */
+        .replace(/--[^\n]*/g, '').toLowerCase();
+      /* Une policy sur `abonnements` portant `for insert` (ou `for all`, qui
+         l'inclut) est exactement le trou que 001 ferme. */
+      const re = /create\s+policy[\s\S]{0,200}?on\s+(?:public\.)?abonnements[\s\S]{0,200}?for\s+(insert|all)/g;
+      let m;
+      while((m = re.exec(sql))) soucis.push(f + ' : une policy « for ' + m[1] + ' » sur abonnements');
+    });
+    console.log('abonnements   → ' + (soucis.length
+      ? soucis.length + ' policy d\'écriture interdite'
+      : 'aucune policy d\'écriture — la porte reste fermée'));
+    soucis.forEach(d => console.log('   ! ' + d));
+    souci += soucis.length;
+  }
+
   await nav.close();
   console.log(souci ? '\nÉCHEC — ' + souci + ' problème(s)' : '\nTout est vert.');
   process.exit(souci ? 1 : 0);

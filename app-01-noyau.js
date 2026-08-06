@@ -719,7 +719,14 @@ function payload(){
               duels, alors que le podium n'en est que le sommet recalculé. Il
               monte donc au serveur, et il se fusionne titre par titre — voir
               `fusionnerClassement`. */
-           classement:  db.classement  || null };
+           classement:  db.classement  || null,
+           /* CORRECTION C4 — les annonces « X t'a ajouté » qu'on a ignorées.
+              C'est un choix qui appartient à la PERSONNE, pas au téléphone :
+              écarter l'annonce sur le mobile puis retrouver la même sur la
+              tablette est exactement le genre de détail qui apprend à ignorer
+              les rappels. Fusionné à la réception — voir
+              `fusionnerAbosIgnores`, jamais remplacé en bloc. */
+           abosIgnores: db.abosIgnores || {} };
 }
 function mergeRemote(rem){
   if(!rem || typeof rem !== 'object') return false;
@@ -794,6 +801,7 @@ function mergeRemote(rem){
   }
   if(fusionnerAvis(rem)) changed = true;
   if(fusionnerClassement(rem)) changed = true;
+  if(fusionnerAbosIgnores(rem)) changed = true;
   /* Les cloches arrivées d'un autre appareil : la liste côté serveur a été
      écrite par lui, elle ignore donc les nôtres. On la refait au complet. */
   if(typeof fusionnerNotif === 'function' && fusionnerNotif(rem.notif)){
@@ -954,6 +962,43 @@ function fusionnerClassement(rem){
   return bouge;
 }
 
+/* ---------------------------------------------------------------------------
+   CORRECTION C4 — LES ANNONCES IGNORÉES SUIVENT LE COMPTE
+
+   Même règle que `avis`, et pour la même raison : c'est une union, jamais un
+   remplacement. Chaque entrée porte sa date, la plus récente gagne, et une
+   personne connue d'un seul côté est CONSERVÉE — deux appareils qui ont ignoré
+   deux annonces différentes doivent finir avec les deux.
+
+   Remplacer en bloc, comme on le fait pour `gouts`, serait faux ici : le
+   téléphone resté en arrière renverrait une liste plus courte et ferait
+   réapparaître des blocs déjà écartés.
+
+   IDEMPOTENTE : refusionner le même paquet ne change plus rien.
+
+   LE CAS TRANSITOIRE, ET IL EST ASSUMÉ. Un appareil resté sur la version
+   précédente construit son envoi SANS cette clé. `rem.abosIgnores` est alors
+   absent, et la fonction ne touche à rien — c'est le sens du `return false`
+   ci-dessous : une clé absente ne veut PAS dire « liste vidée ». Ce qui peut
+   arriver, en revanche, c'est que cet appareil-là écrase la liste côté serveur
+   avec son propre envoi, qui n'en porte pas. Le pire cas est bénin — un bloc
+   réapparaît, « Ignorer » le referme — et il disparaît dès que tous les
+   appareils sont à jour. Signalé plutôt que sur-corrigé.
+--------------------------------------------------------------------------- */
+function fusionnerAbosIgnores(rem){
+  if(!rem || typeof rem !== 'object') return false;
+  const ra = rem.abosIgnores;
+  if(!ra || typeof ra !== 'object') return false;
+  if(!db.abosIgnores || typeof db.abosIgnores !== 'object') db.abosIgnores = {};
+  let bouge = false;
+  Object.keys(ra).forEach(id=>{
+    const t = Number(ra[id]) || 0;
+    if(!t) return;                                  // entrée sans date : rien à arbitrer
+    if(t > (Number(db.abosIgnores[id]) || 0)){ db.abosIgnores[id] = t; bouge = true; }
+  });
+  return bouge;
+}
+
 function markDeleted(kind, id){
   db.deleted = db.deleted || {shows:{},movies:{}};
   db.deleted[kind][id] = Date.now();
@@ -1071,9 +1116,15 @@ async function chargerPartage(){
   try{
     const liens = await sbFetch('/rest/v1/abonnements?select=suiveur,suivi,depuis', {});
     const moi = db.auth.uid;
-    const idsSuivis  = liens.filter(l=>l.suiveur===moi).map(l=>l.suivi);
-    const idsAbonnes = liens.filter(l=>l.suivi===moi).map(l=>l.suiveur);
-    const tous = [...new Set(idsSuivis.concat(idsAbonnes))];
+    /* CORRECTION C3 — LA DATE DU LIEN VOYAGE JUSQU'À L'ÉCRAN. Elle était déjà
+       téléchargée (`depuis`, ci-dessus) et jetée aussitôt : le bloc « X t'a
+       ajouté » ne pouvait donc pas distinguer un abonné d'hier d'un abonné de
+       l'an dernier, et se serait affiché pour tout le monde à la mise en
+       service. Chaque liste garde SA date, celle de son propre sens : dans
+       « Mes abonnés », `depuis` dit quand la personne s'est abonnée à moi. */
+    const lSuivis  = liens.filter(l=>l.suiveur===moi).map(l=>({ id:l.suivi,   depuis:l.depuis }));
+    const lAbonnes = liens.filter(l=>l.suivi===moi).map(l=>({ id:l.suiveur, depuis:l.depuis }));
+    const tous = [...new Set(lSuivis.concat(lAbonnes).map(x=>x.id))];
     let profs = {};
     if(tous.length){
       const ps = await sbFetch('/rest/v1/profils?select=user_id,pseudo,couleur,embleme,photo'+
@@ -1082,13 +1133,14 @@ async function chargerPartage(){
     }
     /* On reprend l'avatar tel que la personne l'a choisi. Rien n'est inventé :
        sans profil enregistré, on retombe sur l'initiale. */
-    const fiche = (id)=>{
-      const p = profs[id] || {};
-      return { id, pseudo: p.pseudo || 'Sans nom',
-               couleur: p.couleur || null, embleme: p.embleme || null, photo: p.photo || null };
+    const fiche = (lien)=>{
+      const p = profs[lien.id] || {};
+      return { id: lien.id, pseudo: p.pseudo || 'Sans nom',
+               couleur: p.couleur || null, embleme: p.embleme || null, photo: p.photo || null,
+               depuis: lien.depuis || null };
     };
-    partage.suivis  = idsSuivis.map(fiche);
-    partage.abonnes = idsAbonnes.map(fiche);
+    partage.suivis  = lSuivis.map(fiche);
+    partage.abonnes = lAbonnes.map(fiche);
     partage.charge = true;
     /* Une lecture d'agrément : si elle échoue, l'écran des abonnements — qui
        est l'essentiel — ne doit pas échouer avec elle. */
@@ -1172,6 +1224,45 @@ async function utiliserCode(saisi){
     if(/CODE_INVALIDE/.test(m))   toast('Code inconnu, déjà utilisé ou expiré');
     else if(/CODE_A_SOI/.test(m)) toast('Ce code est le tien');
     else toast('Échec : '+m);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   CYCLE 3, POINT 6 — suivre en retour quelqu'un qui nous suit déjà.
+
+   L'INSERTION NE SE FAIT JAMAIS DEPUIS L'APP. La table `abonnements` n'a
+   AUCUNE policy d'écriture, et c'est délibéré (001_partage.sql) : sans cette
+   fermeture, n'importe qui pourrait suivre n'importe qui en devinant un
+   identifiant. La réciprocité se vérifie CÔTÉ SERVEUR, dans
+   `suivre_en_retour()` (migration 011) : la fonction refuse si la cible ne
+   nous suit pas déjà, et insère elle-même sinon. Ne JAMAIS « corriger » un
+   échec d'insertion ici en ajoutant une policy insert sur la table.
+
+   La notification (« X t'a suivi en retour ») part toute seule : le
+   déclencheur de la migration 011 écoute les insertions, celle-ci comme celle
+   d'`utiliser_code()`. */
+async function suivreEnRetour(id){
+  if(!signedIn()) return;
+  if(!prendre('suivre:'+id)) return;      // deux appuis rapides, un seul appel
+  try{
+    await majProfil();
+    await sbFetch('/rest/v1/rpc/suivre_en_retour', { method:'POST',
+      body: JSON.stringify({ cible: id }) });
+    /* Le pseudo est déjà en mémoire (les deux listes sont chargées) : pas de
+       requête de plus pour un toast. Même mot que `utiliser_code()`. */
+    toast('Tu suis maintenant '+nomDuCercle(id));
+    await chargerPartage();
+    render();
+  }catch(e){
+    /* Comme pour `utiliserCode` : un message clair, jamais un message
+       technique. */
+    const m = String(e && e.message || '');
+    if(/PAS_RECIPROQUE/.test(m))      toast('Cette personne ne te suit plus');
+    else if(/NON_CONNECTE/.test(m))   toast('Connecte-toi d\'abord');
+    else if(/SOI_MEME/.test(m))       toast('C\'est toi');
+    else toast('Impossible pour le moment — réessaie');
+  }finally{
+    rendre('suivre:'+id);
   }
 }
 

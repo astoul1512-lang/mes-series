@@ -1,7 +1,7 @@
 /* Service worker — démarrage instantané et fonctionnement hors-ligne.
    Stratégie : network-first sur les fichiers de l'app (pour recevoir les mises à jour),
    repli sur le cache quand le réseau est absent. Les appels TMDB ne sont jamais mis en cache. */
-const CACHE = 'mes-series-v86';
+const CACHE = 'mes-series-v87';
 
 /* Au-delà de ce délai, on sert le cache sans attendre la réponse du réseau.
    Sans lui, un réseau qui PEND — portail captif d'hôtel qui ne répond ni oui
