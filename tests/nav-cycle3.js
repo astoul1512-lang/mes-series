@@ -6,8 +6,12 @@
        node tests/nav-cycle3.js
 
    Ce fichier a servi deux fois :
-   1. AVANT le correctif, il a reproduit les constats A et B/C-mécanisme
-      (voir RAPPORT.md — les échecs relevés sont la preuve de reproduction) ;
+   1. AVANT le correctif, il a reproduit les constats A et B/C-mécanisme.
+      LA PREUVE DE REPRODUCTION SE REJOUE, elle n'est pas à croire sur parole :
+      ce fichier exécuté contre `main` échoue sur trois vérifications (la barre
+      du bas allume « Découvrir », le popstate tardif renvoie en haut de page et
+      rejoue un rendu) ; exécuté contre cette branche, il passe entièrement.
+      C'est cette comparaison qui établit le constat, et rien d'autre ;
    2. APRÈS, il verrouille le comportement corrigé. Il doit rester vert.
 
    Le balayage de retour est joué avec de VRAIS événements tactiles
