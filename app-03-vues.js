@@ -357,13 +357,31 @@ function viewFollow(){
        comme déjà diffusée : mieux vaut une ligne de moins qu'un feuilleton
        déversé — c'était exactement le défaut. */
     if(pasCommence && !(s.first && s.first >= t)) return;
-    /* L'étiquette « Premier épisode » ne marque que la PREMIÈRE date d'une
-       série jamais diffusée : sur ses épisodes suivants elle ne dirait rien. */
-    const neufSur = ep => pasCommence && (ep.d === s.first || (ep.s === 1 && ep.e === 1));
-    allEpisodes(s,false).forEach(ep=>{ if(ep.d && ep.d >= t) cal.push({d:ep.d, show:s, ep:ep, neuf:neufSur(ep)}); });
+    /* CORRECTION C2 (relecture du cycle 3, tranchée le 06/08 : « seulement la
+       première ») — UNE SÉRIE JAMAIS DIFFUSÉE N'ANNONCE QU'UNE LIGNE.
+       Elle posait jusqu'ici TOUS ses épisodes déjà annoncés : sur une série qui
+       publie son calendrier complet avant diffusion, c'était le déversement du
+       point 2 qui revenait par une autre porte, sur une série qu'on n'a même
+       pas commencée. On ne garde donc que sa date de première, étiquetée
+       « Premier épisode ». Ses épisodes suivants apparaîtront quand elle sera
+       commencée — c'est-à-dire quand elle passera au statut `asuivre`, où la
+       boucle complète ci-dessous s'applique de nouveau. */
+    if(pasCommence){
+      /* L'épisode de la première : celui qui porte la date, à défaut S1E1, à
+         défaut le premier annoncé. On ne fabrique pas de ligne sans épisode. */
+      const futurs = allEpisodes(s,false).filter(ep => ep.d && ep.d >= t);
+      const prem = futurs.find(ep => ep.d === s.first)
+                || futurs.find(ep => ep.s === 1 && ep.e === 1)
+                || futurs[0];
+      if(prem) cal.push({d:prem.d, show:s, ep:prem, neuf:true});
+      else if(s.next && s.next.d && s.next.d >= t)
+        cal.push({d:s.next.d, show:s,
+                  ep:{s:s.next.s, e:s.next.e, n:s.next.n, d:s.next.d}, neuf:true});
+      return;
+    }
+    allEpisodes(s,false).forEach(ep=>{ if(ep.d && ep.d >= t) cal.push({d:ep.d, show:s, ep:ep, neuf:false}); });
     if(s.next && s.next.d && s.next.d >= t && !(s.seasons[s.next.s]||[]).some(e=>e.e===s.next.e))
-      cal.push({d:s.next.d, show:s, ep:{s:s.next.s, e:s.next.e, n:s.next.n, d:s.next.d},
-                neuf:neufSur({s:s.next.s, e:s.next.e, d:s.next.d})});
+      cal.push({d:s.next.d, show:s, ep:{s:s.next.s, e:s.next.e, n:s.next.n, d:s.next.d}, neuf:false});
   });
   if(typeof filmsBientot === 'function')
     filmsBientot().forEach(f=> cal.push({d:f.dfr, film:f}));

@@ -2391,7 +2391,13 @@ window.MODE_TEST = true;
          'sans date de première, on doit retenir plutôt que déverser');
   });
 
-  test('une série à voir PAS ENCORE diffusée annonce sa première — « Premier épisode »', ()=>{
+  /* TEST DURCI PAR LA CORRECTION C2 (tranchée le 06/08 : « seulement la
+     première »). Il se contentait jusqu'ici de vérifier que l'étiquette
+     « Premier épisode » n'apparaissait QU'UNE FOIS — ce qui laissait passer les
+     épisodes suivants, simplement non étiquetés. Il exige désormais UNE SEULE
+     LIGNE pour toute la série. Le durcissement est déclaré ici pour que la
+     prochaine relecture ne le prenne pas pour une réécriture de complaisance. */
+  test('une série à voir PAS ENCORE diffusée annonce sa première, ET RIEN D\'AUTRE', ()=>{
     baseVierge();
     const APRES = new Date(Date.now()+8*86400000).toISOString().slice(0,10);
     db.shows[903] = serie(903, [ep(1, DEMAIN), ep(2, APRES)], {},
@@ -2399,12 +2405,33 @@ window.MODE_TEST = true;
     const html = calFollow();
     vrai(html.indexOf('S903') >= 0, 'la série jamais diffusée a disparu du calendrier');
     vrai(html.indexOf('Premier épisode') >= 0, 'l\'étiquette « Premier épisode » manque');
+    /* UNE ligne, pas une par épisode annoncé : c'est tout l'objet de C2. */
+    egal((html.match(/S903/g)||[]).length, 1,
+         'la série jamais diffusée pose plus d\'une ligne : ses épisodes suivants '+
+         'n\'ont rien à faire là avant qu\'elle soit commencée');
     egal((html.match(/Premier épisode/g)||[]).length, 1,
-         'l\'étiquette doit marquer la première, pas chaque épisode annoncé');
+         'l\'étiquette doit marquer la première, et elle seule');
+    vrai(html.indexOf('S1E2') < 0 && html.indexOf('E2') < 0,
+         'le deuxième épisode d\'une série jamais diffusée est annoncé');
     vrai(html.indexOf('Pas commencé') < 0, 'l\'ancienne étiquette « Pas commencé » est revenue');
     /* Et pas dans « À rattraper » : on ne rattrape pas ce qu\'on n\'a pas commencé. */
     vrai(html.indexOf('rattrap') < 0 || html.split('data-rail="rattrap"').length === 1,
          'une série jamais commencée est entrée dans « À rattraper »');
+  });
+
+  test('C2 — la série jamais diffusée retrouve TOUS ses épisodes une fois commencée', ()=>{
+    /* Le pendant obligatoire du durcissement : la restriction ne doit valoir
+       que tant que la série n'est pas commencée. Sinon on aurait « corrigé »
+       C2 en cassant l'essentiel de l'écran. */
+    baseVierge();
+    const APRES = new Date(Date.now()+8*86400000).toISOString().slice(0,10);
+    db.shows[906] = serie(906, [ep(1, HIER), ep(2, DEMAIN), ep(3, APRES)], { '1x1':1 },
+                          { status:'Returning Series', first: HIER });
+    const html = calFollow();
+    egal((html.match(/S906/g)||[]).length, 2,
+         'une série commencée doit garder TOUS ses prochains épisodes');
+    vrai(html.indexOf('Premier épisode') < 0,
+         'une série commencée porte une étiquette qui ne lui revient pas');
   });
 
   test('une série COMMENCÉE garde ses prochains épisodes, sans étiquette', ()=>{
@@ -2427,9 +2454,20 @@ window.MODE_TEST = true;
   });
 
   /* ========== CYCLE 3, POINT 6 — le suivi en retour, côté écran ==========
-     La partie serveur (fonction, déclencheur, absence de policy insert) se
-     vérifie dans Supabase — voir RAPPORT.md. Ici : la réciprocité lue en
-     mémoire, le bouton, la mention, et le bloc d'annonce. */
+     Ce groupe éprouve ce qui se voit à l'écran : la réciprocité lue en
+     mémoire, le bouton, la mention, et le bloc d'annonce.
+
+     LA PARTIE SERVEUR NE S'ÉPROUVE PAS ICI, et il ne faut pas croire qu'elle
+     est couverte parce que ce groupe est vert. Elle se vérifie dans Supabase —
+     que la fonction et le déclencheur existent, et surtout qu'AUCUNE policy
+     d'écriture n'a été créée sur `abonnements`. Les requêtes de contrôle sont
+     écrites en fin de `supabase/migrations/011_suivi_en_retour.sql`, et le
+     `RAPPORT-CORRECTIONS.md` de la branche note ce qu'elles ont répondu le
+     jour de la mise en service.
+     Un garde-fou automatique existe malgré tout, et il est dans
+     `tests/lance-tests.js` : il relit toutes les migrations du dépôt et refuse
+     qu'une policy « for insert » (ou « for all ») apparaisse sur cette
+     table. */
   groupe('Cycle 3, point 6 — le suivi en retour');
 
   function partageDeTest(suivis, abonnes){
@@ -2439,7 +2477,13 @@ window.MODE_TEST = true;
     partage.abonnes = abonnes || [];
     partage.charge = true;
   }
-  const THOMAS = { id:'uid-thomas', pseudo:'Thomas' };
+  /* CORRECTION C3 — une fiche porte désormais sa date de lien (`depuis`). Sans
+     elle, le bloc d'annonce ne s'affiche pas : c'est la règle prudente retenue
+     pour les fiches construites avant la correction. Les personnes de test
+     sont donc datées d'aujourd'hui, sauf celle qui joue l'ancien abonné. */
+  const AUJ = new Date().toISOString();
+  const THOMAS = { id:'uid-thomas', pseudo:'Thomas', depuis: AUJ };
+  const VIEUX  = { id:'uid-vieux',  pseudo:'Camille', depuis:'2026-07-01T10:00:00+00:00' };
 
   test('le bouton « Suivre » : sur mes abonnés non réciproques, et eux seuls', ()=>{
     partageDeTest([], [THOMAS]);
@@ -2483,6 +2527,74 @@ window.MODE_TEST = true;
     partageDeTest([], [THOMAS]);
     partage.charge = false;
     egal(blocAnnonceAbo(), '', 'le bloc s\'affiche sur des listes pas encore chargées');
+  });
+
+  /* ---------- CORRECTION C3 : le bloc ne salue que les nouveaux ---------- */
+
+  test('C3 — un abonné d\'avant ce lot n\'ouvre AUCUN bloc d\'annonce', ()=>{
+    partageDeTest([], [VIEUX]);
+    egal(blocAnnonceAbo(), '',
+         'la mise en service ferait surgir une annonce par abonnement déjà existant');
+    /* Mais le chemin permanent, lui, reste ouvert pour tout le monde. */
+    vrai(ligneAbo(VIEUX, 'suivi').indexOf('>Suivre<') >= 0,
+         'le bouton de la rangée a disparu pour les anciens abonnés : '+
+         'C3 ne devait limiter QUE le bloc');
+  });
+
+  test('C3 — un abonné du jour, lui, ouvre bien le bloc', ()=>{
+    partageDeTest([], [THOMAS]);
+    vrai(blocAnnonceAbo().indexOf('Thomas t\'a ajouté') >= 0,
+         'un abonnement tout neuf ne déclenche plus l\'annonce');
+    /* Les deux ensemble : seul le nouveau est annoncé. */
+    partageDeTest([], [VIEUX, THOMAS]);
+    const bloc = blocAnnonceAbo();
+    vrai(bloc.indexOf('Thomas') >= 0, 'le nouvel abonné n\'est pas annoncé');
+    vrai(bloc.indexOf('Camille') < 0, 'l\'ancien abonné est annoncé avec le nouveau');
+  });
+
+  test('C3 — une fiche sans date connue ne déclenche pas d\'annonce', ()=>{
+    /* Le cas prudent : une fiche construite avant la correction, ou lue d'une
+       base plus ancienne. On préfère un rappel muet à un rappel faux. */
+    partageDeTest([], [{ id:'uid-sansdate', pseudo:'Sans date' }]);
+    egal(blocAnnonceAbo(), '', 'une fiche sans date déclenche une annonce non fondée');
+  });
+
+  /* ---------- CORRECTION C4 : « Ignorer » suit le compte ---------- */
+
+  test('C4 — le choix « Ignorer » monte au serveur', ()=>{
+    partageDeTest([], [THOMAS]);
+    const vraiRender = window.render;
+    window.render = function(){};
+    try{ ignorerAnnonceAbo(THOMAS.id); }
+    finally{ window.render = vraiRender; }
+    const envoi = payload();
+    vrai(envoi.abosIgnores && envoi.abosIgnores[THOMAS.id],
+         'le choix reste sur l\'appareil : il ne franchira jamais la synchro');
+    vrai(Number(envoi.abosIgnores[THOMAS.id]) > 0,
+         'le choix part sans date : deux appareils ne pourront pas se départager');
+  });
+
+  test('C4 — la réception FUSIONNE, elle ne remplace pas', ()=>{
+    partageDeTest([], [THOMAS]);
+    db.abosIgnores = { 'uid-a': 1000 };
+    /* Le distant en connaît un autre, et une date plus récente sur un troisième. */
+    fusionnerAbosIgnores({ abosIgnores: { 'uid-b': 2000, 'uid-a': 500 } });
+    egal(db.abosIgnores['uid-a'], 1000, 'une date plus ancienne a écrasé la nôtre');
+    egal(db.abosIgnores['uid-b'], 2000, 'une entrée connue du seul autre appareil a été perdue');
+    fusionnerAbosIgnores({ abosIgnores: { 'uid-a': 3000 } });
+    egal(db.abosIgnores['uid-a'], 3000, 'une date plus récente n\'a pas gagné');
+    /* Idempotence : refusionner le même paquet ne bouge plus rien. */
+    egal(fusionnerAbosIgnores({ abosIgnores: { 'uid-a': 3000, 'uid-b': 2000 } }), false,
+         'refusionner le même paquet se déclare comme un changement');
+  });
+
+  test('C4 — un envoi SANS la liste ne vide pas la nôtre', ()=>{
+    /* Le cas transitoire : un appareil resté sur la version précédente. Une
+       clé absente ne veut pas dire « liste vidée ». */
+    partageDeTest([], [THOMAS]);
+    db.abosIgnores = { 'uid-a': 1000 };
+    egal(fusionnerAbosIgnores({}), false, 'un envoi sans la clé est traité comme un changement');
+    egal(db.abosIgnores['uid-a'], 1000, 'un appareil pas à jour a effacé un choix déjà fait');
   });
 
   test('changer de famille ne laisse pas traîner une recette de film', ()=>{

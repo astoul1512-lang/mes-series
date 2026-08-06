@@ -362,16 +362,41 @@ function aboReciproque(id){
          (partage.abonnes || []).some(x => x && String(x.id) === String(id));
 }
 
+/* CORRECTION C3 — LA FRONTIÈRE ENTRE « ANCIEN » ET « NOUVEAU » ABONNÉ.
+
+   Sans elle, la mise en service faisait surgir un bloc « X t'a ajouté » pour
+   CHAQUE personne déjà abonnée depuis des mois : une pile d'annonces à traiter
+   pour des liens qu'on connaît par cœur, alors que le bloc annonce un
+   événement — quelqu'un vient de te suivre.
+
+   Une date écrite en dur, et c'est délibéré : c'est la seule forme qui se
+   relise sans rien exécuter. Elle vaut « jour de la correction » — la mise en
+   production suit de peu, et tout ce qui est antérieur est, par construction,
+   un abonnement d'avant ce lot.
+
+   ATTENTION EN LA DÉPLAÇANT : la reculer ferait réapparaître d'anciens
+   abonnements sous forme d'annonces. Elle n'a aucune raison de bouger. */
+const ABO6_ANNONCE_DEPUIS = '2026-08-06';
+function abo6Nouveau(p){
+  /* `depuis` est un horodatage ISO rendu par la base (« 2026-08-06T19:14:… ») :
+     les dix premiers caractères en donnent le jour, et deux jours ISO se
+     comparent comme deux chaînes. Sans date connue — une fiche construite
+     avant la correction C3, ou un lien lu d'une base plus ancienne — on ne
+     montre PAS le bloc : un rappel muet vaut mieux qu'un rappel faux, et le
+     bouton de la rangée reste, lui, le chemin permanent. */
+  return !!(p && p.depuis && String(p.depuis).slice(0,10) >= ABO6_ANNONCE_DEPUIS);
+}
+
 /* Le bloc d'annonce « X t'a ajouté », calqué sur le motif de
    `blocConseilsRecus` : un rappel en tête d'écran, avec les deux réponses.
    « Ignorer » ferme LE BLOC, jamais le bouton de la rangée — le bloc est un
-   rappel, la rangée est le chemin permanent. Le choix est retenu dans `db`
-   pour ne pas réapparaître à chaque ouverture. */
+   rappel, la rangée est le chemin permanent. Le choix est retenu dans `db`,
+   et depuis la correction C4 il suit le COMPTE et non l'appareil. */
 function blocAnnonceAbo(){
   if(!partage.charge) return '';
   const ignores = db.abosIgnores || {};
   const l = (partage.abonnes || []).filter(p =>
-    p && p.id && !aboReciproque(p.id) && !ignores[p.id]);
+    p && p.id && abo6Nouveau(p) && !aboReciproque(p.id) && !ignores[p.id]);
   if(!l.length) return '';
   return l.map(p =>
     '<div class="abo6bloc">'+
@@ -386,6 +411,9 @@ function blocAnnonceAbo(){
 }
 function ignorerAnnonceAbo(id){
   if(!db.abosIgnores || typeof db.abosIgnores !== 'object') db.abosIgnores = {};
+  /* La date, et pas un simple `true` : c'est elle qui permet à deux appareils
+     de se départager à la synchronisation (correction C4, `fusionnerAbosIgnores`
+     dans app-01). */
   db.abosIgnores[id] = Date.now();
   saveDB();
   render();
