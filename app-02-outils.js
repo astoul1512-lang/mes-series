@@ -315,7 +315,11 @@ const srcImage = (p, size) => { const c = cheminImage(p); return c ? esc(IMG(c, 
 function posterEl(path, size, cls, alt, pressee){
   const src = srcImage(path, size);
   if(src) return '<img class="poster '+(cls||'')+'"'+
-    (pressee ? ' fetchpriority="high" decoding="async"' : ' loading="lazy"')+
+    /* C9 — REVUE DU 07/08 : `decoding="async"` partout, pas seulement sur la
+       carte pressée. Sans lui, le décodage d'une affiche peut tomber sur le fil
+       de l'écran, pendant le geste — la règle existait déjà ici même, elle
+       n'était appliquée qu'à une branche. */
+    (pressee ? ' fetchpriority="high" decoding="async"' : ' loading="lazy" decoding="async"')+
     ' onerror="posterFail(this)" src="'+src+'" alt="'+esc(alt||'')+'">';
   return '<div class="poster ph '+(cls||'')+'">'+esc((alt||'?').slice(0,18))+'</div>';
 }
@@ -480,10 +484,56 @@ function openSheet(html, cle){
      hauteur, et poser le défilement n'a aucun effet. */
   el.scrollTop = y;
   poserFermeture(cle);
+  /* C3 : la garde ne se pose qu'à l'OUVERTURE — un panneau redessiné à chaque
+     puce touchée ne doit pas empiler une entrée par puce. */
+  if(!deja) poserGarde('feuille');
 }
+/* ===========================================================================
+   C3 — REVUE DU 07/08 : LES GARDES D'HISTORIQUE.
+   Un état plein écran qui n'est pas une vue (feuille de filtres, jeu de
+   Recherche, recherche plein écran du profil) pose une « entrée-garde » dans
+   l'historique du navigateur à son ouverture. Sans elle, sur un onglet de la
+   barre du bas — où les onglets se REMPLACENT au lieu de s'empiler — il n'y a
+   AUCUNE entrée derrière : le bouton retour du téléphone quittait l'app avec
+   la feuille ouverte, et toute la recherche composée était perdue (reproduit
+   par la revue, constat C3).
+   L'entrée-garde décrit l'écran COURANT : consommée par le bouton du
+   téléphone, l'écouteur `popstate` ferme l'état ouvert et l'historique est
+   déjà retombé au bon endroit ; retirée par une fermeture DANS l'app
+   (`retirerGarde` → `history.back()`), le `popstate` qui s'ensuit décrit
+   l'écran affiché et la garde « même écran » l'absorbe sans rien rendre.
+   Le miroir (`pileHisto`, `iHisto`) n'avance PAS : une garde n'est pas une
+   navigation, et les gestes de retour restent bloqués tant que l'état est
+   ouvert — comme avant.
+   Une navigation volontaire pendant qu'une garde est posée la rend orpheline :
+   `go()` l'oublie simplement (`gardesHisto[nom] = false`) ; l'entrée restante
+   décrit un écran réel et sera remplacée par la prochaine substitution ou
+   absorbée par la garde « même écran » — au pire, un appui retour de plus,
+   jamais une sortie d'app ni un écran faux. */
+const gardesHisto = {};
+function poserGarde(nom){
+  if(gardesHisto[nom]) return;
+  try{
+    history.pushState(etatHisto(view, params, iHisto), '',
+      routeVersFragment(view, params) || (location.pathname + location.search));
+    gardesHisto[nom] = true;
+  }catch(e){}
+}
+function consommerGarde(nom){
+  if(!gardesHisto[nom]) return false;
+  gardesHisto[nom] = false;
+  return true;
+}
+function retirerGarde(nom){
+  if(!gardesHisto[nom]) return;
+  gardesHisto[nom] = false;
+  try{ history.back(); }catch(e){}
+}
+
 function closeSheet(){
   const s = document.getElementById('sheet');
   s.classList.remove('show');
+  retirerGarde('feuille');   // C3 : fermée dans l'app → l'entrée-garde s'en va aussi
   jouerFermeture();
   /* Un lecteur vidéo laissé dans le panneau continuerait de jouer, sans image
      et sans moyen de l'arrêter. On le retire à la fermeture. */
@@ -675,6 +725,15 @@ let navDir = 'none';
    titres, et revenir d'une fiche pour retomber tout en haut est le reproche
    exact d'Adrien. */
 const LISTES = { discover:1, search:1, follow:1, profile:1, abos:1, biblio:1, acteur:1, rangee:1 };
+/* C2 — REVUE DU 07/08 : les fiches aussi retiennent leur position, mais avec
+   une règle plus fine que les listes : la position n'est rendue QU'AU RETOUR
+   (flèche, balayage, bouton du téléphone). Une fiche OUVERTE — depuis une
+   liste, une recherche, une notification — part toujours du haut, et sa
+   mémoire d'avant est oubliée à cet instant. Avant ce correctif, descendre
+   dans une fiche longue, ouvrir un acteur et revenir remettait la fiche tout
+   en haut (reproduit par `tests/phase2.js`) — le reproche exact d'Adrien,
+   version fiches. */
+const FICHES = { show:1, movie:1, preview:1 };
 const memDefil = {};
 /* Paramètres du dernier passage sur chaque écran. En revenant en arrière on
    remet l'écran d'arrivée exactement dans l'état où on l'avait quitté : sans
@@ -691,6 +750,12 @@ function cleDefil(v, p){
   const q = p || params || {};
   if(v === 'biblio') return 'biblio:'+(q.id||'');
   if(v === 'acteur') return 'acteur:'+(q.id || ui.acteurId || '');
+  /* C7/C2 — REVUE DU 07/08 : les fiches aussi ont chacune leur position. La
+     clé nue `show` était PARTAGÉE par toutes les séries : le casting défilé de
+     la fiche B s'appliquait à la fiche A rouverte ensuite (reproduit par
+     `tests/phase2.js`). Même règle que `biblio` et `acteur`, trois lignes
+     plus haut. */
+  if(v === 'show' || v === 'movie' || v === 'preview') return v+':'+(q.id||'');
   /* Deux rangées dépliées ne partagent pas leur position : revenir des « films
      pour toi » ne doit pas rendre la grille des animés là où on avait laissé
      l'autre. */
@@ -866,6 +931,15 @@ function inscrireHistorique(v, p, remplacer){
 
 function go(v, p, dir, opts){
   opts = opts || {};
+  if(!opts.depuisHistorique){
+    /* C4 : une navigation volontaire désarme un retour encore en vol — le
+       secours de 900 ms ne rendra pas l'écran de départ par-dessus le sien. */
+    if(typeof glisseRetour === 'object' && glisseRetour && glisseRetour.abandonnerAttente)
+      glisseRetour.abandonnerAttente();
+    /* C3 : et rend orphelines les entrées-gardes encore posées — voir le
+       commentaire des gardes, plus haut. */
+    for(const k in gardesHisto) gardesHisto[k] = false;
+  }
   if(view===v && JSON.stringify(params)===JSON.stringify(p||{})){
     /* Réappuyer sur l'onglet où l'on est déjà remonte en haut : c'est voulu.
        POINT 4 DU CYCLE 3 — mais quand l'appel vient de l'HISTORIQUE (un
@@ -875,7 +949,7 @@ function go(v, p, dir, opts){
     render(); return;
   }
   const ancienneVue = view;
-  if(LISTES[view]) memDefil[cleDefil(view)] = window.scrollY || 0;
+  if(LISTES[view] || FICHES[view]) memDefil[cleDefil(view)] = window.scrollY || 0;
   memoriserRails();
   /* En revenant sur Découvrir sans recherche en cours, le champ se referme :
      on retrouve l'écran de suggestions net. Une recherche en cours, elle, survit. */
@@ -920,6 +994,7 @@ function go(v, p, dir, opts){
   dernierGo = { vue: v, dir: navDir, historique: !!opts.depuisHistorique };
   view = v; params = p||{};
   if(typeof hideUndo === 'function') hideUndo();
+  railsDejaReleves = true;   // C7 : le relevé juste est fait plus haut, sur l'écran quitté
   render();
   const app = document.getElementById('app');
   app.classList.remove('tabg-d', 'tabg-g');
@@ -927,7 +1002,12 @@ function go(v, p, dir, opts){
     void app.offsetWidth;                    // repart de zéro si on enchaîne vite
     app.classList.add(versTab > deTab ? 'tabg-d' : 'tabg-g');
   }
-  const y = LISTES[v] ? (memDefil[cleDefil(v, p)] || 0) : 0;
+  /* C2 — une liste restaure toujours ; une fiche ne restaure qu'au retour, et
+     une ouverture neuve efface sa mémoire pour que la position d'une visite
+     passée ne resurgisse pas plus tard. */
+  const revient = navDir === 'back' || !!opts.depuisHistorique;
+  const y = (LISTES[v] || (FICHES[v] && revient)) ? (memDefil[cleDefil(v, p)] || 0) : 0;
+  if(FICHES[v] && !revient) oublierDefil(v);
   window.scrollTo(0, y);
   /* La grille se peuple parfois juste après le rendu : on repositionne une fois de plus. */
   if(y) requestAnimationFrame(()=> window.scrollTo(0, y));
@@ -957,7 +1037,18 @@ function oublierDefil(v){ delete memDefil[cleDefil(v)]; }
    la clé de l'écran — deux rangées dépliées ne partagent pas leur position.
    F2 (repeindre au lieu de tout reconstruire) rendra ceci partiellement inutile
    sur les chemins qu'il couvre ; ça vaut quand même pour tous les autres. */
+/* C7 — REVUE DU 07/08 : pendant une navigation, `go()` relève les rails AVANT
+   de changer `view` (clé juste), puis `render()` les relevait UNE SECONDE FOIS
+   — mais à ce moment-là `view` porte déjà l'écran d'arrivée alors que le DOM
+   montre encore l'écran quitté. Résultat : le défilement du casting d'une
+   fiche s'écrivait sous la clé d'une autre, et la rangée s'ouvrait « au
+   milieu » sans raison (reproduit par `tests/phase2.js`). `go()` lève ce
+   drapeau juste avant `render()` ; le relevé de trop se saute et le consomme.
+   Les redessins SANS navigation (cocher un épisode, ajouter un film) — ceux
+   pour lesquels C4.3 existe — gardent leur relevé, drapeau baissé. */
+let railsDejaReleves = false;
 function memoriserRails(){
+  if(railsDejaReleves){ railsDejaReleves = false; return; }
   document.querySelectorAll('[data-rail]').forEach(el=>{
     memDefil['rail:'+cleDefil(view)+':'+el.dataset.rail] = el.scrollLeft;
   });
@@ -1001,6 +1092,14 @@ function goBack(){
      lancé pendant une partie faisait sortir de Mes goûts et perdait la session
      — et l'écran d'arrivée dessiné sous le doigt aurait été le mauvais. */
   if(typeof duel !== 'undefined' && duel && duel.actif) return fermerDuel();
+  /* C3/S1 — REVUE DU 07/08 : le jeu de Recherche et la recherche plein écran
+     du profil se ferment comme le duel, au lieu d'être ignorés (la partie ou
+     la saisie se perdait, ou le geste ne faisait rien du tout). Les fermetures
+     retirent elles-mêmes leur entrée-garde. */
+  if(view === 'search' && typeof etatRech === 'function' && etatRech().jeu
+     && typeof fermerJeuRech === 'function') return fermerJeuRech();
+  if(view === 'profile' && typeof pf12 !== 'undefined' && pf12.ouvert
+     && typeof fermerRechPf12 === 'function') return fermerRechPf12();
   const t = cibleRetour();
   if(!t) return;
   /* Un deuxième appui pendant que l'écran glisse encore ne doit pas lancer
@@ -1048,8 +1147,14 @@ window.addEventListener('popstate', function(e){
   }
   const feuille = document.getElementById('sheet');
   if(feuille && feuille.classList.contains('show')){
+    /* C3 : si l'entrée consommée était la garde posée à l'ouverture,
+       l'historique est déjà retombé sur l'entrée de l'écran courant — rien à
+       repousser. Le rattrapage ne sert plus qu'au cas où la garde n'avait pas
+       pu se poser (limite Safari). `consommerGarde` AVANT `closeSheet`, pour
+       que la fermeture ne recule pas l'historique une seconde fois. */
+    const garde = consommerGarde('feuille');
     closeSheet();
-    try{ history.pushState(etatHisto(view, params, iHisto), '', adresseCourante()); }catch(err){}
+    if(!garde){ try{ history.pushState(etatHisto(view, params, iHisto), '', adresseCourante()); }catch(err){} }
     return;
   }
   /* LOT A — même traitement que la feuille pour le duel : le bouton matériel
@@ -1060,12 +1165,41 @@ window.addEventListener('popstate', function(e){
     try{ history.pushState(etatHisto(view, params, iHisto), '', adresseCourante()); }catch(err){}
     return;
   }
+  /* C3 — REVUE DU 07/08 : le jeu de Recherche et la recherche plein écran du
+     profil reçoivent les mêmes droits que la feuille et le duel. Avant, aucun
+     chemin de retour ne les connaissait : le bouton du téléphone quittait
+     l'écran et la partie — ou la saisie — était perdue. */
+  if(view === 'search' && typeof etatRech === 'function' && etatRech().jeu){
+    const garde = consommerGarde('jeu');
+    if(typeof fermerJeuRech === 'function') fermerJeuRech();
+    if(!garde){ try{ history.pushState(etatHisto(view, params, iHisto), '', adresseCourante()); }catch(err){} }
+    return;
+  }
+  if(view === 'profile' && typeof pf12 !== 'undefined' && pf12.ouvert){
+    const garde = consommerGarde('pf12');
+    if(typeof fermerRechPf12 === 'function') fermerRechPf12();
+    if(!garde){ try{ history.pushState(etatHisto(view, params, iHisto), '', adresseCourante()); }catch(err){} }
+    return;
+  }
   /* POINT 4C DU CYCLE 3 — un retour de geste est en vol : ce `popstate` est le
      sien, c'est LUI qui rend l'écran d'arrivée (la couche du dessous l'affiche
      déjà, donc sans éclair). Plus de compteur à avaler, plus de pari. */
   if(typeof glisseRetour === 'object' && glisseRetour && glisseRetour.retourConsomme
      && glisseRetour.retourConsomme(e)) return;
   const st = e.state;
+  /* C4 — REVUE DU 07/08 : un `popstate` retardataire — le retour différé d'un
+     geste que l'utilisateur a abandonné en naviguant ailleurs — ne doit pas
+     fermer l'écran qu'il vient d'ouvrir. On repousse l'entrée de l'écran
+     affiché et on ne bouge pas. La garde « même écran » plus bas couvre déjà
+     le cas où le retardataire décrit l'écran affiché ; ici, celui où il
+     décrirait un autre écran et NAVIGUERAIT. `retardataire()` est consommé en
+     dernier, pour ne pas gaspiller la fenêtre sur un cas déjà inoffensif. */
+  if(st && st.msv
+     && (st.view !== view || JSON.stringify(st.params || {}) !== JSON.stringify(params || {}))
+     && typeof glisseRetour === 'object' && glisseRetour.retardataire && glisseRetour.retardataire()){
+    try{ history.pushState(etatHisto(view, params, iHisto), '', adresseCourante()); }catch(err){}
+    return;
+  }
   if(st && st.msv){
     /* POINT 4C DU CYCLE 3 — LA GARDE « MÊME ÉCRAN ». Un `popstate` qui décrit
        l'écran DÉJÀ affiché n'a rien à rendre : c'est la fin de course d'un
@@ -1285,12 +1419,60 @@ const glisseRetour = (function(){
     couche.style.transform = 'translate3d('+(-(1 - part) * largeur * PARALLAXE)+'px,0,0)';
     voile.style.opacity = String(VOILE * (1 - part));
     const achever = ()=> aboutir ? poser() : remettre();
-    el.addEventListener('transitionend', function fin(ev){
-      if(ev.propertyName !== 'transform') return;
+    /* C1 — REVUE DU 07/08 : le secours doit RETIRER l'écouteur, pas seulement
+       achever. Un geste abandonné dont le doigt est revenu au bord relâche sur
+       une transformation déjà à zéro : la transition ne démarre pas,
+       `transitionend` ne vient jamais, et l'écouteur restait posé pour toujours
+       sur `#app` — qui, lui, ne disparaît jamais. Au vrai retour suivant, ce
+       fantôme se réveillait au milieu du mouvement et démontait la couche
+       d'arrivée sous le doigt : c'est l'écran qui saute, reproduit par
+       `tests/phase2.js`. Même défaut, même remède que l'écouteur `animationend`
+       de `render()` (app-03, correctif B10).
+       `ev.target !== el` : `transitionend` BOUILLONNE — une carte qui anime son
+       propre `transform` à l'intérieur de l'écran ne doit pas terminer le geste
+       à sa place.
+       `consomme` : quand la transition finit normalement, le secours ne doit
+       pas rejouer `achever` 120 ms plus tard par-dessus un geste suivant. */
+    let consomme = false;
+    const fin = ev => {
+      if(ev.target !== el || ev.propertyName !== 'transform') return;
+      consomme = true;
       el.removeEventListener('transitionend', fin);
       achever();
-    });
-    setTimeout(achever, duree + 120);
+    };
+    el.addEventListener('transitionend', fin);
+    setTimeout(()=>{
+      if(consomme) return;
+      consomme = true;
+      el.removeEventListener('transitionend', fin);
+      achever();
+    }, duree + 120);
+  }
+
+  /* C4 — REVUE DU 07/08 : l'utilisateur a navigué pendant qu'un retour demandé
+     au navigateur était encore en vol (`history.back` différé — page masquée,
+     téléphone chargé). Sans ce désarmement, le secours de 900 ms redessinait
+     l'écran de départ PAR-DESSUS celui que l'utilisateur venait d'ouvrir, puis
+     le `popstate` différé renvoyait encore ailleurs : deux navigations
+     spontanées pour un seul geste (reproduit par `tests/phase2.js`). */
+  let enFuite = 0;
+  function abandonnerAttente(){
+    if(!attente) return false;
+    const rv = attente; attente = null;
+    clearTimeout(rv.secours);
+    nettoyerRetour(rv);
+    enFuite = Date.now();
+    return true;
+  }
+  /* Vrai UNE SEULE FOIS si un `popstate` survient peu après un abandon : c'est
+     le retour différé du geste abandonné, pas un geste de l'utilisateur.
+     Fenêtre courte (2,5 s) : au-delà, un vrai appui retour reprend ses droits
+     — et même dans la fenêtre, un vrai appui absorbé se rejoue au deuxième
+     appui, là où l'ancien comportement fermait un écran sans raison. */
+  function retardataire(){
+    if(!enFuite || Date.now() - enFuite > 2500) return false;
+    enFuite = 0;
+    return true;
   }
 
   /* Retour sans geste (flèche, balayage impossible) : même mouvement, joué seul. */
@@ -1304,7 +1486,8 @@ const glisseRetour = (function(){
     return true;
   }
 
-  return { suivre, terminer, remettre, jouer, enCours, retourConsomme };
+  return { suivre, terminer, remettre, jouer, enCours, retourConsomme,
+           abandonnerAttente, retardataire };
 })();
 
 /* Balayage depuis le bord gauche pour revenir en arrière */
@@ -1337,6 +1520,13 @@ const RAILS = '.rangee, .cast, .rattrap, .filmrow, .chips, .souschips, .seasonpi
        goûts en perdant la session. On sort par la croix, ou par le bouton
        matériel (traité au `popstate`). */
     if(typeof duel !== 'undefined' && duel && duel.actif && !surVideo){ x0=null; return; }
+    /* C3/S1 — même raison que le duel : le jeu de Recherche et la recherche
+       plein écran du profil ne sont pas des entrées d'historique. Le balayage
+       est refusé (le jeu a d'ailleurs ses propres gestes de cartes) ; on sort
+       par la flèche ou le bouton du téléphone, qui savent désormais les
+       fermer. */
+    if(view === 'search' && typeof etatRech === 'function' && etatRech().jeu && !surVideo){ x0=null; return; }
+    if(view === 'profile' && typeof pf12 !== 'undefined' && pf12.ouvert && !surVideo){ x0=null; return; }
     if(t.clientX <= 28 && (surVideo || cibleRetour()) &&
        !document.getElementById('sheet').classList.contains('show')){
       x0=t.clientX; y0=t.clientY; t0=Date.now();

@@ -143,13 +143,20 @@ async function loadDB(){
   }
 }
 
-let saveTimer = null, dirty = false;
+let saveTimer = null, veilleTimer = null, dirty = false;
 function saveDB(){
   dirty = true;
   if(typeof scheduleSync === 'function') scheduleSync();
   /* La bibliothèque vient peut-être de bouger : la vitrine doit suivre. Ici
-     plutôt qu'aux dix endroits qui cochent, ajoutent ou synchronisent. */
-  if(typeof veilleBiblio === 'function') veilleBiblio();
+     plutôt qu'aux dix endroits qui cochent, ajoutent ou synchronisent.
+     C8 — REVUE DU 07/08 : ce recalcul parcourait les 9 436 épisodes À CHAQUE
+     geste qui écrit, hors de tout regroupement (10–13 ms par coche, mesuré).
+     Il rejoint le même délai de 800 ms que l'écriture : cocher une saison
+     entière ne le paye plus qu'une fois. Minuteur SÉPARÉ de `saveTimer`,
+     parce que l'écriture n'existe pas en mode mémoire (tests) alors que la
+     vitrine doit continuer d'y être surveillée. */
+  clearTimeout(veilleTimer);
+  veilleTimer = setTimeout(()=>{ if(typeof veilleBiblio === 'function') veilleBiblio(); }, 800);
   if(memoryOnly) return;
   clearTimeout(saveTimer);
   /* 150 ms était plus court que l'écriture elle-même (1,3 Mo sérialisés puis
@@ -190,7 +197,13 @@ async function writeNow(){
 function flushDB(){ if(dirty){ clearTimeout(saveTimer); writeNow().catch(()=>{}); } }
 document.addEventListener('visibilitychange', ()=>{ if(document.hidden) flushDB(); });
 window.addEventListener('pagehide', flushDB);
-window.addEventListener('blur', flushDB);
+/* C8 — REVUE DU 07/08 : le filet `blur` est retiré. Il se déclenchait quand la
+   bande-annonce prenait le focus, à chaque bannière de notification, à chaque
+   bascule — et forçait une écriture synchrone de 1,3 Mo (111 ms mesurés) en
+   plein milieu d'une interaction. `visibilitychange` et `pagehide` couvrent le
+   vrai risque (iOS qui tue l'app en arrière-plan) : quand l'app disparaît de
+   l'écran, l'un des deux se déclenche toujours ; `blur` seul — sans bascule —
+   n'annonce aucune mise à mort. */
 
 /* ============================ TMDB ============================ */
 const IMG = (p,size)=> p ? 'https://image.tmdb.org/t/p/'+size+p : '';
@@ -1031,7 +1044,9 @@ async function syncNow(silent){
   syncing = true; syncState = 'busy'; syncError = ''; if(!silent) render();
   try{
     const got = await sbFetch('/rest/v1/'+TABLE+'?select=data&user_id=eq.'+encodeURIComponent(db.auth.uid), {});
-    if(Array.isArray(got) && got.length) mergeRemote(got[0].data);
+    /* C5 — REVUE DU 07/08 : on retient si la fusion a RÉELLEMENT changé
+       quelque chose ; c'est elle qui décide du redessin plus bas. */
+    const fusionAChange = (Array.isArray(got) && got.length) ? mergeRemote(got[0].data) : false;
     await sbFetch('/rest/v1/'+TABLE, {
       method:'POST',
       headers:{ Prefer:'resolution=merge-duplicates,return=minimal' },
@@ -1041,7 +1056,14 @@ async function syncNow(silent){
     delete db.syncDernierEchec;
     await writeNow().catch(()=>{});
     if(!silent) toast('Synchronisé');
-    render();
+    /* C5 — REVUE DU 07/08 : ce `render()` inconditionnel redessinait l'écran
+       ENTIER 15 secondes après chaque modification, sans qu'on ait rien
+       demandé (mesuré à la seconde près) — à-coups en pleine lecture, et
+       position perdue si l'écran redessiné est plus court. On ne redessine que
+       s'il y a une raison : la synchro était visible (`!silent`), la fusion a
+       apporté des données d'un autre appareil, ou l'écran Compte — le seul qui
+       AFFICHE l'état de synchro — est sous les yeux. */
+    if(!silent || fusionAChange || view === 'account') render();
   }catch(e){
     syncState = 'err'; syncError = motifSynchro(e);
     /* Retenu en base pour survivre à un rechargement : l'échec doit rester
@@ -1049,7 +1071,10 @@ async function syncNow(silent){
        un état local. */
     db.syncDernierEchec = { quand: Date.now(), motif: syncError };
     if(!silent) toast('Synchro impossible : '+syncError);
-    render();
+    /* C5 — même règle qu'au succès : un échec silencieux n'a rien à redessiner,
+       sauf si l'écran Compte, qui montre l'état, est affiché. L'échec reste
+       retenu en base et sera visible dès qu'on ouvrira cet écran. */
+    if(!silent || view === 'account') render();
   }finally{
     /* Dans un `finally` : une exception jetée HORS du try — dans `payload()`
        par exemple — laissait `syncing` latché à vrai, et plus rien ne

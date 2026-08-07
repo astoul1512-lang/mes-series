@@ -453,6 +453,43 @@ if(!window.MODE_TEST) boot();
    enregistré depuis elle servirait l'app par-dessus. */
 if(!window.MODE_TEST && 'serviceWorker' in navigator && location.protocol.startsWith('http')){
   window.addEventListener('load', ()=>{
-    navigator.serviceWorker.register('./sw.js').catch(()=>{});
+    navigator.serviceWorker.register('./sw.js').then(reg=>{
+      /* DÉCISION D'ADRIEN, 07/08 (revue, S10) — le service worker sert le
+         cache d'abord : la fraîcheur passe donc par SA mise à jour. On la
+         demande ici, HORS du chemin critique du démarrage, puis on prévient
+         quand la nouvelle version a pris les commandes. */
+      setTimeout(()=>{ try{ reg.update(); }catch(e){} }, 3000);
+      /* Le sw.js du dépôt fait `skipWaiting` à l'installation : dès qu'une
+         nouvelle version est installée, elle prend le contrôle et cet
+         événement tombe. La page, elle, exécute encore l'ancien code — d'où
+         le bandeau, au lieu d'un rechargement d'autorité en pleine lecture.
+         `avaitControleur` : à la TOUTE PREMIÈRE visite, `clients.claim` fait
+         aussi tomber cet événement — ce n'est pas une mise à jour, pas de
+         bandeau. */
+      let avaitControleur = !!navigator.serviceWorker.controller;
+      navigator.serviceWorker.addEventListener('controllerchange', ()=>{
+        if(!avaitControleur){ avaitControleur = true; return; }
+        montrerBandeauMaj();
+      });
+    }).catch(()=>{});
   });
+}
+
+/* Le bandeau « nouvelle version » : discret, au-dessus de la barre du bas,
+   fermable. Styles portés par l'élément pour ne rien ajouter à `app.css`. */
+function montrerBandeauMaj(){
+  if(document.getElementById('majbandeau')) return;
+  if(!document.body || document.body.classList.contains('booting')) return;
+  const b = document.createElement('div');
+  b.id = 'majbandeau';
+  b.style.cssText = 'position:fixed;left:12px;right:12px;bottom:76px;z-index:60;'+
+    'background:#1d2130;color:#fff;border:1px solid #343a4e;border-radius:12px;'+
+    'padding:10px 12px;display:flex;align-items:center;gap:10px;'+
+    'box-shadow:0 8px 24px rgba(0,0,0,.45);font-size:14px';
+  b.innerHTML = '<span style="flex:1">Une nouvelle version est prête</span>'+
+    '<button style="background:#e8412f;color:#fff;border:0;border-radius:9px;'+
+    'padding:8px 12px;font-weight:650" onclick="location.reload()">Recharger</button>'+
+    '<button style="background:none;border:0;color:#9aa1b5;font-size:18px;padding:2px 6px" '+
+    'onclick="document.getElementById(\'majbandeau\').remove()">×</button>';
+  document.body.appendChild(b);
 }

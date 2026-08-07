@@ -1,19 +1,17 @@
 /* Service worker — démarrage instantané et fonctionnement hors-ligne.
-   Stratégie : network-first sur les fichiers de l'app (pour recevoir les mises à jour),
-   repli sur le cache quand le réseau est absent. Les appels TMDB ne sont jamais mis en cache. */
+
+   DÉCISION D'ADRIEN, 07/08/2026 (revue, constat S10) : CACHE D'ABORD.
+   L'ancienne règle « réseau d'abord » redemandait les 14 fichiers au réseau à
+   CHAQUE ouverture avant d'afficher quoi que ce soit : 1,2 s en 4G, 2,9 s en
+   3G — à chaque fois, même quand rien n'avait changé. Désormais le cache est
+   servi immédiatement, et la FRAÎCHEUR passe par la mise à jour du service
+   worker lui-même : à chaque mise en production, ce fichier change (le numéro
+   de CACHE est incrémenté), le navigateur détecte le nouveau worker, installe
+   la nouvelle version d'un bloc (`addAll`, donc jamais de versions mélangées),
+   et l'app affiche un bandeau « Recharger » (app-08). Le réseau ne reste le
+   premier recours que pour un fichier ABSENT du cache.
+   Les appels TMDB ne sont jamais mis en cache. */
 const CACHE = 'mes-series-v87';
-
-/* Au-delà de ce délai, on sert le cache sans attendre la réponse du réseau.
-   Sans lui, un réseau qui PEND — portail captif d'hôtel qui ne répond ni oui
-   ni non, 3G morte — laissait l'app sur un écran vide indéfiniment : `fetch`
-   ne rejette pas, il attend. Le repli sur le cache n'arrivait donc jamais,
-   alors que tout était là.
-
-   4 secondes : au-dessus du temps de réponse normal de GitHub Pages, même sur
-   un réseau mobile lent, et en dessous du seuil où l'on croit que l'app est
-   cassée. Le fetch n'est pas annulé pour autant — il continue en arrière-plan
-   et met le cache à jour s'il finit par répondre. */
-const DELAI_RESEAU = 4000;
 
 const SHELL = ['./', './index.html', './app.css', './manifest.json',
                './icon-192.png', './icon-512.png',
@@ -59,48 +57,42 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
 
-  // Ressources de l'app : réseau d'abord, cache en secours
+  // Ressources de l'app : CACHE D'ABORD (décision du 07/08), réseau pour ce qui manque
   if (url.origin === location.origin) {
-    /* {cache:'reload'} : sans ça, ce fetch repassait par le cache HTTP du
-       navigateur, et GitHub Pages y pose un max-age. Une nouvelle version
-       pouvait mettre une dizaine de minutes à arriver, même en rechargeant. */
-    const reseau = fetch(req, { cache: 'reload' })
-      .then(res => {
-        /* On ne met en cache qu'une vraie réponse : une page d'erreur 404 gardée
-           en secours rendrait l'app inutilisable hors-ligne. */
+    e.respondWith((async () => {
+      /* Le cache est servi tel quel, sans revalidation fichier par fichier :
+         mettre à jour le cache EN COURS DE ROUTE mélangerait deux versions
+         (un index v88 avec des scripts v87). La nouvelle version arrive d'un
+         bloc, par l'installation du prochain service worker. */
+      const enCache = await caches.match(req);
+      if (enCache) return enCache;
+
+      /* Fichier absent du cache (première visite, ou installation partielle) :
+         réseau. {cache:'reload'} : sans ça, ce fetch repassait par le cache
+         HTTP du navigateur, et GitHub Pages y pose un max-age. On garde la
+         réponse pour la fois d'après — mais seulement une vraie réponse : une
+         page d'erreur 404 gardée en secours rendrait l'app inutilisable
+         hors-ligne. */
+      try {
+        const res = await fetch(req, { cache: 'reload' });
         if (res && res.ok && res.type === 'basic') {
           const copy = res.clone();
           caches.open(CACHE).then(c => c.put(req, copy)).catch(()=>{});
         }
         return res;
-      });
-
-    /* Le repli sur `index.html` ne vaut que pour une NAVIGATION. Servi à la
-       place d'un fichier .js absent du cache, il rendait du HTML au navigateur,
-       qui levait « Unexpected token '<' » — et comme app-08-reglages.js est
-       chargé en dernier et porte l'appel `boot()`, l'app ne démarrait pas du
-       tout : écran noir, sans message. Un fichier manquant doit échouer
-       franchement, c'est diagnosticable.
-       Revue de stabilité du 02/08, constat A5-5. */
-    const secours = () => caches.match(req).then(m =>
-      m || (req.mode === 'navigate' ? caches.match('./index.html') : Response.error()));
-
-    e.respondWith(new Promise(resolve => {
-      let rendu = false;
-      const servir = r => { if (!rendu) { rendu = true; resolve(r); } };
-
-      /* Le réseau gagne s'il répond à temps ; s'il échoue, on sert le cache. */
-      reseau.then(servir, () => { if (!rendu) servir(secours()); });
-
-      /* Le délai ne sert le cache que si le cache A la ressource. Sinon on
-         continue d'attendre le réseau : mieux vaut une attente qu'un échec
-         certain. Le fetch, lui, n'est jamais annulé — il finira de remplir le
-         cache pour la fois d'après. */
-      setTimeout(() => {
-        if (rendu) return;
-        caches.match(req).then(m => { if (m) servir(m); }).catch(()=>{});
-      }, DELAI_RESEAU);
-    }));
+      } catch (err) {
+        /* Le repli sur `index.html` ne vaut que pour une NAVIGATION. Servi à
+           la place d'un fichier .js absent du cache, il rendait du HTML au
+           navigateur (« Unexpected token '<' ») et l'app ne démarrait pas.
+           Un fichier manquant doit échouer franchement, c'est diagnosticable.
+           Revue de stabilité du 02/08, constat A5-5. */
+        if (req.mode === 'navigate') {
+          const idx = await caches.match('./index.html');
+          if (idx) return idx;
+        }
+        return Response.error();
+      }
+    })());
     return;
   }
 

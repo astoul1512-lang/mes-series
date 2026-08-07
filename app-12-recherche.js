@@ -2510,10 +2510,18 @@ function ouvrirJeuRech(){
             /* `occupe` : un ajout de série est en cours (état d'attente sur la
                carte). */
             occupe:false, loading:true, err:'', anim:'' };
+  /* C3 — REVUE DU 07/08 : le jeu occupe tout l'écran sans être une vue ; son
+     entrée-garde donne au bouton retour du téléphone quelque chose à consommer
+     pour FERMER le jeu au lieu de quitter l'écran (voir app-02, gardes). */
+  if(typeof poserGarde === 'function') poserGarde('jeu');
   render();
   tirerCarteRech();
 }
-function fermerJeuRech(){ etatRech().jeu = null; jeuSeq++; render(); }
+function fermerJeuRech(){
+  etatRech().jeu = null; jeuSeq++;
+  if(typeof retirerGarde === 'function') retirerGarde('jeu');   // C3
+  render();
+}
 
 /* L'adresse de l'affiche de la prochaine carte jouable, ou rien. */
 function prochaineAfficheRech(depuis){

@@ -209,13 +209,26 @@ function renderNav(){
   const TAB_DIRECT = { discover:'discover', search:'search', follow:'follow', profile:'profile',
     rangee:'discover',
     account:'profile', abos:'profile', biblio:'profile', moi:'profile',
-    notifs:'profile', clochettes:'profile' };
+    notifs:'profile', clochettes:'profile',
+    /* C6 — REVUE DU 07/08 : Réglages, Mes goûts et Mes plateformes vivent sous
+       Mon profil. Absents de la table, un aperçu ouvert depuis Mes goûts
+       tombait dans le repli aveugle et allumait Découvrir (reproduit). */
+    settings:'profile', gouts:'profile', plates:'profile' };
+  /* C6 — la provenance se remonte DE PROCHE EN PROCHE : un film ouvert depuis
+     la filmographie d'un acteur, lui-même ouvert depuis une fiche « En cours »,
+     allume En cours — pas un onglet au hasard. `memParams` (app-02) garde les
+     paramètres de chaque écran traversé ; borné à six sauts par prudence. */
   let cur = TAB_DIRECT[view];
+  let de = params && params.from, saut = 0;
+  while(!cur && de && saut < 6){
+    cur = TAB_DIRECT[de];
+    de = (memParams[de] || {}).from;
+    saut++;
+  }
   if(!cur){
-    /* show, movie, preview, settings, acteur, gouts : l'onglet est celui d'où l'on vient. */
-    cur = TAB_DIRECT[params.from]
-       || ((view==='show'||view==='movie') ? 'follow'
-          : (view==='preview'||view==='acteur') ? 'discover' : 'profile');
+    /* Repli, si la chaîne de provenance ne mène nulle part. */
+    cur = (view==='show'||view==='movie') ? 'follow'
+        : (view==='preview'||view==='acteur') ? 'discover' : 'profile';
   }
 
   /* La barre n'est construite qu'une fois, puis seul son état change : c'est
@@ -515,7 +528,11 @@ function menuPause(id){
    survive à un appel isolé. */
 function carteRattrapage(s, nx, retard){
   const n = (retard === undefined) ? retardSerie(s) : retard;
-  const img = srcImage(s.backdrop,'w780') || srcImage(s.poster,'w342');
+  /* C9 — REVUE DU 07/08 : la carte fait 252 px de large (`.rcarte`, app.css) ;
+     un `w780` y décodait ~1,4 Mo de mémoire d'image PAR CARTE, multiplié par
+     des dizaines de cartes « À rattraper ». `w500` couvre encore un écran
+     Retina ×2 (504 px) sans perte visible. */
+  const img = srcImage(s.backdrop,'w500') || srcImage(s.poster,'w342');
   return '<div class="rcarte">'+
     '<div class="rfond" onclick="pressClic('+s.id+',event)"'+
       ' ontouchstart="pressStart('+s.id+',event)" ontouchend="pressEnd()" ontouchmove="pressMove(event)"'+
@@ -966,6 +983,9 @@ function reprendreRecentPf12(q){
 
 function ouvrirRechPf12(){
   pf12.ouvert = true;
+  /* C3 — REVUE DU 07/08 : même entrée-garde que la feuille et le jeu (app-02) :
+     le bouton retour du téléphone ferme la recherche au lieu de quitter l'app. */
+  if(typeof poserGarde === 'function') poserGarde('pf12');
   pf12.yAvant = window.scrollY || 0;
   pf12.q = ''; pf12.pers = null; pf12.persEtat = ''; pf12.persErr = '';
   render();
@@ -977,6 +997,7 @@ function fermerRechPf12(sansRendu){
   rangerRecentPf12();
   avorterPf12();
   pf12.ouvert = false;
+  if(typeof retirerGarde === 'function') retirerGarde('pf12');   // C3
   pf12.q = ''; pf12.pers = null; pf12.persEtat = ''; pf12.persErr = '';
   if(sansRendu) return;
   render();
