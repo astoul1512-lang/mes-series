@@ -4565,6 +4565,23 @@ window.MODE_TEST = true;
     db.notif = null; migrerNotif();
     db.notif.titres = { 'tv:10':1000, 'movie:20':1000 };
     db.notif.titresOff = { 'tv:55':1000 };
+    /* RELECTURE DU 09/08 — CE BLOC MANQUAIT, ET LE TROU DU HARNAIS ÉTAIT AU
+       MÊME ENDROIT QUE LE TROU DU CORRECTIF. `migrerNotif()` reconstruit un
+       bloc NEUF : `maj` y valait 0 et `films` les valeurs par défaut, donc le
+       cas « rien de A ne monte au serveur de B » ne POUVAIT pas tomber sur les
+       réglages de notification — qui sont précisément ce qui fuyait, par les
+       deux voies à la fois (`payload()` et `push_reglages`).
+       Les valeurs ci-dessous sont toutes DIFFÉRENTES du défaut : c'est ce qui
+       rend le cas capable d'échouer. */
+    db.notif.films = { cine:false, maison:false };
+    db.notif.quandChoisi = true;
+    db.notif.maj = 999;
+    db.notif.desyncAt = 999; db.notif.desyncMotif = 'PanneDeA';
+    /* Et ce qui appartient à l'APPAREIL, qui doit au contraire survivre. */
+    db.notif.abo = 'https://push.exemple/aboDeCetAppareil';
+    db.notif.actif = true;
+    db.notif.erreur = 'refus iOS';
+    db.notif.clocheVue = true;
     db.inscription = { vue:'inscTitres', debut:1, finie:false, genres:{} };
   }
 
@@ -4614,6 +4631,64 @@ window.MODE_TEST = true;
     ['GenreDeA','PseudoDeA','aboDeA','Film de A','feu','lagon'].forEach(marque=>{
       vrai(envoi.indexOf(marque) < 0, '« '+marque+' » de A part sous l\'identifiant de B');
     });
+  });
+
+  test('C1 — les RÉGLAGES de notification de A ne montent pas non plus', ()=>{
+    /* Ajouté après la relecture du 09/08. La recherche de chaînes ci-dessus ne
+       pouvait pas attraper ceux-là : ce sont des booléens et des nombres. On
+       les compare donc pour ce qu'ils sont, dans l'envoi RÉEL. */
+    baseGarnie('compte-A');
+    adopterCompte('compte-B');
+    const n = payload().notif;
+    egal(n.films, { cine:true, maison:true }, 'les réglages de films de A partent sous l\'identifiant de B');
+    egal(n.quandChoisi, false, 'B hérite d\'un choix qu\'il n\'a jamais fait');
+    egal(n.maj, 0,
+         'la date de A gagne l\'arbitrage : les réglages de B ne redescendront même pas');
+    egal(n.titres, {});
+    egal(n.titresOff, {});
+  });
+
+  test('C1 — ce qui appartient à l\'APPAREIL survit au changement de compte', ()=>{
+    /* Le pendant du cas précédent, et il compte autant : à trop effacer, on
+       ferait croire à B que ses notifications sont éteintes alors que
+       `inscrireSiBesoin` ne réinscrira rien — l'abonnement du navigateur,
+       lui, n'a pas changé. */
+    baseGarnie('compte-A');
+    adopterCompte('compte-B');
+    egal(db.notif.abo, 'https://push.exemple/aboDeCetAppareil', 'l\'abonnement du navigateur a été perdu');
+    egal(db.notif.actif, true, 'l\'écran annoncera « désactivées » avec un abonnement valide');
+    egal(db.notif.erreur, 'refus iOS');
+    egal(db.notif.clocheVue, true);
+    /* En revanche, l'avis de panne du compte d'A ne regarde pas B. */
+    egal(db.notif.desyncAt, undefined, 'B voit un avis de panne qui ne le concerne pas');
+    egal(db.notif.desyncMotif, undefined);
+  });
+
+  testAsync('C1 — une liste de cloches vide et pas encore synchronisée ne part pas', async ()=>{
+    /* `remplacer_cloches` REMPLACE. Juste après un changement de compte, la
+       base locale est vide et n'a pas encore vu le serveur : si la première
+       synchro échoue, cet envoi effaçait toutes les cloches que B avait
+       posées ailleurs. Sans un mot, et sans rien pour les ramener. */
+    baseGarnie('compte-A');
+    adopterCompte('compte-B');
+    db.auth = { token:'jeton-B', refresh:'r', uid:'compte-B', email:'b@exemple.fr' };
+    const vrai_sbFetch = window.sbFetch;
+    let envois = 0;
+    window.sbFetch = ()=>{ envois++; return Promise.resolve(null); };
+    try{
+      db.syncedAt = null;                       // rien n'est encore redescendu
+      await pousserCloches();
+      egal(envois, 0, 'une liste vide jamais confrontée au serveur a effacé les cloches de B');
+
+      db.syncedAt = Date.now();                 // la synchro a abouti
+      await pousserCloches();
+      egal(envois, 2, 'après une synchro réussie, l\'envoi doit repartir normalement');
+
+      envois = 0; db.syncedAt = null;
+      db.notif.titres = { 'tv:1': Date.now() }; // un état local explicite
+      await pousserCloches();
+      egal(envois, 2, 'une cloche réellement allumée ici doit partir, synchro ou pas');
+    }finally{ window.sbFetch = vrai_sbFetch; db.auth = null; }
   });
 
   test('C1 — se reconnecter au même compte ne touche à rien', ()=>{

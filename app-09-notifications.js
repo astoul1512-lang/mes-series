@@ -279,6 +279,19 @@ async function reinscrire(){
 async function pousserCloches(){
   if(!signedIn() || !syncReady()) return;
   const cles = Object.keys(db.notif.titres);
+  /* RELECTURE DU 09/08 — LA FENÊTRE OÙ CET ENVOI DÉTRUIT AU LIEU DE DIRE.
+     `remplacer_cloches` REMPLACE : une liste vide efface toutes les cloches du
+     compte côté serveur. C'est voulu — c'est comme ça qu'une cloche éteinte
+     disparaît vraiment. Mais après un changement de compte, la base locale est
+     vide et n'a pas encore vu le serveur : `inscrireSiBesoin()` part en même
+     temps que la première synchro, et si celle-ci échoue (métro, avion,
+     serveur en panne), cet envoi effaçait TOUTES les cloches que la personne
+     avait posées ailleurs. Silencieusement, et sans que rien ne les ramène.
+     Une liste vide qui n'a jamais été confrontée au serveur ne prouve rien :
+     on ne la fait pas valoir. Une liste NON vide, elle, est un état local
+     explicite et part comme avant. Le cas se répare tout seul dès que la
+     synchro aboutit (`db.syncedAt` est posé, les cloches sont redescendues). */
+  if(!cles.length && !db.syncedAt) return;
   try{
     await sbFetch('/rest/v1/push_reglages', {
       method:'POST',

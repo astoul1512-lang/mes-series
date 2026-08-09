@@ -65,11 +65,17 @@ let storageMode = 'idb', storageKO = false;
    les données sont protégées par les règles RLS côté base). Modifiable dans l'écran Compte. */
 const DEFAULT_SYNC = { url:'https://mqwryzopmtykjidabqfv.supabase.co',
                        key:'sb_publishable_ZnfMBfcEQOhdpg3g9u0eZg_Iaw_Fo7y' };
+/* L'avatar par défaut : deux caractères et une couleur, de quoi se reconnaître
+   sans photo. Une FONCTION et non une constante : trois endroits en ont besoin
+   (la base neuve ci-dessous, `loadDB`, et `adopterCompte` au changement de
+   compte), et chacun le MUTE ensuite — un objet partagé les ferait se marcher
+   dessus. Relecture du 09/08 : les trois valeurs étaient recopiées à la main,
+   c'est-à-dire la divergence même que le reste du code évite pour `gouts`,
+   `podium` et `classement`. */
+function profilVierge(){ return { embleme:'lettre', couleur:'corail' }; }
 let db = { lang:'fr-FR', shows:{}, movies:{}, lastExport:null, onboarde:false,
            sync:Object.assign({}, DEFAULT_SYNC), auth:null, pseudo:'',
-           /* Deux caractères et une couleur : de quoi se reconnaître sans photo,
-              et sans alourdir les sauvegardes ni la synchro. */
-           profil:{ embleme:'lettre', couleur:'corail' },
+           profil: profilVierge(),
            /* Le compte à qui appartient cette bibliothèque : sert à ne pas mélanger
               deux personnes qui se connecteraient sur le même appareil. */
            proprio:null,
@@ -126,7 +132,7 @@ async function loadDB(){
   /* Une clé enregistrée par une version précédente est effacée d'office :
      personne ne doit pouvoir la lire, ni dans l'app, ni dans un export. */
   if('apiKey' in db) delete db.apiKey;
-  if(!db.profil || typeof db.profil !== 'object') db.profil = { embleme:'lettre', couleur:'corail' };
+  if(!db.profil || typeof db.profil !== 'object') db.profil = profilVierge();
   if(!db.sync || !db.sync.url || !db.sync.key) db.sync = Object.assign({}, DEFAULT_SYNC);
   if(!db.deleted) db.deleted = {shows:{},movies:{}};
   /* Bases d'avant le compte obligatoire : la bibliothèque existante appartient
@@ -750,38 +756,73 @@ function adopterCompte(uid){
     /* Le signal d'appréciation et ses pierres tombales. */
     db.avis = { tv:{}, movie:{} };
     db.avisRetires = { tv:{}, movie:{} };
-    /* Les goûts, le podium et le classement : remis à `null`, puis reformés
-       juste en dessous par `reparerBase()` et `migrerGouts()`. On ne recopie
-       pas leur forme vierge à la main ici — elle a déjà changé trois fois, et
-       deux copies auraient divergé au premier champ ajouté. */
-    db.gouts = null;
-    db.podium = null;
-    db.classement = null;
+    /* Les goûts, le podium et le classement : vidés, puis reformés juste en
+       dessous par `reparerBase()` et `migrerGouts()`. On ne recopie pas leur
+       forme vierge à la main ici — elle a déjà changé trois fois, et deux
+       copies auraient divergé au premier champ ajouté.
+       `{}` et non `null` (relecture du 09/08) : `migrerGouts` vit dans app-11
+       et l'appel est donc gardé par un `typeof`. Si le fichier manquait, le
+       garde avalerait en silence et `db.gouts` resterait NUL — le premier
+       rendu de Découvrir planterait, ce qui n'arrivait pas avant ce correctif.
+       Un objet vide rend ce pire cas inoffensif, et les trois fonctions de
+       remise en forme le traitent exactement comme un `null`. */
+    db.gouts = {};
+    db.podium = {};
+    db.classement = {};
     /* L'identité affichée aux proches. `db.profil` est le seul de la liste qui
        ne se reforme PAS tout seul : sa forme vierge est posée par `loadDB`,
-       qui ne retournera pas avant le prochain démarrage. On l'écrit donc en
-       clair, à l'identique de la ligne de `loadDB`. */
+       qui ne retournera pas avant le prochain démarrage. D'où la fabrique
+       `profilVierge()`, partagée avec `loadDB` et la base neuve — plutôt
+       qu'une troisième copie du littéral. */
     db.pseudo = '';
-    db.profil = { embleme:'lettre', couleur:'corail' };
+    db.profil = profilVierge();
     /* Les annonces « X t'a ajouté » écartées : un choix qui appartient à la
        personne, et qui monte au serveur (`payload`). */
     db.abosIgnores = {};
-    /* Les cloches allumées et les cloches éteintes. Le reste du bloc `notif`
-       — la permission, l'abonnement push, les réglages — appartient à
-       l'appareil et ne bouge pas. L'abonnement push est traité à part (C7) :
-       c'est lui qui décide à quel compte cet appareil sonne. */
+    /* LES NOTIFICATIONS — RELECTURE DU 09/08, ET C'EST LE POINT QUI MANQUAIT.
+       La première version n'effaçait que `titres` et `titresOff`, en tenant le
+       reste du bloc pour de l'état d'appareil. C'était faux : `quand`,
+       `quandChoisi`, `films` et `maj` montent au serveur par DEUX voies —
+       `notifPourSynchro()` dans `payload()`, et le POST de `pousserCloches()`
+       vers `push_reglages`, qui est PRÉCISÉMENT le chemin que le commentaire
+       de C1 désignait comme fautif. Les réglages d'A partaient donc sous
+       l'identifiant de B ; pire, `maj` gardait la date d'A, et
+       `fusionnerNotif` arbitre dessus : si A avait réglé plus récemment, les
+       réglages de B ne redescendaient même pas, et ceux d'A se propageaient
+       ensuite à TOUS les appareils de B.
+
+       On inverse donc la règle : on ne retire plus une liste de champs, on ne
+       GARDE que ceux de l'appareil, et `migrerNotif()` reforme le reste juste
+       en dessous. Un champ ajouté demain part par défaut, ce qui est le bon
+       défaut.
+
+       Ce qui reste, et pourquoi :
+         `abo`       — l'abonnement push obtenu du navigateur. Il décrit CE
+                       navigateur ; à quel compte il sonne se règle côté
+                       serveur (C7).
+         `actif`     — dit la même chose qu'`abo` et doit rester d'accord avec
+                       lui : à `false` avec un `abo` valide, l'écran annoncerait
+                       « désactivées » alors que `inscrireSiBesoin` ne
+                       réinscrit rien (l'abonnement n'a pas changé).
+         `erreur`    — pourquoi la dernière inscription DE CET APPAREIL a raté.
+         `clocheVue` — l'étiquette « Me prévenir » ne se montre qu'une fois par
+                       installation. Ne monte pas au serveur.
+       Partent avec le reste : `desyncAt` / `desyncMotif`, qui décrivent un
+       envoi raté sous le compte d'A — les laisser afficherait à B un avis de
+       panne qui ne le concerne pas. */
     if(db.notif && typeof db.notif === 'object'){
-      db.notif.titres = {};
-      db.notif.titresOff = {};
+      const n = db.notif;
+      db.notif = { abo: n.abo, actif: n.actif, erreur: n.erreur, clocheVue: n.clocheVue };
     }
     /* Un parcours d'inscription abandonné par l'ancien : sans ça, le nouveau
        compte est dérouté au démarrage suivant vers un questionnaire qui n'est
        pas le sien (`reprendreInscription`, app-08). */
     delete db.inscription;
-    /* Remise en forme canonique de ce qu'on vient de mettre à `null`. Trois
-       fonctions, chacune propriétaire de son bloc — on ne réécrit pas leurs
-       valeurs par défaut ici. Les gardes `typeof` parce qu'elles vivent dans
-       app-11 et app-09, chargés APRÈS app-01. */
+    /* Remise en forme canonique de ce qu'on vient de vider. Trois fonctions,
+       chacune propriétaire de son bloc — on ne réécrit pas leurs valeurs par
+       défaut ici. Les gardes `typeof` parce qu'elles vivent dans app-11 et
+       app-09, chargés APRÈS app-01. `migrerNotif()` remet notamment `maj` à 0,
+       ce qui laisse gagner l'arbitrage à ce que B a déjà sur le serveur. */
     reparerBase();
     if(typeof migrerGouts === 'function') migrerGouts();
     if(typeof migrerNotif === 'function') migrerNotif();
