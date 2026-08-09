@@ -4657,6 +4657,28 @@ window.MODE_TEST = true;
          'le moteur de l\'habitude propose un genre explicitement écarté');
   });
 
+  test('B1 — la rangée « genre du taux » de la vitrine filtre elle aussi (5ᵉ site)', ()=>{
+    /* Relevé par la relecture du 09/08 : `genreDuTaux` canonisait, mais avec
+       `genreCanon` seul, qui ne connaît pas la paire Kids / Familial. Écarter
+       « Familial » faisait disparaître le genre du profil, des deux moteurs et
+       des genres retenus — pendant que la vitrine continuait de bâtir une
+       rangée dessus. Le symptôme exact que B1 existe pour supprimer. */
+    baseVierge();
+    /* Trois séries vues et aimées : `tauxParGenre` a un plancher de trois
+       titres, en dessous duquel un genre n'est pas « mesurable ». */
+    [1,2,3].forEach(id=>{
+      db.shows[id] = serie(id, [ep(1,HIER)], {'1x1':1}, { genres:['Kids'] });
+      poserAvis('tv', id, 1);
+    });
+    const avant = genreDuTaux(cadreSugg('tv'));
+    vrai(avant && avant.nom === 'Kids',
+         'le décor du test est faux : la rangée devrait exister AVANT le retrait');
+    db.gouts.exclus = ['Familial'];
+    const apres = genreDuTaux(cadreSugg('tv'));
+    vrai(!apres || apres.nom !== 'Kids',
+         'la vitrine bâtit encore une rangée sur un genre explicitement écarté');
+  });
+
   groupe('SPEC-03 — B2 : la grille d\'amorçage et le cache de la vitrine');
 
   test('B2 — oublierSuggestions invalide SANS détruire l\'entrée de cache', ()=>{

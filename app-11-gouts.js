@@ -737,8 +737,11 @@ const GENRES_DEDUITS_MAX = 3;
    partait quand même chez TMDB (`with_genres=10759`), puis `tamiser` — qui,
    LUI, canonise — jetait 100 % du résultat. Rangée absente sans explication, et
    une à trois requêtes brûlées pour rien.
-   `estGenreExclu` est le SEUL chemin de canonisation : pas de copie locale,
-   pas de seconde table. `genreDuTaux` fait déjà pareil de son côté. */
+   `estGenreExclu` est le SEUL chemin de canonisation pour la comparaison aux
+   genres écartés : pas de copie locale, pas de seconde table. Il est employé
+   par CINQ sites — `genresDeFamille`, `genresRetenus`, `genresParTaux`,
+   `moteurHabitude` et `genreDuTaux`. Ajouter un sixième site qui compare à
+   `db.gouts.exclus` sans passer par lui, c'est réinstaller ce défaut. */
 function genresRetenus(famille){
   if(!famille){
     const u = [];
@@ -1582,10 +1585,15 @@ function genreDuTaux(cadre){
       c.vus += e.vus; c.aimes += e.aimes;
     });
   });
-  const hors = (db.gouts && db.gouts.exclus) || [];
-  const horsCanon = hors.map(n => (typeof genreCanon === 'function') ? genreCanon(n) : n);
+  /* B1 (09/08, relecture) — LE CINQUIÈME SITE. Celui-ci canonisait déjà, mais
+     avec `genreCanon` seul, qui ne connaît que trois paires : écarter
+     « Familial » laissait la rangée « genre du taux » se construire sur
+     « Kids ». Il passe donc par le même `estGenreExclu` que les quatre autres.
+     Le fondu des familles, lui, reste sur `genreCanon` : ce n'est pas le même
+     travail — il regroupe deux libellés d'un même genre, il ne compare pas à
+     une consigne donnée. */
   return Object.keys(par).map(k => par[k])
-    .filter(e => horsCanon.indexOf(e.nom) < 0)
+    .filter(e => !estGenreExclu(e.nom))
     .map(e => Object.assign(e, { taux: e.aimes / e.vus }))
     .sort((a,b)=> b.taux - a.taux || b.vus - a.vus)[0] || null;
 }
@@ -4011,8 +4019,16 @@ function bascGoutExclu(nom){
    `nomGenreFilm` rend une chaîne VIDE sur les genres qui n'existent que côté
    séries (News, Reality, Soap, Talk) : ceux-là n'ont pas de forme canonique, on
    les compare donc à eux-mêmes. D'où le repli.
-   Cette fonction est LE chemin unique — `genresDeFamille`, `genresRetenus`,
-   `genresParTaux` et `moteurHabitude` passent tous par `estGenreExclu`. */
+   Cette fonction est le chemin unique de la COMPARAISON AUX GENRES ÉCARTÉS :
+   `genresDeFamille`, `genresRetenus`, `genresParTaux`, `moteurHabitude` et
+   `genreDuTaux` passent tous par `estGenreExclu`.
+   Elle n'est pas la seule canonisation du fichier, et il ne faut pas le croire :
+   `genreDuTaux` fond aussi les familles avec `genreCanon` (regrouper deux
+   libellés d'un même genre n'est pas comparer à une consigne), et le tamis final
+   `tamiser` résout les genres écartés en IDENTIFIANTS TMDB via `genreParNom`,
+   qui s'appuie sur `genreCanon` seul — il ne rattrape donc pas la paire
+   Kids/Familial. Défaut antérieur à ce lot, laissé tel quel faute d'être dans
+   son périmètre ; écrit ici pour que personne ne le croie déjà traité. */
 function genreExclusCanon(nom){
   const f = (typeof nomGenreFilm === 'function') ? nomGenreFilm(nom) : '';
   if(f) return f;
