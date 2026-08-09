@@ -49,6 +49,13 @@
       données écrites par un AUTRE utilisateur. Une règle qu'aucun contrôle ne
       tient se défait toute seule, un lot à la fois.
 
+   Quatre contrôles sont arrivés APRÈS cette liste et n'y portent pas de numéro :
+   l'accord des trois numéros de version, la complétude du SHELL du worker, la
+   frontière de publication (S6, 09/08/2026 — tout ce qui traîne à la racine est
+   servi en HTTPS public, sauf ce que `_config.yml` retire) et la règle « un
+   abandon volontaire n'est pas une panne » (B5). Ils s'affichent sous les noms
+   « versions », « shell du SW », « publication » et « abandon ».
+
    Les contrôles 3, 5, 6, 8 et 9 sont STATIQUES : lus sur le disque, sans
    navigateur. Les trois premiers portent la même règle sur trois espaces de
    noms différents — la portée globale, l'état, le DOM ; il n'y a pas de raison
@@ -854,6 +861,99 @@ function collisionsCss(src){
         ? soucis.length + ' écart(s)'
         : dansShell.length + ' fichiers, en accord avec le disque et index.html'));
     }
+    soucis.forEach(d => console.log('   ! ' + d));
+    souci += soucis.length;
+  }
+
+  /* --- 12. S6 — CE QUI EST PUBLIÉ, ET RIEN D'AUTRE ---
+     GitHub Pages sert ce dépôt avec Jekyll, qui publie TOUT par défaut :
+     `test.html` et ses invariants internes, les rapports, `supabase/INSTALL.md`
+     et son architecture de sécurité, les fichiers SQL. `_config.yml` les retire
+     de la publication — mais par une liste de ce qu'on CACHE, pas de ce qu'on
+     montre. Un document interne posé demain à la racine serait donc publié en
+     silence, et personne ne le verrait jamais.
+     Ce contrôle renverse la liste : il exige que CHAQUE entrée de la racine soit
+     ou bien un fichier dont l'app a besoin (donc légitimement public), ou bien
+     exclue. C'est ce qui fait tenir une liste noire aussi bien qu'une liste
+     blanche — à condition de tourner avant chaque mise en production, ce qui est
+     le cas.
+     Il regarde aussi l'autre sens : rien de ce que l'app charge ne doit être
+     exclu. Un `app.css` ajouté à la liste par mégarde, et le site sort nu, sans
+     que rien n'ait échoué. */
+  {
+    const fs = require('fs'), chemin = require('path');
+    const racine = chemin.join(__dirname, '..');
+    const soucis = [];
+    let exclus = [];
+    if(!fs.existsSync(chemin.join(racine, '_config.yml'))){
+      soucis.push('_config.yml a disparu : tout le dépôt redevient public, y compris test.html');
+    }else{
+      /* Lecture volontairement bête — la seule clé attendue est `exclude`, et un
+         analyseur YAML complet serait une dépendance de plus pour trois lignes. */
+      const brut = fs.readFileSync(chemin.join(racine, '_config.yml'), 'utf8');
+      let dedans = false;
+      brut.split('\n').forEach(l => {
+        if(/^exclude\s*:/.test(l)){ dedans = true; return; }
+        if(dedans){
+          const m = /^\s*-\s*(.+?)\s*$/.exec(l);
+          if(m) exclus.push(m[1].replace(/^['"]|['"]$/g, '').replace(/\/$/, ''));
+          else if(l.trim() && !/^\s*#/.test(l)) dedans = false;
+        }
+      });
+      if(!exclus.length) soucis.push('_config.yml ne liste plus rien à exclure');
+    }
+    /* Ce que l'app sert, lu là où c'est déjà tenu à jour : le SHELL du worker,
+       que le contrôle 11 vient de confronter au disque et à `index.html`. */
+    const sw = fs.readFileSync(chemin.join(racine, 'sw.js'), 'utf8');
+    const b = /const\s+SHELL\s*=\s*\[([\s\S]*?)\];/.exec(sw);
+    const publie = new Set(['index.html', 'sw.js', '_config.yml']);
+    if(b) (b[1].match(/'\.\/([^']*)'/g) || []).forEach(x => {
+      const f = x.slice(3, -1);
+      if(f) publie.add(f);
+    });
+    fs.readdirSync(racine).forEach(f => {
+      if(f.charAt(0) === '.') return;                 // .git, .github : Jekyll ne les publie pas
+      if(publie.has(f)) return;
+      if(exclus.indexOf(f) < 0)
+        soucis.push(f + ' : à la racine, ni servi par l\'app ni exclu — il est publié en HTTPS public');
+    });
+    exclus.forEach(f => {
+      if(publie.has(f))
+        soucis.push(f + ' : exclu de la publication alors que l\'app en a besoin — le site sortira amputé');
+    });
+    console.log('publication   → ' + (soucis.length
+      ? soucis.length + ' écart(s)'
+      : publie.size + ' fichiers publiés, ' + exclus.length + ' entrées retirées, rien qui traîne'));
+    soucis.forEach(d => console.log('   ! ' + d));
+    souci += soucis.length;
+  }
+
+  /* --- 13. SPEC-08, B5 — UN ABANDON VOLONTAIRE N'EST PAS UNE PANNE ---
+     Depuis B3/B4, une lecture ratée devient un `echec`, et un `echec` sans
+     fournée devient un bandeau « Pas de connexion ». Depuis B5, la grille coupe
+     elle-même ses requêtes à chaque mot posé — et un `fetch` abandonné rejette
+     exactement comme une coupure réseau. Si un seul `catch` oublie de faire la
+     différence, poser un mot de plus fera clignoter une panne sur une grille en
+     parfait état, de façon intermittente, donc introuvable. Le test rejouable
+     tient le cas nominal ; ce contrôle tient la FORME, pour le prochain lot qui
+     ajoutera un `catch` de plus sans y penser. */
+  {
+    const fs = require('fs'), chemin = require('path');
+    const soucis = [];
+    const src = fs.readFileSync(chemin.join(__dirname, '..', 'app-12-recherche.js'), 'utf8');
+    let marques = 0;
+    src.split('\n').forEach((ligne, i) => {
+      if(ligne.indexOf('f.echec = true') < 0) return;
+      marques++;
+      if(ligne.indexOf('abandonneRech') < 0)
+        soucis.push('app-12-recherche.js:' + (i+1) + ' — marque un échec sans demander si l\'abandon vient de nous');
+    });
+    if(!marques) soucis.push('app-12-recherche.js : plus aucun `f.echec = true` — ce contrôle regarde à côté');
+    if(!/tmdb\('\/discover\/'\s*\+\s*f\.media[^;]*signal/.test(src))
+      soucis.push('app-12-recherche.js : la requête de grille ne passe plus de signal d\'abandon a tmdb');
+    console.log('abandon       → ' + (soucis.length
+      ? soucis.length + ' écart(s)'
+      : marques + ' marques d\'échec, toutes gardées ; la grille passe son signal'));
     soucis.forEach(d => console.log('   ! ' + d));
     souci += soucis.length;
   }

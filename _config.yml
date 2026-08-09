@@ -1,0 +1,27 @@
+# ---------------------------------------------------------------------------
+# CE QUI N'EST PAS PUBLIÉ — SPEC-08 / S6, 09/08/2026
+#
+# GitHub Pages sert ce dépôt avec Jekyll. Sans ce fichier, il publie TOUT :
+# `test.html` (qui expose tous les invariants internes de l'app), les rapports,
+# `supabase/INSTALL.md` (qui détaille l'architecture de sécurité), les fichiers
+# SQL. Rien de tout cela n'a de raison d'être lisible par n'importe qui.
+#
+# Ce que cette liste retire de la publication reste dans le dépôt, versionné et
+# utilisable — elle ne supprime rien, elle cesse de le servir en HTTPS.
+#
+# ATTENTION, ET C'EST TOUT L'ENJEU DE CE FICHIER : c'est une liste de ce qu'on
+# CACHE, pas de ce qu'on montre. Un nouveau document interne posé à la racine
+# serait donc publié par défaut, en silence. C'est exactement ce que le contrôle
+# « publication » de `tests/lance-tests.js` refuse : il exige que tout ce qui
+# traîne à la racine soit ou bien un fichier dont l'app a besoin, ou bien listé
+# ici. Il tourne avant chaque mise en production. Ne pas le retirer.
+# ---------------------------------------------------------------------------
+exclude:
+  - README.md
+  - test.html
+  - tests
+  - supabase
+  - RAPPORT.md
+  - RAPPORT-CORRECTIONS.md
+  - supabase-setup.sql
+  - supabase-partage.sql
