@@ -392,7 +392,14 @@ function collisionsCss(src){
 
   /* --- 1. les tests unitaires --- */
   {
-    const page = await nav.newPage();
+    /* B9 (SPEC-03, 09/08) — LA PAGE DE TESTS TOURNE À L'HEURE DE PARIS. Le
+       défaut corrigé — la journée calculée en UTC — ne se voit QUE dans un
+       fuseau décalé : sur une machine réglée en UTC, les cas de `todayISO` et
+       de `fmtDayLabel` passeraient avant comme après sans rien prouver. On fixe
+       donc le fuseau du navigateur de test au lieu d'espérer celui de la
+       machine — c'est aussi ce qui rend la suite reproductible d'un atelier à
+       l'autre. */
+    const page = await nav.newPage({ timezoneId:'Europe/Paris' });
     const erreurs = [];
     page.on('pageerror', e => erreurs.push('erreur de page : ' + e.message));
     page.on('console', m => {
