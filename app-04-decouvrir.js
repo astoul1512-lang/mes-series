@@ -132,8 +132,15 @@ async function addMovie(id, seen, fiche){
         genres:(m.genres||[]).map(g=>g.name), note:m.vote_average||null,
         seen:!!seen, watchedAt: seen?Date.now():null, addedAt:Date.now() };
     } else {
-      db.movies[id].seen = !!seen;
-      db.movies[id].watchedAt = seen?Date.now():null;
+      /* C3 (09/08) — SECOND point d'écriture du « vu » d'un film, et il faisait
+         la même chose que `toggleMovie` : reposer un film DÉJÀ dans la
+         bibliothèque dans « À voir » le décochait sans dater le geste, donc
+         sans qu'il survive à la synchro. `marquerFilm` (app-01) est désormais
+         le seul passage — les deux appels sont ici et dans app-05.
+         Le cas du dessus (film ABSENT de la bibliothèque) n'en a pas besoin :
+         il n'y a pas de décochage possible sur un titre qu'on vient d'ajouter,
+         et l'objet neuf ne porte donc jamais d'`unseenAt`. */
+      marquerFilm(db.movies[id], !!seen);
     }
     saveDB();
     toast(seen ? 'Marqué comme vu ✓' : 'Ajouté à « À voir »');
@@ -994,7 +1001,7 @@ function refuserSugg(x){
     cles.sort((a,b)=> (r[a].quand||0) - (r[b].quand||0))
         .slice(0, cles.length - REFUS_MAX)
         .forEach(k => { delete r[k]; });
-  toucheGouts();
+  toucheGouts('pasPourMoi');
 }
 
 /* Le malus, et il est LÉGER : il décale, il ne retire rien. Un titre dont le
@@ -1563,7 +1570,7 @@ function bascMaPlate(id){
   /* `toucheGouts` date et enregistre : la signature des goûts a changé, la
      vitrine se refera d'elle-même sous les yeux, et la modification saura
      s'imposer sur l'autre appareil. */
-  toucheGouts();
+  toucheGouts('plates');
   semerPlatesFiltres();
   render();
 }
@@ -1571,14 +1578,14 @@ function voirToutesMesPlates(){ ui.mesPlatesTout = !ui.mesPlatesTout; render(); 
 function viderMesPlates(){
   if(!db.gouts) return;
   db.gouts.plates = [];
-  toucheGouts(); semerPlatesFiltres(); render();
+  toucheGouts('plates'); semerPlatesFiltres(); render();
 }
 function finirMesPlates(){
-  db.gouts.platesDemande = true; toucheGouts();
+  db.gouts.platesDemande = true; toucheGouts('plates');
   go('follow');
 }
 function fermerMesPlates(){
-  db.gouts.platesDemande = true; toucheGouts();
+  db.gouts.platesDemande = true; toucheGouts('plates');
   toast('Plateformes enregistrées');
   goBack();
 }
@@ -1612,7 +1619,7 @@ function setSuggPlates(v){
   g.suggMesPlates = !!v;
   /* `toucheGouts` déclenche la veille : la signature des goûts vient de
      changer, la vitrine se refera d'elle-même au retour sur Découvrir. */
-  toucheGouts();
+  toucheGouts('plates');
   render();
 }
 

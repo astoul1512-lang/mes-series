@@ -52,16 +52,14 @@
       et voulu : le profil de goût et la bibliothèque sont deux choses
       différentes.
 
-   ---------------------------------------------------------------------------
-   DEUX LIMITES CONNUES, SIGNALÉES PLUTÔT QUE CONTOURNÉES
+      `db.avis` EST SYNCHRONISÉ — voir `payload()` et `fusionnerAvis`, app-01.
+      (C3, 09/08 : ces lignes disaient le contraire depuis que la clé a été
+      ajoutée à `payload()`. Un commentaire faux est pire qu'un commentaire
+      absent — celui-ci invitait à écrire dans `db.avis` sans pierre tombale,
+      ce qui est exactement le défaut que C3 répare plus bas.)
 
-   · `db.avis` N'EST PAS SYNCHRONISÉ. `payload()` (app-01) porte une liste
-     blanche explicite et `db.avis` n'y est pas. Ajouter la clé demande de
-     toucher app-01, hors du périmètre de ce lot : c'est signalé dans le
-     compte rendu, avec le code exact à poser. Les trois clés de `db.gouts`
-     (`exclus`, `animeSous`, `plates`), elles, voyagent déjà : `db.gouts` est
-     dans `payload()` et `mergeRemote()` l'arbitre en bloc sur `maj` — d'où
-     l'appel systématique à `toucheGouts()` après chaque écriture.
+   ---------------------------------------------------------------------------
+   UNE LIMITE CONNUE, SIGNALÉE PLUTÔT QUE CONTOURNÉE
 
    · AUCUNE MESURE TMDB EN DIRECT N'A ÉTÉ POSSIBLE pendant l'écriture de ce
      lot (ni le conteneur ni un navigateur connecté n'atteignaient le relais).
@@ -97,13 +95,33 @@ function inscAvis(media, id){
   return (a && (a.v === 1 || a.v === -1)) ? a.v : 0;
 }
 
-/* Le passage unique pour écrire un avis. `v` vaut 1, -1, ou 0 pour retirer.
-   `quand` est posé à chaque écriture : c'est lui qui arbitrera la fusion. */
+/* Le passage unique pour écrire un avis pendant l'inscription. `v` vaut 1, -1,
+   ou 0 pour retirer.
+
+   C3 (09/08) — IL ÉCRIVAIT DANS `db.avis` EN DIRECT, ET C'ÉTAIT LE DÉFAUT.
+   Retirer un avis se faisait par un `delete` nu, sans poser de pierre tombale
+   dans `db.avisRetires`. Or `fusionnerAvis` (app-01) n'arbitre QUE sur ces
+   pierres : un titre absent d'un côté et présent de l'autre est repris, faute
+   de savoir qu'il a été retiré. Retirer un 👍 pendant l'inscription, avec une
+   synchro entre les deux gestes, le faisait donc REVENIR — la grille se
+   rallumait toute seule sur un titre qu'on venait d'éteindre, et le profil
+   déduit repartait avec.
+
+   On délègue aux deux fonctions d'app-11 qui savent le faire : mêmes clés,
+   mêmes dates, mêmes pierres tombales, et un seul comportement à maintenir
+   pour toute l'app au lieu de deux qui divergent.
+
+   `poserAvis` BASCULE quand on repose le pouce déjà en place. Ce n'est pas
+   gênant ici : `inscBascTitre` calcule l'état visé avant d'appeler, et ne
+   redemande jamais celui qui est déjà posé. Et le `saveDB` a disparu parce
+   qu'`apresAvis`, au bout des deux, le fait déjà. */
 function inscPoserAvis(media, id, v){
-  const seau = inscSeau(media), k = String(id);
-  if(v === 1 || v === -1) seau[k] = { v: v, quand: Date.now() };
-  else delete seau[k];
-  saveDB();
+  inscMigrerAvis();
+  /* Même repli que `inscSeau` : `movie` d'un côté, tout le reste dans `tv`.
+     app-11 prend la clé telle quelle et ne replie rien. */
+  const m = (media === 'movie') ? 'movie' : 'tv';
+  if(v === 1 || v === -1) poserAvis(m, id, v);
+  else retirerAvis(m, id);
 }
 
 /* Combien de titres ont reçu un 👍. Sert au compteur et au récapitulatif. */
@@ -301,7 +319,10 @@ function inscTerminer(){
        lot il en avait une. Sa seule issue aurait été « Mes goûts », au fond
        des réglages, qu'il n'ira pas chercher. C'était une régression. */
     if(inscNbAimes()) g.amorcageFait = true;
-    toucheGouts();
+    /* C4 — DEUX sous-blocs d'un seul geste : `platesDemande` juste au-dessus
+       appartient à `plates`, `amorcageFait` à `graines`. N'en dater qu'un
+       ferait perdre l'autre à la première synchro. */
+    toucheGouts('graines','plates');
   }
   if(typeof oublierSuggestions === 'function') oublierSuggestions();
   saveDB();
@@ -681,7 +702,7 @@ function viewInscStyle(){
       if(g.genres.indexOf(nom) < 0 && (g.exclus||[]).indexOf(nom) < 0) g.genres.push(nom);
     });
     inscStylePreRempli = true;
-    if(deduits.length) toucheGouts();
+    if(deduits.length) toucheGouts('genres');
   }
   const nAimes = inscNbAimes();
 
@@ -769,7 +790,7 @@ function inscBascGenre(nom){
     const j = (g.exclus || []).indexOf(nom);
     if(j >= 0) g.exclus.splice(j, 1);
   }
-  toucheGouts(); render();
+  toucheGouts('genres'); render();
 }
 function inscBascExclu(nom){
   const g = db.gouts;
@@ -781,7 +802,7 @@ function inscBascExclu(nom){
     const j = g.genres.indexOf(nom);
     if(j >= 0) g.genres.splice(j, 1);
   }
-  toucheGouts(); render();
+  toucheGouts('genres'); render();
 }
 /* Décocher « animé » vide le second niveau : garder des sous-genres pour une
    famille qu'on ne veut plus laisserait le récapitulatif — et le moteur —
@@ -790,14 +811,14 @@ function inscBascAnime(){
   const g = db.gouts;
   g.animeOui = !g.animeOui;
   if(!g.animeOui) g.animeSous = [];
-  toucheGouts(); render();
+  toucheGouts('genres'); render();
 }
 function inscBascAnimeSous(cle){
   const g = db.gouts;
   if(!Array.isArray(g.animeSous)) g.animeSous = [];
   const i = g.animeSous.indexOf(cle);
   if(i >= 0) g.animeSous.splice(i, 1); else g.animeSous.push(cle);
-  toucheGouts(); render();
+  toucheGouts('genres'); render();
 }
 
 /* ---------------------------------------------------------------------------
@@ -935,7 +956,7 @@ function inscBascPlate(id){
 function inscAucunePlate(){
   inscNoterAucune(!inscAucuneDite());
   if(typeof viderMesPlates === 'function') return viderMesPlates();
-  db.gouts.plates = []; toucheGouts(); render();
+  db.gouts.plates = []; toucheGouts('plates'); render();
 }
 
 /* ---------------------------------------------------------------------------

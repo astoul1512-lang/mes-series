@@ -86,6 +86,21 @@ function porteFermee(){
   return !signedIn() && !VUES_SANS_COMPTE[view];
 }
 
+/* C5 (09/08) — l'écran affiché quand une vue lève.
+   Deux sorties, et pas une de plus : revenir à un écran qui, lui, marche
+   sûrement, ou recharger. Volontairement bâti sans rien lire de `db` — c'est
+   probablement `db` qui vient de faire tomber la vue, et un écran de secours
+   qui plante à son tour ne secourt personne. */
+function ecranPanne(){
+  return '<div class="wrap" style="padding-top:64px;text-align:center">'+
+    '<h2 style="margin:0 0 10px">Cet écran n\'a pas pu s\'afficher</h2>'+
+    '<p class="small muted" style="margin:0 0 20px">Rien n\'est perdu : tes séries et tes films '+
+      'sont toujours là. C\'est l\'affichage de cet écran-ci qui a échoué.</p>'+
+    '<button class="btn block" style="margin-bottom:10px" onclick="go(\'discover\')">Revenir à l\'accueil</button>'+
+    '<button class="btn ghost block" onclick="location.reload()">Recharger l\'application</button>'+
+  '</div>';
+}
+
 function render(){
   const app = document.getElementById('app');
   if(porteFermee()){ view = 'account'; params = {}; navDir = 'none'; }
@@ -110,9 +125,24 @@ function render(){
      des redessins ne changent pas d'écran (cocher un épisode, ajouter un film)
      et ce sont eux qui remettaient les rangées à zéro. */
   if(typeof memoriserRails === 'function') memoriserRails();
-  const html = corpsDeVue();
+  /* C5 (09/08) — UNE VUE QUI LÈVE NE FIGE PLUS L'ÉCRAN.
+     `app.innerHTML = corpsDeVue()` n'avait aucune garde. Une exception dans la
+     construction d'un écran — une donnée abîmée, un champ absent, une date
+     invalide — laissait le DOM tel quel : l'écran PRÉCÉDENT restait affiché,
+     figé, et chaque `go()` suivant relevait la même exception au même endroit.
+     Aucune issue que le rechargement, et rien à l'écran pour le dire.
+     Désormais l'écran de panne prend la place, il dit quoi faire, et
+     `renderNav()` plus bas continue de tourner : la barre du bas reste
+     utilisable, ce qui suffit le plus souvent à s'en sortir seul. */
+  let html;
+  try{ html = corpsDeVue(); }
+  catch(e){ console.error('[render]', view, e); html = ecranPanne(); }
   app.innerHTML = html;
-  if(typeof restaurerRails === 'function') restaurerRails();
+  /* Même raison : ce qui suit le dessin ne doit pas pouvoir l'annuler.
+     `restaurerRails` remet des positions mémorisées qui ne correspondent à
+     rien sur l'écran de panne. */
+  try{ if(typeof restaurerRails === 'function') restaurerRails(); }
+  catch(e){ console.error('[render/rails]', e); }
   /* Porte d'entrée, mot de passe et choix de l'avatar occupent tout l'écran :
      la barre du bas n'a rien à y faire, il n'y a qu'une chose à faire. */
   document.body.classList.toggle('accueil',
@@ -153,6 +183,11 @@ function render(){
   }
   navDir = 'none';
   renderNav();
+  /* C8 · point 4 — le bandeau « session expirée », posé après le dessin comme
+     celui de la mise à jour. Il se pose et s'enlève tout seul selon
+     `db.sessionExpiree` ; l'appeler à chaque rendu est ce qui garantit qu'il
+     revient après une navigation et disparaît dès la reconnexion. */
+  if(typeof montrerBandeauSession === 'function' && db.sessionExpiree) montrerBandeauSession();
   /* Une seule fois : l'étiquette qui apprend à quoi sert la cloche. */
   if((view==='show' || view==='movie') && typeof montrerAstuceCloche === 'function')
     montrerAstuceCloche();
