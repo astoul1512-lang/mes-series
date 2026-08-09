@@ -52,7 +52,13 @@ const BASE = process.env.BASE || 'http://localhost:8099';
 
 /* Les erreurs de console attendues : un test vérifie exprès qu'une migration
    qui échoue ne bloque pas le démarrage, et elle journalise. */
-const CONSOLE_ATTENDUE = [/migration \d+ en échec/];
+const CONSOLE_ATTENDUE = [
+  /migration \d+ en échec/,
+  /* C5 — un cas fait volontairement lever une vue pour vérifier que `render`
+     affiche l'écran de panne au lieu de figer l'écran précédent. Il journalise,
+     et c'est exactement ce qu'on lui demande de faire. */
+  /^\[render\]/
+];
 
 /* ATTENTION — cette liste doit contenir TOUS les fichiers chargés par
    `index.html`, sinon ce contrôle regarde à côté sans jamais le dire.
@@ -672,6 +678,76 @@ function collisionsCss(src){
     console.log('abonnements   → ' + (soucis.length
       ? soucis.length + ' policy d\'écriture interdite'
       : 'aucune policy d\'écriture — la porte reste fermée'));
+    soucis.forEach(d => console.log('   ! ' + d));
+    souci += soucis.length;
+  }
+
+  /* --- 9. C6 — LES TROIS NUMÉROS DE VERSION DISENT-ILS LA MÊME CHOSE ? ---
+     `sw.js`, `index.html` et `README.md` portent chacun le numéro de version, à
+     la main, dans trois fichiers différents. Ils étaient DÉJÀ désynchronisés au
+     moment d'écrire ce contrôle : les deux premiers disaient v88, le README
+     v87. Ce n'est pas cosmétique — `CACHE` dans `sw.js` est la SEULE chose qui
+     change dans ce fichier d'une livraison à l'autre. Une livraison qui modifie
+     un `app-*.js` sans toucher `sw.js` ne change pas un octet du worker : le
+     navigateur ne détecte aucun nouveau worker, n'installe rien, et les
+     utilisateurs déjà installés ne reçoivent PLUS JAMAIS la mise à jour. Sans
+     aucun signal, ni pour eux ni pour l'auteur.
+     Ce contrôle ne peut pas attraper l'oubli lui-même — il faudrait comparer à
+     la livraison précédente — mais il attrape sa trace la plus fréquente : les
+     trois numéros qui divergent. */
+  {
+    const fs = require('fs'), chemin = require('path');
+    const racine = chemin.join(__dirname, '..');
+    const lire = f => fs.readFileSync(chemin.join(racine, f), 'utf8');
+    const soucis = [];
+    const trouve = (f, re, quoi) => {
+      const m = re.exec(lire(f));
+      if(!m){ soucis.push(f + ' : aucun numéro de version trouvé (' + quoi + ')'); return null; }
+      return m[1];
+    };
+    const vSw     = trouve('sw.js',      /CACHE\s*=\s*'mes-series-(v\d+)'/,        'const CACHE');
+    const vIndex  = trouve('index.html', /<meta\s+name="version"\s+content="(v\d+)"/, 'meta version');
+    const vReadme = trouve('README.md',  /Version en production\s*:\s*(v\d+)/,     'ligne « Version en production »');
+    if(vSw && vIndex && vReadme && !(vSw === vIndex && vIndex === vReadme))
+      soucis.push('sw.js dit ' + vSw + ', index.html dit ' + vIndex + ', README.md dit ' + vReadme);
+    console.log('versions      → ' + (soucis.length
+      ? soucis.length + ' désaccord(s)'
+      : 'sw.js, index.html et README.md disent tous ' + vSw));
+    soucis.forEach(d => console.log('   ! ' + d));
+    souci += soucis.length;
+  }
+
+  /* --- 10. C6 — LE SHELL DU SERVICE WORKER EST-IL COMPLET ? ---
+     Un `app-*.js` ajouté à `index.html` mais oublié dans `SHELL` n'est pas mis
+     en cache : l'app cesse de fonctionner hors-ligne, sur ce fichier-là
+     seulement, donc en silence tant qu'on a du réseau. L'inverse — un fichier
+     listé dans `SHELL` mais absent du dépôt — fait ÉCHOUER l'installation
+     entière du worker (`addAll` est tout ou rien) : plus aucune mise à jour ne
+     s'installe, pour personne. Le second est le plus grave, et le plus muet. */
+  {
+    const fs = require('fs'), chemin = require('path');
+    const racine = chemin.join(__dirname, '..');
+    const sw = fs.readFileSync(chemin.join(racine, 'sw.js'), 'utf8');
+    const bloc = /const\s+SHELL\s*=\s*\[([\s\S]*?)\];/.exec(sw);
+    const soucis = [];
+    if(!bloc) soucis.push('sw.js : le tableau SHELL est introuvable');
+    else{
+      const dansShell = (bloc[1].match(/'\.\/(app-[^']+\.js)'/g) || [])
+        .map(s => s.replace(/^'\.\//, '').replace(/'$/, ''));
+      const surDisque = fs.readdirSync(racine).filter(f => /^app-.*\.js$/.test(f)).sort();
+      surDisque.forEach(f=>{ if(dansShell.indexOf(f) < 0) soucis.push(f + ' : sur le disque, absent de SHELL (plus de hors-ligne)'); });
+      dansShell.forEach(f=>{ if(surDisque.indexOf(f) < 0) soucis.push(f + ' : dans SHELL, absent du disque (l\'installation du worker échouera)'); });
+      /* Le troisième espace de noms de la même règle : `index.html` charge-t-il
+         exactement ces fichiers ? Le contrôle n° 3 a déjà été aveugle un an
+         faute d'une liste tenue à jour. */
+      const html = fs.readFileSync(chemin.join(racine, 'index.html'), 'utf8');
+      const charges = (html.match(/<script\s+src="\.\/(app-[^"]+\.js)"/g) || [])
+        .map(s => /\.\/(app-[^"]+\.js)/.exec(s)[1]);
+      charges.forEach(f=>{ if(dansShell.indexOf(f) < 0) soucis.push(f + ' : chargé par index.html, absent de SHELL'); });
+      console.log('shell du SW   → ' + (soucis.length
+        ? soucis.length + ' écart(s)'
+        : dansShell.length + ' fichiers, en accord avec le disque et index.html'));
+    }
     soucis.forEach(d => console.log('   ! ' + d));
     souci += soucis.length;
   }
