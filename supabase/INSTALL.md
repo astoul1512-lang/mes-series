@@ -50,6 +50,8 @@ Dans *SQL Editor*, exécuter les fichiers de `migrations/` **dans l'ordre**.
 | `008_notifications_films.sql` | les réglages de notification : `{cine, maison}`, et `quand` neutralisé |
 | `009_recommandations.sql` | recommander un titre à quelqu'un de son cercle |
 | `010_remise_en_phase.sql` | ce qui tournait en production sans exister dans le dépôt |
+| `011_suivi_en_retour.sql` | le suivi en retour d'un abonnement |
+| `012_push_endpoint.sql` | **C7** — un appareil sonne pour le compte connecté, et pour lui seul. Rejouable. |
 
 Avant d'exécuter `005`, y remplacer deux marques :
 
