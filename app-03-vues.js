@@ -210,8 +210,17 @@ function render(){
        `chargerSuggestions` sait déjà se relancer si la bibliothèque bouge
        pendant un calcul (`c.perime`) : rien n'est perdu.
        Revue de stabilité du 02/08, constat A1-2. */
+    /* B2 (09/08) — ON NE CALCULE PAS UNE VITRINE QUE PERSONNE NE REGARDE. Tant
+       que l'amorçage est nécessaire, `vitrineBody` (app-04) affiche la grille
+       des trois affiches à choisir, et RIEN de la vitrine. Or chaque jaquette
+       touchée appelle `poserGraine` → `oublierSuggestions()` → `render()`, et ce
+       `render()` relançait le moteur complet : douze à vingt requêtes TMDB par
+       affiche touchée, cent vingt à deux cents pour dix. Le calcul part
+       maintenant à la SORTIE de l'amorçage (`finirAmorcage`), quand la vitrine
+       s'affiche vraiment. */
     if(typeof vitrineVisible === 'function' && vitrineVisible()){
-      if(typeof suggEnCours !== 'function' || !suggEnCours()) chargerSuggestions();
+      const amorce = (typeof besoinAmorcage === 'function') && besoinAmorcage();
+      if(!amorce && (typeof suggEnCours !== 'function' || !suggEnCours())) chargerSuggestions();
     }
     else if(!ui.disc.charge && !ui.disc.loading) chargerDecouverte();
   }
@@ -1380,9 +1389,19 @@ function blocAvatar(){
         'aria-label="'+esc(e.nom)+'" onclick="choisirEmbleme(\''+e.id+'\')">'+dedans+'</button>';
     }).join('')+'</div>';
 }
-function modeAvatar(m){ ui.avatarOnglet = m; render(); }
+/* B12 (09/08) — TOUT CE QUI REDESSINE « MODIFIER MON PROFIL » MET D'ABORD LE
+   PRÉNOM SAISI À L'ABRI. `viewMoi` reconstruit le champ `#mpseudo` depuis
+   `db.pseudo` ; or la frappe n'écrit que dans le DOM (`apercuPseudo` ne touche
+   pas la base, exprès, pour ne pas voler le focus). `choisirCouleur` et
+   `choisirEmbleme` appelaient donc `gardePseudoSaisi()` avant leur `render()` —
+   mais pas `modeAvatar`, `choisirPhoto` ni `retirerPhoto`. Taper « Adrien »
+   puis toucher l'onglet « Une photo » effaçait la saisie, sans un mot.
+   RÈGLE : toute fonction de cet écran qui appelle `render()` appelle
+   `gardePseudoSaisi()` avant. Contrôle : les six fonctions listées ici. */
+function modeAvatar(m){ gardePseudoSaisi(); ui.avatarOnglet = m; render(); }
 
 async function choisirPhoto(input){
+  gardePseudoSaisi();                     // B12 — avant tout `render()`
   const f = input && input.files && input.files[0];
   input.value = '';                       // pour pouvoir reprendre la même photo
   if(!f) return;
@@ -1396,6 +1415,7 @@ async function choisirPhoto(input){
   }catch(e){ toast('Cette image n\'a pas pu être lue'); }
 }
 function retirerPhoto(){
+  gardePseudoSaisi();                     // B12
   db.profil = Object.assign({}, db.profil, { photo: null });
   toucheProfil();
   ui.avatarOnglet = 'embleme';

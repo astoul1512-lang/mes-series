@@ -6,10 +6,36 @@
    mémoire trente secondes — le passage de minuit est rattrapé au pire une
    demi-minute plus tard, sur un écran qui se recalcule de toute façon.
    Revue de stabilité du 02/08, constat A2-3. */
+/* B9 (09/08) — `toISOString` rend la journée en UTC. En France (UTC+1 l'hiver,
+   UTC+2 l'été), entre minuit et deux heures du matin, l'app vivait donc encore
+   la veille : l'épisode diffusé le jour même était compté « pas encore sorti »
+   et disparaissait d'« À rattraper », `nextToWatch` s'arrêtait dessus, et le
+   calendrier étiquetait « Aujourd'hui » la journée d'hier. Tout le reste du
+   fichier raisonne pourtant en heure locale (`fmtDate` construit un `T12:00:00`
+   sans fuseau, donc local) : c'était la seule pièce en UTC.
+
+   La journée se construit maintenant à la main depuis les champs locaux. Ce
+   n'est PAS l'astuce du décalage (`getTimezoneOffset`) : celle-ci retombe en
+   panne aux changements d'heure, parce que le décalage à retrancher n'est pas
+   le même avant et après le passage. Ici il n'y a rien à retrancher.
+
+   RÈGLE : toute journée « aujourd'hui / hier / demain » destinée à être
+   comparée à une date TMDB (`ep.d`, `release_date`…) passe par `isoLocal` ou
+   `todayISO`, JAMAIS par `toISOString().slice(0,10)`. Les fenêtres de requête
+   d'app-04 et app-10 sont, elles, des bornes larges de plusieurs jours : deux
+   heures de décalage n'y changent rien, elles restent en l'état. */
+const isoLocal = d => {
+  const p = n => (n < 10 ? '0' : '') + n;
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+};
 let _jourISO = null, _jourISOts = 0;
 const todayISO = ()=>{
   const n = Date.now();
-  if(!_jourISO || n - _jourISOts > 30000){ _jourISO = new Date(n).toISOString().slice(0,10); _jourISOts = n; }
+  /* B9 — la valeur ABSOLUE de l'écart. Avec `n - _jourISOts`, une horloge qui
+     RECULE — un téléphone remis à l'heure au réveil, un fuseau qui change en
+     vol — gardait la journée d'avant en mémoire sans jamais la refaire. Le cas
+     est rare, la correction tient dans un `Math.abs`. */
+  if(!_jourISO || Math.abs(n - _jourISOts) > 30000){ _jourISO = isoLocal(new Date(n)); _jourISOts = n; }
   return _jourISO;
 };
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -289,8 +315,11 @@ function fmtDateShort(iso){
 function fmtDayLabel(iso){
   const t = todayISO();
   if(iso===t) return "Aujourd'hui";
-  const y = new Date(Date.now()-86400000).toISOString().slice(0,10);
-  const tm = new Date(Date.now()+86400000).toISOString().slice(0,10);
+  /* B9 (09/08) — hier et demain suivent la même règle qu'aujourd'hui : heure
+     locale. Mélanger les deux donnait, à 00 h 30 heure de Paris, un « Hier »
+     posé sur la date du jour. */
+  const y = isoLocal(new Date(Date.now()-86400000));
+  const tm = isoLocal(new Date(Date.now()+86400000));
   if(iso===y) return 'Hier';
   if(iso===tm) return 'Demain';
   const d = new Date(iso+'T12:00:00');

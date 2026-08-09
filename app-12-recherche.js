@@ -537,7 +537,10 @@ function etatRech(){
        restent uniques : un plancher ne se cumule pas, un binaire non plus. */
     amb:null, sans:[], genre:[], origine:[], epoque:[], duree:[], note:null,
     pasvu:null, plate:[],
-    total:null, res:[], page:1, pages:1, loading:false, err:'', charge:false,
+    /* B3/B4 — `errSuite` dit si la panne courante vient de « Voir plus »
+       (fournée suivante) plutôt que d'un chargement complet. */
+    total:null, res:[], page:1, pages:1, loading:false, err:'', errSuite:false,
+    charge:false,
     /* `touche` : la personne a-t-elle composé quelque chose elle-même ? La
        proposition du jour ne compte pas — voir `nouvelleOuvertureRech`. */
     touche:false, reprise:null,
@@ -643,7 +646,8 @@ function nouvelleOuvertureRech(){
      `RECH_FAMILLES[].art` et n'est pas un filtre), et la famille repart sur
      « Tout ». `phraseDuJour()` et sa graine ont disparu avec cette règle. */
   r.fam = 'tout';
-  r.res = []; r.total = null; r.page = 1; r.pages = 1; r.charge = false; r.err = '';
+  r.res = []; r.total = null; r.page = 1; r.pages = 1; r.charge = false;
+  r.err = ''; r.errSuite = false;
 }
 function reprendreRech(){
   const r = etatRech(), v = r.reprise;
@@ -728,7 +732,17 @@ function poserAmbianceRech(id){
   if(!f.anime && RECH_AMBIANCES.some(a => a.id === id)) r.fam = 'film';
   r.amb = (r.amb === id) ? null : id;
   r.sans = []; r.genre = []; r.touche = true;
-  if(r.amb){ r.duree = []; r.note = null; }   // l'ambiance les porte déjà
+  /* B6 (09/08) — L'ÉPOQUE MANQUAIT À CETTE LISTE, ET LA PHRASE MENTAIT. Deux
+     ambiances portent leur propre ingrédient d'époque (« Un classique que j'ai
+     raté », côté films et côté séries : `__ansAvant:15`). Poser « depuis 2020 »
+     PUIS cette ambiance affichait les deux dans la phrase, alors que la requête
+     n'en appliquait qu'une seule — l'`Object.assign` de la construction écrase
+     le `.lte` par le `.gte`. L'écran disait donc une chose et cherchait
+     l'autre. Le chemin inverse (poser un mot explicite par-dessus une ambiance
+     qui le porte déjà) était, lui, correctement géré depuis toujours.
+     Remise à zéro SYSTÉMATIQUE, comme la durée et la note juste à côté : poser
+     une tuile, c'est repartir de sa recette, pas la mélanger à la précédente. */
+  if(r.amb){ r.duree = []; r.note = null; r.epoque = []; }   // l'ambiance les porte déjà
   relancerRech();
 }
 /* Retirer un ingrédient d'une recette. C'est le point qui rend l'ambiance
@@ -816,7 +830,7 @@ function relancerRech(){
      qui changent derrière la feuille ne coûte aucune requête supplémentaire.
      `charge` reste vrai : c'est lui qui empêche `viewRecherche` de relancer un
      chargement en croyant l'écran neuf. */
-  r.total = null; r.page = 1; r.pages = 1; r.err = '';
+  r.total = null; r.page = 1; r.pages = 1; r.err = ''; r.errSuite = false;
   r.flux = null;
   oublierDefil('search');
   /* LES CRITÈRES RESTENT SOUS LA MAIN PENDANT LA PARTIE (§4.7) — encore
@@ -1502,7 +1516,7 @@ async function chargerGrilleRech(suite){
      trou noir à chaque mot posé — invisible sous un voile opaque, très visible
      dès qu'on regarde la grille changer derrière la feuille. */
   if(!suite){ r.page = 1; r.total = null; r.flux = null; }
-  r.loading = true; r.err = '';
+  r.loading = true; r.err = ''; r.errSuite = false;
   peindreRech();
   try{
     const médias = mediasRech();
@@ -1565,6 +1579,15 @@ async function chargerGrilleRech(suite){
     const dejaVus = {};
     (suite ? r.res : []).forEach(x => { dejaVus[x.__media+':'+x.id] = 1; });
 
+    /* B4 (09/08) — DEUX COMPTEURS, POUR NE PLUS CONCLURE EN SILENCE. En mode
+       `suite` (« Voir plus »), le bloc d'amorçage ci-dessus est sauté — et avec
+       lui le `throw 'RESEAU'` qui est le SEUL endroit où une panne remontait.
+       Hors ligne, chaque lecture échouait dans son `catch`, la boucle épuisait
+       son budget en échecs, et la fournée se terminait proprement : `r.err`
+       vide, spinner puis rien, à l'infini, avec un bouton qui refaisait pareil.
+       On compte donc ce qui a été VRAIMENT lu et ce qui a échoué. */
+    let luesOk = 0, luesEchec = 0;
+
     let fournee = [], tours = 0;
     const budget = ()=> toursMax * Math.max(1, F.etages[F.i].flux.length);
     while(fournee.length < RECH_CIBLE && F.i < F.etages.length && tours < budget()){
@@ -1582,8 +1605,10 @@ async function chargerGrilleRech(suite){
              pas même une fois le réseau revenu, pendant que le compteur
              continuait d'annoncer le total complet. On marque un ÉCHEC, qui se
              retente ; seul `page >= pages` veut dire « épuisé ». */
-          await lirePageFluxRech(f, seq).catch(()=>{ f.echec = true; });
+          const lue = await lirePageFluxRech(f, seq)
+                        .catch(()=>{ f.echec = true; return false; });
           if(seq !== grilleSeq) return;
+          if(lue) luesOk++; else if(f.echec) luesEchec++;
         }
         if(!f.tampon.length) continue;
         const x = f.tampon.shift();
@@ -1605,19 +1630,43 @@ async function chargerGrilleRech(suite){
       if(!pris && !lu) break;
     }
 
+    /* B4 — RIEN LU, AU MOINS UN ÉCHEC, ET RIEN À SERVIR : c'est une panne, pas
+       une fin de catalogue. On la fait remonter comme l'amorçage le fait déjà ;
+       combinée à B3, elle s'affiche en bandeau SANS effacer la grille en place.
+       Deux cas ressemblants qui ne SONT PAS des pannes, et que les deux
+       conditions de droite écartent :
+         · zéro page lue et aucun échec — les tampons étaient déjà remplis par
+           l'amorçage, la fournée sort d'eux ;
+         · un flux sur trois qui échoue pendant que les deux autres servent
+           leurs tampons — la fournée est pleine, la jeter pour afficher « Pas
+           de connexion » par-dessus serait un mensonge, et une régression du
+           défaut 2.2. Ce qui n'a pas pu être lu sera retenté à la fournée
+           suivante : c'est exactement ce que `f.echec` veut dire. */
+    if(suite && !luesOk && luesEchec && !fournee.length) throw new Error('RESEAU');
+
     /* LE TIRAGE, une fois par fournée, à l'intérieur du rang courant. Puis la
        règle anti-monotonie : elle réordonne, elle ne retire rien. */
     fournee = espacerGenresRech(melangerRech(fournee));
 
     r.res = suite ? r.res.concat(fournee) : fournee;
     r.page = r.page + (suite ? 1 : 0);
-    r.loading = false; r.charge = true; r.err = '';
+    r.loading = false; r.charge = true; r.err = ''; r.errSuite = false;
     peindreRech();
   }catch(e){
     if(seq !== grilleSeq) return;
     r.loading = false; r.charge = true;
     r.err = (e && e.message === 'BADKEY') ? 'Service indisponible' : 'Pas de connexion';
-    r.total = null;
+    /* B3/B4 — quel chemin a échoué, pour que « Réessayer » refasse le bon. */
+    r.errSuite = !!suite;
+    /* B3 — LE COMPTEUR N'EST PLUS EFFACÉ QUAND LA GRILLE, ELLE, RESTE. Sur une
+       panne de « Voir plus », les jaquettes affichées gardent donc leur
+       décompte, qu'on connaît parfaitement.
+       Portée exacte, pour ne rien promettre de plus : sur un rechargement
+       COMPLET, `r.total` a déjà été remis à `null` en entrée de fonction (et
+       par `relancerRech`) — la phrase a changé, l'ancien total ne la décrit
+       plus. La grille conservée s'affiche alors sous « Résultats », sans
+       chiffre, ce qui est la seule chose honnête à dire à ce moment-là. */
+    if(!r.res.length) r.total = null;
     peindreRech();
   }
 }
@@ -2332,10 +2381,18 @@ function blocEnviesRech(){
    sans jamais toucher à la phrase. */
 function grilleRech(){
   const r = etatRech();
-  if(r.err)
+  /* B3 (09/08) — UNE PANNE RÉSEAU N'EFFACE PLUS CE QUI EST DÉJÀ LÀ. Le test
+     `if(r.err)` passait AVANT `r.res.length` : une coupure survenue pendant un
+     rechargement remplaçait quarante-deux jaquettes déjà chargées — et toujours
+     présentes dans `r.res` — par un écran « Pas de connexion ». C'est
+     exactement la règle défendue trois fois ailleurs dans ce fichier (POINT 5,
+     POINT 7, `relancerRech`) : les affiches restent jusqu'à l'arrivée des
+     nouvelles. L'erreur se dit maintenant en BANDEAU au-dessus de la grille, et
+     l'écran vide n'est servi que si la grille est réellement vide. */
+  if(r.err && !r.res.length)
     return '<div class="empty">'+I.boussole+'<h3>'+esc(r.err)+'</h3>'+
       '<p>Vérifie ta connexion, puis réessaie.</p>'+
-      '<button class="btn ghost" onclick="chargerGrilleRech()">Réessayer</button></div>';
+      '<button class="btn ghost" onclick="reessayerGrilleRech()">Réessayer</button></div>';
   if(r.loading && !r.res.length)
     return '<div class="empty"><span class="spin"></span>'+
            '<p style="margin-top:12px">On cherche…</p></div>';
@@ -2345,7 +2402,9 @@ function grilleRech(){
     return '<div class="empty">'+I.boussole+'<h3>Rien avec cette phrase</h3>'+
       '<p>Retire un mot — le compteur remontera tout de suite.</p>'+
       '<button class="btn ghost" onclick="viderRech()">Repartir de zéro</button></div>';
-  let h = '<div class="gtitre">'+(r.total != null
+  /* B3 — le bandeau, au-dessus de la grille conservée. */
+  let h = r.err ? bandeauErrRech() : '';
+  h += '<div class="gtitre">'+(r.total != null
       ? prefixeCompteurRech()+r.total.toLocaleString('fr-FR')+' résultat'+(r.total>1?'s':'')
       : 'Résultats')+'</div>'+
     '<div class="rang3">'+r.res.map(x=>jaquetteRech(x)).join('')+'</div>';
@@ -2357,6 +2416,27 @@ function grilleRech(){
          (r.loading?'<span class="spin"></span> Chargement…':'Voir plus')+'</button></div>';
   return h;
 }
+/* B3 (09/08) — le bandeau d'erreur qui remplace l'écran vide quand la grille,
+   elle, a de quoi s'afficher. Même forme que celui des notifications (app-09) :
+   un aveu, et le bouton qui répare, au même endroit. */
+function bandeauErrRech(){
+  const r = etatRech();
+  return '<div class="banner" style="margin:16px 16px 0;display:flex;'+
+           'align-items:center;gap:12px">'+
+    '<div style="flex:1"><b>'+esc(r.err)+'</b><br>'+
+      '<span class="small">Les résultats déjà trouvés restent affichés.</span></div>'+
+    /* Pas d'état « occupé » ici : `chargerGrilleRech` remet `r.err` à vide dès
+       son entrée, donc ce bandeau n'existe jamais pendant un chargement. Un
+       bouton grisé qu'on ne peut pas voir serait un leurre de plus. */
+    '<button class="btn" style="flex:0 0 auto;padding:9px 16px" '+
+      'onclick="reessayerGrilleRech()">Réessayer</button>'+
+  '</div>';
+}
+/* B3/B4 — « Réessayer » doit refaire CE QUI A ÉCHOUÉ. Une panne survenue sur
+   « Voir plus » ne se répare pas en rechargeant la grille depuis le début :
+   ça jetterait tout ce qui est affiché pour recommencer. `errSuite` retient
+   lequel des deux chemins a échoué. */
+function reessayerGrilleRech(){ chargerGrilleRech(!!etatRech().errSuite); }
 function jaquetteRech(x){
   const media = x.__media || mediaRech();
   const nom = media === 'tv' ? x.name : x.title;

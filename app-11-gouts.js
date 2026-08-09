@@ -614,9 +614,12 @@ function tauxParGenre(famille){
 /* Les genres classés AU TAUX, plancher appliqué. Exposé pour les rangées de
    Découvrir, qui ne sont pas de ce lot. */
 function genresParTaux(famille){
-  const hors = (db.gouts && db.gouts.exclus) || [];
+  /* B1 (09/08) — même défaut que `genresDeFamille`, même correctif : le nom
+     rendu par `tauxParGenre` est le nom TMDB BRUT de la famille (« Action &
+     Adventure » côté séries), `db.gouts.exclus` ne contient que du canonique.
+     `estGenreExclu` canonise les deux côtés. */
   return tauxParGenre(famille)
-    .filter(e => e.mesurable && e.aimes > 0 && hors.indexOf(e.genre) < 0)
+    .filter(e => e.mesurable && e.aimes > 0 && !estGenreExclu(e.genre))
     .sort((a,b)=> b.taux - a.taux || b.vus - a.vus)
     .map(e => e.genre);
 }
@@ -630,9 +633,8 @@ function genresParTaux(famille){
    RIGOUREUSEMENT celui d'avant ce lot. On n'a le droit de bouger l'écran de
    quelqu'un qu'à partir du moment où il a dit quelque chose. */
 function moteurHabitude(famille){
-  const hors = (db.gouts && db.gouts.exclus) || [];
-  return tauxParGenre(famille)
-    .filter(e => e.poids > 0 && hors.indexOf(e.genre) < 0)
+  return tauxParGenre(famille)                     // B1 — filtre canonique
+    .filter(e => e.poids > 0 && !estGenreExclu(e.genre))
     .map(e => ({ genre:e.genre, score: e.poids * (1 + 2 * (e.mesurable ? e.taux : 0)) }))
     .sort((a,b)=> b.score - a.score)
     .map(e => e.genre);
@@ -757,9 +759,20 @@ const GENRES_DEDUITS_MAX = 3;
    la faute silencieuse que ce point existe pour supprimer.
    Les deux appels d'app-12 sont nommés dans le compte rendu du lot ; ils
    devront prendre une famille dès que ce fichier sera rouvert. */
+/* B1 (09/08) — UN GENRE ÉCARTÉ SE COMPARE SUR SON NOM CANONIQUE, ici comme
+   dans `genresDeFamille`. Les deux comparaient le nom TMDB BRUT à
+   `db.gouts.exclus`, qui ne contient QUE des noms canonisés (`bascGoutExclu`
+   n'y pousse que du canonique). Écarter « Action » ne filtrait donc pas
+   « Action & Adventure » : le genre restait dans le profil séries, la rangée
+   partait quand même chez TMDB (`with_genres=10759`), puis `tamiser` — qui,
+   LUI, canonise — jetait 100 % du résultat. Rangée absente sans explication, et
+   une à trois requêtes brûlées pour rien.
+   `estGenreExclu` est le SEUL chemin de canonisation pour la comparaison aux
+   genres écartés : pas de copie locale, pas de seconde table. Il est employé
+   par CINQ sites — `genresDeFamille`, `genresRetenus`, `genresParTaux`,
+   `moteurHabitude` et `genreDuTaux`. Ajouter un sixième site qui compare à
+   `db.gouts.exclus` sans passer par lui, c'est réinstaller ce défaut. */
 function genresRetenus(famille){
-  const g = db.gouts || {};
-  const hors = g.exclus || [];
   if(!famille){
     const u = [];
     ['film','serie'].forEach(f => genresRetenus(f).forEach(n=>{ if(u.indexOf(n) < 0) u.push(n); }));
@@ -771,7 +784,7 @@ function genresRetenus(famille){
   if(famille === 'anime') return genresDeclares('anime');
   const dec = genresDeclares(famille);
   const base = dec.length ? dec : genresDeduits().slice(0, GENRES_DEDUITS_MAX);
-  return base.filter(x => hors.indexOf(x) < 0);
+  return base.filter(x => !estGenreExclu(x));    // B1 — canonique des deux côtés
 }
 
 /* Les titres qui servent de point de départ aux recommandations.
@@ -930,6 +943,10 @@ const cacheSugg = {};
 function suggVide(){
   return { etat:'froid' /* froid|attente|ok|erreur */, quand:0,
            enCours:false, perime:false,
+           /* B2 — le jeton de génération. `oublierSuggestions` l'incrémente ;
+              un calcul en vol qui ne le retrouve pas à l'écriture se jette
+              lui-même plutôt que de peindre une fournée périmée. */
+           seq:0,
            /* La réserve de la proposition du jour : le premier candidat non
               écarté est celui qu'on montre. §3.8 — « la carte est remplacée
               immédiatement par le candidat suivant » ; sans réserve, « Pas pour
@@ -975,9 +992,30 @@ function triSuggestions(){
     ? { sort_by:'vote_average.desc', 'vote_count.gte': String(DISC_VOTES_MINI) }
     : { sort_by:'popularity.desc',   'vote_count.gte':'120' };
 }
-/* Les goûts ont changé : tout est à refaire, sur toutes les puces. */
+/* Les goûts ont changé : tout est à refaire, sur toutes les puces.
+
+   B2 (09/08) — CETTE FONCTION INVALIDE, ELLE NE DÉTRUIT PLUS. Elle faisait
+   `delete cacheSugg[t]`, puis `suggCourantes()` recréait une entrée VIERGE. Un
+   calcul en vol tenait toujours une référence sur l'ANCIEN objet : il continuait
+   jusqu'au bout et écrivait son résultat dans un objet que plus personne ne
+   lisait. Pire, le garde-fou d'entrée de `chargerSuggestions`
+   (`if(c.enCours){ c.perime = true; return; }`) regardait la NOUVELLE entrée,
+   où `enCours` valait faux : deux calculs complets pouvaient donc tourner en
+   parallèle, dont un jeté. Répondre 👍 à « Tu as aimé ? » pendant un calcul de
+   vitrine était exactement ce cas.
+
+   On marque donc l'entrée périmée SANS la détruire — le garde `enCours`
+   redevient effectif — et on incrémente un jeton de génération que
+   `chargerSuggestions` revérifie avant d'écrire, comme `discSeq` (app-04) et
+   `rangeeVue.seq`. `quand` est remis à zéro pour qu'un recalcul qui échoue ne
+   laisse pas le TTL de 24 h resservir l'ancienne fournée. */
 function oublierSuggestions(){
-  Object.keys(cacheSugg).forEach(t => { delete cacheSugg[t]; });
+  Object.keys(cacheSugg).forEach(t => {
+    const c = cacheSugg[t];
+    c.perime = true;
+    c.quand = 0;
+    c.seq = (c.seq || 0) + 1;
+  });
   suggCourantes();
 }
 
@@ -1049,6 +1087,9 @@ function veilleBiblio(){
   if(s === sigBiblio) return;
   sigBiblio = s;
   Object.keys(cacheSugg).forEach(t => { cacheSugg[t].perime = true; });
+  /* B2 — pendant l'amorçage, la vitrine n'est pas à l'écran : la marquer
+     périmée suffit, la calculer serait la calculer pour personne. */
+  if(typeof besoinAmorcage === 'function' && besoinAmorcage()) return;
   if(typeof view !== 'undefined' && view === 'discover') chargerSuggestions();
 }
 
@@ -1288,9 +1329,10 @@ function sectionsPourPuce(type){
 /* Le profil de genres, calculé famille par famille. Un genre choisi à la main
    l'emporte partout : c'est la promesse de l'écran « Mes goûts », qui annonce
    que ces réglages passent avant ce que l'app devine. */
+/* B1 (09/08) — même correction qu'en tête de `genresRetenus`, et pour la même
+   raison : le filtre des genres écartés passe par `estGenreExclu`, qui canonise
+   des deux côtés. Voir le commentaire complet là-bas. */
 function genresDeFamille(famille){
-  const g = db.gouts || {};
-  const hors = g.exclus || [];
   /* POINT 11 — LA LISTE DE CETTE FAMILLE, plus la liste unique. Avant, un genre
      coché s'imposait aux trois sections à la fois : cocher « Horreur » pour ses
      films imposait « Horreur » aux séries, où le genre n'existe pas, et la
@@ -1304,7 +1346,7 @@ function genresDeFamille(famille){
      elle S'AJOUTE, sous forme de mots-clés, dans `requeteSection`. */
   if(famille !== 'anime'){
     const dec = genresDeclares(famille);
-    if(dec.length) return dec.filter(x => hors.indexOf(x) < 0);
+    if(dec.length) return dec.filter(x => !estGenreExclu(x));   // B1
   }
 
   const poids = {};
@@ -1338,7 +1380,7 @@ function genresDeFamille(famille){
     .map(x => ({ nom:x, score: poids[x] * (1 + 2 * (taux[x] || 0)) }))
     .sort((a,b)=> b.score - a.score)
     .map(x => x.nom)
-    .filter(x => hors.indexOf(x) < 0)
+    .filter(x => !estGenreExclu(x))               // B1
     .slice(0, GENRES_DEDUITS_MAX);
 }
 
@@ -1573,10 +1615,15 @@ function genreDuTaux(cadre){
       c.vus += e.vus; c.aimes += e.aimes;
     });
   });
-  const hors = (db.gouts && db.gouts.exclus) || [];
-  const horsCanon = hors.map(n => (typeof genreCanon === 'function') ? genreCanon(n) : n);
+  /* B1 (09/08, relecture) — LE CINQUIÈME SITE. Celui-ci canonisait déjà, mais
+     avec `genreCanon` seul, qui ne connaît que trois paires : écarter
+     « Familial » laissait la rangée « genre du taux » se construire sur
+     « Kids ». Il passe donc par le même `estGenreExclu` que les quatre autres.
+     Le fondu des familles, lui, reste sur `genreCanon` : ce n'est pas le même
+     travail — il regroupe deux libellés d'un même genre, il ne compare pas à
+     une consigne donnée. */
   return Object.keys(par).map(k => par[k])
-    .filter(e => horsCanon.indexOf(e.nom) < 0)
+    .filter(e => !estGenreExclu(e.nom))
     .map(e => Object.assign(e, { taux: e.aimes / e.vus }))
     .sort((a,b)=> b.taux - a.taux || b.vus - a.vus)[0] || null;
 }
@@ -1732,6 +1779,8 @@ async function chargerSuggestions(force){
   if(c.enCours){ c.perime = true; return; }
   if(!force && !c.perime && c.etat === 'ok' && Date.now() - c.quand < SUGG_TTL) return;
   c.enCours = true; c.perime = false;
+  /* B2 — la génération de ce calcul-ci. Relue avant l'écriture finale. */
+  const seq = c.seq || 0;
   /* Recalcul EN DOUCEUR quand il y a déjà de quoi remplir l'écran : la vitrine
      reste lisible pendant qu'on la refait, au lieu de laisser la place à un
      rond qui tourne. C'est ce qui rend supportable un recalcul déclenché par un
@@ -2044,15 +2093,21 @@ async function chargerSuggestions(force){
     for(let i = 0; i < Math.min(PROPOSITIONS_RESERVE, source.length); i++)
       propositions.push(Object.assign({ pourquoi:raison }, source[(jour + i) % source.length]));
 
-    Object.assign(c, { etat:'ok', quand:Date.now(),
-      propositions:propositions,
-      esprit:espritPret, favoris:favorisPret, acteur:acteurPret, genre:genrePret,
-      sections:sectionsPretes, cercle:cerclePret, incont:incontPret, plates:platesPret,
-      nouveautes:nouv.slice(0, SUGG_MAX),
-      /* Gardé en entier, pas coupé à SUGG_MAX : c'est cette liste-là que la
-         grille « Tout voir » déroule, et elle est déjà dans l'ordre. */
-      avenir:avenir,
-      base:sections.map(s=>s.cle), genresUtilises:[] });
+    /* B2 — L'ÉCRITURE FINALE EST SOUS JETON. Si les goûts ont été remis à plat
+       pendant que ce calcul tournait (`oublierSuggestions` a incrémenté `seq`),
+       cette fournée décrit un profil qui n'existe plus : on ne la peint pas.
+       `c.perime` est déjà vrai, la relance est faite quelques lignes plus bas. */
+    if((c.seq || 0) === seq){
+      Object.assign(c, { etat:'ok', quand:Date.now(),
+        propositions:propositions,
+        esprit:espritPret, favoris:favorisPret, acteur:acteurPret, genre:genrePret,
+        sections:sectionsPretes, cercle:cerclePret, incont:incontPret, plates:platesPret,
+        nouveautes:nouv.slice(0, SUGG_MAX),
+        /* Gardé en entier, pas coupé à SUGG_MAX : c'est cette liste-là que la
+           grille « Tout voir » déroule, et elle est déjà dans l'ordre. */
+        avenir:avenir,
+        base:sections.map(s=>s.cle), genresUtilises:[] });
+    }
   }catch(e){
     /* En douceur, un échec réseau ne doit pas effacer une vitrine qui marchait :
        on garde l'ancienne à l'écran et on retentera au prochain changement. */
@@ -2767,6 +2822,11 @@ function ouvrirDuel(famille){
   const paquet = titresEligiblesDuel(famille);
   if(paquet.length < DUEL_MINI)
     return toast('Il faut une dizaine de titres vus pour départager');
+  /* B7 (09/08) — la session précédente est rangée AVANT d'en ouvrir une neuve :
+     minuteur de vote coupé, vote en attente soldé. C'est le défaut 1.2 pris à
+     sa racine — relancer « Départager » dans les 320 ms d'un vote faisait
+     retomber l'ancien minuteur sur la paire de la NOUVELLE partie. */
+  oublierDuel();
   /* R1 · point 11 — LE SCORE VIENT DU CLASSEMENT, PLUS DU PODIUM.
      Le bonus de départ reconstruit depuis le podium a disparu, et avec lui le
      petit bonus de 25 points d'un 👍 : le contrat de données ne connaît qu'un
@@ -2912,6 +2972,21 @@ function appliquerVote(i, silencieux){
   if(!duel.actif || !duel.paire) return;
   const g = duel.paire[i], p = duel.paire[1 - i];
   const kg = cleDuel(g), kp = cleDuel(p);
+  /* B7 (09/08) — LE SCORE DE DÉPART D'UN DUEL SE RELIT DANS LE CLASSEMENT, il
+     ne vient plus de l'instantané pris par `ouvrirDuel`. Une partie dure
+     plusieurs minutes ; une synchro entrante peut très bien tomber au milieu.
+     `fusionnerClassement` (app-01) applique alors la règle décidée — le côté
+     qui a joué le PLUS de duels sur un titre l'emporte — mais le duel suivant
+     repartait de la photo prise à l'ouverture et réécrivait par-dessus : les
+     duels de l'autre téléphone étaient perdus en silence, dans un classement
+     permanent qu'aucun écran ne permet de corriger.
+     En relisant ici, l'arbitrage de la fusion est respecté sans avoir à geler
+     quoi que ce soit, et le `n` écrit plus bas est déjà le `n` fusionné
+     (`duelsJoues` lit la même source). Sans synchro, le comportement est
+     RIGOUREUSEMENT identique : `scoreClassement` rend `DUEL_SCORE0` pour un
+     titre jamais rencontré, exactement ce que `ouvrirDuel` avait posé. */
+  duel.scores[kg] = scoreClassement(duel.famille, g.id);
+  duel.scores[kp] = scoreClassement(duel.famille, p.id);
   /* Un classement par confrontations, à la manière des échecs : battre un titre
      bien placé rapporte plus que battre un titre déjà relégué. C'est ce qui
      permet de trouver le sommet en une dizaine de duels au lieu des centaines
@@ -3224,7 +3299,14 @@ function carteDuel(t, i){
 function ecranDuelJeu(){
   const [a, b] = duel.paire || [];
   if(!a || !b) return '<div class="empty"><p>Plus rien à départager.</p></div>';
-  const avance = Math.round(duel.faits / DUEL_TAILLE * 100);
+  /* B8 (09/08) — LA BARRE COMPTE LE DUEL EN COURS, comme le compteur du haut.
+     Sur `duel.faits` seul, elle affichait 0 % pendant le premier duel et 90 %
+     pendant le dixième et dernier : elle n'atteignait jamais 100 %, et la
+     partie se terminait sur une barre incomplète. Le texte de `ecranDuel` fait
+     déjà `Math.min(duel.faits + 1, DUEL_TAILLE)` — les deux disent maintenant
+     la même chose, ce qui est la moindre des choses pour deux affichages de la
+     même progression, à trente pixels l'un de l'autre. */
+  const avance = Math.round(Math.min(duel.faits + 1, DUEL_TAILLE) / DUEL_TAILLE * 100);
   return '<div class="darene">'+
     '<div class="dbarre"><i style="width:'+avance+'%"></i></div>'+
     '<div class="dquest">Lequel tu as préféré&nbsp;?</div>'+
@@ -3499,6 +3581,21 @@ function boutonPlusClassement(reste, appel){
     (n > 1 ? 'Voir les '+n+' suivants' : 'Voir le suivant')+'</button></div>';
 }
 
+/* B8 (09/08) — LE TOTAL SE COMPTE, IL NE S'ADDITIONNE PLUS. L'écran affichait
+   `l.length + 3` : le nombre de lignes sous le podium, PLUS trois, le `+3`
+   supposant que les trois médailles ont chacune leurs `DUEL_MINI_N` duels. Or
+   `projeterPodium` complète délibérément la projection avec l'ANCIEN podium —
+   médailles comprises — pour ne pas le vider à la première partie : un titre
+   hérité peut donc y figurer avec zéro duel, et le total annonçait jusqu'à
+   trois titres départagés de plus qu'il n'y en avait.
+   On dérive maintenant le total d'UN SEUL ensemble, celui de `classementDuel`
+   (les titres à `DUEL_MINI_N` duels au moins, podium inclus), au lieu
+   d'additionner deux ensembles qui se recoupent. Fonction séparée parce
+   qu'elle est le cas de test. */
+function totalDepartages(fam){ return classementDuel(fam).length; }
+const ditDepartages = n =>
+  n > 1 ? n + ' titres départagés' : n + ' titre départagé';
+
 /* ---------- Sur l'écran de résultat ---------- */
 function allongerClassement(){ duel.montre += CL_PAS; render(); }
 function blocClassementDuel(){
@@ -3512,12 +3609,17 @@ function blocClassementDuel(){
      et couper à l'aveugle ferait réapparaître une médaille en quatrième ligne. */
   const haut = {};
   (duel.classe || []).slice(0, 3).forEach(t=>{ haut[String(t.id)] = 1; });
+  /* B8 — UN SEUL ensemble : celui des titres réellement départagés. La liste
+     affichée en dessous n'en est qu'une vue (podium retiré), et le total est
+     `totalDepartages` — la fonction que le test éprouve, appelée ici pour de
+     bon : un total que l'écran recalculerait dans son coin ne serait protégé
+     par rien. */
   const l = classementDuel(duel.famille).filter(t => !haut[String(t.id)]);
   if(!l.length) return '';
   const n = Math.max(0, Math.min(duel.montre, l.length));
   if(!n) return '';
   return '<div class="sectitle rowt">La suite du classement'+
-      '<span class="cl1aide">'+(l.length + 3)+' titres départagés</span></div>'+
+      '<span class="cl1aide">'+ditDepartages(totalDepartages(duel.famille))+'</span></div>'+
     '<div class="cl1liste">'+l.slice(0, n).map((t, i)=>
       ligneClassement(t, i + 4, ditDuels(duelsJoues(duel.famille, t.id)), false)).join('')+
     '</div>'+
@@ -3687,7 +3789,21 @@ function ecranDuelResultat(){
 /* Quitter le duel pour ouvrir une fiche perdrait la session : on ferme
    proprement d'abord, et on garde le podium — il est déjà enregistré. */
 function ouvrirApercuDuel(media, id){
-  duel = Object.assign({}, DUEL_VIDE);
+  /* B7 (09/08) — ON PASSE PAR `oublierDuel`, JAMAIS PAR UNE RÉINITIALISATION
+     NUE. Cette ligne réinitialisait `duel` SANS couper `duelVoteTimer` : c'est
+     très exactement la configuration du défaut 1.2 de la relecture du 02/08 —
+     un minuteur de vote qui retombe sur une session neuve applique un score Elo
+     à la mauvaise paire, dans un classement permanent, que rien ne permet de
+     corriger. Le défaut n'était que latent ici (l'aperçu ne se rouvre pas en
+     320 ms), mais la configuration, elle, était identique.
+     `oublierDuel` coupe le minuteur ET solde le vote en attente : le duel qu'on
+     vient de choisir avant d'ouvrir la fiche est compté, au lieu d'être perdu.
+     RÈGLE : toute remise à zéro de `duel` passe par `oublierDuel`, qui est le
+     seul endroit où le minuteur est coupé. Contrôle :
+       git grep -n "Object.assign({}, DUEL_VIDE"
+     → trois lignes seulement : la déclaration initiale, `oublierDuel`, et
+     `ouvrirDuel` (qui appelle `oublierDuel` juste avant). */
+  oublierDuel();
   ui.preview = { id:id, type:media, loading:true, data:null, error:'' };
   go('preview', { id:id, type:media, from:'gouts' });
   /* Après le rendu : `loadPreview` redessine seul quand la réponse arrive, et
@@ -3924,16 +4040,38 @@ function bascGoutExclu(nom){
 /* « Écarté » se lit sur le nom canonique : une base d'avant le point 11 peut
    contenir « Action & Adventure » là où la puce dit maintenant « Action », et
    une puce qui ne se rallume pas passe pour un réglage perdu. */
+/* B1 (09/08) — LA FORME CANONIQUE D'UN GENRE ÉCARTÉ, EN UN SEUL ENDROIT.
+   `genreCanon` (app-04) ne connaît que TROIS paires ; la quatrième — Kids →
+   Familial — vit dans `INSC_GENRE_TV` (app-13) et n'est lue que par
+   `nomGenreFilm`. Écarter « Familial » laissait donc « Kids » dans le profil
+   séries, et la rangée partait quand même : le symptôme exact de B1, sur ce
+   genre-là.
+   `nomGenreFilm` rend une chaîne VIDE sur les genres qui n'existent que côté
+   séries (News, Reality, Soap, Talk) : ceux-là n'ont pas de forme canonique, on
+   les compare donc à eux-mêmes. D'où le repli.
+   Cette fonction est le chemin unique de la COMPARAISON AUX GENRES ÉCARTÉS :
+   `genresDeFamille`, `genresRetenus`, `genresParTaux`, `moteurHabitude` et
+   `genreDuTaux` passent tous par `estGenreExclu`.
+   Elle n'est pas la seule canonisation du fichier, et il ne faut pas le croire :
+   `genreDuTaux` fond aussi les familles avec `genreCanon` (regrouper deux
+   libellés d'un même genre n'est pas comparer à une consigne), et le tamis final
+   `tamiser` résout les genres écartés en IDENTIFIANTS TMDB via `genreParNom`,
+   qui s'appuie sur `genreCanon` seul — il ne rattrape donc pas la paire
+   Kids/Familial. Défaut antérieur à ce lot, laissé tel quel faute d'être dans
+   son périmètre ; écrit ici pour que personne ne le croie déjà traité. */
+function genreExclusCanon(nom){
+  const f = (typeof nomGenreFilm === 'function') ? nomGenreFilm(nom) : '';
+  if(f) return f;
+  return (typeof genreCanon === 'function') ? genreCanon(nom) : nom;
+}
 function estGenreExclu(nom){
-  const c = (typeof genreCanon === 'function') ? genreCanon(nom) : nom;
-  return ((db.gouts && db.gouts.exclus) || [])
-    .some(x => ((typeof genreCanon === 'function') ? genreCanon(x) : x) === c);
+  const c = genreExclusCanon(nom);
+  return ((db.gouts && db.gouts.exclus) || []).some(x => genreExclusCanon(x) === c);
 }
 function retirerExclu(nom){
   const g = db.gouts;
-  const c = (typeof genreCanon === 'function') ? genreCanon(nom) : nom;
-  g.exclus = (g.exclus||[]).filter(x =>
-    ((typeof genreCanon === 'function') ? genreCanon(x) : x) !== c);
+  const c = genreExclusCanon(nom);
+  g.exclus = (g.exclus||[]).filter(x => genreExclusCanon(x) !== c);
 }
 function retirerActeur(id){
   db.gouts.acteurs = db.gouts.acteurs.filter(a=>String(a.id) !== String(id));
