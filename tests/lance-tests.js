@@ -195,8 +195,10 @@ const ETAT_PARTAGE = {
   partage: ['app-01-noyau.js','app-07-partage.js'],
   platesEcranDemande: ['app-04-decouvrir.js','app-13-inscription.js'],
   /* Déclaré vide dans app-02, rempli par les écrans qui ont quelque chose à
-     refermer — aujourd'hui la recherche, et elle seule. */
-  FERMETURES: ['app-12-recherche.js']
+     refermer — la recherche, et depuis C2 la feuille de confirmation générique
+     d'app-02 elle-même (`confirmerDansFeuille`), qui s'en sert pour traiter
+     « refermée sans qu'on ait répondu » comme un NON. */
+  FERMETURES: ['app-02-outils.js','app-12-recherche.js']
 };
 
 function ecrituresEtat(fichiers, lire){
