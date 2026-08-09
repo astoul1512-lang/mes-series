@@ -122,13 +122,22 @@ const LOT_PERSONNES = 20;
 const PERSONNES_EN_PARALLELE = 4;
 const CLOCHES_EN_PARALLELE = 5;
 const BUDGET_MS = 3500;
+// Le plafond de ré-invocations. Il ne sert à RIEN aujourd'hui, et c'est très
+// bien : `apres` avance d'au moins une personne à chaque tour, la chaîne est
+// donc déjà bornée par le nombre de lignes de `push_reglages`. Il est là pour
+// le jour où quelqu'un touchera à la condition d'arrêt sans relire tout le
+// raisonnement — une fonction qui s'appelle elle-même mérite une ceinture en
+// plus des bretelles. 50 tours × 20 personnes = 1 000 personnes par balayage,
+// très au-delà de ce que cette app verra jamais ; au-delà, on s'arrête et on
+// le DIT, plutôt que de tourner en silence.
+const TOURS_MAX = 50;
 
 // La ré-invocation : la fonction s'appelle elle-même, avec le même secret et le
 // décalage atteint. Sans `await` sur la réponse — on ne veut pas attendre le
 // reste du balayage, c'est tout l'objet de la manœuvre — mais confiée à
 // `waitUntil` quand la plateforme le propose, sinon le runtime peut couper la
 // requête en vol dès que la réponse ci-dessus est rendue.
-function relancer(req: Request, apres: string) {
+function relancer(req: Request, apres: string, tour: number) {
   // On REPASSE les en-têtes d'entrée : `x-cron-secret` bien sûr, mais aussi
   // `apikey` et `Authorization`, que la passerelle Supabase exige avant même
   // que la fonction soit atteinte. Sans eux, la suite du balayage se ferait
@@ -138,7 +147,7 @@ function relancer(req: Request, apres: string) {
     const v = req.headers.get(nom);
     if (v) h[nom] = v;
   }
-  const p = fetch(req.url, { method: 'POST', headers: h, body: JSON.stringify({ apres }) })
+  const p = fetch(req.url, { method: 'POST', headers: h, body: JSON.stringify({ apres, tour }) })
     .catch((e) => { console.log('notifier: relance impossible → ' + (e?.message || e)); });
   const rt = (globalThis as any).EdgeRuntime;
   if (rt && typeof rt.waitUntil === 'function') rt.waitUntil(p);
@@ -433,7 +442,9 @@ Deno.serve(async (req) => {
   // LECTURE qui a échoué.
   // ==========================================================================
   const debut = Date.now();
+  const tour = Math.max(1, Number(demande.tour) || 1);
   const bilan = { personnes: 0, annonces: 0, envois: 0, erreurs: [] as string[],
+                  tour: tour,
                   depuis: String(demande.apres || ''), jusqu: String(demande.apres || ''),
                   complet: true, suite: null as string | null };
 
@@ -521,10 +532,14 @@ Deno.serve(async (req) => {
       await Promise.all(paquet.map((r: any) => traiterPersonne(r)));
       apres = String(paquet[paquet.length - 1].user_id);
       bilan.jusqu = apres;
-      // On ne coupe QUE s'il reste vraiment quelque chose derrière : un lot
+      // On ne coupe QUE s'il peut rester quelque chose derrière : un lot
       // incomplet dont on vient de traiter le dernier paquet est la fin du
       // balayage. Sans ce test, un tour terminé se ré-invoquerait pour lire
       // zéro ligne, et le journal crierait « SUITE » sur un travail fini.
+      // « Peut », pas « reste » : un lot PLEIN de vingt lignes peut aussi être
+      // le dernier, et on ne le saura qu'en lisant le lot suivant. Cette
+      // ré-invocation-là fait donc une lecture pour rien — une, et la base
+      // devrait compter un multiple exact de vingt pour que ça arrive.
       const resteDerriere = k < paquets.length - 1 || lot.length === LOT_PERSONNES;
       if (resteDerriere && Date.now() - debut > BUDGET_MS) { coupe = true; break; }
     }
@@ -534,12 +549,23 @@ Deno.serve(async (req) => {
 
   // TRAÇABILITÉ — un tour incomplet doit se voir, y compris quand personne ne
   // lit la réponse (le planificateur, lui, ne la lit pas).
-  console.log(`notifier: ${bilan.personnes} personne(s) après « ${bilan.depuis || '(début)'} », ` +
-              `${bilan.annonces} annonce(s), ${bilan.envois} envoi(s), ` +
-              `${bilan.erreurs.length} erreur(s), ${Date.now() - debut} ms, ` +
-              (bilan.complet ? 'tour complet' : `SUITE après « ${bilan.suite || bilan.jusqu} »`));
+  // LE PLAFOND. Atteint, on s'arrête et on le dit : le balayage reprendra au
+  // tour du planificateur suivant, deux heures plus tard, depuis le début.
+  // C'est une panne, pas un fonctionnement — d'où l'entrée dans `erreurs`.
+  const plafond = !bilan.complet && bilan.suite && tour >= TOURS_MAX;
+  if (plafond) {
+    bilan.erreurs.push(`plafond de ${TOURS_MAX} ré-invocations atteint après « ${bilan.suite} »`);
+  }
 
-  if (!bilan.complet && bilan.suite) relancer(req, bilan.suite);
+  console.log(`notifier: tour ${bilan.tour}, ${bilan.personnes} personne(s) après ` +
+              `« ${bilan.depuis || '(début)'} », ${bilan.annonces} annonce(s), ` +
+              `${bilan.envois} envoi(s), ${bilan.erreurs.length} erreur(s), ` +
+              `${Date.now() - debut} ms, ` +
+              (bilan.complet ? 'tour complet'
+                             : plafond ? `ARRÊT AU PLAFOND (${TOURS_MAX} tours)`
+                                       : `SUITE après « ${bilan.suite || bilan.jusqu} »`));
+
+  if (!bilan.complet && bilan.suite && !plafond) relancer(req, bilan.suite, tour + 1);
 
   return new Response(JSON.stringify(bilan), {
     headers: { ...CORS, 'Content-Type': 'application/json' }
