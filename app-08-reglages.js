@@ -441,6 +441,14 @@ async function boot(){
     setTimeout(()=> toast('Tes notifications sont réactivées : le résumé groupé n\'existait pas encore'), 900);
   }
   if(syncReady() && signedIn()){ syncNow(true); majProfil(); chargerPartage(); inscrireSiBesoin(); }
+  /* B11 (09/08) — CE QUI N'EST PAS PARTI REPART AU DÉMARRAGE. Deux choses
+     peuvent rester en plan quand le réseau manque au mauvais moment : une
+     cloche allumée juste avant de verrouiller le téléphone (drapeau
+     `desyncAt`), et la suppression de l'abonnement du compte qu'on vient de
+     quitter (liste `aPurger`) — celle-là fait qu'un appareil continue de
+     recevoir les notifications de quelqu'un d'autre. `rejouerNotifEnAttente`
+     rejoue les deux ; le retour du réseau les rejoue aussi (app-09). */
+  if(typeof rejouerNotifEnAttente === 'function') rejouerNotifEnAttente();
 }
 /* `test.html` charge les mêmes fichiers dans le même ordre, pour éprouver le
    VRAI code et non une copie. Il pose `MODE_TEST` avant de les charger : sans

@@ -125,9 +125,14 @@ function partagePossible(){
 /* Le temps qui reste, en clair. Recalculé à chaque rendu et non rafraîchi par
    une minuterie : l'écran n'est pas fait pour être regardé une heure, et une
    minuterie de plus est une fuite d'écouteur de plus (§B10). */
+/* B13 (09/08) — QUAND ON NE SAIT PAS, ON NE DIT RIEN. Sans `partage.expire`,
+   la ligne affichait « valable 24 h » : une hypothèse — la durée par défaut du
+   serveur — présentée comme un fait, sur le seul élément de l'écran qui engage
+   quelqu'un d'autre. Elle rend maintenant une chaîne vide, et `voletCode`
+   n'affiche la mention que lorsqu'elle est connue. */
 function resteCode(){
   const t = partage.expire ? partage.expire - Date.now() : 0;
-  if(!partage.expire) return 'valable 24 h';
+  if(!partage.expire) return '';
   if(t <= 0) return 'expiré';
   const h = Math.floor(t / 3600000), m = Math.floor((t % 3600000) / 60000);
   if(h >= 1) return 'expire dans ' + h + ' h ' + (m < 10 ? '0' : '') + m;
@@ -141,21 +146,44 @@ function voletCode(){
       'Tant que tu n\'en donnes pas, personne ne voit ta bibliothèque.</div>'+
       '<button class="btn block" onclick="genererCode()">Générer mon code</button>';
   }
-  return '<div class="codebox">'+esc(partage.code)+'</div>'+
-    '<div class="small muted" style="text-align:center;margin-bottom:12px">'+
-      'Une seule utilisation · <b>'+esc(resteCode())+'</b></div>'+
+  /* B13 (09/08) — UN CODE MORT NE SE PARTAGE PLUS. « Copier » et « Envoyer »
+     restaient actifs alors que la ligne du dessus disait « expiré » : une PWA
+     laissée ouverte, un code chargé la veille, et on envoyait à quelqu'un un
+     code qui ne marchera pas — la personne d'en face voit un refus sans
+     comprendre, et personne ne sait lequel des deux s'est trompé.
+     Les deux boutons cèdent la place à celui qui répare. Le calcul est local
+     (`resteCode`) : il se refait à chaque rendu, donc au retour sur l'écran,
+     sans minuterie permanente — voir le commentaire de `resteCode`. */
+  const reste = resteCode();
+  const mort = reste === 'expiré';
+  return '<div class="codebox"'+(mort?' style="opacity:.45"':'')+'>'+esc(partage.code)+'</div>'+
+    (reste
+      ? '<div class="small muted" style="text-align:center;margin-bottom:12px">'+
+          'Une seule utilisation · <b>'+esc(reste)+'</b></div>'
+      : '<div class="small muted" style="text-align:center;margin-bottom:12px">'+
+          'Une seule utilisation</div>')+
     /* `.actions` porte un `padding:16px 16px 0` prévu pour une fiche pleine
        largeur ; ici le volet a déjà le sien, d'où la remise à zéro. */
-    '<div class="actions" style="padding:0">'+
-      '<button class="btn" onclick="copierCode()">Copier</button>'+
-      (partagePossible() ? '<button class="btn ghost" onclick="envoyerCode()">Envoyer</button>' : '')+
-    '</div>'+
+    (mort
+      ? '<div class="small muted" style="text-align:center;margin-bottom:12px">'+
+          'Ce code ne fonctionne plus. Génères-en un nouveau pour partager.</div>'+
+        /* Pas de confirmation ici, contrairement au remplacement : la feuille
+           prévient qu'on va rendre le code inutilisable, or il l'est déjà. */
+        '<button class="btn block" onclick="genererCode()">'+
+          'Générer un nouveau code</button>'
+      : '<div class="actions" style="padding:0">'+
+          '<button class="btn" onclick="copierCode()">Copier</button>'+
+          (partagePossible() ? '<button class="btn ghost" onclick="envoyerCode()">Envoyer</button>' : '')+
+        '</div>')+
     '<button class="lienplus" style="display:block;width:100%;text-align:center" '+
       'onclick="confirmerAnnulationCode()">Annuler ce code</button>'+
     /* Remplacer reste possible, mais ce n'est plus une action anodine posée en
-       bas d'un panneau : elle porte son vrai nom et passe par une confirmation. */
-    '<button class="lienplus" style="display:block;width:100%;text-align:center;color:var(--muted)" '+
-      'onclick="confirmerRemplacementCode()">Remplacer par un nouveau code</button>';
+       bas d'un panneau : elle porte son vrai nom et passe par une confirmation.
+       B13 — sur un code expiré, l'action principale ci-dessus fait déjà
+       exactement cela : la répéter en bas de panneau n'ajouterait qu'un doute. */
+    (mort ? ''
+      : '<button class="lienplus" style="display:block;width:100%;text-align:center;color:var(--muted)" '+
+        'onclick="confirmerRemplacementCode()">Remplacer par un nouveau code</button>');
 }
 
 const messageCode = c => 'Mon code Mes Séries : ' + c;
@@ -725,7 +753,11 @@ function viewAccount(){
         'rien à faire ici. Ce réglage sert à en brancher un autre.</div>'+
         '<div class="small muted" style="margin-top:8px">Un espace neuf ne suffit pas : il faut '+
         'd\'abord y installer la base et les fonctions, sinon l\'app s\'ouvre sans affiches et '+
-        'sans partage. La marche à suivre est dans <b>INSTALL.md</b>, à la racine du dépôt.</div>'+
+        /* B13 (09/08) — le chemin était faux : le fichier est dans le dossier
+           `supabase/`, pas à la racine. Corrigé une seule fois, ici (S5 de la
+           SPEC-02 désigne la même ligne). */
+        'sans partage. La marche à suivre est dans <b>supabase/INSTALL.md</b>, '+
+        'dans le dépôt.</div>'+
       '</div>'+
       '<div style="height:16px"></div>'+
       '<label class="fld"><span>URL du projet Supabase</span>'+
@@ -792,7 +824,20 @@ function viewAccount(){
           'autocomplete="new-password" '+
           'onkeydown="if(event.key===\'Enter\'){this.blur();doSignUp()}"></label>'
         : '')+
-      '<button class="btn block" style="margin-bottom:'+(creer?'14px':'4px')+'" onclick="'+(creer?'doSignUp()':'doSignIn()')+'">'+
+      /* B10 (09/08) — le bouton s'éteint pendant l'appel. Avec `SB_TIMEOUT` à
+         45 s, un double appui envoyait DEUX créations de compte : la seconde
+         répondait « un compte existe déjà avec cette adresse » — sur le compte
+         qui venait d'être créé, une seconde plus tôt, par le premier appui. Le
+         verrou d'action (`prendre('auth')`) est la vraie garde ; ceci en est la
+         traduction visible, sans quoi rien ne dirait qu'il se passe quelque
+         chose pendant quarante-cinq secondes. */
+      /* Le LIBELLÉ NE CHANGE PAS, seul le bouton s'éteint. Un libellé
+         « Création… » posé par un rendu se figerait là : `verrouAuth` ne rend
+         que l'état actif du bouton, sans repasser par un rendu — lequel
+         effacerait le mot de passe déjà tapé si l'appel échoue. Le toast, lui,
+         dit déjà que c'est parti. */
+      '<button class="btn block" id="acgo" style="margin-bottom:'+(creer?'14px':'4px')+'"'+
+        (occupe('auth')?' disabled':'')+' onclick="'+(creer?'doSignUp()':'doSignIn()')+'">'+
         (creer ? 'Créer mon compte' : 'Me connecter')+'</button>'+
       (creer ? ''
         : '<button class="tiny muted" style="display:block;width:100%;text-align:center;padding:10px 8px 14px" '+
@@ -1130,11 +1175,26 @@ function saveSync(){
 }
 function resetSync(){ db.sync=Object.assign({},DEFAULT_SYNC); db.auth=null; saveDB(); render(); }
 
+/* B10 (09/08) — LE VERROU ET LE BOUTON ÉTEINT, pour les deux portes du compte.
+   Ni `doSignIn` ni `doSignUp` n'étaient protégés : pas de `prendre()`, pas de
+   `disabled`. Avec un délai serveur pouvant aller à 45 s (`SB_TIMEOUT`), un
+   double appui — le geste le plus naturel du monde quand rien ne bouge —
+   envoyait deux requêtes. Sur la création, la seconde revenait avec « un compte
+   existe déjà avec cette adresse », un message FAUX au sens où il désigne le
+   compte que le premier appui venait de créer.
+   Le bouton est éteint dans la foulée sans repasser par `render()` : redessiner
+   l'écran effacerait le mot de passe déjà tapé si l'appel échoue. */
+function verrouAuth(actif){
+  const b = document.getElementById('acgo');
+  if(b) b.disabled = !!actif;
+}
 async function doSignIn(){
   const email = document.getElementById('acmail').value.trim();
   const pass  = document.getElementById('acpass').value;
   if(!email || !pass) return toast('Renseigne e-mail et mot de passe');
   if(!FORME_MAIL.test(email)) return toast('Cette adresse e-mail n\'a pas l\'air valide');
+  if(!prendre('auth')) return;
+  verrouAuth(true);
   toast('Connexion…');
   try{
     await sbSignIn(email, pass);
@@ -1152,7 +1212,36 @@ async function doSignIn(){
     /* Nouveau téléphone, ou retour après une déconnexion : si iOS a déjà donné
        son accord, l'appareil se réinscrit sans qu'on ait à le demander. */
     inscrireSiBesoin();
-  }catch(e){ toast(/Invalid/i.test(e.message) ? 'E-mail ou mot de passe incorrect' : 'Échec : '+e.message); }
+  }catch(e){ toast(messageAuth(e)); }
+  finally{ rendre('auth'); verrouAuth(false); }
+}
+/* B10 (09/08) — LES MESSAGES DU SERVEUR SONT EN ANGLAIS, ET ON LES AFFICHAIT
+   TELS QUELS. Seul « Invalid… » était traduit ; « Email not confirmed »,
+   « Password should be at least 6 characters » et « For security purposes, you
+   can only request this after N seconds » arrivaient bruts sous les yeux de
+   quelqu'un qui essaie simplement de créer un compte.
+   Une seule table, pour les deux portes, et un repli générique : on n'affiche
+   PLUS le texte brut du serveur, jamais — il ne dit rien à personne et il fait
+   peur. Un message doit dire quoi FAIRE, pas seulement ce qui a raté. */
+function messageAuth(e){
+  const m = String((e && e.message) || '');
+  if(/CONFIRM/.test(m) || /email not confirmed/i.test(m))
+    return 'Ton adresse n\'est pas confirmée — ouvre le message qu\'on t\'a '+
+           'envoyé (pense aux spams).';
+  if(/already regist|user already/i.test(m))
+    return 'Un compte existe déjà avec cette adresse.';
+  if(/password should be at least/i.test(m))
+    return 'Mot de passe de 6 caractères minimum.';
+  const s = m.match(/after (\d+) seconds?/i);
+  if(s) return 'Trop d\'essais d\'affilée — réessaie dans '+s[1]+' secondes.';
+  if(/for security purposes/i.test(m)) return 'Trop d\'essais d\'affilée — réessaie dans un instant.';
+  if(/invalid/i.test(m)) return 'E-mail ou mot de passe incorrect';
+  /* `DELAI` est le nom que `sbFetch` (app-01) donne au dépassement des 45 s :
+     c'est un problème de réseau, pas un refus du serveur, et il doit se lire
+     comme tel plutôt que de tomber dans le repli générique. */
+  if(/DELAI|RESEAU|network|failed to fetch|timeout|abort/i.test(m))
+    return 'Pas de connexion — réessaie dans un instant.';
+  return 'Échec : réessaie dans un instant';
 }
 /* Contrôle minimal de forme : une adresse sans arobase ou sans point après
    n'est pas une adresse. On ne cherche pas à valider plus loin — seul un envoi
@@ -1168,6 +1257,8 @@ async function doSignUp(){
   if(!FORME_MAIL.test(email)) return toast('Cette adresse e-mail n\'a pas l\'air valide');
   if(pass.length < 6)         return toast('Mot de passe de 6 caractères minimum');
   if(pass !== pass2)          return toast('Les deux mots de passe ne sont pas identiques');
+  if(!prendre('auth')) return;                       // B10 — un seul appui compte
+  verrouAuth(true);
   toast('Création du compte…');
   try{
     await sbSignUp(email, pass);
@@ -1193,9 +1284,12 @@ async function doSignUp(){
          avoir cliqué dans son mail. On lui donne un écran à lui. */
       ui.acMail = email; ui.acNom = nom; ui.acMode = 'confirme';
       db.pseudo = nom; saveDB();
+      /* B10 — le verrou est rendu AVANT le rendu de l'écran suivant, sinon
+         celui-ci se dessinerait avec son bouton éteint. */
+      rendre('auth');
       render();
     }
-    else toast('Échec : '+(/already regist|User already/i.test(e.message)
-      ? 'un compte existe déjà avec cette adresse' : e.message));
+    else toast(messageAuth(e));                      // B10 — plus de texte brut
   }
+  finally{ rendre('auth'); verrouAuth(false); }
 }

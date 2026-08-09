@@ -702,8 +702,11 @@ window.MODE_TEST = true;
   test('le temps restant se dit en clair', ()=>{
     const avant = partage.expire;
     try{
+      /* B13 (SPEC-03, 09/08) — sans date d'expiration connue, la ligne
+         affichait « valable 24 h » : la durée par défaut du serveur, présentée
+         comme un fait alors que rien ne la confirme. On ne dit plus rien. */
       partage.expire = null;
-      egal(resteCode(), 'valable 24 h');
+      egal(resteCode(), '');
       partage.expire = Date.now() - 1000;
       egal(resteCode(), 'expiré');
       partage.expire = Date.now() + 2*3600000 + 5*60000 + 5000;
@@ -4133,8 +4136,12 @@ window.MODE_TEST = true;
   test('todayISO est mémorisé — et il ne l\'est pas éternellement', ()=>{
     const vraiNow = Date.now;
     try{
-      /* 23 h 59 min 50 s UTC : la seconde d'après on change de jour. */
-      const veille = Date.UTC(2026, 0, 1, 23, 59, 50);
+      /* 23 h 59 min 50 s, HEURE LOCALE : la seconde d'après on change de jour.
+         B9 (SPEC-03, 09/08) — c'était `Date.UTC` ici, et c'était le cœur du
+         défaut : la journée se calculait en UTC pendant que tout le reste de
+         l'app raisonnait en heure locale. À Paris, cet instant-là appartient
+         déjà au 2 janvier. Le cas de mémorisation, lui, est inchangé. */
+      const veille = new Date(2026, 0, 1, 23, 59, 50).getTime();
       _jourISO = null; _jourISOts = 0;
       Date.now = ()=> veille;
       const a = todayISO();
@@ -4211,14 +4218,19 @@ window.MODE_TEST = true;
   groupe('LOT D — l\'ordre des rangées et leurs conditions');
 
   /* Une vitrine vide, prête à être remplie à la main. `oublierSuggestions`
-     efface les caches des quatre puces : sans ça, un test hériterait des
-     rangées du précédent. */
+     invalide les caches des quatre puces : sans ça, un test hériterait des
+     rangées du précédent.
+     B2 (SPEC-03, 09/08) — `oublierSuggestions` INVALIDE désormais au lieu de
+     DÉTRUIRE : l'entrée de cache survit, avec tout ce que le test précédent y
+     avait mis. On la remet donc à neuf ici, explicitement — c'est ce que le nom
+     de ce helper promet, et c'est maintenant à lui de le tenir. */
   function vitrineVierge(type){
     baseVierge();
     ui.disc.type = type || 'tout';
     ui.disc.tri = 'populaire';
     oublierSuggestions();
     const c = suggCourantes();
+    Object.assign(c, suggVide());
     c.etat = 'ok'; c.quand = Date.now();
     return c;
   }
@@ -4529,6 +4541,442 @@ window.MODE_TEST = true;
     vrai(/Je te propose mal/.test(carteProfilPauvre()));
     poserAvis('movie', 1, 1);
     egal(carteProfilPauvre(), '', 'un 👍 et elle doit s\'effacer d\'elle-même');
+  });
+
+  /* =========================================================================
+     SPEC-03 — les quatorze bugs du lot (B1 à B15, sans B5)
+
+     Un cas par correctif testable en pur. Ceux qui demandent un vrai réseau
+     (B4 hors ligne, B14 sur une base de 25 lignes) sont éprouvés autrement :
+     voir le compte rendu du lot et les tests Deno du notifier.
+     ========================================================================= */
+  groupe('SPEC-03 — B9 : le fuseau horaire');
+
+  /* L'horloge simulée. On remplace `Date.now`, et rien d'autre : `todayISO`
+     garde sa journée trente secondes en mémoire, mais le saut d'horloge du
+     test dépasse largement ce délai — le cache se refait de lui-même, dans un
+     sens comme dans l'autre. */
+  function aLHeure(ts, fn){
+    const vrai = Date.now;
+    Date.now = function(){ return ts; };
+    _jourISO = null; _jourISOts = 0;           // la mémoire de la journée repart à neuf
+    try{ return fn(); } finally { Date.now = vrai; _jourISO = null; _jourISOts = 0; }
+  }
+
+  test('B9 — isoLocal rend la journée LOCALE, là où toISOString rendait la veille', ()=>{
+    /* 8 août 2026, 00 h 30, heure de la machine. Construit par ses champs
+       locaux : le cas est le même dans n'importe quel fuseau à l'est de
+       Greenwich, et le lanceur place la page à Paris (tests/lance-tests.js). */
+    const minuitPasse = new Date(2026, 7, 8, 0, 30, 0);
+    egal(isoLocal(minuitPasse), '2026-08-08', 'la journée locale');
+    if(-minuitPasse.getTimezoneOffset() > 0){
+      egal(minuitPasse.toISOString().slice(0, 10), '2026-08-07',
+           'le décor du test a changé : sans décalage, ce cas ne prouve plus rien');
+    }
+  });
+
+  test('B9 — à 00 h 30, todayISO ne vit plus hier', ()=>{
+    const minuitPasse = new Date(2026, 7, 8, 0, 30, 0);
+    aLHeure(minuitPasse.getTime(), ()=>{
+      egal(todayISO(), isoLocal(minuitPasse),
+           'todayISO et isoLocal doivent dire la même journée');
+      egal(todayISO(), '2026-08-08');
+    });
+  });
+
+  test('B9 — Aujourd\'hui / Hier / Demain sont justes autour de minuit', ()=>{
+    const minuitPasse = new Date(2026, 7, 8, 0, 30, 0);
+    aLHeure(minuitPasse.getTime(), ()=>{
+      egal(fmtDayLabel('2026-08-08'), "Aujourd'hui");
+      egal(fmtDayLabel('2026-08-07'), 'Hier');
+      egal(fmtDayLabel('2026-08-09'), 'Demain');
+    });
+  });
+
+  test('B9 — un épisode diffusé le jour même est bien « sorti » à 00 h 30', ()=>{
+    const minuitPasse = new Date(2026, 7, 8, 0, 30, 0);
+    aLHeure(minuitPasse.getTime(), ()=>{
+      vrai(aired({ d:'2026-08-08' }), 'l\'épisode du jour disparaissait d\'« À rattraper »');
+      vrai(!aired({ d:'2026-08-09' }), 'un épisode de demain est annoncé comme sorti');
+      /* Et le rail « À rattraper » le propose au lieu de s'arrêter dessus. */
+      const s = serie(1, [ep(1,'2026-08-07'), ep(2,'2026-08-08')], {'1x1':1});
+      const nx = nextToWatch(s);
+      vrai(nx && nx.e === 2, 'nextToWatch s\'arrête sur l\'épisode du jour');
+    });
+  });
+
+  groupe('SPEC-03 — B1 : un genre écarté filtre vraiment');
+
+  test('B1 — écarter « Action » retire « Action & Adventure » du profil séries', ()=>{
+    baseVierge();
+    db.shows[1] = serie(1, [ep(1,HIER), ep(2,HIER)], {'1x1':1,'1x2':1},
+                        { genres:['Action & Adventure'] });
+    db.shows[2] = serie(2, [ep(1,HIER)], {'1x1':1}, { genres:['Drame'] });
+    vrai(genresDeFamille('serie').indexOf('Action & Adventure') >= 0,
+         'le décor du test est faux : le genre devrait être là AVANT le retrait');
+    db.gouts.exclus = ['Action'];
+    egal(genresDeFamille('serie').indexOf('Action & Adventure'), -1,
+         'le genre écarté est resté dans le profil : la rangée part chez TMDB pour rien');
+    vrai(genresDeFamille('serie').indexOf('Drame') >= 0,
+         'le reste du profil a disparu avec lui');
+  });
+
+  test('B1 — même règle sur un genre DÉCLARÉ à la main, et sur genresRetenus', ()=>{
+    baseVierge();
+    db.gouts.genresFam = { serie:['Action & Adventure', 'Drame'] };
+    db.gouts.genresFamDe = Date.now();
+    db.gouts.exclus = ['Action'];
+    egal(genresDeFamille('serie'), ['Drame']);
+    egal(genresRetenus('serie'), ['Drame']);
+  });
+
+  test('B1 — la quatrième paire de libellés (Kids / Familial) est canonisée aussi', ()=>{
+    /* `genreCanon` n'en connaît que trois ; la quatrième vit dans
+       `INSC_GENRE_TV`. Sans elle, écarter « Familial » laissait « Kids » dans
+       le profil séries — le symptôme de B1, sur ce genre-là. */
+    baseVierge();
+    db.gouts.genresFam = { serie:['Kids', 'Drame'] };
+    db.gouts.genresFamDe = Date.now();
+    db.gouts.exclus = ['Familial'];
+    vrai(estGenreExclu('Kids'), '« Kids » n\'est pas reconnu comme « Familial » écarté');
+    egal(genresDeFamille('serie'), ['Drame']);
+    /* Et dans l'autre sens : la puce doit se rallumer. */
+    retirerExclu('Kids');
+    vrai(!estGenreExclu('Familial'), 'le retrait ne retrouve pas l\'entrée écrite sous l\'autre libellé');
+  });
+
+  test('B1 — les deux moteurs de rangées filtrent sur le nom canonique eux aussi', ()=>{
+    baseVierge();
+    db.shows[1] = serie(1, [ep(1,HIER), ep(2,HIER), ep(3,HIER)], {'1x1':1,'1x2':1,'1x3':1},
+                        { genres:['Action & Adventure'] });
+    poserAvis('tv', 1, 1);
+    db.gouts.exclus = ['Action'];
+    egal(genresParTaux('serie').indexOf('Action & Adventure'), -1,
+         'le moteur du taux propose un genre explicitement écarté');
+    egal(moteurHabitude('serie').indexOf('Action & Adventure'), -1,
+         'le moteur de l\'habitude propose un genre explicitement écarté');
+  });
+
+  groupe('SPEC-03 — B2 : la grille d\'amorçage et le cache de la vitrine');
+
+  test('B2 — oublierSuggestions invalide SANS détruire l\'entrée de cache', ()=>{
+    const c = vitrineVierge('tout');
+    const avant = c, seq0 = c.seq || 0;
+    c.enCours = true;                        // un calcul est en vol
+    oublierSuggestions();
+    vrai(suggCourantes() === avant, 'l\'entrée a été remplacée : le calcul en vol écrit dans le vide');
+    egal(c.perime, true, 'l\'entrée n\'est pas marquée périmée');
+    egal(c.seq, seq0 + 1, 'le jeton de génération n\'a pas bougé');
+    egal(c.enCours, true, 'le garde « un calcul est déjà en route » a été perdu');
+    egal(c.quand, 0, 'le TTL de 24 h pourrait resservir l\'ancienne fournée');
+    c.enCours = false;
+  });
+
+  test('B2 — un second calcul ne double pas le premier : il le marque à refaire', ()=>{
+    const c = vitrineVierge('tout');
+    c.enCours = true; c.perime = false;
+    chargerSuggestions();                    // la garde tombe avant tout `await`
+    egal(c.perime, true, 'le second appel est parti pour de bon : deux calculs en parallèle');
+    c.enCours = false;
+  });
+
+  test('B2 — pendant l\'amorçage, toucher dix jaquettes ne relance AUCUN calcul', ()=>{
+    baseVierge();
+    /* Bibliothèque vide et aucune graine : c'est exactement l'état où
+       `vitrineBody` sert la grille des trois affiches à choisir, et où la
+       vitrine, elle, n'est pas à l'écran.
+       (On n'appelle pas `vitrineBody()` ici : la grille d'amorçage va chercher
+        ses titres sur le réseau, et cette page n'a pas le droit d'y aller.) */
+    vrai(besoinAmorcage(), 'le décor du test est faux : l\'amorçage devrait être nécessaire');
+    /* Chaque jaquette touchée passe par `oublierSuggestions()` puis `render()`,
+       et c'est ce `render()` qui relançait le moteur complet — douze à vingt
+       requêtes TMDB par affiche, cent vingt à deux cents pour dix. On rejoue
+       ici la décision exacte que prend `render` (app-03). */
+    let calculs = 0;
+    const vraiCharger = window.chargerSuggestions, vraiRender = window.render;
+    const vraiVue = view;
+    const commeRender = ()=>{
+      if(vitrineVisible() && !besoinAmorcage()) chargerSuggestions();
+    };
+    window.chargerSuggestions = function(){ calculs++; };
+    window.render = commeRender;
+    view = 'discover';
+    try{
+      for(let i = 1; i <= 10; i++) poserGraine('movie', 27200 + i, 'F'+i, 'film');
+      /* La veille de la bibliothèque est l'autre porte d'entrée du moteur : on
+         la ferme aussi pendant l'amorçage. */
+      sigBiblio = -1;
+      veilleBiblio();
+      egal(calculs, 0, 'poser une graine relance le moteur de suggestions');
+      /* Et à la SORTIE de l'amorçage, il repart : la garde ne doit pas devenir
+         un silence permanent. */
+      db.gouts.amorcageFait = true;
+      vrai(!besoinAmorcage(), 'l\'amorçage devrait être terminé');
+      commeRender();
+      egal(calculs, 1, 'une fois l\'amorçage fini, le moteur ne repart plus');
+    } finally {
+      window.chargerSuggestions = vraiCharger; window.render = vraiRender; view = vraiVue;
+    }
+  });
+
+  groupe('SPEC-03 — B3/B4 : la recherche hors ligne');
+
+  test('B3 — une panne n\'efface plus les affiches déjà chargées', ()=>{
+    const r = rechVierge('film');
+    /* `poster_path` nul : cette page n'a pas le droit d'aller sur le réseau,
+       et une affiche TMDB déclencherait une vraie requête d'image. */
+    r.res = [{ id:1, __media:'movie', genre_ids:[], title:'F1', poster_path:null }];
+    r.charge = true; r.total = 42;
+    r.err = 'Pas de connexion';
+    const h = grilleRech();
+    vrai(/rang3/.test(h), 'la grille a disparu au profit de l\'état vide');
+    vrai(/reessayerGrilleRech/.test(h), 'le bandeau ne propose pas de réessayer');
+    vrai(!/Vérifie ta connexion/.test(h), 'l\'écran vide s\'est affiché par-dessus la grille');
+    vrai(/42/.test(h), 'le compteur connu a été effacé alors que la grille est là');
+  });
+
+  test('B3 — une grille réellement vide garde son écran d\'erreur', ()=>{
+    const r = rechVierge('film');
+    r.res = []; r.charge = true; r.err = 'Pas de connexion';
+    const h = grilleRech();
+    vrai(/Vérifie ta connexion/.test(h), 'plus rien ne dit ce qui s\'est passé');
+    vrai(!/rang3/.test(h), 'une grille vide affiche quand même une rangée');
+  });
+
+  test('B4 — « Réessayer » refait CE QUI a échoué, pas autre chose', ()=>{
+    const r = rechVierge('film');
+    let recu = 'jamais appelé';
+    const vraiCharger = window.chargerGrilleRech;
+    window.chargerGrilleRech = function(suite){ recu = !!suite; };
+    try{
+      r.errSuite = true;  reessayerGrilleRech();
+      egal(recu, true, '« Voir plus » qui échoue rechargerait toute la grille depuis le début');
+      r.errSuite = false; reessayerGrilleRech();
+      egal(recu, false, 'un chargement complet qui échoue serait rejoué en « Voir plus »');
+    } finally { window.chargerGrilleRech = vraiCharger; }
+  });
+
+  testAsync('B4 — un flux en panne ne jette pas une fournée que les autres ont remplie', async ()=>{
+    /* Le contre-exemple du correctif : trois flux, deux tampons pleins, le
+       troisième en échec. La fournée est bonne — la jeter pour afficher
+       « Pas de connexion » par-dessus serait un mensonge, et la régression du
+       défaut 2.2. C'est `!fournee.length` qui tient cette promesse. */
+    const r = rechVierge('film');
+    const flux = (n, tampon) => ({ p:{}, media:'movie', page:1, pages:9, total:100,
+                                   tampon:tampon, fini:false, echec:false });
+    r.flux = { etages:[{ compte:true, recoupe:false, flux:[
+      flux(1, [{ id:11, __media:'movie', genre_ids:[], poster_path:null }]),
+      flux(2, [{ id:12, __media:'movie', genre_ids:[], poster_path:null }]),
+      flux(3, [])
+    ] }], i:0, exact:true };
+    r.res = [{ id:1, __media:'movie', genre_ids:[], poster_path:null }];
+    r.charge = true;
+    /* Le troisième flux ne répond pas : c'est le seul appel réseau du test. */
+    const vraiTmdb = window.tmdb;
+    window.tmdb = function(){ return Promise.reject(new Error('RESEAU')); };
+    try{
+      await chargerGrilleRech(true);
+      egal(r.err, '', 'une panne partielle affiche « Pas de connexion » par-dessus une fournée valide');
+      vrai(r.res.length > 1, 'la fournée a été jetée alors qu\'elle était pleine');
+    } finally { window.tmdb = vraiTmdb; }
+  });
+
+  testAsync('B4 — mais une fournée VIDE et un flux en panne, c\'est bien une panne', async ()=>{
+    const r = rechVierge('film');
+    r.flux = { etages:[{ compte:true, recoupe:false, flux:[
+      { p:{}, media:'movie', page:1, pages:9, total:100, tampon:[], fini:false, echec:false }
+    ] }], i:0, exact:true };
+    r.res = [{ id:1, __media:'movie', genre_ids:[], poster_path:null }];
+    r.charge = true;
+    const vraiTmdb = window.tmdb;
+    window.tmdb = function(){ return Promise.reject(new Error('RESEAU')); };
+    try{
+      await chargerGrilleRech(true);
+      egal(r.err, 'Pas de connexion', 'le spinner tournerait puis rien, à l\'infini');
+      egal(r.errSuite, true, '« Réessayer » repartirait du début et jetterait la grille');
+      egal(r.res.length, 1, 'la grille déjà chargée a disparu');
+    } finally { window.tmdb = vraiTmdb; }
+  });
+
+  groupe('SPEC-03 — B6 : une ambiance remet l\'époque à zéro');
+
+  test('B6 — « depuis 2020 » puis « Un classique que j\'ai raté » : la phrase ne ment plus', ()=>{
+    const r = rechVierge('film');
+    const vraiCharger = window.chargerGrilleRech, vraiRender = window.render;
+    window.chargerGrilleRech = function(){}; window.render = function(){};
+    try{
+      poserMotRech('epoque', '2020s');
+      egal(listeRech('epoque'), ['2020s'], 'le décor du test est faux');
+      poserAmbianceRech('classique');
+      egal(r.epoque, [], 'l\'époque explicite survit à l\'ambiance qui en porte une');
+      egal(r.duree, [], 'la durée aussi doit être remise à zéro (comportement d\'avant)');
+      egal(r.note, null);
+    } finally { window.chargerGrilleRech = vraiCharger; window.render = vraiRender; }
+  });
+
+  groupe('SPEC-03 — B7/B8 : le duel');
+
+  /* Dix films vus : c'est le minimum pour ouvrir une partie. */
+  function duelDeTest(){
+    baseVierge();
+    for(let i = 1; i <= 12; i++) db.movies[i] = film(i, ['Drame']);
+    return sansEcran(()=>{ ouvrirDuel('film'); return duel; });
+  }
+
+  test('B7 — un score arrivé par la synchro n\'est plus écrasé par la partie', ()=>{
+    const d = duelDeTest();
+    const a = d.paquet[0], b = d.paquet[1];
+    d.paire = [a, b]; d.choix = null;
+    /* La synchro arrive au milieu de la partie : l'autre téléphone a joué cinq
+       duels sur ce titre, contre zéro ici — c'est lui qui fait autorité. */
+    const dist = {}; dist[String(a.id)] = { s:1400, n:5 };
+    fusionnerClassement({ classement:{ film:dist, serie:{}, anime:{}, maj:Date.now() } });
+    egal(scoreClassement('film', a.id), 1400, 'la fusion n\'a pas pris');
+    sansEcran(()=> appliquerVote(0, true));
+    vrai(scoreClassement('film', a.id) > 1400,
+         'le vainqueur est reparti de l\'instantané pris à l\'ouverture : les duels distants sont perdus');
+    egal(duelsJoues('film', a.id), 6, 'le compte de duels distant a été écrasé');
+  });
+
+  test('B7 — ouvrir un aperçu coupe le minuteur de vote', ()=>{
+    const d = duelDeTest();
+    d.paire = [d.paquet[0], d.paquet[1]]; d.choix = null;
+    sansEcran(()=> duelVote(0));
+    vrai(duelVoteTimer, 'le décor du test est faux : le minuteur devrait être armé');
+    /* `ouvrirApercuDuel` charge la fiche dans un `setTimeout(…, 0)` : le vrai
+       `loadPreview` irait sur le réseau, et cette page n'en a pas le droit. On
+       rend donc la vraie fonction APRÈS ce minuteur-là, pas avant. */
+    const vraiPreview = window.loadPreview;
+    window.loadPreview = function(){};
+    try{ sansEcran(()=> ouvrirApercuDuel('movie', 1)); }
+    finally { setTimeout(()=>{ window.loadPreview = vraiPreview; }, 0); }
+    egal(duelVoteTimer, null,
+         'le minuteur survit à la réinitialisation : il retombera sur la partie suivante');
+    egal(duel.actif, false, 'la session n\'a pas été rangée');
+  });
+
+  test('B8 — le total « départagés » compte, il n\'additionne plus', ()=>{
+    baseVierge();
+    for(let i = 1; i <= 12; i++) db.movies[i] = film(i, ['Drame']);
+    /* Quatre titres ont leurs trois duels ; deux autres sont au podium hérité
+       avec ZÉRO duel — c'est le cas que `projeterPodium` fabrique
+       délibérément, et que le `+3` comptait comme départagés. */
+    [1,2,3,4].forEach(id => ecrireClassement('film', id, 1200 - id, DUEL_MINI_N));
+    ecrireClassement('film', 9, 1000, 0);
+    ecrireClassement('film', 10, 1000, 1);
+    egal(totalDepartages('film'), 4, 'un titre du podium sans ses trois duels est compté départagé');
+    egal(ditDepartages(4), '4 titres départagés');
+    egal(ditDepartages(1), '1 titre départagé', 'le singulier n\'est pas traité');
+  });
+
+  groupe('SPEC-03 — B10/B12/B13 : compte, profil, partage');
+
+  test('B10 — les messages du serveur sont dits en français, et disent quoi faire', ()=>{
+    vrai(/pas confirmée/.test(messageAuth(new Error('Email not confirmed'))),
+         '« Email not confirmed » s\'affiche encore en anglais');
+    vrai(/spams/.test(messageAuth(new Error('Email not confirmed'))),
+         'le message ne dit pas quoi faire');
+    vrai(/6 caractères/.test(messageAuth(new Error('Password should be at least 6 characters'))));
+    vrai(/25 secondes/.test(messageAuth(new Error('For security purposes, you can only request this after 25 seconds'))));
+    vrai(/existe déjà/.test(messageAuth(new Error('User already registered'))));
+    vrai(/incorrect/.test(messageAuth(new Error('Invalid login credentials'))));
+    /* L'inconnu ne s'affiche PLUS en clair : un texte brut de serveur ne dit
+       rien à personne et fait peur. */
+    const inconnu = messageAuth(new Error('PGRST301 jwt expired signature'));
+    vrai(!/PGRST301/.test(inconnu), 'le texte brut du serveur s\'affiche encore');
+    vrai(/réessaie/.test(inconnu), 'le repli ne propose rien');
+  });
+
+  test('B12 — le prénom tapé survit à un changement d\'onglet d\'avatar', ()=>{
+    baseVierge();
+    const champ = document.createElement('input');
+    champ.id = 'mpseudo'; champ.value = 'Adrien';
+    document.body.appendChild(champ);
+    try{
+      sansEcran(()=> modeAvatar('photo'));
+      egal(db.pseudo, 'Adrien', 'toucher l\'onglet « Une photo » efface la saisie');
+      champ.value = 'Camille';
+      sansEcran(()=> retirerPhoto());
+      egal(db.pseudo, 'Camille', 'retirer la photo efface la saisie');
+    } finally { champ.remove(); }
+  });
+
+  testAsync('B11 — la purge différée ne supprime JAMAIS l\'inscription vivante', async ()=>{
+    /* Se déconnecter ne résilie pas l'abonnement du navigateur : en revenant
+       sur le même compte, on se réinscrit avec la MÊME adresse. Purger
+       celle-ci couperait les notifications pour de bon, sans un mot — le
+       défaut que B11.2 corrige, retourné. */
+    baseVierge();
+    db.auth = { uid:'u1', token:'t' };
+    db.notif = db.notif || {};
+    db.notif.abo = 'https://push.example/E';
+    db.notif.aPurger = [{ ep:'https://push.example/E', uid:'u1', quand:Date.now() },
+                        { ep:'https://push.example/VIEUX', uid:'u1', quand:Date.now() }];
+    /* `db.auth` posé plus haut et `db.sync` par défaut suffisent : `signedIn`
+       et `syncReady` sont des `const`, on ne les remplace pas, on met la base
+       dans l'état qu'elles décrivent. Seul le transport est simulé. */
+    const partis = [];
+    const vraiSb = window.sbFetch;
+    window.sbFetch = function(chemin){ partis.push(chemin); return Promise.resolve({}); };
+    try{
+      await purgerAppareils();
+      egal(partis.length, 1, 'la purge a touché plus d\'une ligne');
+      vrai(/VIEUX/.test(partis[0]), 'ce n\'est pas la bonne adresse qui a été supprimée');
+      egal(db.notif.aPurger.length, 0, 'la file n\'est pas vidée : la purge se rejouera sans fin');
+    } finally {
+      window.sbFetch = vraiSb;
+      db.notif.abo = null; db.notif.aPurger = []; db.auth = null;
+    }
+  });
+
+  testAsync('B11 — sans serveur, le drapeau tombe ; sans compte, il attend en silence', async ()=>{
+    baseVierge();
+    db.notif = db.notif || {};
+    /* `signedIn` et `syncReady` sont des `const` : on ne les remplace pas, on
+       met la base dans l'état qu'elles décrivent. C'est de toute façon plus
+       fidèle. */
+    const vraiSync = db.sync;
+    try{
+      /* Pas de serveur du tout : il n'y a personne à prévenir, ni maintenant ni
+         plus tard. Le bandeau resterait allumé pour toujours, avec un
+         « Réessayer » qui retomberait sur le même refus. */
+      db.auth = { uid:'u1', token:'t' };
+      db.sync = { url:'', key:'' };
+      db.notif.desyncAt = Date.now() - 60000; db.notif.desyncMotif = 'test';
+      await pousserCloches();
+      vrai(!db.notif.desyncAt, 'le bandeau resterait allumé sans aucun moyen de l\'éteindre');
+      /* Déconnecté : l'envoi est REMIS, pas perdu — le drapeau reste, mais
+         l'écran se tait tant qu'il n'y a personne à prévenir. */
+      db.sync = vraiSync; db.auth = null;
+      db.notif.desyncAt = Date.now() - 60000; db.notif.desyncMotif = 'test';
+      await pousserCloches();
+      vrai(db.notif.desyncAt, 'un réglage en attente est oublié au lieu d\'être rejoué au retour');
+      vrai(!/Réglages non enregistrés/.test(viewNotifications()),
+           'le bandeau s\'affiche à quelqu\'un qui n\'a plus de compte');
+    } finally {
+      db.sync = vraiSync; db.auth = null;
+      delete db.notif.desyncAt; delete db.notif.desyncMotif;
+    }
+  });
+
+  test('B13 — un code expiré ne se partage plus, il se régénère', ()=>{
+    partageDeTest([], []);
+    partage.code = 'ABCD12';
+    partage.expire = Date.now() - 1000;
+    egal(resteCode(), 'expiré');
+    const h = voletCode();
+    vrai(!/copierCode/.test(h), '« Copier » reste actif sur un code mort');
+    vrai(!/envoyerCode/.test(h), '« Envoyer » reste actif sur un code mort');
+    vrai(/genererCode/.test(h), 'rien ne permet de repartir');
+  });
+
+  test('B13 — sans date d\'expiration connue, on n\'invente pas « valable 24 h »', ()=>{
+    partageDeTest([], []);
+    partage.code = 'ABCD12'; partage.expire = null;
+    egal(resteCode(), '');
+    const h = voletCode();
+    vrai(!/24 h/.test(h), 'une hypothèse est présentée comme un fait');
+    vrai(/copierCode/.test(h), 'le code est pourtant utilisable : les boutons doivent être là');
   });
 
   /* ==================== Bilan ====================
