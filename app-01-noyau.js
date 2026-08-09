@@ -636,14 +636,89 @@ function applySession(d){
    revient telle quelle à la reconnexion. Mais si quelqu'un d'autre se connecte
    ici, elle n'a rien à faire dans son compte : on repart de zéro.
    Les suppressions ne sont surtout PAS tracées dans ce cas — elles se
-   propageraient au nouveau compte et lui effaceraient ses propres titres. */
+   propageraient au nouveau compte et lui effaceraient ses propres titres.
+
+   C1 (09/08) — « ZÉRO » VOULAIT DIRE « LES TITRES », ET RIEN D'AUTRE.
+   Seuls `shows`, `movies`, `deleted` et `syncedAt` étaient effacés. Tout le
+   reste du patrimoine de la personne précédente survivait au changement de
+   compte, et repartait au serveur du NOUVEAU compte à la première synchro :
+   ses pouces (`avis`), ses effacements de pouces (`avisRetires`), ses goûts,
+   son podium, son classement, son pseudo, son avatar, ses cloches.
+
+   Ce n'était pas seulement une trace inerte. Trois conséquences constatées :
+     · l'inscription du nouveau lisait `db.avis` sans filtre (`inscNbAimes`,
+       app-13) et lui pré-remplissait un profil avec les goûts de l'ancien ;
+     · `if(inscNbAimes()) g.amorcageFait = true;` (app-13) lui retirait la
+       grille d'amorçage à cause d'avis qui n'étaient pas les siens ;
+     · `inscrireSiBesoin()` → `pousserCloches()` téléversait les cloches de
+       l'ancien sous l'identifiant du nouveau — qui recevait donc des alertes
+       pour des séries qu'il n'a jamais suivies.
+
+   La liste ci-dessous est calée sur `payload()` : TOUT ce qui monte au serveur
+   et qui appartient à la personne doit y figurer. Ce qui appartient à
+   l'APPAREIL (`lang`, `sync`, `notif.abo`, `astuce*`, `vuPresentation`) reste
+   en place — changer de compte ne change pas de téléphone.
+
+   Rien n'est perdu pour autant : ces données sont sur le serveur de leur
+   propriétaire, et lui reviennent telles quelles à sa reconnexion.
+
+   ATTENTION À L'ORDRE. `nettoyerCloches()` DOIT venir après l'effacement :
+   appelée avant, elle verrait une bibliothèque vide et une liste de cloches
+   pleine, et poserait une pierre tombale datée sur chacune — pierres qui
+   partiraient ensuite éteindre les cloches de l'ancien sur SES appareils. */
 function adopterCompte(uid){
   if(!uid) return;
   if(db.proprio && db.proprio !== uid){
     db.shows = {}; db.movies = {};
     db.deleted = { shows:{}, movies:{} };
     db.syncedAt = null;
+    /* Le signal d'appréciation et ses pierres tombales. */
+    db.avis = { tv:{}, movie:{} };
+    db.avisRetires = { tv:{}, movie:{} };
+    /* Les goûts, le podium et le classement : remis à `null`, puis reformés
+       juste en dessous par `reparerBase()` et `migrerGouts()`. On ne recopie
+       pas leur forme vierge à la main ici — elle a déjà changé trois fois, et
+       deux copies auraient divergé au premier champ ajouté. */
+    db.gouts = null;
+    db.podium = null;
+    db.classement = null;
+    /* L'identité affichée aux proches. `db.profil` est le seul de la liste qui
+       ne se reforme PAS tout seul : sa forme vierge est posée par `loadDB`,
+       qui ne retournera pas avant le prochain démarrage. On l'écrit donc en
+       clair, à l'identique de la ligne de `loadDB`. */
+    db.pseudo = '';
+    db.profil = { embleme:'lettre', couleur:'corail' };
+    /* Les annonces « X t'a ajouté » écartées : un choix qui appartient à la
+       personne, et qui monte au serveur (`payload`). */
+    db.abosIgnores = {};
+    /* Les cloches allumées et les cloches éteintes. Le reste du bloc `notif`
+       — la permission, l'abonnement push, les réglages — appartient à
+       l'appareil et ne bouge pas. L'abonnement push est traité à part (C7) :
+       c'est lui qui décide à quel compte cet appareil sonne. */
+    if(db.notif && typeof db.notif === 'object'){
+      db.notif.titres = {};
+      db.notif.titresOff = {};
+    }
+    /* Un parcours d'inscription abandonné par l'ancien : sans ça, le nouveau
+       compte est dérouté au démarrage suivant vers un questionnaire qui n'est
+       pas le sien (`reprendreInscription`, app-08). */
+    delete db.inscription;
+    /* Remise en forme canonique de ce qu'on vient de mettre à `null`. Trois
+       fonctions, chacune propriétaire de son bloc — on ne réécrit pas leurs
+       valeurs par défaut ici. Les gardes `typeof` parce qu'elles vivent dans
+       app-11 et app-09, chargés APRÈS app-01. */
+    reparerBase();
+    if(typeof migrerGouts === 'function') migrerGouts();
+    if(typeof migrerNotif === 'function') migrerNotif();
   }
+  /* C1 · point 3 — le ménage des cloches tournait UNIQUEMENT au démarrage
+     (`boot`, app-08). Or on vient peut-être de vider la bibliothèque, et une
+     connexion n'est pas un démarrage : sans cet appel, `pousserCloches()`
+     — déclenché juste après par `inscrireSiBesoin()` — enverrait au serveur
+     des cloches sans titre en face. Hors effacement, l'appel est un simple
+     ménage de plus, idempotent et sans écriture propre (`applySession`
+     enregistre juste après). */
+  if(typeof nettoyerCloches === 'function' && db.notif && db.notif.titres) nettoyerCloches();
   db.proprio = uid;
 }
 

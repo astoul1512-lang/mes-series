@@ -4531,6 +4531,120 @@ window.MODE_TEST = true;
     egal(carteProfilPauvre(), '', 'un 👍 et elle doit s\'effacer d\'elle-même');
   });
 
+  /* ==================== Changement de compte — C1 ====================
+     `adopterCompte` n'effaçait que les titres. Tout le reste du patrimoine de
+     la personne précédente — pouces, goûts, podium, classement, pseudo,
+     avatar, cloches — survivait au changement de compte et repartait au
+     serveur du NOUVEAU compte à la première synchro.
+
+     Ces cas comparent CHAMP PAR CHAMP, et pas seulement « db.avis est vide » :
+     c'est la liste elle-même qui est le correctif, et le prochain champ ajouté
+     à `payload()` doit faire tomber le dernier cas de ce groupe. */
+  groupe('Changement de compte — C1');
+
+  /* Une base bien garnie, avec des valeurs RECONNAISSABLES : le dernier cas
+     cherche ces chaînes dans l'envoi au serveur. */
+  function baseGarnie(proprio){
+    baseVierge();
+    db.proprio = proprio;
+    db.shows[10] = serie(10, [ep(1,HIER)], {1:1});
+    db.movies[20] = { id:20, title:'Film de A', seen:true, watchedAt:1, addedAt:1 };
+    db.deleted = { shows:{99:1}, movies:{} };
+    db.syncedAt = 123456;
+    db.avis = { tv:{ '10':{v:1, quand:1000} }, movie:{ '20':{v:-1, quand:1000} } };
+    db.avisRetires = { tv:{ '77':1000 }, movie:{} };
+    db.gouts = { genres:['GenreDeA'], exclus:[], acteurs:[], graines:[],
+                 plates:[], animeSous:[], pasVus:[], amorcageFait:true,
+                 propose:true, platesDemande:true, suggMesPlates:false,
+                 jour:'', maj: 999 };
+    db.podium = { film:['20'], serie:['10'], anime:[], maj:999 };
+    db.classement = { film:{'20':{s:12,n:3}}, serie:{}, anime:{}, maj:999 };
+    db.pseudo = 'PseudoDeA';
+    db.profil = { embleme:'feu', couleur:'lagon', maj:999 };
+    db.abosIgnores = { 'aboDeA': 1000 };
+    db.notif = null; migrerNotif();
+    db.notif.titres = { 'tv:10':1000, 'movie:20':1000 };
+    db.notif.titresOff = { 'tv:55':1000 };
+    db.inscription = { vue:'inscTitres', debut:1, finie:false, genres:{} };
+  }
+
+  test('C1 — un nouveau compte ne récupère rien de l\'ancien', ()=>{
+    baseGarnie('compte-A');
+    adopterCompte('compte-B');
+    egal(db.proprio, 'compte-B', 'la bibliothèque n\'a pas changé de propriétaire');
+    egal(db.shows, {});
+    egal(db.movies, {});
+    egal(db.deleted, { shows:{}, movies:{} });
+    egal(db.syncedAt, null);
+    egal(db.avis, { tv:{}, movie:{} }, 'les pouces de A sont restés');
+    egal(db.avisRetires, { tv:{}, movie:{} }, 'les effacements de pouces de A sont restés');
+    egal(db.podium, { film:[], serie:[], anime:[], maj:0 }, 'le podium de A est resté');
+    egal(db.classement, { film:{}, serie:{}, anime:{}, maj:0 }, 'le classement de A est resté');
+    egal(db.pseudo, '', 'le pseudo de A est resté');
+    egal(db.profil, { embleme:'lettre', couleur:'corail' }, 'l\'avatar de A est resté');
+    egal(db.abosIgnores, {}, 'les annonces écartées par A sont restées');
+    egal(db.notif.titres, {}, 'les cloches de A sont restées');
+    egal(db.inscription, undefined, 'le parcours d\'inscription de A dérouterait B au démarrage');
+  });
+
+  test('C1 — les goûts repartent à la forme vierge, pas à `null`', ()=>{
+    baseGarnie('compte-A');
+    adopterCompte('compte-B');
+    vrai(db.gouts && typeof db.gouts === 'object', 'un `gouts` nul plante le premier écran Découvrir');
+    egal(db.gouts.genres, [], 'les genres déclarés par A sont restés');
+    egal(db.gouts.graines, [], 'les graines d\'amorçage de A sont restées');
+    egal(db.gouts.amorcageFait, false, 'B perd la grille d\'amorçage à cause du parcours de A');
+    egal(db.gouts.maj, undefined,
+         'une date de A ferait perdre l\'arbitrage à ce que B a déjà sur le serveur');
+  });
+
+  test('C1 — effacer les cloches ne pose pas de pierre tombale sur celles de A', ()=>{
+    baseGarnie('compte-A');
+    adopterCompte('compte-B');
+    /* `nettoyerCloches` date chaque cloche dont le titre a quitté la
+       bibliothèque. Appelée AVANT l'effacement, elle daterait les trois
+       cloches de A — et ces dates partiraient les éteindre sur SES appareils. */
+    egal(db.notif.titresOff, {}, 'des extinctions datées iraient éteindre les cloches de A ailleurs');
+  });
+
+  test('C1 — rien ne monte au serveur de B qui vienne de A', ()=>{
+    baseGarnie('compte-A');
+    adopterCompte('compte-B');
+    const envoi = JSON.stringify(payload());
+    ['GenreDeA','PseudoDeA','aboDeA','Film de A','feu','lagon'].forEach(marque=>{
+      vrai(envoi.indexOf(marque) < 0, '« '+marque+' » de A part sous l\'identifiant de B');
+    });
+  });
+
+  test('C1 — se reconnecter au même compte ne touche à rien', ()=>{
+    baseGarnie('compte-A');
+    adopterCompte('compte-A');
+    egal(Object.keys(db.shows), ['10'], 'la reconnexion a vidé la bibliothèque');
+    egal(db.pseudo, 'PseudoDeA');
+    egal(db.avis.tv['10'].v, 1);
+    egal(db.gouts.genres, ['GenreDeA']);
+    egal(db.notif.titres['tv:10'], 1000);
+  });
+
+  test('C1 — le premier compte adopte la bibliothèque au lieu de l\'effacer', ()=>{
+    baseGarnie(null);
+    adopterCompte('compte-B');
+    egal(db.proprio, 'compte-B');
+    egal(Object.keys(db.shows), ['10'], 'une bibliothèque sans propriétaire a été effacée');
+    egal(db.pseudo, 'PseudoDeA', 'la bibliothèque a été adoptée mais amputée');
+  });
+
+  test('C1 — le ménage des cloches tourne aussi à la connexion', ()=>{
+    baseGarnie('compte-A');
+    /* Titre supprimé de la bibliothèque pendant que l'app était fermée : sans
+       cet appel, `pousserCloches()` enverrait au serveur une cloche orpheline. */
+    delete db.shows[10];
+    adopterCompte('compte-A');
+    egal(db.notif.titres['tv:10'], undefined, 'la cloche d\'une série absente est restée');
+    vrai(db.notif.titresOff['tv:10'] > 0, 'l\'extinction n\'est pas datée : elle serait annulée à la synchro');
+    egal(db.notif.titres['movie:20'], 1000, 'une cloche encore valable a été emportée');
+  });
+
   /* ==================== Bilan ====================
      Écrit UNE FOIS, après la file asynchrone. `window.__testsFinis` est le
      signal que le lanceur attend : sans lui il lirait un bilan encore
