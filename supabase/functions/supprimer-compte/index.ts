@@ -59,8 +59,10 @@ Deno.serve(async (req: Request) => {
      effacé ici SURVIT, et la personne à qui on vient de répondre croit être
      partie. La liste doit donc rester complète.
 
-     À jour des migrations 001 à 010. TOUTE nouvelle table portant un
-     `user_id` doit être ajoutée ici en même temps qu'elle est créée. */
+     À jour des migrations 001 à 012 (relu le 09/08 — 011 et 012 ne créent
+     aucune table, la liste ci-dessous est donc inchangée). TOUTE nouvelle
+     table portant un `user_id` doit être ajoutée ici en même temps qu'elle est
+     créée. */
   const efface = async (chemin: string) => {
     const r = await fetch(`${URL_SB}/rest/v1/${chemin}`, { method: "DELETE", headers: admin });
     if (!r.ok) throw new Error(`${chemin} : ${r.status} ${await r.text()}`);

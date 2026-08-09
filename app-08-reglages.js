@@ -6,10 +6,26 @@ function viewSettings(){
      « Exporter mes données » là), et personne ne savait plus où aller.
      Un seul endroit, des groupes nommés, et revenir d'une sous-page ramène ici
      puisque c'est un écran et non un panneau flottant. */
+  /* S2 (09/08) — `txt` et `sous` sont échappés ICI, à l'unique endroit où ils
+     sont injectés, plutôt que chez les dix appelants. Un seul point à tenir au
+     lieu de dix, et un appelant ajouté demain est protégé sans qu'on y pense.
+
+     Ce n'était pas théorique : `sous` recevait `resumePlates()` (app-04), donc
+     `db.gouts.plates[].nom`, qui arrive de la synchro distante (app-01) et de
+     l'import de fichier (`appliquerImport`, plus bas). Une sauvegarde piégée
+     avec `plates:[{nom:"<img src=x onerror=…>"}]` exécutait du script sur
+     l'écran Réglages, avec le jeton de session en mémoire.
+
+     `icone` et `action` ne sont PAS échappés, et ne doivent pas l'être :
+     `icone` est un SVG littéral du dictionnaire `I`, `action` est du code
+     JavaScript écrit ici même. Aucun des deux ne porte de donnée utilisateur.
+     Si un jour un appelant a besoin de HTML volontaire dans le sous-titre, on
+     lui ouvre un paramètre explicite `sousHtml` — on ne remélange jamais les
+     deux dans le même paramètre. */
   const ligne = (txt, sous, action, icone, danger)=>
     '<button class="reg'+(danger?' danger':'')+'" onclick="'+action+'">'+
       '<i>'+icone+'</i>'+
-      '<span class="rtxt"><b>'+txt+'</b>'+(sous?'<em>'+sous+'</em>':'')+'</span>'+
+      '<span class="rtxt"><b>'+esc(txt)+'</b>'+(sous?'<em>'+esc(sous)+'</em>':'')+'</span>'+
       '<span class="ecaret">'+I.caret+'</span>'+
     '</button>';
 
@@ -76,7 +92,10 @@ function viewSettings(){
                      : 'Nécessite un compte',
           "ouvrirAbosDepuisReglages()", I.user)+
     ligne(signedIn() ? 'Compte et synchronisation' : 'Sauvegarder en ligne',
-          signedIn() ? esc(db.auth.email||'') : 'Tes séries à l\'abri, sur tous tes appareils',
+          /* S2 (09/08) — le `esc()` qui était ici est retiré : `ligne()` échappe
+             désormais lui-même. Le garder produisait un double échappement
+             (une apostrophe dans l'adresse se serait affichée `&#39;`). */
+          signedIn() ? (db.auth.email||'') : 'Tes séries à l\'abri, sur tous tes appareils',
           "go('account',{from:'settings'})", I.refresh)+
   '</div>';
 

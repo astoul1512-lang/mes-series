@@ -216,6 +216,164 @@ window.MODE_TEST = true;
       .forEach(c=>{ if(cheminImage(c) !== c) throw new Error('refusé : '+c); });
   });
 
+  /* ==================== Changer de serveur (S5) ==================== */
+  groupe('Changer de serveur');
+
+  test('une adresse en clair est refusée (S5)', ()=>{
+    ['http://exemple.fr', 'http://exemple.fr/supabase', 'ftp://x.fr',
+     'javascript:alert(1)', 'exemple.fr', 'https://', '', null, 42,
+     'http://localhost.exemple.fr'   // le suffixe trompeur : ce n'est PAS local
+    ].forEach(u=>{
+      if(urlServeurValide(u)) throw new Error('acceptée : '+JSON.stringify(u));
+    });
+  });
+
+  test('https et le serveur local restent acceptés (S5)', ()=>{
+    ['https://abc.supabase.co', 'https://abc.supabase.co/',
+     'http://localhost:54321', 'http://127.0.0.1:54321', 'http://localhost'
+    ].forEach(u=>{
+      if(!urlServeurValide(u)) throw new Error('refusée : '+JSON.stringify(u));
+    });
+  });
+
+  /* LE CŒUR DE S5 : le jeton du serveur PRÉCÉDENT ne doit pas partir chez le
+     suivant. `sbFetch` (app-01) pose `Authorization: Bearer db.auth.token` sur
+     chaque appel — il suffit que `db.auth` survive au changement. */
+  test('changer de serveur ferme la session en cours (S5)', ()=>{
+    baseVierge();
+    const oublie = (typeof oublierAppareil === 'function') ? oublierAppareil : null;
+    if(oublie) oublierAppareil = ()=>{};        // aucun appel réseau depuis un test
+    db.sync = { url:'https://ancien.supabase.co', key:'x'.repeat(30) };
+    db.auth = { token:'jeton-de-l-ancien', uid:'u' };
+    db.syncedAt = 123;
+    syncEnAttente = { url:'https://nouveau.supabase.co', key:'y'.repeat(30) };
+    try{
+      appliquerSync();
+      egal(db.sync.url, 'https://nouveau.supabase.co');
+      egal(db.auth, null, 'le jeton de l\'ancien serveur a survécu au changement');
+      egal(db.syncedAt, null);
+      egal(syncEnAttente, null, 'la demande en attente n\'a pas été consommée');
+    } finally {
+      if(oublie) oublierAppareil = oublie;
+      db.sync = Object.assign({}, DEFAULT_SYNC); db.auth = null;
+    }
+  });
+
+  test('« Revenir au serveur d\'origine » sait qu\'il n\'y a rien à faire (S5)', ()=>{
+    db.sync = Object.assign({}, DEFAULT_SYNC);
+    vrai(!serveurPersonnalise(), 'le serveur d\'origine est pris pour un serveur perso');
+    db.sync = { url:'https://ailleurs.fr', key:'z'.repeat(30) };
+    vrai(serveurPersonnalise(), 'un serveur perso n\'est pas reconnu');
+    db.sync = Object.assign({}, DEFAULT_SYNC);
+  });
+
+  /* S4 (09/08) — la photo d'un membre du cercle. Le danger n'est pas le script
+     (l'attribut est échappé) : c'est la REQUÊTE RÉSEAU vers un serveur choisi
+     par quelqu'un d'autre, qui lui livre notre adresse IP et l'heure à laquelle
+     on ouvre l'app. Exactement ce que `cheminImage` empêche pour les affiches. */
+  test('une photo de profil qui n\'est pas une image embarquée est ignorée (S4)', ()=>{
+    ['https://sonserveur.fr/px.gif', '//evil.example/px.gif', 'http://x/p.png',
+     'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',   // un document, pas une image
+     'data:text/html;base64,PGgxPng8L2gxPg==',
+     'data:image/jpeg,pas-du-base64', 'javascript:alert(1)', '/local.jpg',
+     '', null, 42].forEach(c=>{
+      if(photoAvatar(c) !== null) throw new Error('acceptée : '+JSON.stringify(c));
+    });
+    const html = avatarDe({ pseudo:'Léa', photo:'https://sonserveur.fr/px.gif' }, 'moyen');
+    vrai(html.indexOf('<img') < 0, 'une balise img est rendue malgré tout');
+    vrai(html.indexOf('sonserveur') < 0, 'l\'adresse du tiers est encore dans la page');
+  });
+
+  test('une vraie photo d\'avatar s\'affiche comme avant (S4)', ()=>{
+    const p = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ==';
+    egal(photoAvatar(p), p);
+    const html = avatarDe({ pseudo:'Léa', photo:p }, 'moyen');
+    vrai(html.indexOf('<img') === 0 && html.indexOf(p) > 0, 'la photo ne s\'affiche plus');
+  });
+
+  test('une photo hors des bornes de la migration 006 est refusée (S4)', ()=>{
+    vrai(photoAvatar('data:image/jpeg;base64,' + 'A'.repeat(PHOTO_MAX)) === null,
+         'un data-URI aberrant passe encore');
+  });
+
+  /* S3 (09/08) — l'identifiant d'un proche traverse SIX gestionnaires de
+     `ligneAbo`, et il vient de la table `profils` : c'est une donnée écrite
+     par quelqu'un d'autre. Le test emprunte le VRAI chemin, comme les deux cas
+     `escJs` ci-dessus — on pose le HTML dans le document et on clique. */
+  test('l\'identifiant d\'un proche ne s\'évade pas d\'un onclick (S3)', ()=>{
+    const PIEGE = "x');window.__evade=1;('";
+    const vraiClic = glisAboClic;
+    let recu = null;
+    window.__evade = 0;
+    glisAboClic = (e, id)=>{ recu = id; };
+    try{
+      const d = document.createElement('div');
+      d.innerHTML = ligneAbo({ id:PIEGE, pseudo:'Léa' }, 'suivi');
+      document.body.appendChild(d);
+      d.querySelector('.glisrow').click();
+      egal(recu, PIEGE, 'l\'identifiant n\'arrive pas entier au gestionnaire');
+      egal(window.__evade, 0, 'du code glissé dans l\'identifiant s\'est exécuté');
+      d.remove();
+    } finally { glisAboClic = vraiClic; }
+  });
+
+  /* Le point d'entrée : une ligne de `recommandations` hors contrat est jetée à
+     l'arrivée, comme le cercle l'est déjà dans `cercleDepuisBiblios`. */
+  testAsync('une recommandation hors contrat est jetée à l\'entrée (S3)', async ()=>{
+    baseVierge();
+    db.auth = { token:'t', uid:'moi' };
+    const vraiFetch = sbFetch;
+    sbFetch = async ()=> ([
+      { id:'a', de:'lui', vers:'moi', type:'tv',     tmdb_id:1399,  titre:'Conforme' },
+      { id:'b', de:'lui', vers:'moi', type:'script', tmdb_id:1399,  titre:'Type hors contrat' },
+      { id:'c', de:'lui', vers:'moi', type:'tv',     tmdb_id:'1);x', titre:'Identifiant douteux' },
+      { id:'d', de:'lui', vers:'moi', type:'movie',  tmdb_id:null,  titre:'Sans identifiant' }
+    ]);
+    try{
+      await chargerConseils();
+      egal(conseils.recues.map(x=>x.id), ['a'], 'le filtre d\'entrée laisse passer autre chose');
+      const html = blocConseilsRecus();
+      vrai(html.indexOf('Type hors contrat') < 0 && html.indexOf('Identifiant douteux') < 0,
+           'une ligne hors contrat s\'affiche encore');
+      vrai(html.indexOf('Conforme') >= 0, 'la ligne conforme a disparu avec les autres');
+    } finally {
+      sbFetch = vraiFetch; db.auth = null;
+      conseils.recues = []; conseils.envoyees = []; conseils.charge = false;
+    }
+  });
+
+  /* S2 (09/08) — `ligne()` est locale à `viewSettings()` : on ne peut pas
+     l'appeler seule, et c'est très bien — ce qui compte est ce que l'écran
+     PEINT. Le nom de plateforme est la donnée la plus exposée du lot : elle
+     arrive de la synchro distante ET de l'import de fichier, et personne ne la
+     valide entre les deux. */
+  test('un nom de plateforme hostile ressort en texte, pas en HTML (S2)', ()=>{
+    baseVierge();
+    db.gouts.plates = [{ id:8, nom:'<img src=x onerror="window.__xss=1">' }];
+    const html = viewSettings();
+    vrai(html.indexOf('<img src=x') < 0, 'le nom de plateforme est injecté tel quel');
+    vrai(html.indexOf('&lt;img src=x') >= 0, 'le nom de plateforme n\'apparaît pas échappé');
+  });
+
+  test('deux plateformes hostiles : les deux sont échappées (S2)', ()=>{
+    baseVierge();
+    db.gouts.plates = [{ id:8, nom:'<b>A</b>' }, { id:9, nom:'<i>B</i>' }];
+    const html = viewSettings();
+    vrai(html.indexOf('<b>A</b>') < 0 && html.indexOf('<i>B</i>') < 0,
+         'le résumé « A et B » laisse passer du HTML');
+  });
+
+  /* L'autre moitié de S2 : `ligne()` échappant désormais lui-même, l'appelant
+     qui échappait déjà produirait `&amp;#39;` à l'écran. */
+  test('l\'adresse du compte n\'est pas doublement échappée (S2)', ()=>{
+    baseVierge();
+    db.auth = { email:'o\'brien@exemple.fr', token:'t', uid:'u' };
+    const html = viewSettings();
+    vrai(html.indexOf('&amp;#39;') < 0, 'double échappement de l\'apostrophe');
+    vrai(html.indexOf('o&#39;brien@exemple.fr') >= 0, 'l\'adresse ne s\'affiche plus');
+    db.auth = null;
+  });
+
   /* ==================== Statut d'un titre ==================== */
   groupe('Statut d\'un titre');
 

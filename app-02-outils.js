@@ -380,14 +380,47 @@ const EMBLEMES = [
 function profilCouleur(id){
   return COULEURS_PROFIL.find(c=>c.id===id) || COULEURS_PROFIL[0];
 }
+/* S4 (09/08) — LA MÊME FRONTIÈRE QUE `cheminImage`, SUR L'AUTRE PORTE.
+
+   `cheminImage` existe pour une raison précise, écrite plus haut : une adresse
+   d'image choisie par quelqu'un d'autre et rendue dans NOTRE page est une
+   balise de traçage — notre adresse IP et l'heure d'ouverture de l'app partent
+   chez lui à chaque affichage. `profils.photo` est exactement ce cas : elle
+   vient de la fiche d'un membre du cercle (app-01), et elle partait dans un
+   `<img src>` sans que sa FORME soit vérifiée. `esc` empêche de casser
+   l'attribut, il n'empêche pas `https://sonserveur/px.gif` d'être chargé.
+
+   La contrainte SQL `photo like 'data:image/%'` de 006 dit déjà la même chose.
+   Elle est dans une autre couche, et le client ne peut pas savoir qu'elle a
+   bien été posée sur l'installation qu'il interroge — même doctrine que le
+   filtre des recommandations : deux défenses indépendantes, pas une déléguée.
+
+   CE QUI EST ACCEPTÉ : une data-URL base64 en JPEG, PNG ou WEBP. `photoVersAvatar`
+   ne produit aujourd'hui que du JPEG (`toDataURL('image/jpeg')`), mais une
+   photo enregistrée par une version antérieure ne doit pas disparaître de
+   l'écran sans prévenir — les trois formats sont des images matricielles
+   inertes. `svg+xml` est volontairement EXCLU : c'est un document, pas une
+   image, et l'élargir un jour se paierait cher.
+
+   LA BORNE est celle de 006, à l'identique et pour la même raison mesurée
+   là-bas. La répliquer ici évite de peindre un data-URI aberrant que le
+   serveur, lui, refuserait. */
+const PHOTO_MAX = 80000;
+const photoAvatar = p =>
+  (typeof p === 'string' && p.length < PHOTO_MAX &&
+   /^data:image\/(?:jpeg|jpg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(p)) ? p : null;
+
 /* L'avatar de n'importe qui : le sien, ou celui d'une personne du cercle.
    Une photo remplace la couleur et l'emblème — on ne superpose pas les deux.
    `profil` attend { pseudo, couleur, embleme, photo } ; tout est facultatif. */
 function avatarDe(profil, cls){
   const p = profil || {};
   const nom = (p.pseudo || '').trim();
-  if(p.photo){
-    return '<img class="avatar photo '+(cls||'')+'" src="'+esc(p.photo)+'" '+
+  /* Tout ce qui n'a pas la bonne forme est IGNORÉ, sans message : on retombe
+     sur l'avatar de couleur, qui existe déjà et qui ne demande rien au réseau. */
+  const photo = photoAvatar(p.photo);
+  if(photo){
+    return '<img class="avatar photo '+(cls||'')+'" src="'+esc(photo)+'" '+
            'alt="'+esc(nom || 'Avatar')+'">';
   }
   const c = profilCouleur(p.couleur);

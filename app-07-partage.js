@@ -270,7 +270,12 @@ function menuRecommander(type, id){
     duCercle.map(p =>
       '<button class="opt" style="display:flex;align-items:center;gap:12px"'+
         (dejaFait(p) ? ' disabled' : '')+
-        ' onclick="closeSheet();recommander(\''+esc(type)+'\','+Number(id)+
+        /* S3 (09/08) — `escJs`, pas `esc` : la règle d'app-02:23 vaut pour
+           TOUTE chaîne glissée dans un `onclick`, sans exception au prétexte
+           que la valeur « ne peut être que tv ou movie ». Ici elle vient d'un
+           paramètre d'appel ; à trois lignes de là (`ouvrirConseil`) la même
+           valeur vient d'une ligne écrite par un autre utilisateur. */
+        ' onclick="closeSheet();recommander(\''+escJs(type)+'\','+Number(id)+
           ',\''+escJs(titre||'')+'\',\''+escJs(p.id)+'\')">'+
         avatarDe(p, 'moyen')+
         '<span>'+esc(p.pseudo)+
@@ -295,8 +300,15 @@ function blocConseilsRecus(){
           '<div class="tiny muted">'+esc(nomDuCercle(r.de))+' te le conseille'+
             (dejaChezMoi(r.type === 'tv' ? 'tv' : 'movie', r.tmdb_id) ? ' · déjà chez toi' : '')+'</div>'+
           '<div class="actions" style="padding:8px 0 0">'+
+            /* S3 (09/08) — `r.type` vient de la table `recommandations`,
+               c'est-à-dire d'une ligne écrite par UN AUTRE UTILISATEUR. Il
+               n'était retenu que par la contrainte SQL `check (type in
+               ('tv','movie'))` de 009 — une défense située dans une autre
+               couche, qu'un jour de migration ratée peut laisser tomber sans
+               que ce fichier le sache. `escJs` ici, filtrage à l'entrée dans
+               app-01 : les deux, pas l'un ou l'autre. */
             (idOk ? '<button class="btn mini" onclick="ouvrirConseil(\''+escJs(r.id)+'\','+
-                      Number(r.tmdb_id)+',\''+esc(r.type)+'\')">Voir</button>' : '')+
+                      Number(r.tmdb_id)+',\''+escJs(r.type)+'\')">Voir</button>' : '')+
             '<button class="btn mini ghost" onclick="ecarterConseil(\''+escJs(r.id)+'\')">Non merci</button>'+
           '</div>'+
         '</div>'+
@@ -420,7 +432,16 @@ function ignorerAnnonceAbo(id){
 }
 
 function ligneAbo(p, role){
+  /* S3 (09/08) — l'identifiant du proche part dans SIX attributs de cette
+     fonction, et il n'était passé par `escJs` que dans deux d'entre eux. Il
+     vient de la table `profils`, donc d'une ligne écrite par quelqu'un d'autre.
+     On le prépare UNE FOIS, ici, et on n'utilise plus que cette variable dans
+     les attributs — c'est ce qui rend l'oubli visible à la lecture. */
+  const idJs = escJs(String(p.id));
   const cle = role+':'+p.id;
+  /* `cle` porte le même identifiant : elle traverse elle aussi un `onclick`
+     (`ontouchstart`), donc `escJs` et non `esc`. */
+  const cleJs = escJs(cle);
   const suit = role === 'suiveur';
   const mot  = suit ? 'Ne plus<br>suivre' : 'Retirer<br>l\'accès';
   /* Le pictogramme seul serait ambigu — les deux actions se ressemblent trop.
@@ -429,13 +450,13 @@ function ligneAbo(p, role){
   return '<div class="glis" data-cle="'+esc(cle)+'">'+
     '<div class="glisfond">'+
       '<button class="glisact" aria-label="'+(suit?'Ne plus suivre':'Retirer l\'accès')+'" '+
-        'onclick="confirmerRupture(\''+p.id+'\',\''+role+'\')">'+act+'</button>'+
+        'onclick="confirmerRupture(\''+idJs+'\',\''+role+'\')">'+act+'</button>'+
     '</div>'+
     '<div class="srow glisrow" style="align-items:center"'+
-      ' ontouchstart="glisAboStart(event,\''+esc(cle)+'\')"'+
+      ' ontouchstart="glisAboStart(event,\''+cleJs+'\')"'+
       ' ontouchmove="glisAboMove(event)" ontouchend="glisAboEnd(event)"'+
       ' ontouchcancel="glisAboEnd(event)"'+
-      ' onclick="glisAboClic(event,\''+p.id+'\',\''+role+'\')">'+
+      ' onclick="glisAboClic(event,\''+idJs+'\',\''+role+'\')">'+
       avatarDe(p, 'moyen')+
       '<div class="sinfo" style="justify-content:center">'+
         '<div class="sname">'+esc(p.pseudo)+'</div>'+
@@ -448,7 +469,7 @@ function ligneAbo(p, role){
          sur une paire déjà réciproque. */
       (aboReciproque(p.id) ? '<span class="abo6recip">↔ Vous vous suivez</span>'
        : role==='suivi'
-         ? '<button class="btn mini abo6btn" onclick="event.stopPropagation();suivreEnRetour(\''+escJs(p.id)+'\')">Suivre</button>'
+         ? '<button class="btn mini abo6btn" onclick="event.stopPropagation();suivreEnRetour(\''+idJs+'\')">Suivre</button>'
          : '')+
       (role==='suiveur' ? '<span class="ecaret">'+I.caret+'</span>' : '')+
       /* I3 — la seconde porte. L'action ne vivait que derrière un glissement,
@@ -461,7 +482,7 @@ function ligneAbo(p, role){
       '<button class="ecaret" aria-haspopup="menu" '+
         'aria-label="Actions pour '+esc(p.pseudo)+'" '+
         'style="flex:none;width:36px;height:36px;border-radius:9px;background:var(--surface2)" '+
-        'onclick="menuAbo(event,\''+p.id+'\',\''+role+'\')">'+I.dots+'</button>'+
+        'onclick="menuAbo(event,\''+idJs+'\',\''+role+'\')">'+I.dots+'</button>'+
     '</div>'+
   '</div>';
 }
@@ -556,6 +577,9 @@ function confirmerRupture(id, role){
   const liste = (role==='suiveur' ? partage.suivis : partage.abonnes) || [];
   const p = liste.find(x=>String(x.id) === String(id));
   const nom = (p && p.pseudo) || 'Cette personne';
+  /* S3 (09/08) — même préparation qu'en tête de `ligneAbo` : l'identifiant
+     repart dans deux `onclick`, il passe par `escJs`. */
+  const idJs = escJs(String(id));
   openSheet('<h3>'+esc(nom)+'</h3>'+
     '<p class="small muted" style="margin:0 0 8px">'+
       (role==='suiveur' ? 'Tu ne verras plus sa bibliothèque.' : 'Cette personne ne verra plus la tienne.')+'</p>'+
@@ -564,9 +588,9 @@ function confirmerRupture(id, role){
        issue non destructrice. D'où cette première entrée, absente au clavier
        et à la souris jusqu'ici. */
     (role==='suiveur'
-      ? '<button class="opt" onclick="closeSheet();ouvrirBiblio(\''+id+'\')">Voir sa bibliothèque</button>'
+      ? '<button class="opt" onclick="closeSheet();ouvrirBiblio(\''+idJs+'\')">Voir sa bibliothèque</button>'
       : '')+
-    '<button class="opt danger" onclick="closeSheet();rompre(\''+id+'\',\''+role+'\')">'+
+    '<button class="opt danger" onclick="closeSheet();rompre(\''+idJs+'\',\''+role+'\')">'+
       (role==='suiveur' ? 'Me désabonner' : 'Retirer cet abonné')+'</button>'+
     '<button class="opt" onclick="closeSheet()">Annuler</button>');
 }
@@ -588,7 +612,7 @@ function viewBiblio(){
   const d = biblios[id];
   if(!d) return html + '<div class="empty"><span class="spin"></span><p style="margin-top:12px">Chargement…</p></div>';
   if(d.erreur) return html + '<div class="empty"><h3>Lecture impossible</h3><p>'+esc(d.erreur)+'</p>'+
-    '<button class="btn ghost" onclick="chargerBiblio(\''+id+'\')">Réessayer</button></div>';
+    '<button class="btn ghost" onclick="chargerBiblio(\''+escJs(String(id))+'\')">Réessayer</button></div>';
 
   const shows  = Object.values(d.shows  || {});
   const movies = Object.values(d.movies || {});
@@ -725,7 +749,13 @@ function viewAccount(){
         'rien à faire ici. Ce réglage sert à en brancher un autre.</div>'+
         '<div class="small muted" style="margin-top:8px">Un espace neuf ne suffit pas : il faut '+
         'd\'abord y installer la base et les fonctions, sinon l\'app s\'ouvre sans affiches et '+
-        'sans partage. La marche à suivre est dans <b>INSTALL.md</b>, à la racine du dépôt.</div>'+
+        /* S5 (09/08) — le fichier n'a JAMAIS été à la racine du dépôt : il est
+           dans `supabase/`. Un chemin faux dans une consigne d'installation
+           coûte exactement le même temps qu'une consigne absente. */
+        'sans partage. La marche à suivre est dans <b>supabase/INSTALL.md</b>, dans le dépôt.</div>'+
+        /* S5 (09/08) — ce qu'on s'apprête à faire, dit AVANT de le faire. */
+        '<div class="small muted" style="margin-top:8px">Ton compte et tes données passeront par '+
+        'ce serveur : <b>ne fais ça que si c\'est TON serveur</b>. Tu devras te reconnecter.</div>'+
       '</div>'+
       '<div style="height:16px"></div>'+
       '<label class="fld"><span>URL du projet Supabase</span>'+
@@ -734,6 +764,12 @@ function viewAccount(){
         '<input type="text" id="sbkey" placeholder="eyJhbGciOi..." autocapitalize="off" autocorrect="off" spellcheck="false" value="'+esc(db.sync.key)+'">'+
         '<em>Dans Supabase : Project Settings → API. Cette clé est prévue pour être publique.</em></label>'+
       '<button class="btn block" onclick="saveSync()">Enregistrer</button>'+
+      /* S5 (09/08) — `resetSync` existait sans aucun appelant : du code mort
+         qui SEMBLAIT être la porte de sortie. Elle l'est maintenant pour de
+         bon, et seulement quand il y a quelque chose à défaire. */
+      (serveurPersonnalise()
+        ? '<button class="btn ghost block" style="margin-top:10px" onclick="resetSync()">Revenir au serveur d\'origine</button>'
+        : '')+
       (syncReady() ? '<button class="btn ghost block" style="margin-top:10px" onclick="ui.editServer=false;render()">Annuler</button>' : '')+
     '</div>';
     return html + '<div style="height:30px"></div>';
@@ -1120,15 +1156,91 @@ async function doSupprimerCompte(){
   }
 }
 
+/* ---------------------------------------------------------------------------
+   S5 (09/08) — CHANGER DE SERVEUR EST UNE DÉCISION, PAS UN RÉGLAGE
+
+   Cet écran vit derrière sept appuis sur le logo, donc on ne l'atteint pas par
+   hasard — mais on peut très bien y être GUIDÉ par quelqu'un. « Tape cette
+   adresse pour débloquer ton compte » est une phrase qui marche, et l'écran
+   faisait alors trois choses de travers, chacune suffisante :
+
+     1. IL ACCEPTAIT `http://`. Le mot de passe, le jeton et toute la
+        bibliothèque partaient en clair sur le réseau du café d'à côté.
+     2. IL NE TOUCHAIT PAS À LA SESSION. `db.auth` restait en place, si bien que
+        le PROCHAIN appel (`sbFetch`, app-01) envoyait le jeton porteur du
+        projet PRÉCÉDENT au serveur qu'on venait de désigner. Le jeton de
+        rafraîchissement survit à un changement de mot de passe : le donner,
+        c'est donner le compte.
+     3. IL NE DEMANDAIT RIEN. Un champ, un bouton, aucun avertissement.
+
+   Les trois sont fermés ici : forme imposée, session jetée, confirmation
+   explicite qui NOMME la conséquence.
+
+   `http://localhost` et `http://127.0.0.1` restent acceptés — un serveur local
+   ne traverse aucun réseau, et les tests en ont besoin. */
+const SERVEUR_LOCAL = /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?(?:\/|$)/;
+const urlServeurValide = u =>
+  typeof u === 'string' && (/^https:\/\/[^\s/]+/.test(u) || SERVEUR_LOCAL.test(u));
+
+/* Sommes-nous ailleurs que sur le serveur d'origine ? Sert au bouton de retour :
+   il n'a rien à proposer tant qu'on n'a rien changé. */
+function serveurPersonnalise(){
+  return !!(db.sync && db.sync.url && db.sync.url !== DEFAULT_SYNC.url);
+}
+
+/* Ce qui attend la confirmation. `null` le reste du temps. */
+let syncEnAttente = null;
+
 function saveSync(){
   const url = document.getElementById('sburl').value.trim();
   const k   = document.getElementById('sbkey').value.trim();
-  if(!/^https?:\/\/.+/.test(url)) return toast('URL invalide');
+  if(!urlServeurValide(url))
+    return toast('Adresse refusée : il faut une adresse en https://');
   if(k.length < 20) return toast('Clé invalide');
-  db.sync = {url:url.replace(/\/+$/,''), key:k}; ui.editServer=false; saveDB(); render();
-  toast('Serveur enregistré');
+  const propre = url.replace(/\/+$/,'');
+  /* Rien n'a bougé : pas de confirmation, pas de déconnexion. Faire payer une
+     reconnexion à qui a seulement rouvert l'écran serait absurde. */
+  if(propre === db.sync.url && k === db.sync.key){
+    ui.editServer = false; render();
+    return toast('Serveur inchangé');
+  }
+  syncEnAttente = { url:propre, key:k };
+  openSheet('<h3>Changer de serveur ?</h3>'+
+    '<p class="small muted" style="margin:0 0 8px">Ton compte et tes données passeront par '+
+    '<b>'+esc(propre)+'</b>. Ne fais ça que si c\'est <b>TON</b> serveur : celui qui le tient '+
+    'voit ce que tu y déposes.</p>'+
+    '<p class="small muted" style="margin:0 0 8px">Ta session actuelle sera fermée — '+
+    'tu devras te reconnecter. Les titres enregistrés sur cet appareil restent en place.</p>'+
+    '<button class="opt danger" onclick="closeSheet();appliquerSync()">Changer de serveur</button>'+
+    '<button class="opt" onclick="closeSheet();syncEnAttente=null">Annuler</button>');
 }
-function resetSync(){ db.sync=Object.assign({},DEFAULT_SYNC); db.auth=null; saveDB(); render(); }
+
+/* Le seul endroit qui écrit `db.sync`. La session est jetée AVANT le premier
+   appel au nouveau serveur — c'est tout l'objet de S5. */
+function appliquerSync(){
+  const s = syncEnAttente; if(!s) return;
+  syncEnAttente = null;
+  if(typeof oublierAppareil === 'function') oublierAppareil();
+  db.sync = { url:s.url, key:s.key };
+  db.auth = null; db.syncedAt = null; syncState = 'off';
+  partage.suivis = []; partage.abonnes = []; partage.code = null; partage.charge = false;
+  ui.editServer = false;
+  saveDB(); render();
+  toast('Serveur enregistré — reconnecte-toi');
+}
+
+/* Revenir au serveur d'origine. Même conséquence, donc même confirmation : on
+   quitte un serveur pour un autre, la session ne suit pas. */
+function resetSync(){
+  if(!serveurPersonnalise()) return toast('Tu es déjà sur le serveur d\'origine');
+  syncEnAttente = Object.assign({}, DEFAULT_SYNC);
+  openSheet('<h3>Revenir au serveur d\'origine ?</h3>'+
+    '<p class="small muted" style="margin:0 0 8px">L\'app repassera par '+
+    '<b>'+esc(DEFAULT_SYNC.url)+'</b>. Ta session sur le serveur actuel sera fermée — '+
+    'tu devras te reconnecter. Les titres enregistrés sur cet appareil restent en place.</p>'+
+    '<button class="opt danger" onclick="closeSheet();appliquerSync()">Revenir au serveur d\'origine</button>'+
+    '<button class="opt" onclick="closeSheet();syncEnAttente=null">Annuler</button>');
+}
 
 async function doSignIn(){
   const email = document.getElementById('acmail').value.trim();

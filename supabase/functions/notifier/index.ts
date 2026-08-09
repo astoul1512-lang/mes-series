@@ -139,8 +139,30 @@ const MOT:   Record<string, string>   = {
   maison: 'Disponible chez toi'
 };
 
-// `{cine, stream, vod}` → `{cine, maison}`. Le même pliage que
-// `normaliserFilmsNotif` côté app : les deux doivent rester d'accord.
+// S7 (09/08) — LE REPLI `stream`/`vod` RESTE, ET VOICI CE QUI A CHANGÉ.
+//
+// La spec demandait de le retirer une fois le défaut de colonne corrigé. Deux
+// des trois sources d'anciennes clés sont bien taries par la migration 012 :
+// le DÉFAUT de `push_reglages.films` (qui fabriquait une ligne périmée à
+// chaque compte créé sans toucher aux réglages), et les lignes déjà nées de ce
+// défaut, que 012 replie une bonne fois.
+//
+// LA TROISIÈME NE L'EST PAS : un téléphone qui tourne encore la version d'avant
+// le 30/07 envoie `films` tel quel, avec `stream`/`vod`. Le service worker sert
+// d'abord son cache — on ne décide pas depuis ici du jour où le dernier
+// appareil aura basculé. Retirer le repli aujourd'hui ferait, pour cette
+// personne, `maison = false` : plus aucune notification « à la maison », sans
+// erreur, sans message, sans rien à voir dans les réglages. Un réglage qui
+// s'éteint tout seul est le pire des symptômes — on ne le cherche pas, on
+// conclut que l'app ne marche plus.
+//
+// À RETIRER AU LOT SUIVANT, une fois la version en place partout. La preuve à
+// exiger avant de le faire est dans le contrôle n°4 de 012 : aucune ligne de
+// `push_reglages` ne porte plus `stream` ni `vod` après quelques jours de
+// production — c'est-à-dire que plus personne n'en écrit.
+//
+// Le pliage est le même que `normaliserFilmsNotif` côté app : les deux doivent
+// rester d'accord, et partir ensemble.
 function genresVoulus(films: Record<string, boolean>): Record<string, boolean> {
   const f = films ?? {};
   return {

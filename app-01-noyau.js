@@ -1325,7 +1325,21 @@ async function chargerConseils(){
     const r = await sbFetch('/rest/v1/recommandations'+
       '?select=id,de,vers,type,tmdb_id,titre,cree,vu,ecarte&order=cree.desc&limit=100', {});
     const moi = db.auth.uid;
-    const tout = Array.isArray(r) ? r : [];
+    /* S3 (09/08) — LE POINT D'ENTRÉE, et la même doctrine que
+       `cercleDepuisBiblios` : ce qui vient d'une ligne écrite par un pair est
+       filtré ICI, une fois, à l'arrivée — pas dans chacun des écrans qui
+       l'affichent. Une ligne dont `type` sort du contrat ou dont `tmdb_id`
+       n'est pas un identifiant TMDB est jetée, sans bruit et sans erreur.
+
+       La contrainte SQL `check (type in ('tv','movie'))` de 009 dit déjà la
+       même chose ; elle est dans une AUTRE COUCHE, et le client ne peut pas
+       savoir qu'elle a bien été posée sur l'installation qu'il interroge —
+       `INSTALL.md` a déjà laissé une migration hors du tableau. Deux défenses
+       indépendantes, comme pour `escJs` : le filtre ne remplace pas le
+       `check`, il ne dépend pas de lui. */
+    const conforme = x => !!x && (x.type === 'tv' || x.type === 'movie')
+                                 && estIdTmdb(x.tmdb_id);
+    const tout = (Array.isArray(r) ? r : []).filter(conforme);
     /* La policy ne renvoie déjà que mes lignes : le tri ci-dessous range,
        il ne protège rien. */
     conseils.recues   = tout.filter(x=> x.vers === moi && !x.ecarte);

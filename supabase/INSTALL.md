@@ -50,6 +50,8 @@ Dans *SQL Editor*, exécuter les fichiers de `migrations/` **dans l'ordre**.
 | `008_notifications_films.sql` | les réglages de notification : `{cine, maison}`, et `quand` neutralisé |
 | `009_recommandations.sql` | recommander un titre à quelqu'un de son cercle |
 | `010_remise_en_phase.sql` | ce qui tournait en production sans exister dans le dépôt |
+| `011_suivi_en_retour.sql` | « Suivre en retour », et la notification d'un nouvel abonné |
+| `012_durcissements.sql` | verrou sur les codes de partage, droits alignés, purge, défaut corrigé |
 
 Avant d'exécuter `005`, y remplacer deux marques :
 
@@ -60,11 +62,19 @@ Il n'y a **aucun autre secret à saisir**. Celui du planificateur est tiré par
 la base elle-même et lu au même endroit par la fonction SQL et par l'Edge
 Function : personne n'a besoin de le connaître.
 
-Les dix fichiers sont **rejouables**. Les exécuter deux fois d'affilée ne doit
+> **`011` manquait à ce tableau.** Toute installation montée en suivant ce
+> fichier avant le 09/08/2026 n'a donc PAS `suivre_en_retour()` : le bouton
+> « Suivre » d'un abonné non réciproque répond `404`, en silence. Exécuter
+> `011` puis `012` sur une base existante répare le manque — les deux fichiers
+> sont rejouables, il n'y a rien à défaire avant.
+
+Les douze fichiers sont **rejouables**. Les exécuter deux fois d'affilée ne doit
 produire aucune erreur et ne changer aucune règle. Vérifié le 31/07/2026 sur un
-Postgres vierge : les dix passent dans l'ordre, trois fois de suite, et la base
-obtenue porte exactement les mêmes vingt policies et les mêmes droits de
-fonction que la production.
+Postgres vierge pour `001` à `010` : les dix passent dans l'ordre, trois fois de
+suite, et la base obtenue porte exactement les mêmes vingt policies et les mêmes
+droits de fonction que la production. `011` et `012` suivent la même discipline
+(`create or replace`, `drop policy if exists`, `unschedule` avant `schedule`)
+mais n'ont pas encore été éprouvés par ce même passage en triple.
 
 Après le premier passage, vérifier :
 
@@ -120,14 +130,71 @@ supabase functions deploy notifier         --no-verify-jwt
 fois — et chacune est protégée autrement :
 
 - **`tmdb`** est appelée par des gens qui n'ont pas encore de compte. Elle est
-  protégée par une liste blanche de chemins et retire `api_key` de ce qu'on lui
-  passe.
+  protégée par **deux** listes blanches — les chemins et les origines — et
+  retire `api_key` de ce qu'on lui passe.
 - **`supprimer-compte`** doit répondre aux requêtes `OPTIONS` du navigateur,
   que `verify_jwt` rejetterait avant d'arriver au code. Elle vérifie le jeton
   elle-même et ne supprime que l'identité que le serveur d'authentification
   associe à ce jeton.
 - **`notifier`** est appelée par le planificateur, qui n'a pas de session. Elle
   est protégée par le secret partagé de `005`.
+
+### 5 bis. L'adresse depuis laquelle l'app a le droit d'appeler `tmdb`
+
+**À faire sur toute installation qui n'est pas `astoul1512-lang.github.io`.**
+
+Le relais répondait à `Access-Control-Allow-Origin: *`, c'est-à-dire à
+n'importe quel site du monde : un tiers pouvait s'en servir comme de sa propre
+API TMDB, sur cette clé et sur ce quota d'invocations (500 000 par mois en
+offre gratuite). Ce n'est pas une fuite de données, c'est une facture — et une
+coupure pour les vrais utilisateurs le jour où le quota tombe.
+
+La liste des adresses autorisées est en tête de
+`functions/tmdb/relais.ts` :
+
+```ts
+export const ORIGINES: string[] = [
+  "https://astoul1512-lang.github.io",
+  "http://localhost:8099",
+  "http://127.0.0.1:8099",
+];
+```
+
+Y mettre l'adresse **exacte** du site (protocole + domaine, sans chemin :
+`https://mon-site.fr`, pas `https://mon-site.fr/mes-series/`), puis
+redéployer. Une adresse absente reçoit `403` et le navigateur ne lit rien.
+
+Une requête **sans** en-tête `Origin` est acceptée — un client hors navigateur,
+ou certains contextes de l'app installée — **sauf** si le navigateur annonce
+lui-même qu'elle vient d'un autre site (`Sec-Fetch-Site: cross-site`). Cette
+seconde condition n'est pas un détail : une balise `<img src=…>` ou
+`<script src=…>` posée par une page tierce n'envoie **aucun** `Origin`, et
+contrôler `Origin` seul aurait laissé passer exactement l'abus qu'on cherche à
+fermer. Un client hors navigateur, lui, n'envoie pas `Sec-Fetch-Site` du tout et
+reste servi.
+
+Ce qui n'est **pas** couvert : un abus mené hors navigateur (script, serveur),
+qui n'envoie ni l'un ni l'autre. Le seul remède serait un compteur par adresse
+IP ; il n'est pas posé tant que l'abus n'est pas constaté, parce qu'il coûte une
+table et un appel de plus à chaque requête. À décider si le quota se met à
+descendre sans raison.
+
+Les tests du relais tournent sans réseau et sans Supabase :
+
+```
+deno test --allow-env supabase/functions/tmdb/index.test.ts
+```
+
+Ils couvrent les deux listes blanches — origine connue, origine inconnue,
+absence d'`Origin`, préflight, `/tv/123` accepté, `/account` et
+`/tv/123/../../account` refusés, `api_key` entrant ignoré. Le relais est la
+seule barrière devant la clé TMDB : ne pas livrer une modification de ce
+dossier sans les avoir joués.
+
+> La logique vit dans `functions/tmdb/relais.ts` ; `functions/tmdb/index.ts`
+> ne fait plus que la brancher sur `Deno.serve`. C'est ce qui permet aux tests
+> d'éprouver la fonction sans ouvrir de port. La commande de déploiement ne
+> change pas : les modules importés par l'entrée sont embarqués.
 
 ## 6. Vérifier
 
@@ -157,6 +224,11 @@ select user_id, type, tmdb_id from public.push_cloches;
 
 C'est le chemin qui passe par `remplacer_cloches()` (migration `010`) : s'il
 répond `404`, c'est que `010` n'a pas été exécuté.
+
+> **Si tu rejoues `010`, rejoue `012` juste derrière.** `010` accorde
+> `remplacer_cloches()` au rôle `anon` ; `012` le lui retire. Rejouer `010`
+> seul remet donc la porte entrouverte, sans rien afficher. Le contrôle est
+> écrit en pied de `012`.
 
 > **Il n'y a pas de « notification d'essai ».** Une version précédente de ce
 > fichier en promettait une depuis les réglages : elle n'existe nulle part côté

@@ -4,7 +4,7 @@
        cd <depot> && python3 -m http.server 8099 &
        node tests/lance-tests.js
 
-   Il fait SEPT choses. Chacune a été ajoutée après s'être fait avoir une fois :
+   Il fait NEUF choses. Chacune a été ajoutée après s'être fait avoir une fois :
    aucune n'est là par principe, toutes portent la trace d'un accident réel.
 
    1. Il ouvre `test.html` et lit son bilan. Ce sont les tests des fonctions
@@ -39,9 +39,21 @@
    7. Il dessine l'écran Découvrir pour de bon, contre un faux catalogue, et
       vérifie l'ordre de dépouillement des rangées (lot D).
 
-   Les contrôles 3, 5 et 6 sont STATIQUES : lus sur le disque, sans navigateur.
-   Les trois portent la même règle, sur trois espaces de noms différents — la
-   portée globale, l'état, le DOM. Il n'y a pas de raison qu'ils divergent.
+   8. Il refuse qu'une migration ouvre une policy d'écriture sur `abonnements`
+      (cycle 3, point 6). Ce contrôle existait déjà ; il n'était pas compté.
+
+   9. Il refuse `esc(` à l'intérieur d'un gestionnaire d'événement
+      (`onclick="…"`, `ontouchstart="…"`) — SPEC-02, S3. La règle est écrite
+      depuis longtemps en tête d'app-02 ; rien ne la surveillait, et trois
+      endroits d'app-07 l'enfreignaient encore le 09/08, dont deux sur des
+      données écrites par un AUTRE utilisateur. Une règle qu'aucun contrôle ne
+      tient se défait toute seule, un lot à la fois.
+
+   Les contrôles 3, 5, 6, 8 et 9 sont STATIQUES : lus sur le disque, sans
+   navigateur. Les trois premiers portent la même règle sur trois espaces de
+   noms différents — la portée globale, l'état, le DOM ; il n'y a pas de raison
+   qu'ils divergent. Les deux derniers tiennent chacun une règle écrite ailleurs
+   dans le dépôt et que rien ne relisait.
 
    Ce fichier est VERSIONNÉ, à la différence des suites d'une session
    précédente qui ont disparu avec leur machine.
@@ -279,6 +291,75 @@ function identifiantsDom(src){
   const propriete = /\.id\s*=\s*(?:\\?["'])([A-Za-z_][\w-]*)/g;
   while((m = propriete.exec(net))) ids.push(m[1]);
   return ids;
+}
+
+/* ---------------------------------------------------------------------------
+   SPEC-02, S3 — `esc` N'A RIEN À FAIRE DANS UN GESTIONNAIRE D'ÉVÉNEMENT
+
+   La règle est posée en tête d'app-02 depuis le bug des acteurs à apostrophe :
+   toute chaîne glissée dans un `onclick` traverse DEUX analyseurs et doit donc
+   passer par `escJs`. Elle était écrite, expliquée, testée sur la fonction
+   elle-même — et violée à trois endroits d'app-07, parce que rien ne relisait
+   les APPELS. Deux de ces trois endroits portaient une valeur écrite par un
+   autre utilisateur (`r.type`, venu de la table `recommandations`).
+
+   Le contrôle lit chaque attribut `on…="…"` construit dans une chaîne, et
+   refuse d'y trouver un appel à `esc(`. Il est volontairement grossier — il ne
+   comprend pas le JavaScript, il regarde entre deux délimiteurs — et c'est
+   suffisant : le motif fautif est toujours de cette forme.
+
+   Ce qui n'est PAS signalé : `escJs(` (la bonne forme), `Number(x)` (déjà sûr),
+   et `esc()` employé ailleurs dans la même chaîne, hors du gestionnaire —
+   `aria-label="Actions pour '+esc(p.pseudo)+'"` est correct et le reste.
+
+   SA LIMITE, ÉCRITE PLUTÔT QUE TUE : il ne voit que `esc(` posé À L'INTÉRIEUR
+   de l'attribut. Un échappement passé par une variable —
+   `const t = esc(r.type); … 'onclick="f(\''+t+'\')"'` — lui échappe, et c'est
+   justement l'idiome que ce lot installe (`idJs`, `cleJs` dans `ligneAbo`).
+   D'où la convention qui va avec, et qui est la vraie règle : une variable
+   destinée à un gestionnaire se nomme `…Js` et se remplit avec `escJs`. Le
+   contrôle attrape l'écriture directe ; la convention de nom attrape le reste
+   à la relecture.
+--------------------------------------------------------------------------- */
+function escDansGestionnaire(src){
+  /* Comme pour les identifiants DOM : on n'efface QUE les commentaires. Les
+     chaînes sont précisément ce qu'on veut lire, et les commentaires du dépôt
+     citent le motif fautif pour l'expliquer.
+
+     Le `//` n'est effacé qu'EN DÉBUT DE LIGNE. Ailleurs, c'est une adresse
+     relative au protocole (`'<img src="//cdn/p.png" onclick="…">'`) : la
+     prendre pour un commentaire effacerait la fin de la ligne, gestionnaire
+     compris, et le contrôle se tairait sur le cas le plus douteux qui soit. */
+  const net = src.replace(/\/\*[\s\S]*?\*\//g, c => c.replace(/[^\n]/g, ' '))
+                 .replace(/^([ \t]*)\/\/[^\n]*/gm, '$1');
+  const soucis = [];
+  /* `on` + au moins trois lettres : `onclick`, `ontouchstart`, `onchange`…
+     Le délimiteur peut être `"`, `'`, ou `\"` quand la chaîne portante est
+     elle-même à guillemets doubles. */
+  const ouvre = /\bon[a-z]{3,}\s*=\s*(\\?["'])/g;
+  let m;
+  while((m = ouvre.exec(net))){
+    const delim = m[1];
+    const debut = m.index + m[0].length;
+    /* On cherche LE MÊME délimiteur, échappement compris : dans une chaîne
+       portante à guillemets doubles, l'attribut se ferme sur `\"` et non sur
+       le `"` qui termine la chaîne JavaScript. Chercher le premier `"` venu
+       s'arrêtait AVANT le contenu de l'attribut et ne regardait rien. */
+    const ferme = new RegExp(delim.length === 2 ? '\\\\' + delim[1]
+                                                : '(?<!\\\\)' + delim, 'g');
+    ferme.lastIndex = debut;
+    const f = ferme.exec(net);
+    /* Pas de délimiteur fermant en vue : on borne, plutôt que d'avaler la
+       moitié du fichier et de signaler n'importe quoi. */
+    const fin = f ? f.index : Math.min(net.length, debut + 600);
+    const valeur = net.slice(debut, fin);
+    /* `esc(` en position d'appel — y compris `window.esc(` — jamais `escJs(`. */
+    if(/(^|[^\w$.])(?:(?:window|self|globalThis)\.)?esc\s*\(/.test(valeur))
+      soucis.push('l.' + net.slice(0, m.index).split('\n').length + ' — ' +
+                  m[0].trim() + ' … ' + valeur.replace(/\s+/g, ' ').slice(0, 70));
+    ouvre.lastIndex = fin;
+  }
+  return soucis;
 }
 
 /* ---------------------------------------------------------------------------
@@ -670,6 +751,24 @@ function collisionsCss(src){
     console.log('abonnements   → ' + (soucis.length
       ? soucis.length + ' policy d\'écriture interdite'
       : 'aucune policy d\'écriture — la porte reste fermée'));
+    soucis.forEach(d => console.log('   ! ' + d));
+    souci += soucis.length;
+  }
+
+  /* --- 9. SPEC-02, S3 — `esc` DANS UN GESTIONNAIRE D'ÉVÉNEMENT --- */
+  {
+    const fs = require('fs'), chemin = require('path');
+    const racine = chemin.join(__dirname, '..');
+    const soucis = [];
+    let gestionnaires = 0;
+    for(const f of FICHIERS){
+      const src = fs.readFileSync(chemin.join(racine, f), 'utf8');
+      gestionnaires += (src.match(/\bon[a-z]{3,}\s*=\s*\\?"/g) || []).length;
+      escDansGestionnaire(src).forEach(d => soucis.push(f + ' ' + d));
+    }
+    console.log('onclick       → ' + (soucis.length
+      ? soucis.length + ' esc( dans un gestionnaire — il faut escJs('
+      : gestionnaires + ' gestionnaires, aucun esc( : la règle d\'app-02 tient'));
     soucis.forEach(d => console.log('   ! ' + d));
     souci += soucis.length;
   }
