@@ -522,6 +522,16 @@ async function boot(){
      et pas au chargement du script : elles n'ont de sens qu'une fois la base
      lue, et `boot` est le seul endroit qui le garantit. */
   if(typeof armerReprisesSynchro === 'function') armerReprisesSynchro();
+  /* B11 (09/08) — CE QUI N'EST PAS PARTI REPART AU DÉMARRAGE. Deux choses
+     peuvent rester en plan quand le réseau manque au mauvais moment : une
+     cloche allumée juste avant de verrouiller le téléphone (drapeau
+     `desyncAt`), et la suppression de l'abonnement du compte qu'on vient de
+     quitter (liste `aPurger`) — celle-là fait qu'un appareil continue de
+     recevoir les notifications de quelqu'un d'autre. `rejouerNotifEnAttente`
+     rejoue les deux ; le retour du réseau les rejoue aussi (app-09).
+     DANS le `try` de C5, comme tout le corps de `boot` : si elle levait, le
+     retrait de « booting » du `finally` doit rester garanti. */
+  if(typeof rejouerNotifEnAttente === 'function') rejouerNotifEnAttente();
   }catch(e){
     /* C5 — on n'avale pas : on journalise ET on affiche. Un `catch` muet ici
        reproduirait l'écran noir avec une couche de politesse en plus. */

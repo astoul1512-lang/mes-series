@@ -321,6 +321,13 @@ function motifAbonnement(e){
    fois dans la vie de l'app, autant que ce soit quand la raison est évidente. */
 async function inscrireSiBesoin(){
   if(!notifPossibles() || !notifAutorisees() || !signedIn() || !syncReady()) return false;
+  /* B11 (09/08) — LA PURGE D'ABORD, L'INSCRIPTION ENSUITE, ET DANS CET ORDRE.
+     Les deux peuvent porter sur la MÊME adresse d'abonnement : se déconnecter
+     ne résilie pas l'abonnement du navigateur, on revient donc avec la même.
+     Inscrire d'abord et supprimer ensuite effacerait la ligne qu'on vient de
+     créer. On attend donc que la file soit vidée — elle est vide dans la quasi
+     -totalité des cas, cet `await` ne coûte rien. */
+  await purgerAppareils();
   try{
     const reg = await navigator.serviceWorker.ready;
     const ab  = await reg.pushManager.getSubscription();
@@ -341,26 +348,146 @@ async function inscrireSiBesoin(){
 function oublierAppareil(){
   if(!db.notif) return;
   const ep = db.notif.abo;
+  const uid = (db.auth && db.auth.uid) || null;
   db.notif.abo = null; db.notif.erreur = null; saveDB();
-  if(!ep || !signedIn() || !syncReady()) return;
+  if(!ep) return;
+  /* B11 (09/08) — UN DELETE PERDU NE SE PERD PLUS. Le `.catch(()=>{})` était un
+     renoncement pur, et le cas est celui que le commentaire ci-dessus qualifie
+     lui-même de sérieux : se déconnecter HORS LIGNE effaçait l'abonnement côté
+     téléphone et laissait la ligne au serveur — cet appareil continuait donc de
+     recevoir les notifications de l'ancien compte, indéfiniment, sans plus
+     aucun écran pour le dire ni bouton pour l'arrêter.
+     L'adresse part maintenant dans une liste à purger, PERSISTÉE, rejouée au
+     démarrage et au retour du réseau jusqu'à réussite. Elle retient aussi le
+     compte : la suppression est protégée par RLS, elle n'a de sens qu'avec le
+     jeton de CE compte-là.
+     (S'articule avec C7 de la SPEC-01 : une fois l'inscription passée en
+     `on_conflict=endpoint`, une réinscription depuis un autre compte reprend la
+     ligne au lieu d'en créer une seconde. La purge reste le chemin propre, elle
+     cesse d'être le seul.) */
+  if(!signedIn() || !syncReady()){ marquerAPurger(ep, uid); return; }
   /* RLS oblige : cette requête ne peut toucher que les lignes de la personne
      connectée, le filtre sur l'adresse suffit. */
   sbFetch('/rest/v1/push_appareils?endpoint=eq.' + encodeURIComponent(ep),
-          { method:'DELETE', headers:{ Prefer:'return=minimal' } }).catch(()=>{});
+          { method:'DELETE', headers:{ Prefer:'return=minimal' } })
+    .catch(()=>{ marquerAPurger(ep, uid); });
+}
+/* La file des adresses à supprimer côté serveur. Locale à l'appareil :
+   `notifPourSynchro` ne la fait pas voyager — une adresse d'abonnement ne veut
+   rien dire sur un autre téléphone. */
+function marquerAPurger(ep, uid){
+  if(!db.notif || !ep) return;
+  if(!Array.isArray(db.notif.aPurger)) db.notif.aPurger = [];
+  if(db.notif.aPurger.some(x => x && x.ep === ep)) return;
+  db.notif.aPurger.push({ ep:ep, uid:uid || null, quand:Date.now() });
+  /* La file ne grossit pas indéfiniment. Deux cas la rendraient éternelle : un
+     compte SUPPRIMÉ (le DELETE n'aboutira jamais, la ligne serveur est partie
+     avec le compte) et un compte sur lequel on ne reviendra plus. On oublie
+     donc au-delà d'un mois, et on garde les dix plus récentes : passé ce
+     point, insister ne répare plus rien, ça ne fait qu'alourdir la base. */
+  const limite = Date.now() - 30 * 86400000;
+  db.notif.aPurger = db.notif.aPurger
+    .filter(x => x && x.ep && (x.quand || 0) > limite)
+    .slice(-10);
+  saveDB();
+}
+/* B11 — la purge différée. Une entrée dont le compte n'est pas celui qui est
+   connecté ATTEND : la supprimer avec le jeton de quelqu'un d'autre ne ferait
+   rien (RLS), et la retirer de la liste reviendrait à abandonner pour de bon. */
+/* UN SEUL PASSAGE À LA FOIS, et c'est indispensable : `boot`, le retour du
+   réseau et `inscrireSiBesoin` peuvent la demander dans la même seconde. Deux
+   passages concurrents liraient la même file avant que le premier ne la
+   réécrive, et ressusciteraient des adresses déjà supprimées. Les appelants
+   partagent donc la même promesse. */
+let purgeEnCours = null;
+function purgerAppareils(){
+  if(purgeEnCours) return purgeEnCours;
+  purgeEnCours = purgerAppareilsVraiment()
+    .catch(()=>{})
+    .then(()=>{ purgeEnCours = null; });
+  return purgeEnCours;
+}
+async function purgerAppareilsVraiment(){
+  if(!db.notif || !Array.isArray(db.notif.aPurger) || !db.notif.aPurger.length) return;
+  if(!signedIn() || !syncReady()) return;
+  const reste = [];
+  for(const e of db.notif.aPurger){
+    if(!e || !e.ep) continue;
+    /* LE GARDE-FOU LE PLUS IMPORTANT DE CETTE FONCTION. Se déconnecter ne
+       résilie pas l'abonnement du NAVIGATEUR : en revenant sur le même compte,
+       `abonnerAppareil` réinscrit très exactement la même adresse. Purger
+       celle-ci supprimerait alors la ligne VIVANTE — et comme `db.notif.abo`
+       vaudrait toujours cette adresse, `inscrireSiBesoin` croirait l'appareil
+       inscrit et ne retenterait jamais : plus aucune notification, sans un mot,
+       définitivement. Exactement le défaut que B11.2 corrige, retourné.
+       Une adresse redevenue la nôtre sort donc de la file, sans DELETE. */
+    if(db.notif.abo && e.ep === db.notif.abo) continue;
+    if(e.uid && db.auth && db.auth.uid !== e.uid){ reste.push(e); continue; }
+    try{
+      await sbFetch('/rest/v1/push_appareils?endpoint=eq.' + encodeURIComponent(e.ep),
+                    { method:'DELETE', headers:{ Prefer:'return=minimal' } });
+    }catch(err){ reste.push(e); }
+  }
+  db.notif.aPurger = reste;
+  saveDB();
+}
+/* B11 — LE RATTRAPAGE, un seul point d'entrée : ce qui n'a pas pu partir part
+   enfin, et le bandeau tombe tout seul. Appelé par `boot()` et par le retour du
+   réseau. */
+async function rejouerNotifEnAttente(){
+  if(!db.notif || !signedIn() || !syncReady()) return;
+  /* Le même verrou que `reessayerCloches` et `reinscrire`, pour la même raison :
+     `boot()` et le retour du réseau peuvent tomber dans la même seconde, et
+     deux `remplacer_cloches` concurrents se croiseraient. */
+  if(!prendre('cloches')) return;
+  try{
+    await purgerAppareils();
+    if(db.notif.desyncAt) await pousserCloches();
+  } finally { rendre('cloches'); }
+  if(typeof view !== 'undefined' && view === 'notifs') render();
+}
+if(typeof window !== 'undefined' && window.addEventListener){
+  window.addEventListener('online', ()=>{ try{ rejouerNotifEnAttente(); }catch(e){} });
 }
 
 /* Le bouton de rattrapage de l'écran Notifications. */
 async function reinscrire(){
-  const ok = await abonnerAppareil();
-  if(ok) await pousserCloches();
+  /* B11 (09/08) — le même verrou que `reessayerCloches`, qui l'avait déjà, lui.
+     Sans lui, un double appui lançait deux `abonnerAppareil` ET deux
+     `remplacer_cloches` concurrents : deux inscriptions pour un appareil, et
+     deux réécritures complètes de la liste des cloches qui se croisent. */
+  if(!prendre('cloches')) return;
   render();
+  let ok = false;
+  try{
+    ok = await abonnerAppareil();
+    if(ok) await pousserCloches();
+  } finally { rendre('cloches'); render(); }
   toast(ok ? 'Cet appareil est inscrit' : 'Échec — ' + (db.notif.erreur || 'raison inconnue'));
 }
 
 /* Les cloches et le réglage. On efface puis on réécrit : la liste fait
    quelques lignes, et un titre éteint doit vraiment disparaître. */
 async function pousserCloches(){
-  if(!signedIn() || !syncReady()) return;
+  /* B11 (09/08) — DEUX RAISONS DE NE RIEN ENVOYER, ET ELLES N'ONT PAS LE MÊME
+     SENS. Depuis que le drapeau se pose dès la bascule d'une cloche, ce
+     `return` pouvait laisser le bandeau allumé pour toujours, avec un
+     « Réessayer » qui retombait dessus sans rien changer.
+       · PAS DE SERVEUR CONFIGURÉ (`!syncReady`) — il n'y a personne à qui
+         parler, ni maintenant ni plus tard : le drapeau n'a aucun objet, on
+         l'éteint.
+       · PAS DE COMPTE OUVERT (`!signedIn`) — l'envoi est seulement REMIS : au
+         retour du compte, `inscrireSiBesoin` et `rejouerNotifEnAttente` le
+         rejouent. On garde donc le drapeau, et c'est l'écran qui se tait tant
+         qu'il n'y a personne à prévenir (voir `viewNotifications`). */
+  if(!syncReady()){
+    pousseEnVol = false;
+    if(db.notif && db.notif.desyncAt){
+      delete db.notif.desyncAt; delete db.notif.desyncMotif; saveDB();
+    }
+    return;
+  }
+  if(!signedIn()){ pousseEnVol = false; return; }
   const cles = Object.keys(db.notif.titres);
   /* RELECTURE DU 09/08 — LA FENÊTRE OÙ CET ENVOI DÉTRUIT AU LIEU DE DIRE.
      `remplacer_cloches` REMPLACE : une liste vide efface toutes les cloches du
@@ -396,8 +523,12 @@ async function pousserCloches(){
       })) })
     });
     /* Tout est passé : le drapeau de désynchronisation tombe. */
+    pousseEnVol = false;                                        // B11
     if(db.notif.desyncAt){ delete db.notif.desyncAt; delete db.notif.desyncMotif; saveDB(); }
   }catch(e){
+    /* B11 — l'envoi n'est plus « en route » : le bandeau doit redevenir
+       actionnable dans le même rendu que celui déclenché ci-dessous. */
+    pousseEnVol = false;
     /* Et si malgré tout ça rate, on le DIT. Un drapeau que l'écran sait lire,
        plutôt qu'un `catch` vide — c'est la règle que l'auteur applique partout
        ailleurs (P2 du document de specs). */
@@ -420,12 +551,36 @@ async function reessayerCloches(){
 /* Un seul point d'entrée : à appeler après tout changement de cloche ou de
    réglage. Sans abonnement d'appareil, envoyer des cloches ne servirait à rien. */
 let pousseTimer;
+/* B11 — « un envoi est-il en route ou en attente ? ». En MÉMOIRE seulement, et
+   c'est voulu : au prochain démarrage, plus rien n'est en route, et le bandeau
+   doit alors proposer « Réessayer » plutôt que d'annoncer un envoi imaginaire. */
+let pousseEnVol = false;
 function poussserPlusTard(){
   clearTimeout(pousseTimer);
+  /* B11 (09/08) — LE DRAPEAU AVANT L'ATTENTE, PAS APRÈS. On patientait 1 200 ms
+     avant de pousser, sans rien noter : le cas ordinaire — on allume une
+     cloche, on verrouille le téléphone dans la seconde — ne laissait aucune
+     trace. Le serveur n'apprenait jamais la cloche, et l'écran continuait
+     d'annoncer « Activées · 1 série » au-dessus d'un serveur vide. Le correctif
+     B6 couvrait le chemin « la requête a échoué » ; celui-ci, « la requête n'est
+     jamais partie ».
+     Le drapeau est posé tout de suite et n'est levé que par un `pousserCloches`
+     RÉUSSI. Il devient une promesse tenue : tant qu'il est là, le serveur n'a
+     pas la dernière version. Le bandeau existant et le rattrapage au démarrage
+     font le reste. */
+  /* Sans compte ni serveur joignable, il n'y a rien à envoyer et donc rien à
+     avouer : le drapeau ne se pose que quand un envoi est réellement attendu. */
+  if(db.notif && signedIn() && syncReady() && !db.notif.desyncAt){
+    db.notif.desyncAt = Date.now();
+    db.notif.desyncMotif = 'Le réglage n\'est pas encore parti au serveur.';
+    saveDB();
+  }
+  pousseEnVol = true;
   pousseTimer = setTimeout(async ()=>{
-    if(!signedIn()) return;
+    if(!signedIn()){ pousseEnVol = false; return; }
     if(Object.keys(db.notif.titres).length) await abonnerAppareil();
     await pousserCloches();
+    pousseEnVol = false;
   }, 1200);
 }
 
@@ -624,16 +779,31 @@ function viewNotifications(){
   /* B6 — l'aveu. Tant que le serveur n'a pas la dernière version des cloches,
      l'écran le dit ; sans ça il affichait « Activées · 3 séries » au-dessus
      d'un serveur vide. */
-  if(db.notif.desyncAt){
+  /* B11 — DEUX SITUATIONS, DEUX PHRASES. Depuis que le drapeau est posé dès la
+     bascule d'une cloche, il couvre aussi la seconde et demie pendant laquelle
+     l'envoi est simplement en route : annoncer « Réglages non enregistrés » à
+     ce moment-là serait une fausse alerte. Tant que l'envoi est en vol, l'écran
+     dit qu'il est en vol — et ne propose pas de le relancer. `pousseEnVol` vit
+     en mémoire : après un redémarrage, plus rien n'est en route, et c'est bien
+     l'aveu complet qui s'affiche. */
+  /* B11 — et rien à avouer tant qu'il n'y a pas de compte : l'envoi est remis,
+     pas perdu, et un bandeau d'alerte devant quelqu'un qui vient de se
+     déconnecter ne décrirait rien qu'il puisse réparer. */
+  if(db.notif.desyncAt && signedIn()){
+    const enVol = pousseEnVol;
     html += '<div class="wrap" style="padding-top:10px;padding-bottom:0">'+
       '<div class="banner" style="margin:0;display:flex;align-items:center;gap:12px">'+
-        '<div style="flex:1"><b>Réglages non enregistrés</b><br>'+
-          '<span class="small">'+esc(db.notif.desyncMotif || 'La connexion a été perdue '+
-          'en cours d\'enregistrement.')+' Le serveur n\'a pas la dernière version '+
-          'de tes alertes.</span></div>'+
-        '<button class="btn" style="flex:0 0 auto;padding:9px 16px" '+
-          (occupe('cloches') ? 'disabled ' : '')+'onclick="reessayerCloches()">'+
-          (occupe('cloches') ? '…' : 'Réessayer')+'</button>'+
+        '<div style="flex:1"><b>'+(enVol ? 'Enregistrement en cours…'
+                                         : 'Réglages non enregistrés')+'</b><br>'+
+          '<span class="small">'+(enVol
+            ? 'Tes alertes partent au serveur.'
+            : esc(db.notif.desyncMotif || 'La connexion a été perdue '+
+              'en cours d\'enregistrement.')+' Le serveur n\'a pas la dernière version '+
+              'de tes alertes.')+'</span></div>'+
+        (enVol ? ''
+          : '<button class="btn" style="flex:0 0 auto;padding:9px 16px" '+
+            (occupe('cloches') ? 'disabled ' : '')+'onclick="reessayerCloches()">'+
+            (occupe('cloches') ? '…' : 'Réessayer')+'</button>')+
       '</div></div>';
   }
 
