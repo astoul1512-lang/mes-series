@@ -252,6 +252,28 @@ function appliquerImport(){
     db.notif = d.notif;
     if(typeof migrerNotif === 'function') migrerNotif();
   }
+  /* C5 (09/08) — UNE SAUVEGARDE ANCIENNE ARRIVAIT AU MAUVAIS FORMAT, ET PLANTAIT.
+     `migrer()` et `reparerBase()` ne tournent qu'au démarrage : la base
+     importée entrait donc telle quelle, avec le format de sa version d'origine.
+     Une sauvegarde d'avant le renommage `ep.s → ep.st` faisait tomber le
+     premier `progress()` venu, c'est-à-dire le rendu qui suit trois lignes plus
+     bas. Il fallait redémarrer l'app pour que l'import devienne exploitable —
+     et personne ne pouvait le deviner.
+
+     `d.v` D'ABORD, ET C'EST L'ORDRE QUI COMPTE : `migrer()` lit `db.v` pour
+     savoir d'où partir. Sans cette reprise, une sauvegarde en v1 entrerait dans
+     une base marquée v4, et le registre sauterait toutes les migrations dont
+     elle a précisément besoin. Une sauvegarde sans `v` est réputée v1 : c'est
+     ce que fait déjà `migrer()` pour une base locale sans version.
+     Sans `v` du tout dans le fichier, on ne touche pas à `db.v` : forcer 1
+     rejouerait des migrations déjà faites sur les blocs qu'on vient de garder. */
+  if(d.v !== undefined) db.v = Number(d.v) || 1;
+  if(typeof migrer === 'function') migrer();
+  /* Les deux, et pas seulement `migrer()`. Il appelle bien `reparerBase()` sur
+     son chemin normal, mais il sort AVANT quand la sauvegarde annonce un schéma
+     plus récent que le code (`schemaTropRecent`) — et c'est justement le cas où
+     la base est la plus susceptible d'être illisible. */
+  if(typeof reparerBase === 'function') reparerBase();
   saveDB(); render(); toast('Données importées');
 }
 /* ---------------------------------------------------------------------------
@@ -367,7 +389,40 @@ function doWipe(){
 }
 
 /* ============================ Démarrage ============================ */
+
+/* C5 (09/08) — L'ÉCRAN DE SECOURS, ET POURQUOI IL EXISTE.
+   `body.booting .app, body.booting nav { opacity:0 }` (app.css) masque tout
+   jusqu'à ce que `boot()` retire la classe. Cette ligne était posée APRÈS
+   `loadDB` / `migrer` / `migrerNotif` / `migrerGouts` : n'importe quel throw
+   sur ce chemin — une donnée abîmée, un script en 404, une migration qui
+   s'étrangle — laissait `booting` en place. L'app devenait INVISIBLE, pour
+   toujours, sans un mot. Écran noir, et rien à faire que réinstaller.
+
+   Écrit en HTML direct dans `#app`, sans passer par `render()` ni par `esc()` :
+   à cet instant on ne sait pas ce qui marche encore, et un écran de secours
+   qui dépend du reste de l'app ne secourt personne. Le bouton d'export est
+   proposé quand la fonction existe — c'est le seul geste qui peut sauver
+   quelque chose avant de réinstaller. */
+function ecranSecours(){
+  const app = document.getElementById('app');
+  if(!app) return;
+  app.innerHTML =
+    '<div class="wrap" style="padding-top:64px;text-align:center">'+
+      '<h2 style="margin:0 0 10px">L\'application n\'a pas pu démarrer</h2>'+
+      '<p class="small muted" style="margin:0 0 20px">Tes données sont toujours sur '+
+        'l\'appareil. Réessaie ; si l\'écran revient, exporte-les avant toute autre chose.</p>'+
+      '<button class="btn block" style="margin-bottom:10px" onclick="location.reload()">Réessayer</button>'+
+      (typeof exportData === 'function'
+        ? '<button class="btn ghost block" onclick="exportData()">Exporter mes données</button>' : '')+
+    '</div>';
+}
+
 async function boot(){
+  /* C5 — TOUT LE CORPS EST DANS CE `try`. Le contenu n'est volontairement pas
+     ré-indenté : le seul changement réel tient dans les trois lignes du
+     `catch`/`finally`, et une ré-indentation de quatre-vingts lignes rendrait
+     le diff illisible pour la relecture, qui est le dernier filet du projet. */
+  try{
   await loadDB();
   /* B7 — le registre de migrations, AVANT le premier rendu et après la lecture
      de la base. Il porte désormais aussi la remise en forme douce (présence de
@@ -377,9 +432,13 @@ async function boot(){
      test, sinon on déplace du code sans filet. */
   if(typeof migrer === 'function') migrer();
   /* Les préférences de notification n'existent pas dans les bases d'avant :
-     on les crée avant le premier rendu, sinon l'écran des réglages plante. */
-  migrerNotif();
-  migrerGouts();
+     on les crée avant le premier rendu, sinon l'écran des réglages plante.
+     C5 (09/08) — les gardes `typeof` manquaient sur ces deux-là, alors que
+     TOUS les autres appels de cette fonction en portent une. Un app-09 ou un
+     app-11 en 404 — un déploiement à moitié servi, un cache partiel — et le
+     démarrage s'arrêtait ici, avant que `booting` soit retiré. */
+  if(typeof migrerNotif === 'function') migrerNotif();
+  if(typeof migrerGouts === 'function') migrerGouts();
   /* LOT C — la forme de `db.avis`, garantie avant le premier rendu comme les
      deux migrations ci-dessus. Elle ne transforme rien : elle crée les deux
      seaux `tv` et `movie` s'ils manquent, et c'est tout. */
@@ -390,9 +449,8 @@ async function boot(){
   semerPlatesFiltres();
   /* I9 — le nettoyage a quitté le rendu de l'écran des cloches, où il mutait
      `db` sans jamais l'enregistrer. Ici, et son résultat est écrit. */
-  if(nettoyerCloches()) saveDB();
+  if(typeof nettoyerCloches === 'function' && nettoyerCloches()) saveDB();
   askPersist();
-  document.body.classList.remove('booting');
 
   /* ===================== C3 — l'entrée directe =====================
      ORDRE IMPÉRATIF : le lien de réinitialisation se lit AVANT toute route. Il
@@ -441,6 +499,21 @@ async function boot(){
     setTimeout(()=> toast('Tes notifications sont réactivées : le résumé groupé n\'existait pas encore'), 900);
   }
   if(syncReady() && signedIn()){ syncNow(true); majProfil(); chargerPartage(); inscrireSiBesoin(); }
+  /* C8 — les reprises de synchro (retour du réseau, réouverture de l'app). Ici
+     et pas au chargement du script : elles n'ont de sens qu'une fois la base
+     lue, et `boot` est le seul endroit qui le garantit. */
+  if(typeof armerReprisesSynchro === 'function') armerReprisesSynchro();
+  }catch(e){
+    /* C5 — on n'avale pas : on journalise ET on affiche. Un `catch` muet ici
+       reproduirait l'écran noir avec une couche de politesse en plus. */
+    console.error('[boot]', e);
+    ecranSecours();
+  }finally{
+    /* LA LIGNE QUI COMPTE. Dans le `finally`, donc jouée quelle que soit la
+       sortie — succès, exception, ou l'un des `return` du chemin de l'entrée
+       directe plus haut. Tant qu'elle n'est pas passée, l'app est invisible. */
+    document.body.classList.remove('booting');
+  }
 }
 /* `test.html` charge les mêmes fichiers dans le même ordre, pour éprouver le
    VRAI code et non une copie. Il pose `MODE_TEST` avant de les charger : sans
@@ -492,4 +565,38 @@ function montrerBandeauMaj(){
     '<button style="background:none;border:0;color:#9aa1b5;font-size:18px;padding:2px 6px" '+
     'onclick="document.getElementById(\'majbandeau\').remove()">×</button>';
   document.body.appendChild(b);
+}
+
+/* C8 · point 4 (09/08) — LE BANDEAU « SESSION EXPIRÉE ».
+   Quand le rafraîchissement du jeton échoue définitivement, `sbRefresh`
+   (app-01) retire la session et pose `db.sessionExpiree`. Sans ce bandeau,
+   l'app se contentait de retomber sur l'écran de connexion sans dire pourquoi —
+   ce qui, vu de l'extérieur, ressemble à une déconnexion arbitraire, et donne
+   surtout l'impression que les données sont parties avec.
+   Même forme que le bandeau de mise à jour, à deux détails près : il ne se
+   ferme pas d'une croix (il n'y a rien à ignorer, il faut se reconnecter), et
+   il mène à l'écran Compte plutôt qu'à un rechargement, qui ne changerait
+   rien. */
+function montrerBandeauSession(){
+  if(!db.sessionExpiree) return;
+  if(document.getElementById('sessionbandeau')) return;
+  if(!document.body || document.body.classList.contains('booting')) return;
+  const b = document.createElement('div');
+  b.id = 'sessionbandeau';
+  b.style.cssText = 'position:fixed;left:12px;right:12px;bottom:76px;z-index:61;'+
+    'background:#1d2130;color:#fff;border:1px solid #343a4e;border-radius:12px;'+
+    'padding:10px 12px;display:flex;align-items:center;gap:10px;'+
+    'box-shadow:0 8px 24px rgba(0,0,0,.45);font-size:14px';
+  b.innerHTML = '<span style="flex:1">Session expirée — tes données sont intactes</span>'+
+    '<button style="background:#e8412f;color:#fff;border:0;border-radius:9px;'+
+    'padding:8px 12px;font-weight:650" onclick="oublierSessionExpiree();go(\'account\')">Se reconnecter</button>';
+  document.body.appendChild(b);
+}
+/* Le bandeau disparaît quand on va faire ce qu'il demande, ou quand une
+   session revient. Deux appelants, et c'est voulu : la marque ne doit pas
+   survivre à sa raison d'être. */
+function oublierSessionExpiree(){
+  if(db.sessionExpiree){ delete db.sessionExpiree; saveDB(); }
+  const b = document.getElementById('sessionbandeau');
+  if(b) b.remove();
 }

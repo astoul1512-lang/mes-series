@@ -226,14 +226,28 @@ async function tmdb(path, params, extra){
   u.searchParams.set('language', db.lang || 'fr-FR');
   for(const k in (params||{})) u.searchParams.set(k, params[k]);
   const opt = {};
-  if(extra && extra.signal) opt.signal = extra.signal;      // permet d'abandonner la requête
-  /* Sans délai maximal, un réseau qui ne répond plus laisse l'interface en
-     « chargement » pour toujours. */
-  let minuteur = null;
-  if(!opt.signal && typeof AbortController !== 'undefined'){
-    const ctrl = new AbortController();
+  /* C8 · point 5 (09/08) — LE DÉLAI MAXIMAL S'ARME TOUJOURS.
+     Il ne s'armait QUE si l'appelant ne fournissait pas son propre signal :
+     `if(!opt.signal)`. Or `chercherTitre` (app-12) en fournit toujours un — il
+     lui sert à abandonner la recherche précédente quand on continue de taper.
+     Autrement dit, l'écran de recherche, le seul où l'on attend vraiment une
+     réponse, était le seul SANS délai maximal : sur un réseau qui s'effondre,
+     le spinner tournait indéfiniment.
+     On combine donc les deux plutôt que de choisir : abandon si l'appelant le
+     demande, OU si les quinze secondes sont écoulées. Les deux causes sont
+     réelles et n'ont aucune raison de s'exclure. */
+  let minuteur = null, ctrl = null;
+  if(typeof AbortController !== 'undefined'){
+    ctrl = new AbortController();
     opt.signal = ctrl.signal;
+    const sortie = extra && extra.signal;
+    if(sortie){
+      if(sortie.aborted) ctrl.abort();
+      else sortie.addEventListener('abort', ()=>{ try{ ctrl.abort(); }catch(e){} }, { once:true });
+    }
     minuteur = setTimeout(()=>{ try{ ctrl.abort(); }catch(e){} }, 15000);
+  }else if(extra && extra.signal){
+    opt.signal = extra.signal;      // navigateur sans AbortController : on ne perd pas l'existant
   }
   let r;
   try{ r = await fetch(u.toString(), opt); }
@@ -305,7 +319,7 @@ async function fetchShowFull(id, onStep, base0){
    ici doit se faire UNE PAR UNE, chacune avec son test : les rapatrier toutes
    dans la même livraison, c'est empiler les risques sur le démarrage.
 --------------------------------------------------------------------------- */
-const SCHEMA = 3;
+const SCHEMA = 4;
 
 const MIGRATIONS = {
   2: function(){
@@ -341,6 +355,28 @@ const MIGRATIONS = {
       n.reprisI9 = true;
     }
     if(typeof normaliserFilmsNotif === 'function') normaliserFilmsNotif(n.films);
+  },
+  4: function(){
+    /* C4 (09/08) — LES DATES PAR SOUS-BLOC DE `db.gouts`.
+
+       Une base existante ne porte qu'une date globale, `maj`. On la recopie
+       telle quelle sur chacun des sept sous-blocs : c'est la seule lecture
+       honnête de ce qu'on sait — « à cet instant, tout le bloc était à jour ».
+
+       Sans elle, `majBlocs` serait vide et TOUS les blocs vaudraient zéro : le
+       premier distant rencontré, même bien plus ancien, gagnerait sur chacun
+       d'eux et écraserait des réglages parfaitement frais. C'est exactement la
+       perte que ce correctif est censé empêcher, retournée dans l'autre sens.
+
+       Une transformation ponctuelle : sa place est ici, dans le registre, et
+       pas dans `migrerGouts` qui ne fait que garantir des présences (§B7).
+       `db.gouts` peut être absent — `migrer()` tourne AVANT `migrerGouts()`. */
+    const g = db.gouts;
+    if(!g || typeof g !== 'object') return;
+    if(g.majBlocs && typeof g.majBlocs === 'object' && !Array.isArray(g.majBlocs)) return;
+    const t = Number(g.maj) || 0;
+    g.majBlocs = {};
+    Object.keys(GOUT_BLOCS).forEach(nom=>{ g.majBlocs[nom] = t; });
   }
 };
 
@@ -634,12 +670,68 @@ async function sbPoserMotDePasse(jeton, mdp){
   return b;
 }
 
-async function sbRefresh(){
-  try{
-    const d = await sbFetch('/auth/v1/token?grant_type=refresh_token', {method:'POST', noAuth:true,
-      body: JSON.stringify({refresh_token: db.auth.refresh})});
-    await applySession(d); return true;
-  }catch(e){ return false; }
+/* ---------------------------------------------------------------------------
+   C8 · point 3 — UN SEUL RAFRAÎCHISSEMENT À LA FOIS
+
+   Au démarrage, quatre appels partent EN PARALLÈLE (`boot`, app-08) :
+   `syncNow`, `majProfil`, `chargerPartage`, `inscrireSiBesoin`. Jeton expiré,
+   et les quatre reçoivent un 401 à quelques millisecondes d'intervalle : quatre
+   `sbRefresh()` partaient avec LE MÊME jeton de rafraîchissement. Or Supabase
+   fait tourner ces jetons — le premier appel invalide celui que les trois
+   autres tiennent encore en main. Résultat : trois `invalid_grant`, et selon
+   l'ordre d'arrivée, une session perdue au démarrage sans que rien ne l'ait
+   demandé.
+
+   Une seule promesse partagée : le premier 401 lance le rafraîchissement, les
+   suivants attendent CELUI-LÀ. Remise à `null` dans un `finally`, sinon un
+   échec figerait la promesse ratée pour le reste de la session.
+
+   C8 · point 4 — LA SESSION ZOMBIE. Quand le rafraîchissement échoue
+   DÉFINITIVEMENT — jeton révoqué, mot de passe changé ailleurs, compte
+   supprimé sur un autre appareil — `db.auth` restait posé. L'app se croyait
+   connectée : chaque synchro affichait « erreur 401 », l'écran Compte montrait
+   une adresse e-mail, et rien, nulle part, ne proposait de se reconnecter. On
+   distingue donc les deux causes d'échec :
+     · réseau ou serveur indisponible → on garde la session, ça repartira ;
+     · le serveur REFUSE le jeton (400/401/403) → la session est morte, on la
+       retire et on le dit.
+   Confondre les deux déconnecterait quelqu'un qui passe sous un tunnel.
+--------------------------------------------------------------------------- */
+let refreshEnCours = null;
+
+function sbRefresh(){
+  if(refreshEnCours) return refreshEnCours;
+  refreshEnCours = (async ()=>{
+    try{
+      const d = await sbFetch('/auth/v1/token?grant_type=refresh_token', {method:'POST', noAuth:true,
+        body: JSON.stringify({refresh_token: db.auth && db.auth.refresh})});
+      await applySession(d);
+      return true;
+    }catch(e){
+      const st = e && e.status;
+      const brut = String((e && e.message) || '');
+      const refus = st === 400 || st === 401 || st === 403 ||
+                    /invalid_grant|invalid refresh|not found|expired/i.test(brut);
+      if(refus) sessionExpiree();
+      return false;
+    }finally{
+      refreshEnCours = null;
+    }
+  })();
+  return refreshEnCours;
+}
+
+/* La session est morte pour de bon. On la retire — sans quoi l'app continuerait
+   de se croire connectée — et on le DIT une seule fois : un bandeau qui reste,
+   plutôt qu'un toast qui passe pendant qu'on regarde ailleurs. */
+function sessionExpiree(){
+  if(!db.auth) return;
+  db.auth = null;
+  syncState = 'off';
+  db.sessionExpiree = true;
+  saveDB();
+  if(typeof toast === 'function') toast('Session expirée — reconnecte-toi');
+  if(typeof render === 'function') render();
 }
 
 /* ---------------------------------------------------------------------------
@@ -701,6 +793,10 @@ async function applySession(d){
   }
   db.auth = { token:d.access_token, refresh:d.refresh_token,
               uid: uid, email:(d.user&&d.user.email)||(db.auth&&db.auth.email) };
+  /* C8 — une session valide efface la marque « session expirée » : le bandeau
+     n'a plus de raison d'être, et le laisser serait pire que ne rien afficher. */
+  if(typeof oublierSessionExpiree === 'function') oublierSessionExpiree();
+  else delete db.sessionExpiree;
   adopterCompte(db.auth.uid);
   saveDB();
   return db.auth;
@@ -1044,15 +1140,9 @@ function mergeRemote(rem){
     });
   });
   if(!db.pseudo && rem.pseudo){ db.pseudo = rem.pseudo; changed = true; }
-  /* B8 — les préférences suivent le compte, pas l'appareil. Elles ne se
-     fusionnent PAS champ par champ : la plus récente gagne en bloc. Ce sont des
-     réglages, pas du patrimoine — perdre le dernier genre coché n'est pas du
-     même ordre que perdre un épisode. */
-  if(rem.gouts && (rem.gouts.maj||0) > ((db.gouts||{}).maj||0)){
-    db.gouts = rem.gouts;
-    if(typeof migrerGouts === 'function') migrerGouts();   // champs manquants d'une version d'avant
-    changed = true;
-  }
+  /* B8 — les préférences suivent le compte, pas l'appareil.
+     C4 (09/08) — et elles se fusionnent maintenant SOUS-BLOC PAR SOUS-BLOC. */
+  if(fusionnerGouts(rem)) changed = true;
   if(rem.profil && (rem.profil.maj||0) > ((db.profil||{}).maj||0)){
     db.profil = rem.profil; changed = true;
   }
@@ -1256,6 +1346,114 @@ function fusionnerAbosIgnores(rem){
   return bouge;
 }
 
+/* ---------------------------------------------------------------------------
+   C4 (09/08) — LES GOÛTS NE S'ÉCRASENT PLUS EN BLOC
+
+   `db.gouts` se fusionnait en tout-ou-rien sur une seule date, `maj`. C'était
+   défendable quand le bloc ne portait que des réglages ; ça ne l'est plus
+   depuis qu'il porte aussi des GESTES. `refuserSugg` (app-04) — un simple
+   « Pas pour moi » sur une suggestion — appelle `toucheGouts()`, ce qui datait
+   TOUT le bloc : à la synchro suivante, il écrasait les genres, les acteurs,
+   les plateformes et les graines réglés le même jour sur l'autre appareil. Et
+   réciproquement. Deux appareils utilisés dans la même journée se volaient
+   silencieusement leurs réglages, celui qui avait touché en dernier gagnant
+   tout — y compris ce qu'il n'avait jamais touché.
+
+   LA DÉCOUPE. Chaque bloc regroupe des clés qui se règlent d'un même geste et
+   qui n'ont aucun sens l'une sans l'autre :
+
+     genres     — le choix de genres et son complément. `exclus` est l'envers
+                  exact de `genres` (cocher un genre le retire des exclus, et
+                  l'inverse) : les séparer ferait apparaître un genre à la fois
+                  aimé et écarté. `genresFam` est DÉRIVÉ de `genres` et de
+                  `animeSous`, et `genresFamDe` est la signature qui dit de
+                  quoi il a été dérivé — les trois voyagent ensemble ou la
+                  signature ment.
+     acteurs    — indépendant de tout le reste.
+     graines    — les titres d'amorçage et le drapeau qui ferme la grille.
+     plates     — les abonnements déclarés, la question posée, et le filtre
+                  « seulement mes plateformes » qui n'existe que grâce à eux.
+     pasVus     — « je ne l'ai pas vu », dit en plein duel.
+     pasPourMoi — les suggestions refusées. C'EST LE BLOC QUI A MOTIVÉ TOUT
+                  CECI : le plus écrit, et le moins important.
+     divers     — les réglages restants (`propose`, `toutesOrigines`, `jour`,
+                  `neutres`). Un fourre-tout assumé : ce sont des interrupteurs
+                  isolés, et leur donner un bloc chacun n'achèterait rien.
+
+   ÉCART ASSUMÉ AVEC LA SPEC. Elle demandait `animeSous` en bloc séparé. Il est
+   ici DANS `genres`, parce que `genresFam` est recalculé à partir de la paire
+   `genres` + `animeSous` (voir `migrerGenresFam`, app-11) : les fusionner
+   séparément produirait un `genresFam` en désaccord avec sa propre signature,
+   c'est-à-dire un écran de goûts qui affiche autre chose que ce qui est
+   stocké. La spec demandait aussi `genres`+`exclus` groupés — même famille,
+   même raison, on est cohérent.
+
+   COMPATIBILITÉ DESCENDANTE, DANS LES DEUX SENS.
+     · Un distant SANS `majBlocs` (appareil resté en v88) : tous ses blocs sont
+       réputés datés de son `maj`. C'est exactement l'ancien comportement, donc
+       aucune régression pour lui.
+     · `maj` continue d'être écrit et envoyé : un appareil resté en v88 lit
+       toujours ce qu'il attend et arbitre comme avant.
+   Une base locale existante reçoit ses `majBlocs` par la migration 4.
+--------------------------------------------------------------------------- */
+const GOUT_BLOCS = {
+  genres:     ['genres','genresFam','genresFamDe','exclus','animeOui','animeSous'],
+  acteurs:    ['acteurs'],
+  graines:    ['graines','amorcageFait'],
+  plates:     ['plates','platesDemande','suggMesPlates'],
+  pasVus:     ['pasVus'],
+  pasPourMoi: ['pasPourMoi'],
+  divers:     ['propose','toutesOrigines','jour','neutres']
+};
+
+function fusionnerGouts(rem){
+  const rg = rem && rem.gouts;
+  if(!rg || typeof rg !== 'object') return false;
+  if(!db.gouts || typeof db.gouts !== 'object') db.gouts = {};
+  const g = db.gouts;
+  if(!g.majBlocs || typeof g.majBlocs !== 'object' || Array.isArray(g.majBlocs)) g.majBlocs = {};
+
+  const rmaj = Number(rg.maj) || 0;
+  const rBlocs = (rg.majBlocs && typeof rg.majBlocs === 'object' && !Array.isArray(rg.majBlocs))
+               ? rg.majBlocs : null;
+  let bouge = false;
+
+  const lmaj = Number(g.maj) || 0;
+
+  Object.keys(GOUT_BLOCS).forEach(nom=>{
+    /* LE REPLI SUR LA DATE GLOBALE, DES DEUX CÔTÉS ET CLÉ PAR CLÉ.
+       Un bloc sans date vaut la date globale de son porteur — pas zéro. Ça
+       couvre trois cas d'un coup, et le troisième est celui qui compte :
+         · un distant d'avant C4, qui n'a pas de `majBlocs` du tout ;
+         · une base locale dont la migration 4 n'a pas encore tourné ;
+         · un bloc AJOUTÉ dans une version future, absent des deux registres.
+       Sans ce repli, un bloc à `undefined` compterait pour zéro et le premier
+       distant venu, même bien plus ancien, gagnerait tout. C'est-à-dire
+       exactement la perte que ce correctif est censé empêcher, retournée. */
+    const la  = Number(rBlocs && rBlocs[nom] !== undefined ? rBlocs[nom] : rmaj) || 0;
+    const ici = Number(g.majBlocs[nom] !== undefined ? g.majBlocs[nom] : lmaj) || 0;
+    /* `<=` : à égalité on garde le local. Même règle que partout ailleurs dans
+       cette fusion, et elle évite qu'un aller-retour fasse osciller un
+       réglage entre deux appareils qui ont écrit la même milliseconde. */
+    if(la <= ici) return;
+    GOUT_BLOCS[nom].forEach(cle=>{
+      /* Le distant gagne, y compris quand il n'a PAS la clé : une base plus
+         ancienne qui ignore `animeOui` doit pouvoir la retirer, sinon un
+         réglage abandonné reviendrait indéfiniment. `migrerGouts` reposera la
+         valeur par défaut juste après. */
+      if(rg[cle] === undefined) delete g[cle]; else g[cle] = rg[cle];
+    });
+    g.majBlocs[nom] = la;
+    bouge = true;
+  });
+
+  /* `maj` suit le plus récent des deux, pour rester lisible par un appareil
+     d'avant C4. Il n'arbitre plus rien ici. */
+  if(rmaj > (Number(g.maj) || 0)) g.maj = rmaj;
+  if(bouge && typeof migrerGouts === 'function') migrerGouts();
+  return bouge;
+}
+
 function markDeleted(kind, id){
   db.deleted = db.deleted || {shows:{},movies:{}};
   db.deleted[kind][id] = Date.now();
@@ -1269,9 +1467,65 @@ function markDeleted(kind, id){
 function motifSynchro(e){
   const brut = (e && (e.message || e)) || '';
   if(e && e.delai) return 'Délai dépassé — rien n\'est perdu, ça repartira.';
+  /* C8 — trois fois devancé par un autre appareil. Ce n'est pas une panne, et
+     surtout rien n'est perdu : c'est même le contraire, on a refusé d'écraser. */
+  if(e && e.course) return 'Un autre appareil synchronisait en même temps — ça repartira.';
   if(!navigator.onLine || /Failed to fetch|NetworkError|Load failed/i.test(brut))
     return 'Pas de connexion — rien n\'est perdu, ça repartira.';
   return String(brut).slice(0, 120);
+}
+
+/* C8 · point 1 — un aller-retour complet, retenté tant qu'un autre appareil
+   nous passe devant. Rend `true` si la fusion a rapporté quelque chose.
+
+   Deux cas au POST, et il faut les distinguer :
+     · la ligne n'existe pas encore (premier appareil du compte) → il n'y a
+       aucune version à conserver, on insère sans condition ;
+     · la ligne existe → on n'écrit que si elle porte encore l'`updated_at`
+       qu'on a lu. Sinon on relit et on recommence.
+
+   Le filtre `user_id=eq.…` est conservé DANS la condition : sans lui, la RLS
+   protégerait toujours, mais la requête décrirait autre chose que ce qu'elle
+   veut dire, et c'est le genre d'écart qui se paye à la relecture suivante. */
+async function echangerAvecServeur(essaisRestants){
+  const cible = '/rest/v1/'+TABLE+'?user_id=eq.'+encodeURIComponent(db.auth.uid);
+  const got = await sbFetch(cible.replace('?', '?select=data,updated_at&'), {});
+  const ligne = (Array.isArray(got) && got.length) ? got[0] : null;
+  const fusionAChange = ligne ? mergeRemote(ligne.data) : false;
+
+  const corps = JSON.stringify({ user_id: db.auth.uid, data: payload(),
+                                 updated_at: new Date().toISOString() });
+
+  if(!ligne){
+    /* Première écriture du compte. `merge-duplicates` reste nécessaire : deux
+       appareils neufs peuvent insérer en même temps, et le second doit fusionner
+       sur la clé plutôt que tomber en conflit. */
+    await sbFetch('/rest/v1/'+TABLE, {
+      method:'POST',
+      headers:{ Prefer:'resolution=merge-duplicates,return=minimal' },
+      body: corps
+    });
+    return fusionAChange;
+  }
+
+  const rep = await sbFetch(cible + '&updated_at=eq.' + encodeURIComponent(ligne.updated_at), {
+    method:'PATCH',
+    headers:{ Prefer:'return=representation' },
+    body: corps
+  });
+  /* Zéro ligne touchée = quelqu'un a écrit entre notre lecture et notre
+     écriture. Rien n'est perdu : on relit SA version, on la refusionne avec la
+     nôtre, et on repart. C'est exactement ce que la fusion sait faire. */
+  if(Array.isArray(rep) && rep.length) return fusionAChange;
+  if(essaisRestants > 1){
+    const encore = await echangerAvecServeur(essaisRestants - 1);
+    return fusionAChange || encore;
+  }
+  /* Trois passages et toujours devancé : ce n'est plus une course. On le dit
+     par une erreur, ce qui replanifie via le chemin d'échec habituel. */
+  const err = new Error('COURSE');
+  err.course = true;
+  throw err;
 }
 
 async function syncNow(silent){
@@ -1287,15 +1541,22 @@ async function syncNow(silent){
   }
   syncing = true; syncState = 'busy'; syncError = ''; if(!silent) render();
   try{
-    const got = await sbFetch('/rest/v1/'+TABLE+'?select=data&user_id=eq.'+encodeURIComponent(db.auth.uid), {});
-    /* C5 — REVUE DU 07/08 : on retient si la fusion a RÉELLEMENT changé
-       quelque chose ; c'est elle qui décide du redessin plus bas. */
-    const fusionAChange = (Array.isArray(got) && got.length) ? mergeRemote(got[0].data) : false;
-    await sbFetch('/rest/v1/'+TABLE, {
-      method:'POST',
-      headers:{ Prefer:'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify({ user_id: db.auth.uid, data: payload(), updated_at: new Date().toISOString() })
-    });
+    /* C8 · point 1 — LE POST EST CONDITIONNÉ PAR LA VERSION QU'ON A LUE.
+       L'ancien enchaînement était GET → fusion → POST inconditionnel. Entre le
+       GET et le POST, il se passe plusieurs SECONDES : le paquet fait environ
+       1,4 Mo dans chaque sens. Si l'autre appareil poste dans cette fenêtre,
+       son écriture est écrasée en bloc par la nôtre — elle n'a jamais été lue,
+       donc jamais fusionnée. Aucune trace, aucun message : une soirée de
+       cochage disparaît parce que deux téléphones ont synchronisé en même
+       temps.
+       On relit donc `updated_at` avec les données, et le POST ne s'applique
+       QUE si la ligne porte encore cette valeur (`?updated_at=eq.…`).
+       `return=representation` est ce qui permet de savoir combien de lignes ont
+       été touchées : zéro veut dire « quelqu'un est passé avant », et on
+       recommence tout — relire, refusionner, reposter.
+       TROIS TENTATIVES, pas plus : au-delà, ce n'est plus une course, c'est un
+       problème. On replanifie et on laisse la main. */
+    const fusionAChange = await echangerAvecServeur(3);
     db.syncedAt = Date.now(); syncState = 'ok'; syncError = '';
     delete db.syncDernierEchec;
     await writeNow().catch(()=>{});
@@ -1336,6 +1597,71 @@ function scheduleSync(){
      est déjà faite (`saveDB`), et `syncNow` est rejoué à l'ouverture.
      Revue de stabilité du 02/08, constat A2-4. */
   syncTimer = setTimeout(()=> syncNow(true), 15000);
+}
+
+/* ---------------------------------------------------------------------------
+   C8 · point 2 (09/08) — LA SYNCHRO REPART TOUTE SEULE
+
+   Rien ne la relançait. Ni le retour du réseau, ni la réouverture de l'app :
+   il n'y avait aucun `addEventListener('online')` ni `visibilitychange` dans
+   tout le dépôt. Un échec dans le métro restait un échec jusqu'à la
+   modification suivante — et si on ne modifiait rien, jusqu'au redémarrage.
+   Rouvrir l'app après deux jours en arrière-plan ne déclenchait rien non plus :
+   `boot()` ne rejoue pas sur une PWA qui n'a jamais été fermée.
+
+   DEUX DÉCLENCHEURS, UNE SEULE CONDITION. On ne repart que si la dernière
+   tentative a échoué, ou si la dernière réussite date de plus de cinq minutes.
+   Sans cette condition, chaque bascule d'onglet lancerait un aller-retour de
+   1,4 Mo — ce qui coûterait plus cher que le défaut qu'on répare.
+
+   LE REPLI EXPONENTIEL sert à autre chose qu'à ménager le serveur : sur un
+   réseau qui répond « peut-être » (portail captif, 4G qui s'effondre), chaque
+   `online` déclenche un échec, et sans attente croissante on obtiendrait une
+   rafale de synchros ratées de 1,4 Mo chacune. 1 min, 2, 4, 8, plafond 15.
+   Remis à zéro par la première réussite.
+--------------------------------------------------------------------------- */
+const REPRISE_SI_PLUS_DE = 5 * 60000;   // dernière réussite plus vieille que ça
+const REPRISE_PLAFOND    = 15 * 60000;
+let repriseEchecs = 0, repriseTimer = null, reprisesArmees = false;
+
+function synchroAReprendre(){
+  if(!syncReady() || !signedIn()) return false;
+  if(db.syncDernierEchec) return true;
+  return (Date.now() - (db.syncedAt || 0)) > REPRISE_SI_PLUS_DE;
+}
+
+/* Le délai à respecter avant de retenter, d'après le nombre d'échecs
+   consécutifs. Pur, donc éprouvable — c'est la seule partie de ce bloc qui a
+   une valeur à vérifier plutôt qu'un effet à observer. */
+function delaiReprise(echecs){
+  if(echecs <= 0) return 0;
+  return Math.min(REPRISE_PLAFOND, 60000 * Math.pow(2, echecs - 1));
+}
+
+function reprendreSynchro(){
+  if(!synchroAReprendre()) return;
+  const attente = delaiReprise(repriseEchecs);
+  clearTimeout(repriseTimer);
+  repriseTimer = setTimeout(async ()=>{
+    if(!synchroAReprendre()) return;
+    const avant = db.syncedAt || 0;
+    await syncNow(true);
+    /* Le compteur se lit sur le RÉSULTAT, pas sur l'absence d'exception :
+       `syncNow` avale déjà les siennes et n'a rien à nous dire autrement. */
+    if((db.syncedAt || 0) > avant && !db.syncDernierEchec) repriseEchecs = 0;
+    else repriseEchecs++;
+  }, attente);
+}
+
+function armerReprisesSynchro(){
+  /* Une seule fois : `boot()` ne tourne qu'au chargement, mais les tests et un
+     futur appel manuel ne doivent pas empiler des écouteurs sur `window`. */
+  if(reprisesArmees) return;
+  reprisesArmees = true;
+  window.addEventListener('online', ()=>{ repriseEchecs = 0; reprendreSynchro(); });
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.visibilityState === 'visible') reprendreSynchro();
+  });
 }
 
 /* ============================ Partage par abonnement ============================ */

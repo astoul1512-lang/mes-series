@@ -319,7 +319,10 @@ function inscTerminer(){
        lot il en avait une. Sa seule issue aurait été « Mes goûts », au fond
        des réglages, qu'il n'ira pas chercher. C'était une régression. */
     if(inscNbAimes()) g.amorcageFait = true;
-    toucheGouts();
+    /* C4 — DEUX sous-blocs d'un seul geste : `platesDemande` juste au-dessus
+       appartient à `plates`, `amorcageFait` à `graines`. N'en dater qu'un
+       ferait perdre l'autre à la première synchro. */
+    toucheGouts('graines','plates');
   }
   if(typeof oublierSuggestions === 'function') oublierSuggestions();
   saveDB();
@@ -699,7 +702,7 @@ function viewInscStyle(){
       if(g.genres.indexOf(nom) < 0 && (g.exclus||[]).indexOf(nom) < 0) g.genres.push(nom);
     });
     inscStylePreRempli = true;
-    if(deduits.length) toucheGouts();
+    if(deduits.length) toucheGouts('genres');
   }
   const nAimes = inscNbAimes();
 
@@ -787,7 +790,7 @@ function inscBascGenre(nom){
     const j = (g.exclus || []).indexOf(nom);
     if(j >= 0) g.exclus.splice(j, 1);
   }
-  toucheGouts(); render();
+  toucheGouts('genres'); render();
 }
 function inscBascExclu(nom){
   const g = db.gouts;
@@ -799,7 +802,7 @@ function inscBascExclu(nom){
     const j = g.genres.indexOf(nom);
     if(j >= 0) g.genres.splice(j, 1);
   }
-  toucheGouts(); render();
+  toucheGouts('genres'); render();
 }
 /* Décocher « animé » vide le second niveau : garder des sous-genres pour une
    famille qu'on ne veut plus laisserait le récapitulatif — et le moteur —
@@ -808,14 +811,14 @@ function inscBascAnime(){
   const g = db.gouts;
   g.animeOui = !g.animeOui;
   if(!g.animeOui) g.animeSous = [];
-  toucheGouts(); render();
+  toucheGouts('genres'); render();
 }
 function inscBascAnimeSous(cle){
   const g = db.gouts;
   if(!Array.isArray(g.animeSous)) g.animeSous = [];
   const i = g.animeSous.indexOf(cle);
   if(i >= 0) g.animeSous.splice(i, 1); else g.animeSous.push(cle);
-  toucheGouts(); render();
+  toucheGouts('genres'); render();
 }
 
 /* ---------------------------------------------------------------------------
@@ -953,7 +956,7 @@ function inscBascPlate(id){
 function inscAucunePlate(){
   inscNoterAucune(!inscAucuneDite());
   if(typeof viderMesPlates === 'function') return viderMesPlates();
-  db.gouts.plates = []; toucheGouts(); render();
+  db.gouts.plates = []; toucheGouts('plates'); render();
 }
 
 /* ---------------------------------------------------------------------------

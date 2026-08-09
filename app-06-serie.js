@@ -265,6 +265,9 @@ async function cocherDepuisApercu(id, n, e){
 
 function showMenu(id){
   const s = db.shows[id];
+  /* C5 — une feuille ouverte sur une série disparue plantait avant même de
+     s'afficher (`s.name`), et emportait l'écran avec elle. */
+  if(!s) return;
   openSheet('<h3>'+esc(s.name)+'</h3><p class="small muted" style="margin:0 0 6px">Mise à jour : '+
       fmtDate(new Date(s.updated||Date.now()).toISOString().slice(0,10))+'</p>'+
     /* « Reprendre » reste toujours proposé — sans quoi une série mise en pause
@@ -360,6 +363,12 @@ function toggleEp(id,s,e){
    Les hors-série (saison 0) restent indépendants et ne déclenchent aucune cascade. */
 function toggleWholeSeason(id, n){
   const sh = db.shows[id];
+  /* C5 (09/08) — même garde que `toggleEp` juste au-dessus, qui l'avait déjà.
+     Le DOM peut être en retard sur la base : une synchro entrante qui retire
+     une série, un changement de compte, un import — et l'écran affiche encore
+     des boutons qui portent l'identifiant d'une série disparue. Sans garde,
+     `sh.seasons` lève un TypeError et l'écran entier se fige (voir `render`). */
+  if(!sh) return;
   const eps = sh.seasons[n] || [];
   const allOn = eps.length > 0 && eps.every(ep => sh.watched[key(n, ep.e)]);
   const cibles = (n === 0) ? [0]
@@ -388,6 +397,7 @@ function toggleWholeSeason(id, n){
 /* Toute la série vue / tout décocher — même moteur, donc annulable */
 function marquerToutVu(id){
   const sh = db.shows[id];
+  if(!sh) return;                                  // C5 — voir `toggleWholeSeason`
   const nb = allEpisodes(sh,true).filter(ep=>aired(ep) && !sh.watched[key(ep.s,ep.e)]).length;
   if(!nb) return toast('Déjà tout vu');
   applyWatched(id, s=>{
@@ -396,12 +406,15 @@ function marquerToutVu(id){
   }, nb+' épisode'+(nb>1?'s':'')+' marqué'+(nb>1?'s':'')+' vu'+(nb>1?'s':''));
 }
 function toutDecocher(id){
-  const nb = Object.keys(db.shows[id].watched).length;
+  const sh = db.shows[id];
+  if(!sh) return;                                  // C5 — voir `toggleWholeSeason`
+  const nb = Object.keys(sh.watched || {}).length;
   if(!nb) return;
   applyWatched(id, s=>{ s.watched = {}; },
     nb+' épisode'+(nb>1?'s':'')+' décoché'+(nb>1?'s':''));
 }
 function toggleToutVu(id){
+  if(!db.shows[id]) return;                        // C5 — voir `toggleWholeSeason`
   const p = progress(db.shows[id]);
   if(p.total > 0 && p.watched === p.total) toutDecocher(id); else marquerToutVu(id);
 }
@@ -539,7 +552,9 @@ function marquerCascade(id, n, e){
    ne se superposent jamais — voir `reculerAvis` / `filerAvis`. */
 function quickWatch(id, ev){
   if(ev) ev.stopPropagation();
-  const s = db.shows[id], nx = nextToWatch(s);
+  const s = db.shows[id];
+  if(!s) return;                                   // C5 — voir `toggleWholeSeason`
+  const nx = nextToWatch(s);
   if(!nx) return;
   applyWatched(id, x=>{ x.watched[key(nx.s,nx.e)] = Date.now(); },
                codeEp(nx.s,nx.e)+' vu');

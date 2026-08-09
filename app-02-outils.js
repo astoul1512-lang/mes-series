@@ -248,6 +248,26 @@ function fmtDate(iso){
   const d = new Date(iso+'T12:00:00');
   return d.getDate()+' '+MOIS[d.getMonth()]+' '+d.getFullYear();
 }
+/* C5 (09/08) — LA DATE À LAQUELLE ON A VU UN TITRE, SANS PLANTER.
+
+   Deux écrans faisaient `new Date(m.watchedAt).toISOString()` sans garde
+   (app-05 et app-11). `watchedAt` peut parfaitement être absent sur un film
+   marqué vu : une vieille sauvegarde réimportée, un film arrivé d'un appareil
+   en v82, un enregistrement interrompu. `new Date(undefined)` rend une date
+   invalide, et `.toISOString()` sur une date invalide lève un `RangeError` —
+   au milieu de la construction de la fiche, donc l'écran entier ne s'affiche
+   pas. Un film sans date de visionnage rendait sa propre fiche inatteignable.
+
+   Ici on rend `''`, et l'appelant écrit « Vu » sans date plutôt que rien du
+   tout. On ne devine pas une date qu'on n'a pas. */
+function dateVue(ts){
+  const n = Number(ts);
+  if(!n || !isFinite(n)) return '';
+  const d = new Date(n);
+  if(isNaN(d.getTime())) return '';
+  return fmtDate(d.toISOString().slice(0,10));
+}
+
 /* « il y a 3 min », « hier », « le 12 juin » — plus parlant qu'une date brute
    pour dire quand la dernière sauvegarde est partie. */
 function fmtQuand(ts){

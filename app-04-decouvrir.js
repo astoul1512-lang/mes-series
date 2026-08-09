@@ -1001,7 +1001,7 @@ function refuserSugg(x){
     cles.sort((a,b)=> (r[a].quand||0) - (r[b].quand||0))
         .slice(0, cles.length - REFUS_MAX)
         .forEach(k => { delete r[k]; });
-  toucheGouts();
+  toucheGouts('pasPourMoi');
 }
 
 /* Le malus, et il est LÉGER : il décale, il ne retire rien. Un titre dont le
@@ -1570,7 +1570,7 @@ function bascMaPlate(id){
   /* `toucheGouts` date et enregistre : la signature des goûts a changé, la
      vitrine se refera d'elle-même sous les yeux, et la modification saura
      s'imposer sur l'autre appareil. */
-  toucheGouts();
+  toucheGouts('plates');
   semerPlatesFiltres();
   render();
 }
@@ -1578,14 +1578,14 @@ function voirToutesMesPlates(){ ui.mesPlatesTout = !ui.mesPlatesTout; render(); 
 function viderMesPlates(){
   if(!db.gouts) return;
   db.gouts.plates = [];
-  toucheGouts(); semerPlatesFiltres(); render();
+  toucheGouts('plates'); semerPlatesFiltres(); render();
 }
 function finirMesPlates(){
-  db.gouts.platesDemande = true; toucheGouts();
+  db.gouts.platesDemande = true; toucheGouts('plates');
   go('follow');
 }
 function fermerMesPlates(){
-  db.gouts.platesDemande = true; toucheGouts();
+  db.gouts.platesDemande = true; toucheGouts('plates');
   toast('Plateformes enregistrées');
   goBack();
 }
@@ -1619,7 +1619,7 @@ function setSuggPlates(v){
   g.suggMesPlates = !!v;
   /* `toucheGouts` déclenche la veille : la signature des goûts vient de
      changer, la vitrine se refera d'elle-même au retour sur Découvrir. */
-  toucheGouts();
+  toucheGouts('plates');
   render();
 }
 

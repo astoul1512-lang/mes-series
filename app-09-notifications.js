@@ -186,6 +186,65 @@ function echecAbo(raison){
   return false;
 }
 
+/* ---------------------------------------------------------------------------
+   C7 (09/08) — CET APPAREIL SONNE POUR LE COMPTE CONNECTÉ, ET POUR LUI SEUL
+
+   L'envoi partait avec `Prefer: resolution=merge-duplicates` mais SANS dire sur
+   quelle colonne résoudre. La clé primaire de `push_appareils` est `id uuid`,
+   tirée au hasard : elle ne collisionne jamais. C'est `endpoint` qui porte
+   l'unicité — et la violation remontait donc en 409, sans jamais rien
+   remplacer. Deux conséquences, toutes deux constatables :
+
+     · réinstaller la PWA (le navigateur rend le MÊME endpoint) rendait la
+       réinscription impossible, avec un message PostgREST brut à l'écran ;
+     · si B se connecte sur le téléphone de A sans que A se soit déconnecté, la
+       ligne de A survit : A continue de recevoir SES notifications sur le
+       téléphone de B, et B n'en reçoit aucune.
+
+   DEUX CHEMINS, ET L'ORDRE COMPTE.
+     1. `?on_conflict=endpoint` : l'upsert remplace la ligne au même endpoint,
+        `user_id` compris. Suffit dans le cas courant — la ligne est déjà la
+        nôtre, ou elle n'existe pas.
+     2. Si la ligne appartient à QUELQU'UN D'AUTRE, l'UPDATE sous-jacent porte
+        sur une ligne que la policy « mes lignes seulement » (003) rend
+        invisible : Postgres refuse, et il a raison. On passe alors par
+        `reprendre_endpoint`, une fonction `security definer` qui n'a le droit
+        que d'une chose — effacer la ligne à cet endpoint, puis en insérer une
+        pour l'appelant (migration 012).
+
+   Le premier chemin d'abord, et pas l'inverse : la fonction serveur peut ne pas
+   être installée (migration pas encore jouée), et l'immense majorité des
+   inscriptions n'en a aucun besoin.
+--------------------------------------------------------------------------- */
+async function poserAbonnement(j){
+  const corps = { user_id: db.auth.uid, endpoint: j.endpoint,
+                  p256dh: j.keys.p256dh, auth: j.keys.auth,
+                  vu: new Date().toISOString(), echecs: 0 };
+  try{
+    await sbFetch('/rest/v1/push_appareils?on_conflict=endpoint', {
+      method:'POST',
+      headers:{ Prefer:'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify(corps)
+    });
+    return true;
+  }catch(e){
+    /* Cet appareil appartient à un autre compte. C'est le seul cas où l'on
+       insiste, et on n'insiste que pour ça : un 409 (unicité) ou un 403/42501
+       (la policy refuse de toucher la ligne d'autrui). Toute autre erreur —
+       réseau, jeton, serveur — remonte telle quelle. */
+    const st = e && e.status;
+    const msg = String((e && e.message) || '');
+    if(st !== 409 && st !== 403 && st !== 401 && !/policy|permission|duplicate|unique/i.test(msg)) throw e;
+    if(st === 401) throw e;                       // ce n'est pas un conflit, c'est une session morte
+    await sbFetch('/rest/v1/rpc/reprendre_endpoint', {
+      method:'POST',
+      body: JSON.stringify({ p_endpoint: j.endpoint,
+                             p_p256dh: j.keys.p256dh, p_auth: j.keys.auth })
+    });
+    return true;
+  }
+}
+
 async function abonnerAppareil(){
   if(!notifPossibles())
     return echecAbo(estIOS() && !surEcranAccueil()
@@ -211,18 +270,28 @@ async function abonnerAppareil(){
     const j = ab.toJSON();
     if(!j || !j.endpoint || !j.keys) return echecAbo('Abonnement incomplet renvoyé par iOS');
     etape = 'envoi au serveur';
-    await sbFetch('/rest/v1/push_appareils', {
-      method:'POST',
-      headers:{ Prefer:'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify({ user_id: db.auth.uid, endpoint: j.endpoint,
-                             p256dh: j.keys.p256dh, auth: j.keys.auth,
-                             vu: new Date().toISOString(), echecs: 0 })
-    });
+    await poserAbonnement(j);
     db.notif.abo = j.endpoint; db.notif.erreur = null; saveDB();
     return true;
   }catch(e){
-    return echecAbo(etape + ' — ' + ((e && (e.message || e.name)) || 'erreur inconnue'));
+    return echecAbo(etape + ' — ' + motifAbonnement(e));
   }
+}
+
+/* C7 — le message affiché quand l'inscription rate. Un 409 qui survit aux deux
+   chemins ci-dessus veut dire une chose et une seule, et il faut la dire dans
+   la langue de la personne plutôt que dans celle de PostgREST — qui répondait
+   jusqu'ici « duplicate key value violates unique constraint
+   push_appareils_endpoint_key », affiché tel quel sur l'écran des
+   notifications. */
+function motifAbonnement(e){
+  const st = e && e.status;
+  const brut = String((e && (e.message || e.name)) || 'erreur inconnue');
+  if(st === 409 || /duplicate key|unique constraint/i.test(brut))
+    return 'cet appareil était inscrit pour un autre compte — réessaie';
+  if(st === 404 || /reprendre_endpoint/i.test(brut))
+    return 'le serveur n\'a pas encore la mise à jour des notifications (migration 012)';
+  return brut.slice(0, 120);
 }
 
 /* Appelée à chaque ouverture de l'app, et après une connexion.
