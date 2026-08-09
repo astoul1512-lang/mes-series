@@ -52,6 +52,7 @@ Dans *SQL Editor*, exécuter les fichiers de `migrations/` **dans l'ordre**.
 | `010_remise_en_phase.sql` | ce qui tournait en production sans exister dans le dépôt |
 | `011_suivi_en_retour.sql` | « Suivre en retour », et la notification d'un nouvel abonné |
 | `012_durcissements.sql` | verrou sur les codes de partage, droits alignés, purge, défaut corrigé |
+| `013_push_endpoint.sql` | **SPEC-01 · C7** — un appareil sonne pour le compte connecté, et pour lui seul |
 
 Avant d'exécuter `005`, y remplacer deux marques :
 
@@ -66,15 +67,17 @@ Function : personne n'a besoin de le connaître.
 > fichier avant le 09/08/2026 n'a donc PAS `suivre_en_retour()` : le bouton
 > « Suivre » d'un abonné non réciproque répond `404`, en silence. Exécuter
 > `011` puis `012` sur une base existante répare le manque — les deux fichiers
-> sont rejouables, il n'y a rien à défaire avant.
+> sont rejouables, il n'y a rien à défaire avant. `013` se joue à la suite,
+> même discipline.
 
-Les douze fichiers sont **rejouables**. Les exécuter deux fois d'affilée ne doit
+Les treize fichiers sont **rejouables**. Les exécuter deux fois d'affilée ne doit
 produire aucune erreur et ne changer aucune règle. Vérifié le 31/07/2026 sur un
 Postgres vierge pour `001` à `010` : les dix passent dans l'ordre, trois fois de
 suite, et la base obtenue porte exactement les mêmes vingt policies et les mêmes
 droits de fonction que la production. `011` et `012` suivent la même discipline
 (`create or replace`, `drop policy if exists`, `unschedule` avant `schedule`)
-mais n'ont pas encore été éprouvés par ce même passage en triple.
+mais n'ont pas encore été éprouvés par ce même passage en triple. `013` aussi :
+son `delete` est idempotent et sa fonction est en `create or replace`.
 
 Après le premier passage, vérifier :
 
