@@ -446,6 +446,19 @@ function reparerBase(){
       });
     });
   });
+  /* C3 (09/08) — la trace de décochage d'un film s'efface d'elle-même au bout
+     de trois mois, exactement comme celle d'un épisode (`unwatched`, purgée
+     dans `noterDecoches` et dans la fusion). Ici plutôt que dans
+     `dernierGesteFilm`, qui doit rester pure : sans ce ménage, la trace
+     resterait dans l'envoi au serveur pour toujours. */
+  const t = Date.now();
+  Object.values(db.movies).forEach(m=>{
+    if(!m || typeof m !== 'object') return;
+    if(m.unseenAt !== undefined &&
+       (typeof m.unseenAt !== 'number' || t - m.unseenAt > RETENTION_DECOCHE)){
+      delete m.unseenAt; n++;
+    }
+  });
   return n;
 }
 
@@ -619,13 +632,69 @@ async function sbRefresh(){
   try{
     const d = await sbFetch('/auth/v1/token?grant_type=refresh_token', {method:'POST', noAuth:true,
       body: JSON.stringify({refresh_token: db.auth.refresh})});
-    applySession(d); return true;
+    await applySession(d); return true;
   }catch(e){ return false; }
 }
-function applySession(d){
+
+/* ---------------------------------------------------------------------------
+   C2 (09/08) — ON NE RETIRE PLUS UNE BIBLIOTHÈQUE SANS LE DEMANDER
+
+   `adopterCompte` effaçait sans un mot, et sans rien tenter pour sauver ce qui
+   n'était pas encore parti au serveur. Deux gestes, dans cet ordre :
+
+   (a) CE QUI N'EST PAS SYNCHRONISÉ PART D'ABORD, sous l'ANCIENNE session —
+       celle du propriétaire de la bibliothèque, pas celle de la personne qui
+       arrive. C'est le seul instant où c'est encore possible : trois lignes
+       plus bas, le jeton est remplacé et cette dernière soirée de cochage
+       n'existe plus nulle part. Session absente ou expirée : on passe. On n'a
+       alors rien à pousser, et bloquer la connexion pour autant ne rendrait
+       service à personne.
+
+   (b) PUIS ON DEMANDE. Et on demande AVANT d'endosser la nouvelle session, pas
+       après : répondre « Annuler » doit laisser l'appareil exactement comme il
+       était — même compte connecté (aucun), même bibliothèque, même propriétaire.
+       C'est pour ça que la question est posée ici et non dans `adopterCompte` :
+       à l'intérieur, `db.auth` est déjà celui du nouveau et il faudrait défaire.
+
+   La feuille de confirmation vit dans app-02, chargé APRÈS ce fichier : d'où la
+   garde `typeof`. Si elle manque, on REFUSE le changement plutôt que d'effacer
+   sans avoir pu demander. Le pire cas devient « la connexion n'aboutit pas »,
+   jamais « la bibliothèque a disparu ».
+--------------------------------------------------------------------------- */
+async function preparerChangementDeProprio(ancienne){
+  if(ancienne && ancienne.token && ancienne.uid && syncReady()){
+    /* `syncNow` avale déjà ses propres erreurs ; le `try` est là pour ce qui
+       pourrait sortir d'ailleurs (sérialisation, stockage). Un échec n'empêche
+       pas de poser la question : on ne bloque pas quelqu'un sur un réseau mort. */
+    try{ await syncNow(true); }catch(e){}
+  }
+  if(typeof confirmerDansFeuille !== 'function') return false;
+  return confirmerDansFeuille(
+    'Cette bibliothèque appartient à un autre compte',
+    'Elle va être retirée de cet appareil. Elle reste sur le compte d\'origine, '
+    + 'et lui reviendra telle quelle à sa prochaine connexion.',
+    'Continuer', 'Annuler');
+}
+
+async function applySession(d){
   if(!d || !d.access_token) throw new Error('réponse inattendue du serveur');
+  const uid = (d.user&&d.user.id) || (db.auth&&db.auth.uid);
+  /* C2 — la session de l'ancien propriétaire, lue AVANT d'être remplacée.
+     Passée telle quelle plutôt que relue là-bas : à l'instant où la question
+     se pose, elle n'existe plus que dans cette variable. */
+  const ancienne = db.auth;
+  if(db.proprio && uid && db.proprio !== uid){
+    if(!(await preparerChangementDeProprio(ancienne))){
+      /* Refus. Rien n'a été touché — ni `db.auth`, ni la base. On le dit par
+         une erreur reconnaissable plutôt que par un retour vide : les deux
+         écrans de connexion doivent pouvoir distinguer « refusé » de
+         « mot de passe incorrect », et ne surtout pas continuer leur parcours
+         comme si la connexion avait abouti. */
+      const err = new Error('ANNULE'); err.annule = true; throw err;
+    }
+  }
   db.auth = { token:d.access_token, refresh:d.refresh_token,
-              uid:(d.user&&d.user.id)||(db.auth&&db.auth.uid), email:(d.user&&d.user.email)||(db.auth&&db.auth.email) };
+              uid: uid, email:(d.user&&d.user.email)||(db.auth&&db.auth.email) };
   adopterCompte(db.auth.uid);
   saveDB();
   return db.auth;
@@ -637,6 +706,12 @@ function applySession(d){
    ici, elle n'a rien à faire dans son compte : on repart de zéro.
    Les suppressions ne sont surtout PAS tracées dans ce cas — elles se
    propageraient au nouveau compte et lui effaceraient ses propres titres.
+
+   C2 (09/08) — CETTE FONCTION N'EFFACE PLUS DE SA PROPRE AUTORITÉ. Quand elle
+   est appelée avec un effacement à la clé, la question a déjà été posée et la
+   réponse est oui : le portier est `applySession`, juste au-dessus. Elle reste
+   silencieuse dans le seul cas où il n'y a rien à demander — `db.proprio` vide,
+   c'est-à-dire le premier compte posé sur cet appareil.
 
    C1 (09/08) — « ZÉRO » VOULAIT DIRE « LES TITRES », ET RIEN D'AUTRE.
    Seuls `shows`, `movies`, `deleted` et `syncedAt` étaient effacés. Tout le
@@ -766,6 +841,56 @@ function noterDecoches(sh, avant){
   sh.updated = t;
 }
 
+/* ---------------------------------------------------------------------------
+   C3 (09/08) — LES FILMS N'AVAIENT PAS DE DÉCOCHAGE DATÉ
+
+   Les épisodes en ont un depuis toujours (`unwatched`, juste au-dessus). Les
+   films, non : démarquer posait `seen = false, watchedAt = null`, et la fusion
+   tranchait sur `watchedAt` seul —
+
+       if((rm.watchedAt||0) > (lm.watchedAt||0)) db.movies[rm.id] = rm;
+
+   — c'est-à-dire 0 contre la date de l'autre appareil, qui croit toujours le
+   film vu. Le distant gagnait DONC TOUJOURS : le film redevenait « vu » à la
+   synchro suivante, sur tous les appareils, et le geste était annulé en
+   silence. Il n'y avait aucune manière de le démarquer durablement.
+
+   La correction tient en une idée : ce qui arbitre n'est pas « quand l'ai-je
+   vu », c'est « quand ai-je touché ce film pour la dernière fois ». Cocher et
+   décocher sont deux événements de même rang, et le plus récent gagne.
+
+   MÊME RÉTENTION QUE LES ÉPISODES, et pour la même raison : une trace de
+   décochage ne peut pas vivre éternellement dans un envoi de 1,4 Mo. Passé
+   trois mois elle ne compte plus. La conséquence est assumée et connue — un
+   appareil resté hors ligne plus de trois mois peut encore ressusciter un
+   film démarqué. C'est le contrat déjà en vigueur pour `unwatched`.
+--------------------------------------------------------------------------- */
+function marquerFilm(m, vu){
+  if(!m || typeof m !== 'object') return m;
+  const t = Date.now();
+  m.seen = !!vu;
+  if(vu){
+    m.watchedAt = t;
+    /* La trace de décochage n'a plus lieu d'être : le geste inverse vient
+       d'être posé, et la laisser ferait gagner un vieux décochage sur ce
+       cochage-ci à la fusion suivante. */
+    delete m.unseenAt;
+  }else{
+    m.watchedAt = null;
+    m.unseenAt = t;
+  }
+  return m;
+}
+/* L'instant du dernier geste posé sur un film, cochage ou décochage confondus.
+   PURE, et sans effet de bord sur l'objet : la rétention est appliquée à la
+   lecture, l'effacement du champ périmé revient à `reparerBase`. */
+function dernierGesteFilm(m){
+  if(!m || typeof m !== 'object') return 0;
+  const vu = Number(m.watchedAt) || 0;
+  const dec = Number(m.unseenAt) || 0;
+  return Math.max(vu, (dec && Date.now() - dec > RETENTION_DECOCHE) ? 0 : dec);
+}
+
 /* --- Fusion : on ne perd jamais un épisode coché, et les suppressions se propagent --- */
 /* Ce qui monte au serveur — LISTE BLANCHE, et rien d'autre.
    Chaque exclusion a une raison, écrite ici : c'est ce qui doit empêcher le
@@ -865,7 +990,10 @@ function mergeRemote(rem){
     if(!rm) return;
     const lm = db.movies[rm.id];
     if(!lm){ db.movies[rm.id] = rm; changed = true; return; }
-    if((rm.watchedAt||0) > (lm.watchedAt||0)){ db.movies[rm.id] = rm; changed = true; }
+    /* C3 — le geste le plus récent gagne, qu'il soit un cochage ou un
+       décochage. `>` et non `>=` : à égalité parfaite on garde le local, comme
+       partout ailleurs dans cette fusion. */
+    if(dernierGesteFilm(rm) > dernierGesteFilm(lm)){ db.movies[rm.id] = rm; changed = true; }
   });
   /* suppressions distantes à appliquer localement */
   ['shows','movies'].forEach(k=>{

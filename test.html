@@ -4645,6 +4645,314 @@ window.MODE_TEST = true;
     egal(db.notif.titres['movie:20'], 1000, 'une cloche encore valable a été emportée');
   });
 
+  /* ==================== Effacement consenti — C2 ====================
+     Deux défauts distincts, réunis parce qu'ils produisent la même perte :
+
+       · `doSupprimerCompte` laissait `db.proprio` sur un compte détruit — le
+         compte SUIVANT créé sur l'appareil vidait donc la bibliothèque, à
+         l'instant précis où l'on croyait la récupérer ;
+       · `adopterCompte` effaçait sans demander, et sans tenter de pousser ce
+         qui n'était pas encore synchronisé.
+
+     Les cas sont asynchrones : la question passe par une promesse. La feuille
+     de confirmation est remplacée par un espion — on éprouve la MÉCANIQUE de
+     `applySession` (est-ce qu'on demande ? qu'est-ce qu'on fait de la
+     réponse ?), pas le dessin du panneau, qui a ses deux cas à lui plus bas. */
+  groupe('Effacement consenti — C2');
+
+  /* Une réponse de serveur d'authentification, réduite à ce que le code lit. */
+  function session(uid){
+    return { access_token:'jeton-'+uid, refresh_token:'refresh-'+uid,
+             user:{ id:uid, email:uid+'@exemple.fr' } };
+  }
+  /* Remplace la feuille ET la synchro le temps d'un cas, puis les rend :
+     `syncNow` partirait sur le réseau, ce que cette page n'a pas le droit de
+     faire. Compte au passage les appels de chacune. */
+  async function avecEspions(reponse, fn){
+    const vraieFeuille = window.confirmerDansFeuille, vraieSync = window.syncNow;
+    const compte = { demande:0, synchro:0 };
+    window.confirmerDansFeuille = ()=>{ compte.demande++; return Promise.resolve(reponse); };
+    window.syncNow = ()=>{ compte.synchro++; return Promise.resolve(); };
+    try{ await fn(compte); }
+    finally{
+      window.confirmerDansFeuille = vraieFeuille; window.syncNow = vraieSync;
+      /* Sans ça, le `scheduleSync` posé par `saveDB` partirait vraiment sur le
+         réseau quinze secondes plus tard. Sans session, il renonce. */
+      db.auth = null;
+    }
+  }
+
+  testAsync('C2 — refuser laisse la bibliothèque et la session intactes', async ()=>{
+    baseGarnie('compte-A');
+    db.auth = null;                       // A s'est déconnecté, la base reste la sienne
+    await avecEspions(false, async (compte)=>{
+      let jete = null;
+      try{ await applySession(session('compte-B')); }catch(e){ jete = e; }
+      vrai(jete && jete.annule, 'un refus doit se distinguer d\'un échec de connexion');
+      egal(compte.demande, 1, 'la question n\'a pas été posée');
+      egal(db.proprio, 'compte-A', 'la bibliothèque a changé de propriétaire malgré le refus');
+      egal(db.auth, null, 'la session du nouveau compte a été endossée malgré le refus');
+      egal(Object.keys(db.shows), ['10'], 'la bibliothèque a été vidée malgré le refus');
+      egal(db.pseudo, 'PseudoDeA');
+    });
+  });
+
+  testAsync('C2 — accepter efface, et seulement alors', async ()=>{
+    baseGarnie('compte-A');
+    db.auth = null;
+    await avecEspions(true, async (compte)=>{
+      await applySession(session('compte-B'));
+      egal(compte.demande, 1, 'on a effacé sans demander');
+      egal(db.proprio, 'compte-B');
+      egal(db.shows, {}, 'l\'effacement n\'a pas eu lieu après un oui');
+      egal(db.pseudo, '');
+      egal(db.auth.uid, 'compte-B');
+    });
+  });
+
+  testAsync('C2 — le premier compte sur l\'appareil ne pose aucune question', async ()=>{
+    baseGarnie(null);                     // bibliothèque sans propriétaire
+    db.auth = null;
+    await avecEspions(false, async (compte)=>{
+      await applySession(session('compte-B'));
+      egal(compte.demande, 0, 'une question pour rien — et un refus effacerait tout');
+      egal(db.proprio, 'compte-B');
+      egal(Object.keys(db.shows), ['10'], 'la bibliothèque adoptée a été vidée');
+    });
+  });
+
+  testAsync('C2 — se reconnecter au même compte ne pose aucune question', async ()=>{
+    baseGarnie('compte-A');
+    db.auth = null;
+    await avecEspions(false, async (compte)=>{
+      await applySession(session('compte-A'));
+      egal(compte.demande, 0, 'on interroge quelqu\'un qui rentre chez lui');
+      egal(Object.keys(db.shows), ['10']);
+    });
+  });
+
+  testAsync('C2 — ce que l\'ancien n\'a pas synchronisé part sous SA session', async ()=>{
+    baseGarnie('compte-A');
+    /* A est encore connecté : son jeton peut encore pousser. */
+    db.auth = { token:'jeton-A', refresh:'refresh-A', uid:'compte-A', email:'a@exemple.fr' };
+    await avecEspions(true, async (compte)=>{
+      await applySession(session('compte-B'));
+      egal(compte.synchro, 1, 'la dernière soirée de cochage de A part avec l\'effacement');
+      egal(db.proprio, 'compte-B');
+    });
+  });
+
+  testAsync('C2 — sans session valide, on saute la synchro mais on demande quand même', async ()=>{
+    baseGarnie('compte-A');
+    db.auth = null;                       // plus de jeton : rien à pousser
+    await avecEspions(true, async (compte)=>{
+      await applySession(session('compte-B'));
+      egal(compte.synchro, 0, 'une synchro sans session ne peut qu\'échouer');
+      egal(compte.demande, 1, 'la question doit être posée même sans réseau');
+    });
+  });
+
+  testAsync('C2 — fermer la feuille sans répondre vaut « Annuler »', async ()=>{
+    const p = confirmerDansFeuille('Cette bibliothèque appartient à un autre compte',
+                                   'Elle va être retirée de cet appareil.',
+                                   'Continuer', 'Annuler');
+    const dedans = document.getElementById('sheetin').innerHTML;
+    vrai(/appartient à un autre compte/.test(dedans), 'la question ne s\'affiche pas');
+    vrai(/repondreFeuille\(true\)/.test(dedans) && /repondreFeuille\(false\)/.test(dedans),
+         'les deux boutons ne sont pas branchés');
+    /* Appui sur le fond, bouton retour du téléphone, geste de tiroir : les
+       trois passent par `closeSheet`. Un panneau refermé sans réponse ne doit
+       pas laisser la promesse en suspens — la connexion resterait bloquée. */
+    closeSheet();
+    egal(await p, false, 'une feuille refermée sans réponse a été prise pour un oui');
+  });
+
+  testAsync('C2 — les deux boutons rendent bien oui et non', async ()=>{
+    const oui = confirmerDansFeuille('Titre', 'Texte', 'Continuer', 'Annuler');
+    repondreFeuille(true);
+    egal(await oui, true);
+    const non = confirmerDansFeuille('Titre', 'Texte', 'Continuer', 'Annuler');
+    repondreFeuille(false);
+    egal(await non, false);
+  });
+
+  test('C2 — supprimer son compte rend la bibliothèque sans propriétaire', ()=>{
+    /* On ne peut pas jouer `doSupprimerCompte` ici — elle appelle le serveur.
+       Ce cas éprouve la CONSÉQUENCE, qui est tout ce qui compte : une base
+       laissée dans l'état où la suppression la laisse doit être adoptée en
+       silence par le compte suivant, et non vidée. */
+    baseGarnie('compte-A');
+    db.auth = null; db.proprio = null;              // état laissé par doSupprimerCompte
+    adopterCompte('compte-neuf');
+    egal(db.proprio, 'compte-neuf');
+    egal(Object.keys(db.shows), ['10'], 'la bibliothèque promise « restée sur l\'appareil » a été vidée');
+    egal(db.pseudo, 'PseudoDeA');
+  });
+
+  test('C2 — la ligne qui rend le propriétaire est bien dans doSupprimerCompte', ()=>{
+    /* Contrôle de présence, faute de pouvoir jouer la fonction : sans lui, le
+       cas ci-dessus reste vert alors que le défaut est entier. */
+    vrai(/db\.proprio\s*=\s*null/.test(String(doSupprimerCompte)),
+         'doSupprimerCompte laisse `db.proprio` sur un compte qui n\'existe plus');
+  });
+
+  /* ============ Décochages qui survivent à la synchro — C3 ============
+     Deux gestes que la synchro annulait en silence :
+
+       · démarquer un FILM. La fusion tranchait sur `watchedAt` seul, donc 0
+         contre la date de l'autre appareil, qui croit toujours le film vu :
+         le distant gagnait TOUJOURS et le film redevenait « vu ». Il n'y avait
+         aucune manière de le démarquer durablement.
+       · retirer un 👍 pendant l'INSCRIPTION. `inscPoserAvis` faisait un
+         `delete` nu, sans pierre tombale, alors que `fusionnerAvis` n'arbitre
+         que sur celles-ci : l'avis revenait à la synchro suivante.
+
+     Les quatre premiers cas sont la table de vérité complète de la fusion des
+     films — c'est elle, et elle seule, qui décide si un geste survit. */
+  groupe('Décochages qui survivent à la synchro — C3');
+
+  const MAINTENANT = Date.now(), IL_Y_A_1H = MAINTENANT - 3600000;
+  /* Un film à l'état exact que produit chaque geste, sans passer par l'app. */
+  function filmVu(id, quand){
+    return { id:id, title:'F'+id, genres:['Drame'], seen:true,
+             watchedAt:quand, addedAt:1, date:'2010-01-01' };
+  }
+  function filmDecoche(id, quand){
+    return { id:id, title:'F'+id, genres:['Drame'], seen:false,
+             watchedAt:null, unseenAt:quand, addedAt:1, date:'2010-01-01' };
+  }
+
+  test('C3 — décochage RÉCENT ici contre vu ANCIEN ailleurs : reste décoché', ()=>{
+    baseVierge();
+    db.movies[1] = filmDecoche(1, MAINTENANT);
+    mergeRemote({ shows:{}, movies:{ 1: filmVu(1, IL_Y_A_1H) } });
+    egal(db.movies[1].seen, false,
+         'le film décoché est redevenu « vu » : le geste se perd à chaque synchro');
+  });
+
+  test('C3 — décochage RÉCENT ailleurs contre vu ANCIEN ici : devient décoché', ()=>{
+    baseVierge();
+    db.movies[1] = filmVu(1, IL_Y_A_1H);
+    mergeRemote({ shows:{}, movies:{ 1: filmDecoche(1, MAINTENANT) } });
+    egal(db.movies[1].seen, false, 'le décochage fait sur l\'autre appareil n\'est pas arrivé');
+  });
+
+  test('C3 — vu RÉCENT ici contre décochage ANCIEN ailleurs : reste vu', ()=>{
+    baseVierge();
+    db.movies[1] = filmVu(1, MAINTENANT);
+    mergeRemote({ shows:{}, movies:{ 1: filmDecoche(1, IL_Y_A_1H) } });
+    egal(db.movies[1].seen, true, 'un vieux décochage a effacé un visionnage tout frais');
+  });
+
+  test('C3 — vu RÉCENT ailleurs contre décochage ANCIEN ici : redevient vu', ()=>{
+    baseVierge();
+    db.movies[1] = filmDecoche(1, IL_Y_A_1H);
+    mergeRemote({ shows:{}, movies:{ 1: filmVu(1, MAINTENANT) } });
+    egal(db.movies[1].seen, true, 'le film revu sur l\'autre appareil est resté décoché');
+  });
+
+  test('C3 — marquerFilm pose la date du geste, dans les deux sens', ()=>{
+    const m = filmVu(1, 5);
+    marquerFilm(m, false);
+    egal(m.seen, false);
+    egal(m.watchedAt, null);
+    vrai(m.unseenAt > 0, 'un décochage sans date ne survit pas à la synchro');
+    marquerFilm(m, true);
+    egal(m.seen, true);
+    vrai(m.watchedAt > 0);
+    egal(m.unseenAt, undefined,
+         'la trace du décochage survit au recochage : elle regagnerait à la fusion suivante');
+  });
+
+  test('C3 — une trace de décochage de plus de trois mois ne compte plus', ()=>{
+    /* Même rétention que celle des épisodes (`unwatched`). La conséquence est
+       assumée : un appareil resté hors ligne plus longtemps peut ressusciter
+       le film. C'est le contrat déjà en vigueur, pas une nouveauté. */
+    const vieux = MAINTENANT - (91 * 86400000);
+    egal(dernierGesteFilm({ watchedAt:null, unseenAt:vieux }), 0);
+    egal(dernierGesteFilm({ watchedAt:null, unseenAt:MAINTENANT }), MAINTENANT);
+    egal(dernierGesteFilm({ watchedAt:42, unseenAt:vieux }), 42, 'le cochage doit rester lisible');
+  });
+
+  test('C3 — reparerBase efface les traces périmées et garde les fraîches', ()=>{
+    baseVierge();
+    db.movies[1] = filmDecoche(1, MAINTENANT - (91 * 86400000));
+    db.movies[2] = filmDecoche(2, MAINTENANT);
+    db.movies[3] = filmVu(3, MAINTENANT);
+    db.movies[3].unseenAt = 'pas un nombre';
+    reparerBase();
+    egal(db.movies[1].unseenAt, undefined, 'une trace périmée reste dans l\'envoi au serveur');
+    egal(db.movies[2].unseenAt, MAINTENANT, 'une trace fraîche a été effacée');
+    egal(db.movies[3].unseenAt, undefined, 'une trace mal formée a survécu');
+  });
+
+  test('C3 — les deux écrans qui décochent un film passent par marquerFilm', ()=>{
+    /* Contrôle de présence : `toggleMovie` (app-05) et `addMovie` (app-04)
+       sont les deux SEULS endroits qui remettent `seen` à faux. Un troisième
+       qui l'écrirait à la main rouvrirait le défaut sans que rien ne le dise. */
+    vrai(/marquerFilm\(/.test(String(toggleMovie)), 'toggleMovie écrit encore le « vu » à la main');
+    vrai(/marquerFilm\(/.test(String(addMovie)), 'addMovie écrit encore le « vu » à la main');
+  });
+
+  test('C3 — démarquer depuis la fiche laisse une trace datée', ()=>{
+    baseVierge();
+    db.movies[1] = filmVu(1, IL_Y_A_1H);
+    /* `toggleMovie` redessine et pose la question « tu as aimé ? » : ni l'un
+       ni l'autre n'a sa place ici, on les met de côté le temps du geste. */
+    const vraiRender = window.render, vraiSignal = window.signalerFilmVu;
+    window.render = ()=>{}; window.signalerFilmVu = ()=>{};
+    try{ toggleMovie(1); }
+    finally{ window.render = vraiRender; window.signalerFilmVu = vraiSignal; }
+    egal(db.movies[1].seen, false);
+    vrai(db.movies[1].unseenAt > 0, 'le geste n\'est pas daté : la synchro l\'annulera');
+    /* Et il tient contre l'autre appareil, qui croit encore le film vu. */
+    mergeRemote({ shows:{}, movies:{ 1: filmVu(1, IL_Y_A_1H) } });
+    egal(db.movies[1].seen, false, 'le film est redevenu « vu » à la première synchro');
+  });
+
+  test('C3 — retirer un 👍 à l\'inscription pose une pierre tombale', ()=>{
+    baseVierge();
+    inscPoserAvis('movie', 1, 1);
+    egal(avisDe('movie', 1), 1, 'le 👍 de la grille d\'inscription n\'a pas été posé');
+    inscPoserAvis('movie', 1, 0);
+    egal(avisDe('movie', 1), 0);
+    vrai(db.avisRetires.movie['1'] > 0,
+         'aucune trace de l\'effacement : l\'avis reviendra à la synchro suivante');
+  });
+
+  test('C3 — un 👍 retiré à l\'inscription ne revient pas par la synchro', ()=>{
+    /* Le scénario exact du critère d\'acceptation : poser, synchro, retirer,
+       synchro. L\'autre appareil croit toujours le 👍 posé et le renvoie. */
+    baseVierge();
+    inscPoserAvis('tv', 42, 1);
+    const commeAilleurs = { avis:{ tv:{ '42':{ v:1, quand: db.avis.tv['42'].quand } } } };
+    fusionnerAvis(commeAilleurs);                    // première synchro
+    inscPoserAvis('tv', 42, 0);                      // on le retire
+    fusionnerAvis(commeAilleurs);                    // seconde synchro
+    egal(avisDe('tv', 42), 0, 'le 👍 retiré est revenu tout seul');
+  });
+
+  test('C3 — l\'inscription range les séries dans le seau « tv »', ()=>{
+    /* `inscSeau` repliait tout ce qui n\'est pas `movie` sur `tv` ; app-11
+       prend la clé telle quelle. Sans le repli, un avis d\'inscription
+       atterrirait dans un troisième seau que personne ne lit. */
+    baseVierge();
+    inscPoserAvis('serie-inconnue', 7, 1);
+    egal(avisDe('tv', 7), 1, 'l\'avis est parti dans un seau que rien ne relit');
+    egal(Object.keys(db.avis).sort(), ['movie','tv'], 'un seau de trop dans db.avis');
+  });
+
+  test('C3 — le pavé qui disait « db.avis n\'est pas synchronisé » a disparu', ()=>{
+    /* Il invitait à ne pas corriger ce défaut-ci. Contrôle porté par le
+       lanceur (contrôle statique) — ici on vérifie au moins que la clé EST
+       bien dans l\'envoi, ce que le commentaire niait. */
+    baseVierge();
+    poserAvis('movie', 1, 1);
+    const envoi = payload();
+    vrai(envoi.avis && envoi.avis.movie['1'], 'db.avis ne monte pas au serveur');
+    vrai(envoi.avisRetires, 'les pierres tombales ne montent pas au serveur');
+  });
+
   /* ==================== Bilan ====================
      Écrit UNE FOIS, après la file asynchrone. `window.__testsFinis` est le
      signal que le lanceur attend : sans lui il lirait un bilan encore

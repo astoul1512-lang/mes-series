@@ -132,8 +132,15 @@ async function addMovie(id, seen, fiche){
         genres:(m.genres||[]).map(g=>g.name), note:m.vote_average||null,
         seen:!!seen, watchedAt: seen?Date.now():null, addedAt:Date.now() };
     } else {
-      db.movies[id].seen = !!seen;
-      db.movies[id].watchedAt = seen?Date.now():null;
+      /* C3 (09/08) — SECOND point d'écriture du « vu » d'un film, et il faisait
+         la même chose que `toggleMovie` : reposer un film DÉJÀ dans la
+         bibliothèque dans « À voir » le décochait sans dater le geste, donc
+         sans qu'il survive à la synchro. `marquerFilm` (app-01) est désormais
+         le seul passage — les deux appels sont ici et dans app-05.
+         Le cas du dessus (film ABSENT de la bibliothèque) n'en a pas besoin :
+         il n'y a pas de décochage possible sur un titre qu'on vient d'ajouter,
+         et l'objet neuf ne porte donc jamais d'`unseenAt`. */
+      marquerFilm(db.movies[id], !!seen);
     }
     saveDB();
     toast(seen ? 'Marqué comme vu ✓' : 'Ajouté à « À voir »');
