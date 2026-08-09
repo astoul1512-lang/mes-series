@@ -151,6 +151,16 @@ window.MODE_TEST = true;
   }
   function vrai(c, msg){ if(!c) throw new Error(msg || 'faux'); }
 
+  /* Le CODE d'une fonction, commentaires retirés. Plusieurs cas ci-dessous
+     lisent la source plutôt que de l'exécuter — c'est le seul moyen d'attraper
+     un défaut de FORME (une ligne au mauvais endroit, un appelant qui oublie de
+     se nommer). Sans ce nettoyage ils lisent aussi les commentaires, qui citent
+     justement le code fautif : deux d'entre eux ont commencé par échouer sur la
+     phrase qui expliquait leur propre correctif. */
+  function codeDe(fn){
+    return String(fn).replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:\w])\/\/[^\n]*/g, '$1');
+  }
+
   /* Une base neuve à chaque test : les fonctions écrivent dans `db`, il ne
      faut pas qu'un test hérite de l'état du précédent. */
   function baseVierge(){
@@ -4687,6 +4697,1003 @@ window.MODE_TEST = true;
     vrai(/Je te propose mal/.test(carteProfilPauvre()));
     poserAvis('movie', 1, 1);
     egal(carteProfilPauvre(), '', 'un 👍 et elle doit s\'effacer d\'elle-même');
+  });
+
+  /* ==================== Changement de compte — C1 ====================
+     `adopterCompte` n'effaçait que les titres. Tout le reste du patrimoine de
+     la personne précédente — pouces, goûts, podium, classement, pseudo,
+     avatar, cloches — survivait au changement de compte et repartait au
+     serveur du NOUVEAU compte à la première synchro.
+
+     Ces cas comparent CHAMP PAR CHAMP, et pas seulement « db.avis est vide » :
+     c'est la liste elle-même qui est le correctif, et le prochain champ ajouté
+     à `payload()` doit faire tomber le dernier cas de ce groupe. */
+  groupe('Changement de compte — C1');
+
+  /* Une base bien garnie, avec des valeurs RECONNAISSABLES : le dernier cas
+     cherche ces chaînes dans l'envoi au serveur. */
+  function baseGarnie(proprio){
+    baseVierge();
+    db.proprio = proprio;
+    db.shows[10] = serie(10, [ep(1,HIER)], {1:1});
+    db.movies[20] = { id:20, title:'Film de A', seen:true, watchedAt:1, addedAt:1 };
+    db.deleted = { shows:{99:1}, movies:{} };
+    db.syncedAt = 123456;
+    db.avis = { tv:{ '10':{v:1, quand:1000} }, movie:{ '20':{v:-1, quand:1000} } };
+    db.avisRetires = { tv:{ '77':1000 }, movie:{} };
+    db.gouts = { genres:['GenreDeA'], exclus:[], acteurs:[], graines:[],
+                 plates:[], animeSous:[], pasVus:[], amorcageFait:true,
+                 propose:true, platesDemande:true, suggMesPlates:false,
+                 jour:'', maj: 999 };
+    db.podium = { film:['20'], serie:['10'], anime:[], maj:999 };
+    db.classement = { film:{'20':{s:12,n:3}}, serie:{}, anime:{}, maj:999 };
+    db.pseudo = 'PseudoDeA';
+    db.profil = { embleme:'feu', couleur:'lagon', maj:999 };
+    db.abosIgnores = { 'aboDeA': 1000 };
+    db.notif = null; migrerNotif();
+    db.notif.titres = { 'tv:10':1000, 'movie:20':1000 };
+    db.notif.titresOff = { 'tv:55':1000 };
+    /* RELECTURE DU 09/08 — CE BLOC MANQUAIT, ET LE TROU DU HARNAIS ÉTAIT AU
+       MÊME ENDROIT QUE LE TROU DU CORRECTIF. `migrerNotif()` reconstruit un
+       bloc NEUF : `maj` y valait 0 et `films` les valeurs par défaut, donc le
+       cas « rien de A ne monte au serveur de B » ne POUVAIT pas tomber sur les
+       réglages de notification — qui sont précisément ce qui fuyait, par les
+       deux voies à la fois (`payload()` et `push_reglages`).
+       Les valeurs ci-dessous sont toutes DIFFÉRENTES du défaut : c'est ce qui
+       rend le cas capable d'échouer. */
+    db.notif.films = { cine:false, maison:false };
+    db.notif.quandChoisi = true;
+    db.notif.maj = 999;
+    db.notif.desyncAt = 999; db.notif.desyncMotif = 'PanneDeA';
+    /* Et ce qui appartient à l'APPAREIL, qui doit au contraire survivre. */
+    db.notif.abo = 'https://push.exemple/aboDeCetAppareil';
+    db.notif.actif = true;
+    db.notif.erreur = 'refus iOS';
+    db.notif.clocheVue = true;
+    db.inscription = { vue:'inscTitres', debut:1, finie:false, genres:{} };
+  }
+
+  test('C1 — un nouveau compte ne récupère rien de l\'ancien', ()=>{
+    baseGarnie('compte-A');
+    adopterCompte('compte-B');
+    egal(db.proprio, 'compte-B', 'la bibliothèque n\'a pas changé de propriétaire');
+    egal(db.shows, {});
+    egal(db.movies, {});
+    egal(db.deleted, { shows:{}, movies:{} });
+    egal(db.syncedAt, null);
+    egal(db.avis, { tv:{}, movie:{} }, 'les pouces de A sont restés');
+    egal(db.avisRetires, { tv:{}, movie:{} }, 'les effacements de pouces de A sont restés');
+    egal(db.podium, { film:[], serie:[], anime:[], maj:0 }, 'le podium de A est resté');
+    egal(db.classement, { film:{}, serie:{}, anime:{}, maj:0 }, 'le classement de A est resté');
+    egal(db.pseudo, '', 'le pseudo de A est resté');
+    egal(db.profil, { embleme:'lettre', couleur:'corail' }, 'l\'avatar de A est resté');
+    egal(db.abosIgnores, {}, 'les annonces écartées par A sont restées');
+    egal(db.notif.titres, {}, 'les cloches de A sont restées');
+    egal(db.inscription, undefined, 'le parcours d\'inscription de A dérouterait B au démarrage');
+  });
+
+  test('C1 — les goûts repartent à la forme vierge, pas à `null`', ()=>{
+    baseGarnie('compte-A');
+    adopterCompte('compte-B');
+    vrai(db.gouts && typeof db.gouts === 'object', 'un `gouts` nul plante le premier écran Découvrir');
+    egal(db.gouts.genres, [], 'les genres déclarés par A sont restés');
+    egal(db.gouts.graines, [], 'les graines d\'amorçage de A sont restées');
+    egal(db.gouts.amorcageFait, false, 'B perd la grille d\'amorçage à cause du parcours de A');
+    egal(db.gouts.maj, undefined,
+         'une date de A ferait perdre l\'arbitrage à ce que B a déjà sur le serveur');
+  });
+
+  test('C1 — effacer les cloches ne pose pas de pierre tombale sur celles de A', ()=>{
+    baseGarnie('compte-A');
+    adopterCompte('compte-B');
+    /* `nettoyerCloches` date chaque cloche dont le titre a quitté la
+       bibliothèque. Appelée AVANT l'effacement, elle daterait les trois
+       cloches de A — et ces dates partiraient les éteindre sur SES appareils. */
+    egal(db.notif.titresOff, {}, 'des extinctions datées iraient éteindre les cloches de A ailleurs');
+  });
+
+  test('C1 — rien ne monte au serveur de B qui vienne de A', ()=>{
+    baseGarnie('compte-A');
+    adopterCompte('compte-B');
+    const envoi = JSON.stringify(payload());
+    ['GenreDeA','PseudoDeA','aboDeA','Film de A','feu','lagon'].forEach(marque=>{
+      vrai(envoi.indexOf(marque) < 0, '« '+marque+' » de A part sous l\'identifiant de B');
+    });
+  });
+
+  test('C1 — les RÉGLAGES de notification de A ne montent pas non plus', ()=>{
+    /* Ajouté après la relecture du 09/08. La recherche de chaînes ci-dessus ne
+       pouvait pas attraper ceux-là : ce sont des booléens et des nombres. On
+       les compare donc pour ce qu'ils sont, dans l'envoi RÉEL. */
+    baseGarnie('compte-A');
+    adopterCompte('compte-B');
+    const n = payload().notif;
+    egal(n.films, { cine:true, maison:true }, 'les réglages de films de A partent sous l\'identifiant de B');
+    egal(n.quandChoisi, false, 'B hérite d\'un choix qu\'il n\'a jamais fait');
+    egal(n.maj, 0,
+         'la date de A gagne l\'arbitrage : les réglages de B ne redescendront même pas');
+    egal(n.titres, {});
+    egal(n.titresOff, {});
+  });
+
+  test('C1 — ce qui appartient à l\'APPAREIL survit au changement de compte', ()=>{
+    /* Le pendant du cas précédent, et il compte autant : à trop effacer, on
+       ferait croire à B que ses notifications sont éteintes alors que
+       `inscrireSiBesoin` ne réinscrira rien — l'abonnement du navigateur,
+       lui, n'a pas changé. */
+    baseGarnie('compte-A');
+    adopterCompte('compte-B');
+    egal(db.notif.abo, 'https://push.exemple/aboDeCetAppareil', 'l\'abonnement du navigateur a été perdu');
+    egal(db.notif.actif, true, 'l\'écran annoncera « désactivées » avec un abonnement valide');
+    egal(db.notif.erreur, 'refus iOS');
+    egal(db.notif.clocheVue, true);
+    /* En revanche, l'avis de panne du compte d'A ne regarde pas B. */
+    egal(db.notif.desyncAt, undefined, 'B voit un avis de panne qui ne le concerne pas');
+    egal(db.notif.desyncMotif, undefined);
+  });
+
+  testAsync('C1 — une liste de cloches vide et pas encore synchronisée ne part pas', async ()=>{
+    /* `remplacer_cloches` REMPLACE. Juste après un changement de compte, la
+       base locale est vide et n'a pas encore vu le serveur : si la première
+       synchro échoue, cet envoi effaçait toutes les cloches que B avait
+       posées ailleurs. Sans un mot, et sans rien pour les ramener. */
+    baseGarnie('compte-A');
+    adopterCompte('compte-B');
+    db.auth = { token:'jeton-B', refresh:'r', uid:'compte-B', email:'b@exemple.fr' };
+    const vrai_sbFetch = window.sbFetch;
+    let envois = 0;
+    window.sbFetch = ()=>{ envois++; return Promise.resolve(null); };
+    try{
+      db.syncedAt = null;                       // rien n'est encore redescendu
+      await pousserCloches();
+      egal(envois, 0, 'une liste vide jamais confrontée au serveur a effacé les cloches de B');
+
+      db.syncedAt = Date.now();                 // la synchro a abouti
+      await pousserCloches();
+      egal(envois, 2, 'après une synchro réussie, l\'envoi doit repartir normalement');
+
+      envois = 0; db.syncedAt = null;
+      db.notif.titres = { 'tv:1': Date.now() }; // un état local explicite
+      await pousserCloches();
+      egal(envois, 2, 'une cloche réellement allumée ici doit partir, synchro ou pas');
+    }finally{ window.sbFetch = vrai_sbFetch; db.auth = null; }
+  });
+
+  test('C1 — se reconnecter au même compte ne touche à rien', ()=>{
+    baseGarnie('compte-A');
+    adopterCompte('compte-A');
+    egal(Object.keys(db.shows), ['10'], 'la reconnexion a vidé la bibliothèque');
+    egal(db.pseudo, 'PseudoDeA');
+    egal(db.avis.tv['10'].v, 1);
+    egal(db.gouts.genres, ['GenreDeA']);
+    egal(db.notif.titres['tv:10'], 1000);
+  });
+
+  test('C1 — le premier compte adopte la bibliothèque au lieu de l\'effacer', ()=>{
+    baseGarnie(null);
+    adopterCompte('compte-B');
+    egal(db.proprio, 'compte-B');
+    egal(Object.keys(db.shows), ['10'], 'une bibliothèque sans propriétaire a été effacée');
+    egal(db.pseudo, 'PseudoDeA', 'la bibliothèque a été adoptée mais amputée');
+  });
+
+  test('C1 — le ménage des cloches tourne aussi à la connexion', ()=>{
+    baseGarnie('compte-A');
+    /* Titre supprimé de la bibliothèque pendant que l'app était fermée : sans
+       cet appel, `pousserCloches()` enverrait au serveur une cloche orpheline. */
+    delete db.shows[10];
+    adopterCompte('compte-A');
+    egal(db.notif.titres['tv:10'], undefined, 'la cloche d\'une série absente est restée');
+    vrai(db.notif.titresOff['tv:10'] > 0, 'l\'extinction n\'est pas datée : elle serait annulée à la synchro');
+    egal(db.notif.titres['movie:20'], 1000, 'une cloche encore valable a été emportée');
+  });
+
+  /* ==================== Effacement consenti — C2 ====================
+     Deux défauts distincts, réunis parce qu'ils produisent la même perte :
+
+       · `doSupprimerCompte` laissait `db.proprio` sur un compte détruit — le
+         compte SUIVANT créé sur l'appareil vidait donc la bibliothèque, à
+         l'instant précis où l'on croyait la récupérer ;
+       · `adopterCompte` effaçait sans demander, et sans tenter de pousser ce
+         qui n'était pas encore synchronisé.
+
+     Les cas sont asynchrones : la question passe par une promesse. La feuille
+     de confirmation est remplacée par un espion — on éprouve la MÉCANIQUE de
+     `applySession` (est-ce qu'on demande ? qu'est-ce qu'on fait de la
+     réponse ?), pas le dessin du panneau, qui a ses deux cas à lui plus bas. */
+  groupe('Effacement consenti — C2');
+
+  /* Une réponse de serveur d'authentification, réduite à ce que le code lit. */
+  function session(uid){
+    return { access_token:'jeton-'+uid, refresh_token:'refresh-'+uid,
+             user:{ id:uid, email:uid+'@exemple.fr' } };
+  }
+  /* Remplace la feuille ET la synchro le temps d'un cas, puis les rend :
+     `syncNow` partirait sur le réseau, ce que cette page n'a pas le droit de
+     faire. Compte au passage les appels de chacune. */
+  async function avecEspions(reponse, fn){
+    const vraieFeuille = window.confirmerDansFeuille, vraieSync = window.syncNow;
+    const compte = { demande:0, synchro:0 };
+    window.confirmerDansFeuille = ()=>{ compte.demande++; return Promise.resolve(reponse); };
+    window.syncNow = ()=>{ compte.synchro++; return Promise.resolve(); };
+    try{ await fn(compte); }
+    finally{
+      window.confirmerDansFeuille = vraieFeuille; window.syncNow = vraieSync;
+      /* Sans ça, le `scheduleSync` posé par `saveDB` partirait vraiment sur le
+         réseau quinze secondes plus tard. Sans session, il renonce. */
+      db.auth = null;
+    }
+  }
+
+  testAsync('C2 — refuser laisse la bibliothèque et la session intactes', async ()=>{
+    baseGarnie('compte-A');
+    db.auth = null;                       // A s'est déconnecté, la base reste la sienne
+    await avecEspions(false, async (compte)=>{
+      let jete = null;
+      try{ await applySession(session('compte-B')); }catch(e){ jete = e; }
+      vrai(jete && jete.annule, 'un refus doit se distinguer d\'un échec de connexion');
+      egal(compte.demande, 1, 'la question n\'a pas été posée');
+      egal(db.proprio, 'compte-A', 'la bibliothèque a changé de propriétaire malgré le refus');
+      egal(db.auth, null, 'la session du nouveau compte a été endossée malgré le refus');
+      egal(Object.keys(db.shows), ['10'], 'la bibliothèque a été vidée malgré le refus');
+      egal(db.pseudo, 'PseudoDeA');
+    });
+  });
+
+  testAsync('C2 — accepter efface, et seulement alors', async ()=>{
+    baseGarnie('compte-A');
+    db.auth = null;
+    await avecEspions(true, async (compte)=>{
+      await applySession(session('compte-B'));
+      egal(compte.demande, 1, 'on a effacé sans demander');
+      egal(db.proprio, 'compte-B');
+      egal(db.shows, {}, 'l\'effacement n\'a pas eu lieu après un oui');
+      egal(db.pseudo, '');
+      egal(db.auth.uid, 'compte-B');
+    });
+  });
+
+  testAsync('C2 — le premier compte sur l\'appareil ne pose aucune question', async ()=>{
+    baseGarnie(null);                     // bibliothèque sans propriétaire
+    db.auth = null;
+    await avecEspions(false, async (compte)=>{
+      await applySession(session('compte-B'));
+      egal(compte.demande, 0, 'une question pour rien — et un refus effacerait tout');
+      egal(db.proprio, 'compte-B');
+      egal(Object.keys(db.shows), ['10'], 'la bibliothèque adoptée a été vidée');
+    });
+  });
+
+  testAsync('C2 — se reconnecter au même compte ne pose aucune question', async ()=>{
+    baseGarnie('compte-A');
+    db.auth = null;
+    await avecEspions(false, async (compte)=>{
+      await applySession(session('compte-A'));
+      egal(compte.demande, 0, 'on interroge quelqu\'un qui rentre chez lui');
+      egal(Object.keys(db.shows), ['10']);
+    });
+  });
+
+  testAsync('C2 — ce que l\'ancien n\'a pas synchronisé part sous SA session', async ()=>{
+    baseGarnie('compte-A');
+    /* A est encore connecté : son jeton peut encore pousser. */
+    db.auth = { token:'jeton-A', refresh:'refresh-A', uid:'compte-A', email:'a@exemple.fr' };
+    await avecEspions(true, async (compte)=>{
+      await applySession(session('compte-B'));
+      egal(compte.synchro, 1, 'la dernière soirée de cochage de A part avec l\'effacement');
+      egal(db.proprio, 'compte-B');
+    });
+  });
+
+  testAsync('C2 — sans session valide, on saute la synchro mais on demande quand même', async ()=>{
+    baseGarnie('compte-A');
+    db.auth = null;                       // plus de jeton : rien à pousser
+    await avecEspions(true, async (compte)=>{
+      await applySession(session('compte-B'));
+      egal(compte.synchro, 0, 'une synchro sans session ne peut qu\'échouer');
+      egal(compte.demande, 1, 'la question doit être posée même sans réseau');
+    });
+  });
+
+  testAsync('C2 — fermer la feuille sans répondre vaut « Annuler »', async ()=>{
+    const p = confirmerDansFeuille('Cette bibliothèque appartient à un autre compte',
+                                   'Elle va être retirée de cet appareil.',
+                                   'Continuer', 'Annuler');
+    const dedans = document.getElementById('sheetin').innerHTML;
+    vrai(/appartient à un autre compte/.test(dedans), 'la question ne s\'affiche pas');
+    vrai(/repondreFeuille\(true\)/.test(dedans) && /repondreFeuille\(false\)/.test(dedans),
+         'les deux boutons ne sont pas branchés');
+    /* Appui sur le fond, bouton retour du téléphone, geste de tiroir : les
+       trois passent par `closeSheet`. Un panneau refermé sans réponse ne doit
+       pas laisser la promesse en suspens — la connexion resterait bloquée. */
+    closeSheet();
+    egal(await p, false, 'une feuille refermée sans réponse a été prise pour un oui');
+  });
+
+  testAsync('C2 — les deux boutons rendent bien oui et non', async ()=>{
+    const oui = confirmerDansFeuille('Titre', 'Texte', 'Continuer', 'Annuler');
+    repondreFeuille(true);
+    egal(await oui, true);
+    const non = confirmerDansFeuille('Titre', 'Texte', 'Continuer', 'Annuler');
+    repondreFeuille(false);
+    egal(await non, false);
+  });
+
+  test('C2 — supprimer son compte rend la bibliothèque sans propriétaire', ()=>{
+    /* On ne peut pas jouer `doSupprimerCompte` ici — elle appelle le serveur.
+       Ce cas éprouve la CONSÉQUENCE, qui est tout ce qui compte : une base
+       laissée dans l'état où la suppression la laisse doit être adoptée en
+       silence par le compte suivant, et non vidée. */
+    baseGarnie('compte-A');
+    db.auth = null; db.proprio = null;              // état laissé par doSupprimerCompte
+    adopterCompte('compte-neuf');
+    egal(db.proprio, 'compte-neuf');
+    egal(Object.keys(db.shows), ['10'], 'la bibliothèque promise « restée sur l\'appareil » a été vidée');
+    egal(db.pseudo, 'PseudoDeA');
+  });
+
+  test('C2 — la ligne qui rend le propriétaire est bien dans doSupprimerCompte', ()=>{
+    /* Contrôle de présence, faute de pouvoir jouer la fonction : sans lui, le
+       cas ci-dessus reste vert alors que le défaut est entier. */
+    vrai(/db\.proprio\s*=\s*null/.test(codeDe(doSupprimerCompte)),
+         'doSupprimerCompte laisse `db.proprio` sur un compte qui n\'existe plus');
+  });
+
+  /* ============ Décochages qui survivent à la synchro — C3 ============
+     Deux gestes que la synchro annulait en silence :
+
+       · démarquer un FILM. La fusion tranchait sur `watchedAt` seul, donc 0
+         contre la date de l'autre appareil, qui croit toujours le film vu :
+         le distant gagnait TOUJOURS et le film redevenait « vu ». Il n'y avait
+         aucune manière de le démarquer durablement.
+       · retirer un 👍 pendant l'INSCRIPTION. `inscPoserAvis` faisait un
+         `delete` nu, sans pierre tombale, alors que `fusionnerAvis` n'arbitre
+         que sur celles-ci : l'avis revenait à la synchro suivante.
+
+     Les quatre premiers cas sont la table de vérité complète de la fusion des
+     films — c'est elle, et elle seule, qui décide si un geste survit. */
+  groupe('Décochages qui survivent à la synchro — C3');
+
+  const MAINTENANT = Date.now(), IL_Y_A_1H = MAINTENANT - 3600000;
+  /* Un film à l'état exact que produit chaque geste, sans passer par l'app. */
+  function filmVu(id, quand){
+    return { id:id, title:'F'+id, genres:['Drame'], seen:true,
+             watchedAt:quand, addedAt:1, date:'2010-01-01' };
+  }
+  function filmDecoche(id, quand){
+    return { id:id, title:'F'+id, genres:['Drame'], seen:false,
+             watchedAt:null, unseenAt:quand, addedAt:1, date:'2010-01-01' };
+  }
+
+  test('C3 — décochage RÉCENT ici contre vu ANCIEN ailleurs : reste décoché', ()=>{
+    baseVierge();
+    db.movies[1] = filmDecoche(1, MAINTENANT);
+    mergeRemote({ shows:{}, movies:{ 1: filmVu(1, IL_Y_A_1H) } });
+    egal(db.movies[1].seen, false,
+         'le film décoché est redevenu « vu » : le geste se perd à chaque synchro');
+  });
+
+  test('C3 — décochage RÉCENT ailleurs contre vu ANCIEN ici : devient décoché', ()=>{
+    baseVierge();
+    db.movies[1] = filmVu(1, IL_Y_A_1H);
+    mergeRemote({ shows:{}, movies:{ 1: filmDecoche(1, MAINTENANT) } });
+    egal(db.movies[1].seen, false, 'le décochage fait sur l\'autre appareil n\'est pas arrivé');
+  });
+
+  test('C3 — vu RÉCENT ici contre décochage ANCIEN ailleurs : reste vu', ()=>{
+    baseVierge();
+    db.movies[1] = filmVu(1, MAINTENANT);
+    mergeRemote({ shows:{}, movies:{ 1: filmDecoche(1, IL_Y_A_1H) } });
+    egal(db.movies[1].seen, true, 'un vieux décochage a effacé un visionnage tout frais');
+  });
+
+  test('C3 — vu RÉCENT ailleurs contre décochage ANCIEN ici : redevient vu', ()=>{
+    baseVierge();
+    db.movies[1] = filmDecoche(1, IL_Y_A_1H);
+    mergeRemote({ shows:{}, movies:{ 1: filmVu(1, MAINTENANT) } });
+    egal(db.movies[1].seen, true, 'le film revu sur l\'autre appareil est resté décoché');
+  });
+
+  test('C3 — marquerFilm pose la date du geste, dans les deux sens', ()=>{
+    const m = filmVu(1, 5);
+    marquerFilm(m, false);
+    egal(m.seen, false);
+    egal(m.watchedAt, null);
+    vrai(m.unseenAt > 0, 'un décochage sans date ne survit pas à la synchro');
+    marquerFilm(m, true);
+    egal(m.seen, true);
+    vrai(m.watchedAt > 0);
+    egal(m.unseenAt, undefined,
+         'la trace du décochage survit au recochage : elle regagnerait à la fusion suivante');
+  });
+
+  test('C3 — une trace de décochage de plus de trois mois ne compte plus', ()=>{
+    /* Même rétention que celle des épisodes (`unwatched`). La conséquence est
+       assumée : un appareil resté hors ligne plus longtemps peut ressusciter
+       le film. C'est le contrat déjà en vigueur, pas une nouveauté. */
+    const vieux = MAINTENANT - (91 * 86400000);
+    egal(dernierGesteFilm({ watchedAt:null, unseenAt:vieux }), 0);
+    egal(dernierGesteFilm({ watchedAt:null, unseenAt:MAINTENANT }), MAINTENANT);
+    egal(dernierGesteFilm({ watchedAt:42, unseenAt:vieux }), 42, 'le cochage doit rester lisible');
+  });
+
+  test('C3 — reparerBase efface les traces périmées et garde les fraîches', ()=>{
+    baseVierge();
+    db.movies[1] = filmDecoche(1, MAINTENANT - (91 * 86400000));
+    db.movies[2] = filmDecoche(2, MAINTENANT);
+    db.movies[3] = filmVu(3, MAINTENANT);
+    db.movies[3].unseenAt = 'pas un nombre';
+    reparerBase();
+    egal(db.movies[1].unseenAt, undefined, 'une trace périmée reste dans l\'envoi au serveur');
+    egal(db.movies[2].unseenAt, MAINTENANT, 'une trace fraîche a été effacée');
+    egal(db.movies[3].unseenAt, undefined, 'une trace mal formée a survécu');
+  });
+
+  test('C3 — les deux écrans qui décochent un film passent par marquerFilm', ()=>{
+    /* Contrôle de présence : `toggleMovie` (app-05) et `addMovie` (app-04)
+       sont les deux SEULS endroits qui remettent `seen` à faux. Un troisième
+       qui l'écrirait à la main rouvrirait le défaut sans que rien ne le dise. */
+    vrai(/marquerFilm\(/.test(codeDe(toggleMovie)), 'toggleMovie écrit encore le « vu » à la main');
+    vrai(/marquerFilm\(/.test(codeDe(addMovie)), 'addMovie écrit encore le « vu » à la main');
+  });
+
+  test('C3 — démarquer depuis la fiche laisse une trace datée', ()=>{
+    baseVierge();
+    db.movies[1] = filmVu(1, IL_Y_A_1H);
+    /* `toggleMovie` redessine et pose la question « tu as aimé ? » : ni l'un
+       ni l'autre n'a sa place ici, on les met de côté le temps du geste. */
+    const vraiRender = window.render, vraiSignal = window.signalerFilmVu;
+    window.render = ()=>{}; window.signalerFilmVu = ()=>{};
+    try{ toggleMovie(1); }
+    finally{ window.render = vraiRender; window.signalerFilmVu = vraiSignal; }
+    egal(db.movies[1].seen, false);
+    vrai(db.movies[1].unseenAt > 0, 'le geste n\'est pas daté : la synchro l\'annulera');
+    /* Et il tient contre l'autre appareil, qui croit encore le film vu. */
+    mergeRemote({ shows:{}, movies:{ 1: filmVu(1, IL_Y_A_1H) } });
+    egal(db.movies[1].seen, false, 'le film est redevenu « vu » à la première synchro');
+  });
+
+  test('C3 — retirer un 👍 à l\'inscription pose une pierre tombale', ()=>{
+    baseVierge();
+    inscPoserAvis('movie', 1, 1);
+    egal(avisDe('movie', 1), 1, 'le 👍 de la grille d\'inscription n\'a pas été posé');
+    inscPoserAvis('movie', 1, 0);
+    egal(avisDe('movie', 1), 0);
+    vrai(db.avisRetires.movie['1'] > 0,
+         'aucune trace de l\'effacement : l\'avis reviendra à la synchro suivante');
+  });
+
+  test('C3 — un 👍 retiré à l\'inscription ne revient pas par la synchro', ()=>{
+    /* Le scénario exact du critère d\'acceptation : poser, synchro, retirer,
+       synchro. L\'autre appareil croit toujours le 👍 posé et le renvoie. */
+    baseVierge();
+    inscPoserAvis('tv', 42, 1);
+    const commeAilleurs = { avis:{ tv:{ '42':{ v:1, quand: db.avis.tv['42'].quand } } } };
+    fusionnerAvis(commeAilleurs);                    // première synchro
+    inscPoserAvis('tv', 42, 0);                      // on le retire
+    fusionnerAvis(commeAilleurs);                    // seconde synchro
+    egal(avisDe('tv', 42), 0, 'le 👍 retiré est revenu tout seul');
+  });
+
+  test('C3 — l\'inscription range les séries dans le seau « tv »', ()=>{
+    /* `inscSeau` repliait tout ce qui n\'est pas `movie` sur `tv` ; app-11
+       prend la clé telle quelle. Sans le repli, un avis d\'inscription
+       atterrirait dans un troisième seau que personne ne lit. */
+    baseVierge();
+    inscPoserAvis('serie-inconnue', 7, 1);
+    egal(avisDe('tv', 7), 1, 'l\'avis est parti dans un seau que rien ne relit');
+    egal(Object.keys(db.avis).sort(), ['movie','tv'], 'un seau de trop dans db.avis');
+  });
+
+  test('C3 — le pavé qui disait « db.avis n\'est pas synchronisé » a disparu', ()=>{
+    /* Il invitait à ne pas corriger ce défaut-ci. Contrôle porté par le
+       lanceur (contrôle statique) — ici on vérifie au moins que la clé EST
+       bien dans l\'envoi, ce que le commentaire niait. */
+    baseVierge();
+    poserAvis('movie', 1, 1);
+    const envoi = payload();
+    vrai(envoi.avis && envoi.avis.movie['1'], 'db.avis ne monte pas au serveur');
+    vrai(envoi.avisRetires, 'les pierres tombales ne montent pas au serveur');
+  });
+
+  /* ============ Les goûts, sous-bloc par sous-bloc — C4 ============
+     `db.gouts` se fusionnait en tout-ou-rien sur une seule date. Un « Pas pour
+     moi » sur une suggestion — le geste le plus fréquent et le moins important
+     du bloc — datait TOUT, et écrasait à la synchro les genres, les acteurs,
+     les plateformes et les graines réglés le même jour sur l'autre appareil.
+
+     Le cas central est le premier : c'est le critère d'acceptation, et c'est le
+     seul qui échouait avant. Les suivants gardent la compatibilité, qui est la
+     vraie difficulté ici — deux appareils dont un seul est à jour ne doivent
+     rien perdre, dans aucun des deux sens. */
+  groupe('Les goûts, sous-bloc par sous-bloc — C4');
+
+  /* Des goûts complets, avec des dates par bloc posées à la main. */
+  function goutsDe(champs, blocs, maj){
+    const g = { genres:[], genresFam:{}, exclus:[], acteurs:[], graines:[],
+                plates:[], animeSous:[], pasVus:[], pasPourMoi:{},
+                amorcageFait:false, propose:false, platesDemande:false,
+                suggMesPlates:false, jour:'', toutesOrigines:false };
+    Object.assign(g, champs || {});
+    if(blocs) g.majBlocs = blocs;
+    if(maj !== undefined) g.maj = maj;
+    return g;
+  }
+
+  test('C4 — un refus de suggestion n\'écrase plus les genres de l\'autre appareil', ()=>{
+    /* Le critère d'acceptation, mot pour mot : A refuse une suggestion, B
+       coche des genres le même jour, double synchro, les DEUX survivent. */
+    baseVierge();
+    /* Ici, c'est A : il vient de refuser une suggestion, rien d'autre. */
+    db.gouts = goutsDe({ pasPourMoi:{ 'movie:1':{quand:2000, g:['Drame']} } },
+                       { pasPourMoi:2000, genres:1000, acteurs:1000, graines:1000,
+                         plates:1000, pasVus:1000, divers:1000 }, 2000);
+    /* Là-bas, c'est B : il a coché des genres, un peu plus tôt dans la journée. */
+    mergeRemote({ shows:{}, movies:{}, gouts: goutsDe(
+      { genres:['Comédie','Action'] },
+      { pasPourMoi:1000, genres:1500, acteurs:1000, graines:1000,
+        plates:1000, pasVus:1000, divers:1000 }, 1500) });
+    egal(db.gouts.genres, ['Comédie','Action'], 'les genres cochés sur B ont été écrasés par un refus');
+    vrai(db.gouts.pasPourMoi['movie:1'], 'le refus posé sur A a été perdu');
+  });
+
+  test('C4 — chaque bloc est arbitré seul, dans les deux sens à la fois', ()=>{
+    baseVierge();
+    db.gouts = goutsDe({ genres:['ici'], acteurs:[{id:1,nom:'ActeurIci'}], plates:[{id:8}] },
+                       { genres:3000, acteurs:1000, plates:3000,
+                         graines:1000, pasVus:1000, pasPourMoi:1000, divers:1000 }, 3000);
+    mergeRemote({ shows:{}, movies:{}, gouts: goutsDe(
+      { genres:['ailleurs'], acteurs:[{id:2,nom:'ActeurAilleurs'}], plates:[{id:9}] },
+      { genres:2000, acteurs:5000, plates:1000,
+        graines:1000, pasVus:1000, pasPourMoi:1000, divers:1000 }, 5000) });
+    egal(db.gouts.genres, ['ici'], 'un bloc local plus récent a perdu');
+    egal(db.gouts.acteurs, [{id:2,nom:'ActeurAilleurs'}], 'un bloc distant plus récent n\'est pas arrivé');
+    egal(db.gouts.plates, [{id:8}], 'un bloc local plus récent a perdu');
+  });
+
+  test('C4 — les clés qui se règlent ensemble voyagent ensemble', ()=>{
+    /* `exclus` est l'envers exact de `genres` : les séparer ferait apparaître
+       un genre à la fois aimé et écarté. Même chose pour `suggMesPlates`, qui
+       n'a aucun sens sans la liste de plateformes qu'il filtre. */
+    baseVierge();
+    db.gouts = goutsDe({ genres:['Drame'], exclus:['Horreur'], plates:[{id:8}], suggMesPlates:false },
+                       { genres:1000, plates:1000, acteurs:1000, graines:1000,
+                         pasVus:1000, pasPourMoi:1000, divers:1000 }, 1000);
+    mergeRemote({ shows:{}, movies:{}, gouts: goutsDe(
+      { genres:['Comédie'], exclus:['Drame'], plates:[{id:9}], suggMesPlates:true },
+      { genres:2000, plates:2000, acteurs:1000, graines:1000,
+        pasVus:1000, pasPourMoi:1000, divers:1000 }, 2000) });
+    egal(db.gouts.exclus, ['Drame'], 'les exclus sont restés en désaccord avec les genres');
+    egal(db.gouts.suggMesPlates, true, 'le filtre est resté en désaccord avec sa liste');
+  });
+
+  test('C4 — un distant resté en v88 ne fait rien perdre', ()=>{
+    /* Il n'a pas de `majBlocs` : tous ses blocs valent sa date globale. C'est
+       l'ancien comportement, donc aucune régression pour lui. */
+    baseVierge();
+    db.gouts = goutsDe({ genres:['ici'] },
+                       { genres:3000, acteurs:1000, graines:1000, plates:1000,
+                         pasVus:1000, pasPourMoi:1000, divers:1000 }, 3000);
+    mergeRemote({ shows:{}, movies:{},
+                  gouts: goutsDe({ genres:['vieux'], acteurs:[{id:9,nom:'Vieux'}] }, null, 2000) });
+    egal(db.gouts.genres, ['ici'], 'un appareil en v88 a écrasé un bloc plus récent');
+    egal(db.gouts.acteurs, [{id:9,nom:'Vieux'}], 'un appareil en v88 n\'arrive plus à rien transmettre');
+  });
+
+  test('C4 — une base locale sans majBlocs se défend avec sa date globale', ()=>{
+    /* Le cas qui rend la migration 4 non indispensable, et c'est voulu : une
+       base arrivée par la synchro peut ne pas l\'avoir vue passer. Sans ce
+       repli, ses blocs vaudraient zéro et le premier distant venu, même bien
+       plus ancien, gagnerait tout. */
+    baseVierge();
+    db.gouts = goutsDe({ genres:['ici'] }, null, 5000);
+    mergeRemote({ shows:{}, movies:{}, gouts: goutsDe({ genres:['ailleurs'] }, null, 2000) });
+    egal(db.gouts.genres, ['ici'], 'une base sans majBlocs s\'est fait tout écraser');
+  });
+
+  test('C4 — la migration 4 recopie la date globale sur chaque bloc', ()=>{
+    baseVierge();
+    db.v = 3;
+    db.gouts = goutsDe({ genres:['Drame'] }, null, 4242);
+    migrer();
+    egal(db.v, SCHEMA);
+    egal(Object.keys(db.gouts.majBlocs).sort(), Object.keys(GOUT_BLOCS).sort(),
+         'un bloc sans date vaudrait zéro et se ferait écraser par n\'importe quoi');
+    Object.keys(GOUT_BLOCS).forEach(n=> egal(db.gouts.majBlocs[n], 4242, n));
+  });
+
+  test('C4 — la migration 4 ne repasse pas sur des dates déjà posées', ()=>{
+    baseVierge();
+    db.v = 3;
+    db.gouts = goutsDe({}, { genres:9999, acteurs:1, graines:1, plates:1,
+                             pasVus:1, pasPourMoi:1, divers:1 }, 4242);
+    migrer();
+    egal(db.gouts.majBlocs.genres, 9999, 'une date déjà posée a été écrasée par la migration');
+  });
+
+  test('C4 — toucheGouts ne date que le bloc nommé', ()=>{
+    baseVierge();
+    db.gouts = goutsDe({}, { genres:1000, acteurs:1000, graines:1000, plates:1000,
+                             pasVus:1000, pasPourMoi:1000, divers:1000 }, 1000);
+    toucheGouts('pasPourMoi');
+    vrai(db.gouts.majBlocs.pasPourMoi > 1000, 'le bloc touché n\'a pas été daté');
+    egal(db.gouts.majBlocs.genres, 1000, 'un bloc qu\'on n\'a pas touché a été daté quand même');
+    egal(db.gouts.majBlocs.plates, 1000);
+    vrai(db.gouts.maj > 1000, 'la date globale doit continuer d\'exister pour les appareils en v88');
+  });
+
+  test('C4 — toucheGouts accepte plusieurs blocs, et date tout sans nom', ()=>{
+    baseVierge();
+    db.gouts = goutsDe({}, { genres:1000, acteurs:1000, graines:1000, plates:1000,
+                             pasVus:1000, pasPourMoi:1000, divers:1000 }, 1000);
+    toucheGouts('pasVus','graines');          // le cas de `duelPasVu`
+    vrai(db.gouts.majBlocs.pasVus > 1000 && db.gouts.majBlocs.graines > 1000);
+    egal(db.gouts.majBlocs.genres, 1000, 'un troisième bloc a été daté au passage');
+    /* Sans nom : repli sur l'ancien comportement, tout est daté. C'est le
+       moins grave des deux mauvais défauts possibles — écraser comme avant
+       plutôt que perdre sa propre modification. */
+    toucheGouts();
+    Object.keys(GOUT_BLOCS).forEach(n=> vrai(db.gouts.majBlocs[n] > 1000, n+' n\'a pas été daté'));
+  });
+
+  test('C4 — chaque écrivain de db.gouts se nomme', ()=>{
+    /* Contrôle de forme : un appelant qui oublie son nom écrase comme avant.
+       Le défaut se rouvrirait en silence, et aucun cas fonctionnel ne le
+       verrait — d'où ce garde-fou, qui lit le code plutôt que l'exécuter. */
+    const sansNom = [];
+    [['refuserSugg',refuserSugg], ['bascMaPlate',bascMaPlate], ['viderMesPlates',viderMesPlates],
+     ['setSuggPlates',setSuggPlates], ['finirAmorcage',finirAmorcage], ['poserGraine',poserGraine],
+     ['duelPasVu',duelPasVu], ['bascGoutFamGenre',bascGoutFamGenre], ['bascGoutExclu',bascGoutExclu],
+     ['retirerActeur',retirerActeur], ['ajouterActeur',ajouterActeur],
+     ['setToutesOrigines',setToutesOrigines], ['inscTerminer',inscTerminer],
+     ['inscBascGenre',inscBascGenre], ['inscBascAnime',inscBascAnime],
+     ['inscBascAnimeSous',inscBascAnimeSous]].forEach(([nom, fn])=>{
+      if(/toucheGouts\(\s*\)/.test(codeDe(fn))) sansNom.push(nom);
+    });
+    egal(sansNom, [], 'ces écrivains datent encore TOUT le bloc de goûts');
+  });
+
+  /* ============ Filets de sécurité — C5 ============
+     Trois façons de rendre l'app inutilisable SANS ISSUE, toutes trois
+     constatables : l'écran noir au démarrage (la classe `booting` jamais
+     retirée), l'écran figé au rendu (une vue qui lève laisse le DOM précédent),
+     et le crash de fiche sur une date absente. */
+  groupe('Filets de sécurité — C5');
+
+  test('C5 — dateVue ne plante jamais et ne devine pas une date absente', ()=>{
+    egal(dateVue(undefined), '', 'un film vu sans watchedAt fait planter sa propre fiche');
+    egal(dateVue(null), '');
+    egal(dateVue(0), '');
+    egal(dateVue('pas un nombre'), '');
+    egal(dateVue(NaN), '');
+    const t = new Date('2024-03-14T10:00:00Z').getTime();
+    egal(dateVue(t), fmtDate('2024-03-14'), 'une date valide doit rester lisible');
+  });
+
+  test('C5 — un film vu sans date ouvre quand même sa fiche', ()=>{
+    /* Le motif exact d'avant : `new Date(m.watchedAt).toISOString()` levait un
+       RangeError au milieu de la construction de la fiche, donc l'écran entier
+       ne s'affichait pas. Un film sans date de visionnage — vieille sauvegarde,
+       appareil resté en v82 — rendait sa propre fiche inatteignable. */
+    baseVierge();
+    db.movies[1] = { id:1, title:'Sans date', genres:['Drame'], seen:true,
+                     watchedAt:null, addedAt:1, date:'2010-01-01' };
+    /* Les quatre caches de la fiche, remplis à la main : sans eux, dessiner
+       une fiche part chercher plateformes, casting, bande-annonce et
+       recommandations sur le réseau — ce que cette page n'a pas le droit de
+       faire, et qui arriverait APRÈS la fin du cas. */
+    platos['movie:1'] = { abo:[], lien:'' };
+    castings['movie:1'] = [];
+    bandes['movie:1'] = null;
+    recos['movie:1'] = null;
+    const p = view, q = params;
+    view = 'movie'; params = { id:1 };
+    let html = '';
+    try{ html = corpsDeVue(); } finally { view = p; params = q; }
+    vrai(/Vu/.test(html), 'la fiche ne dit plus qu\'il est vu');
+    vrai(!/Vu le/.test(html), 'une date a été inventée');
+  });
+
+  test('C5 — une vue qui lève affiche l\'écran de panne, pas l\'écran précédent', ()=>{
+    baseVierge();
+    const vrai_corps = window.corpsDeVue;
+    window.corpsDeVue = ()=>{ throw new Error('boum'); };
+    let leve = null;
+    try{ render(); }
+    catch(e){ leve = e; }
+    finally{ window.corpsDeVue = vrai_corps; }
+    egal(leve, null, 'render laisse l\'exception remonter : l\'écran reste figé');
+    const dedans = document.getElementById('app').innerHTML;
+    vrai(/n'a pas pu s'afficher/.test(dedans), 'l\'écran de panne ne s\'est pas affiché');
+    vrai(/go\('discover'\)/.test(dedans) && /location\.reload/.test(dedans),
+         'l\'écran de panne n\'offre pas de sortie');
+    render();                                   // et on répare l'état de la page
+  });
+
+  test('C5 — l\'écran de panne ne lit rien de la base', ()=>{
+    /* C'est probablement `db` qui vient de faire tomber la vue : un écran de
+       secours qui en dépend ne secourt personne. */
+    const avant = db;
+    let html = '';
+    try{ db = null; html = ecranPanne(); } finally { db = avant; }
+    vrai(html.length > 50);
+  });
+
+  test('C5 — un geste sur une série absente ne casse rien', ()=>{
+    /* Le DOM peut être en retard sur la base : synchro entrante qui retire une
+       série, changement de compte, import. Les boutons portent encore son
+       identifiant. Avant, chacun de ces appels levait un TypeError qui figeait
+       l'écran entier. */
+    baseVierge();
+    const vrai_render = window.render, vrai_toast = window.toast, vrai_sheet = window.openSheet;
+    window.render = ()=>{}; window.toast = ()=>{}; window.openSheet = ()=>{};
+    try{
+      quickWatch(999);
+      toggleWholeSeason(999, 1);
+      marquerToutVu(999);
+      toutDecocher(999);
+      toggleToutVu(999);
+      toggleEp(999, 1, 1);
+      showMenu(999);
+      movieMenu(999);
+    }finally{
+      window.render = vrai_render; window.toast = vrai_toast; window.openSheet = vrai_sheet;
+    }
+    egal(Object.keys(db.shows), [], 'un geste sur une série absente a créé quelque chose');
+  });
+
+  test('C5 — une sauvegarde au vieux schéma est exploitable tout de suite', ()=>{
+    /* `migrer()` et `reparerBase()` ne tournaient qu'au démarrage : une
+       sauvegarde d'avant le renommage `ep.s → ep.st` entrait telle quelle et
+       faisait tomber le premier `progress()` venu — c'est-à-dire le rendu qui
+       suit l'import. Il fallait redémarrer l'app, et rien ne le disait. */
+    baseVierge();
+    const vrai_render = window.render, vrai_toast = window.toast;
+    window.render = ()=>{}; window.toast = ()=>{};
+    importEnAttente = {
+      v: 1,
+      shows: { 7: { id:7, name:'Vieille', status:'Ended', addedAt:1, updated:1,
+                    watched:{}, seasons:{ 1:[{ e:1, n:'E1', d:HIER, r:42, s:'/vieille.jpg' }] } } },
+      movies: {}
+    };
+    try{ appliquerImport(); } finally { window.render = vrai_render; window.toast = vrai_toast; }
+    const ep0 = db.shows[7].seasons[1][0];
+    egal(ep0.st, '/vieille.jpg', 'le renommage ep.s → ep.st n\'a pas été rejoué');
+    egal(ep0.s, undefined);
+    egal(db.v, SCHEMA, 'la base importée reste marquée dans une version qui n\'est pas la sienne');
+    egal(progress(db.shows[7]).total, 1, 'progress() tombe encore sur la base importée');
+  });
+
+  test('C5 — l\'import reprend la version du fichier AVANT de migrer', ()=>{
+    /* Sans cette reprise, une sauvegarde en v1 entre dans une base marquée v4,
+       et le registre saute toutes les migrations dont elle a besoin. */
+    const src = codeDe(appliquerImport);
+    vrai(/d\.v[\s\S]{0,80}db\.v\s*=/.test(src),
+         'appliquerImport ne reprend pas `d.v` du fichier importé');
+    const i = src.indexOf('db.v =');
+    const j = src.indexOf('migrer()');
+    vrai(i > 0 && j > i, 'la version est reprise APRÈS la migration : elle ne sert plus à rien');
+  });
+
+  test('C5 — boot retire « booting » quoi qu\'il arrive', ()=>{
+    /* La ligne qui décide entre « l'app s'affiche » et « écran noir définitif ».
+       Contrôle de forme : elle doit être dans le `finally`, pas au milieu du
+       corps où n'importe quel throw en amont la sautait. */
+    const src = codeDe(boot);
+    const f = src.lastIndexOf('finally');
+    const r = src.indexOf("classList.remove('booting')");
+    vrai(f > 0, 'boot n\'a pas de finally');
+    vrai(r > f, 'le retrait de « booting » n\'est pas dans le finally : l\'écran noir est possible');
+    vrai(/ecranSecours\(\)/.test(src), 'aucun écran de secours n\'est affiché en cas d\'échec');
+  });
+
+  /* ============ Synchronisation — C8 ============ */
+  groupe('Synchronisation — C8');
+
+  test('C8 — le repli exponentiel monte puis plafonne', ()=>{
+    egal(delaiReprise(0), 0, 'la première reprise ne doit pas attendre');
+    egal(delaiReprise(1), 60000);
+    egal(delaiReprise(2), 120000);
+    egal(delaiReprise(3), 240000);
+    egal(delaiReprise(4), 480000);
+    egal(delaiReprise(5), 900000, 'le plafond de 15 min n\'est pas tenu');
+    egal(delaiReprise(50), 900000, 'sans plafond, on n\'y revient jamais');
+  });
+
+  test('C8 — on ne repart que s\'il y a une raison', ()=>{
+    baseVierge();
+    db.auth = { token:'t', refresh:'r', uid:'u', email:'a@b.fr' };
+    db.syncedAt = Date.now(); delete db.syncDernierEchec;
+    egal(synchroAReprendre(), false, 'chaque bascule d\'onglet relancerait 1,4 Mo');
+    db.syncDernierEchec = { quand:1, motif:'x' };
+    egal(synchroAReprendre(), true, 'un échec resté en base ne redéclenche rien');
+    delete db.syncDernierEchec;
+    db.syncedAt = Date.now() - (6 * 60000);
+    egal(synchroAReprendre(), true, 'une app rouverte après deux jours ne resynchronise pas');
+    db.auth = null;
+    egal(synchroAReprendre(), false, 'on synchronise sans session');
+  });
+
+  testAsync('C8 — le POST est conditionné par la version lue', async ()=>{
+    baseVierge();
+    db.auth = { token:'t', refresh:'r', uid:'u', email:'a@b.fr' };
+    const vrai_sbFetch = window.sbFetch;
+    const vus = [];
+    window.sbFetch = (chemin, opt)=>{
+      vus.push({ chemin:chemin, methode:(opt && opt.method) || 'GET' });
+      if(!(opt && opt.method)) return Promise.resolve([{ data:{ shows:{}, movies:{} }, updated_at:'2026-08-09T10:00:00Z' }]);
+      return Promise.resolve([{ ok:true }]);       // une ligne touchée
+    };
+    try{ await echangerAvecServeur(3); }
+    finally{ window.sbFetch = vrai_sbFetch; db.auth = null; }
+    egal(vus.length, 2);
+    egal(vus[1].methode, 'PATCH', 'le POST inconditionnel écrase ce que l\'autre appareil vient d\'écrire');
+    vrai(/updated_at=eq\.2026-08-09T10%3A00%3A00Z/.test(vus[1].chemin),
+         'la condition de version n\'est pas dans la requête');
+  });
+
+  testAsync('C8 — devancé par un autre appareil : on relit et on recommence', async ()=>{
+    baseVierge();
+    db.auth = { token:'t', refresh:'r', uid:'u', email:'a@b.fr' };
+    const vrai_sbFetch = window.sbFetch;
+    let ecritures = 0, lectures = 0;
+    window.sbFetch = (chemin, opt)=>{
+      if(!(opt && opt.method)){ lectures++; return Promise.resolve([{ data:{}, updated_at:'v'+lectures }]); }
+      ecritures++;
+      /* Devancé les deux premières fois, on passe à la troisième. */
+      return Promise.resolve(ecritures < 3 ? [] : [{ ok:true }]);
+    };
+    try{ await echangerAvecServeur(3); }
+    finally{ window.sbFetch = vrai_sbFetch; db.auth = null; }
+    egal(ecritures, 3, 'une écriture rejetée doit être retentée après relecture');
+    egal(lectures, 3, 'on repart sans relire : on réécrirait la même version périmée');
+  });
+
+  testAsync('C8 — trois fois devancé, on renonce plutôt que d\'écraser', async ()=>{
+    baseVierge();
+    db.auth = { token:'t', refresh:'r', uid:'u', email:'a@b.fr' };
+    const vrai_sbFetch = window.sbFetch;
+    window.sbFetch = (chemin, opt)=>
+      (opt && opt.method) ? Promise.resolve([]) : Promise.resolve([{ data:{}, updated_at:'v' }]);
+    let jete = null;
+    try{ await echangerAvecServeur(3); }
+    catch(e){ jete = e; }
+    finally{ window.sbFetch = vrai_sbFetch; db.auth = null; }
+    vrai(jete && jete.course, 'on a fini par écraser au lieu de renoncer');
+    vrai(/en même temps/.test(motifSynchro(jete)), 'le message parle de panne alors que rien n\'est perdu');
+  });
+
+  testAsync('C8 — une ligne absente s\'insère sans condition', async ()=>{
+    baseVierge();
+    db.auth = { token:'t', refresh:'r', uid:'u', email:'a@b.fr' };
+    const vrai_sbFetch = window.sbFetch;
+    const vus = [];
+    window.sbFetch = (chemin, opt)=>{
+      vus.push((opt && opt.method) || 'GET');
+      return Promise.resolve((opt && opt.method) ? null : []);   // aucune ligne au serveur
+    };
+    try{ await echangerAvecServeur(3); }
+    finally{ window.sbFetch = vrai_sbFetch; db.auth = null; }
+    egal(vus, ['GET','POST'], 'le premier appareil du compte n\'arrive plus à écrire');
+  });
+
+  testAsync('C8 — quatre 401 simultanés ne font QU\'UN rafraîchissement', async ()=>{
+    /* Le défaut : au démarrage, syncNow, majProfil, chargerPartage et
+       inscrireSiBesoin partent en parallèle. Jeton expiré, quatre 401, quatre
+       sbRefresh avec le MÊME jeton — que Supabase fait tourner. Les trois
+       derniers recevaient `invalid_grant`, et selon l'ordre, la session
+       sautait au démarrage sans que personne l'ait demandé. */
+    baseVierge();
+    db.auth = { token:'vieux', refresh:'r', uid:'u', email:'a@b.fr' };
+    const vrai_sbFetch = window.sbFetch, vrai_apply = window.applySession;
+    let appels = 0;
+    window.sbFetch = ()=>{ appels++; return new Promise(r=> setTimeout(()=> r({ access_token:'neuf' }), 20)); };
+    window.applySession = ()=> Promise.resolve(true);
+    let ok;
+    try{ ok = await Promise.all([sbRefresh(), sbRefresh(), sbRefresh(), sbRefresh()]); }
+    finally{ window.sbFetch = vrai_sbFetch; window.applySession = vrai_apply; db.auth = null; }
+    egal(appels, 1, 'plusieurs rafraîchissements concurrents avec le même jeton');
+    egal(ok, [true,true,true,true], 'les appels en attente n\'ont pas reçu le résultat');
+  });
+
+  testAsync('C8 — un jeton refusé retire la session et le dit', async ()=>{
+    baseVierge();
+    db.auth = { token:'vieux', refresh:'r', uid:'u', email:'a@b.fr' };
+    const vrai_sbFetch = window.sbFetch, vrai_toast = window.toast, vrai_render = window.render;
+    window.toast = ()=>{}; window.render = ()=>{};
+    window.sbFetch = ()=>{ const e = new Error('invalid_grant'); e.status = 400; return Promise.reject(e); };
+    let ok;
+    try{ ok = await sbRefresh(); }
+    finally{ window.sbFetch = vrai_sbFetch; window.toast = vrai_toast; window.render = vrai_render; }
+    egal(ok, false);
+    egal(db.auth, null, 'la session zombie survit : l\'app se croit connectée et n\'affiche que des 401');
+    egal(db.sessionExpiree, true, 'rien ne propose de se reconnecter');
+    /* Et elle ne monte pas au serveur : c'est un état d'appareil. */
+    egal(payload().sessionExpiree, undefined);
+    delete db.sessionExpiree;
+  });
+
+  testAsync('C8 — un réseau coupé ne déconnecte PAS', async ()=>{
+    /* La moitié qui compte autant : confondre « serveur injoignable » et
+       « jeton refusé » déconnecterait quelqu'un qui passe sous un tunnel. */
+    baseVierge();
+    db.auth = { token:'vieux', refresh:'r', uid:'u', email:'a@b.fr' };
+    const vrai_sbFetch = window.sbFetch;
+    window.sbFetch = ()=> Promise.reject(new Error('Failed to fetch'));
+    let ok;
+    try{ ok = await sbRefresh(); }
+    finally{ window.sbFetch = vrai_sbFetch; }
+    egal(ok, false);
+    vrai(db.auth !== null, 'un passage sous un tunnel déconnecte');
+    egal(db.sessionExpiree, undefined);
+    db.auth = null;
+  });
+
+  test('C8 — le délai de tmdb s\'arme même quand l\'appelant fournit un signal', ()=>{
+    /* `chercherTitre` (app-12) passe TOUJOURS un signal — il lui sert à
+       abandonner la recherche précédente. L'écran de recherche, le seul où l'on
+       attend vraiment une réponse, était donc le seul sans délai maximal. */
+    const src = codeDe(tmdb);
+    vrai(!/if\(!opt\.signal/.test(src),
+         'le délai maximal reste conditionné à l\'absence de signal de l\'appelant');
+    vrai(/setTimeout\([\s\S]{0,80}15000\)/.test(src), 'plus de délai maximal du tout');
+    vrai(/addEventListener\('abort'/.test(src),
+         'le signal de l\'appelant n\'est plus écouté : la recherche ne s\'abandonne plus');
+  });
+
+  /* ============ Notifications d'un autre compte — C7 ============ */
+  groupe('Notifications d\'un autre compte — C7');
+
+  testAsync('C7 — l\'abonnement se pose sur on_conflict=endpoint', async ()=>{
+    baseVierge();
+    db.auth = { token:'t', refresh:'r', uid:'u', email:'a@b.fr' };
+    const vrai_sbFetch = window.sbFetch;
+    const vus = [];
+    window.sbFetch = (chemin)=>{ vus.push(chemin); return Promise.resolve(null); };
+    try{
+      await poserAbonnement({ endpoint:'https://push.exemple/abc', keys:{ p256dh:'p', auth:'a' } });
+    }finally{ window.sbFetch = vrai_sbFetch; db.auth = null; }
+    egal(vus.length, 1);
+    vrai(/on_conflict=endpoint/.test(vus[0]),
+         'sans on_conflict, PostgREST résout sur la clé primaire — qui ne collisionne jamais');
+  });
+
+  testAsync('C7 — un appareil pris par un autre compte passe par la fonction serveur', async ()=>{
+    baseVierge();
+    db.auth = { token:'t', refresh:'r', uid:'u', email:'a@b.fr' };
+    const vrai_sbFetch = window.sbFetch;
+    const vus = [];
+    window.sbFetch = (chemin)=>{
+      vus.push(chemin);
+      if(vus.length === 1){ const e = new Error('duplicate key'); e.status = 409; return Promise.reject(e); }
+      return Promise.resolve(null);
+    };
+    try{
+      await poserAbonnement({ endpoint:'https://push.exemple/abc', keys:{ p256dh:'p', auth:'a' } });
+    }finally{ window.sbFetch = vrai_sbFetch; db.auth = null; }
+    egal(vus.length, 2, 'le 409 n\'est pas rattrapé : A continue de sonner sur le téléphone de B');
+    vrai(/rpc\/reprendre_endpoint/.test(vus[1]));
+  });
+
+  testAsync('C7 — une session morte n\'est pas prise pour un conflit', async ()=>{
+    baseVierge();
+    db.auth = { token:'t', refresh:'r', uid:'u', email:'a@b.fr' };
+    const vrai_sbFetch = window.sbFetch;
+    let n = 0;
+    window.sbFetch = ()=>{ n++; const e = new Error('JWT expired'); e.status = 401; return Promise.reject(e); };
+    let jete = null;
+    try{ await poserAbonnement({ endpoint:'https://push.exemple/abc', keys:{ p256dh:'p', auth:'a' } }); }
+    catch(e){ jete = e; }
+    finally{ window.sbFetch = vrai_sbFetch; db.auth = null; }
+    vrai(jete, 'une erreur de session doit remonter telle quelle');
+    egal(n, 1, 'on insiste sur une session morte au lieu de la signaler');
+  });
+
+  test('C7 — le message d\'échec est lisible', ()=>{
+    const conflit = { status:409, message:'duplicate key value violates unique constraint "push_appareils_endpoint_key"' };
+    egal(motifAbonnement(conflit), 'cet appareil était inscrit pour un autre compte — réessaie');
+    vrai(/migration 013/.test(motifAbonnement({ status:404, message:'Not Found' })));
+    egal(motifAbonnement(new Error('réseau indisponible')), 'réseau indisponible');
   });
 
   /* ==================== Bilan ====================

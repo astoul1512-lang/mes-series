@@ -248,6 +248,26 @@ function fmtDate(iso){
   const d = new Date(iso+'T12:00:00');
   return d.getDate()+' '+MOIS[d.getMonth()]+' '+d.getFullYear();
 }
+/* C5 (09/08) — LA DATE À LAQUELLE ON A VU UN TITRE, SANS PLANTER.
+
+   Deux écrans faisaient `new Date(m.watchedAt).toISOString()` sans garde
+   (app-05 et app-11). `watchedAt` peut parfaitement être absent sur un film
+   marqué vu : une vieille sauvegarde réimportée, un film arrivé d'un appareil
+   en v82, un enregistrement interrompu. `new Date(undefined)` rend une date
+   invalide, et `.toISOString()` sur une date invalide lève un `RangeError` —
+   au milieu de la construction de la fiche, donc l'écran entier ne s'affiche
+   pas. Un film sans date de visionnage rendait sa propre fiche inatteignable.
+
+   Ici on rend `''`, et l'appelant écrit « Vu » sans date plutôt que rien du
+   tout. On ne devine pas une date qu'on n'a pas. */
+function dateVue(ts){
+  const n = Number(ts);
+  if(!n || !isFinite(n)) return '';
+  const d = new Date(n);
+  if(isNaN(d.getTime())) return '';
+  return fmtDate(d.toISOString().slice(0,10));
+}
+
 /* « il y a 3 min », « hier », « le 12 juin » — plus parlant qu'une date brute
    pour dire quand la dernière sauvegarde est partie. */
 function fmtQuand(ts){
@@ -578,6 +598,54 @@ function closeSheet(){
   if(el){ el.style.transition = ''; el.style.transform = ''; }
 }
 document.getElementById('sheet').addEventListener('click', e=>{ if(e.target.id==='sheet') closeSheet(); });
+
+/* ---------------------------------------------------------------------------
+   C2 (09/08) — UNE QUESTION DONT LA RÉPONSE SE LIT DANS LE CODE
+
+   Les feuilles existantes posent leurs questions en branchant deux `onclick`
+   sur deux fonctions nommées, et la suite du travail vit dans ces fonctions.
+   Ça marche partout ici — sauf quand la question tombe AU MILIEU d'une
+   opération asynchrone qu'il faut reprendre après la réponse : c'est le cas de
+   l'effacement d'une bibliothèque au changement de compte (C2), posé en plein
+   `applySession`. Il faut pouvoir écrire `if(await confirmerDansFeuille(…))`.
+
+   `confirm()` du navigateur est exclu : il s'affiche hors du style de l'app,
+   une PWA installée peut l'escamoter, et le projet ne s'en sert nulle part.
+
+   QUATRE FAÇONS DE RÉPONDRE NON, UNE SEULE DE RÉPONDRE OUI. Le bouton
+   « Annuler », l'appui sur le fond, le bouton retour du téléphone et le geste
+   de tiroir valent tous NON : on ne détruit rien sur un geste flou. Le rappel
+   de fermeture (`FERMETURES`) les attrape tous les quatre d'un coup, puisque
+   les quatre passent par `closeSheet`.
+--------------------------------------------------------------------------- */
+let reponseFeuille = null;
+function confirmerDansFeuille(titre, texte, libelleOui, libelleNon){
+  /* Une question déjà en attente reçoit un NON avant que la suivante s'ouvre :
+     deux promesses sur la même feuille, et la première ne se dénouerait
+     jamais — l'appel qui l'attend resterait bloqué pour de bon. */
+  if(reponseFeuille) repondreFeuille(false);
+  return new Promise(res=>{
+    reponseFeuille = res;
+    FERMETURES['confirmation'] = ()=> repondreFeuille(false);
+    openSheet('<h3>'+esc(titre)+'</h3>'+
+      '<p class="small muted" style="margin:0 0 14px">'+esc(texte)+'</p>'+
+      '<button class="opt danger" onclick="repondreFeuille(true)">'+esc(libelleOui)+'</button>'+
+      '<button class="opt" onclick="repondreFeuille(false)">'+esc(libelleNon)+'</button>',
+      'confirmation');
+  });
+}
+function repondreFeuille(oui){
+  const res = reponseFeuille;
+  /* Vidés AVANT de refermer : `closeSheet` rejoue le rappel de fermeture, qui
+     rappelle cette fonction. Sans ce garde-fou on répondrait deux fois — la
+     seconde sur une promesse déjà dénouée, donc en silence, ce qui est
+     exactement le genre de silence qui se paye plus tard. */
+  reponseFeuille = null;
+  FERMETURES['confirmation'] = null;
+  if(!res) return;
+  closeSheet();
+  res(!!oui);
+}
 
 /* ================================ Routes ================================= */
 /* C1 — un écran = une chaîne, et réciproquement.

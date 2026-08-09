@@ -705,7 +705,7 @@ function viewMovie(){
   /* POINT 9 — la ligne pleine largeur, entre le bloc du titre et l'action. */
   html += zoneBande('movie', m.id, true);
   html += '<div class="actions"><button class="btn block" style="'+(m.seen?'background:var(--ok);color:#08130d':'')+
-    '" onclick="toggleMovie('+m.id+')">'+I.check+(m.seen?' Vu le '+fmtDate(new Date(m.watchedAt).toISOString().slice(0,10)):' Marquer comme vu')+'</button></div>';
+    '" onclick="toggleMovie('+m.id+')">'+I.check+(m.seen ? (dateVue(m.watchedAt) ? ' Vu le '+dateVue(m.watchedAt) : ' Vu') : ' Marquer comme vu')+'</button></div>';
   /* POINT 21 — un film de la bibliothèque qui n'est pas vu EST un film à voir.
      Sa fiche ne le disait pas davantage que l'aperçu, et le seul retrait passait
      par le menu ⋮. Le bloc dit l'état et porte « Retirer ». */
@@ -719,7 +719,12 @@ function viewMovie(){
 }
 function toggleMovie(id){
   const m = db.movies[id]; if(!m) return;
-  m.seen = !m.seen; m.watchedAt = m.seen ? Date.now() : null;
+  /* C3 (09/08) — le geste passe par `marquerFilm` (app-01), qui DATE le
+     décochage. Écrit à la main ici, il ne laissait aucune trace : la fusion
+     tranchait sur `watchedAt` seul, l'autre appareil — qui croit toujours le
+     film vu — gagnait donc toujours, et le film redevenait « vu » à la synchro
+     suivante. Sur tous les appareils, et sans un mot. */
+  marquerFilm(m, !m.seen);
   saveDB(); render();
   /* LOT A, §1.3 — à CHAQUE film marqué vu. Un film est binaire : il n'y a pas
      d'autre moment où poser la question, et pas de raison de la reporter.
@@ -738,6 +743,7 @@ function marquerFilmVu(id){
 }
 function movieMenu(id){
   const m = db.movies[id];
+  if(!m) return;                                   // C5 — voir `showMenu`, app-06
   openSheet('<h3>'+esc(m.title)+'</h3><p class="small muted" style="margin:0 0 8px">'+esc(year(m.date))+'</p>'+
     '<button class="opt danger" onclick="removeMovie('+id+')">Retirer de ma liste</button>'+
     '<button class="opt" onclick="closeSheet()">Annuler</button>');

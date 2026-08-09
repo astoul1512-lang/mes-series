@@ -1146,7 +1146,19 @@ async function doSupprimerCompte(){
     /* Le compte n'existe plus : on oublie la session et tout ce qui décrivait
        les échanges avec les autres. Les titres, eux, restent sur l'appareil. */
     if(typeof oublierAppareil === 'function') oublierAppareil();
-    db.auth = null; db.syncedAt = null; syncState = 'off';
+    db.auth = null;
+    /* C2 (09/08) — LE PROPRIÉTAIRE PART AVEC LE COMPTE.
+       `db.proprio` restait sur l'identifiant d'un compte qui n'existe plus.
+       L'écran promet que les titres restent sur l'appareil — et ils restaient,
+       jusqu'à la création du compte SUIVANT : `adopterCompte` voyait alors un
+       propriétaire différent et vidait la bibliothèque. Quelqu'un qui refait un
+       compte pour repartir du bon pied perdait tout, sans un mot, à l'instant
+       exact où il croyait récupérer ses séries. Et rien ne pouvait le rattraper :
+       le compte d'origine était détruit, la copie serveur avec.
+       À `null`, la bibliothèque est de nouveau SANS propriétaire : le prochain
+       compte l'adopte en silence, comme au premier jour. */
+    db.proprio = null;
+    db.syncedAt = null; syncState = 'off';
     partage.suivis = []; partage.abonnes = []; partage.code = null;
     saveDB(); closeSheet(); go('profile');
     toast('Compte supprimé.');
@@ -1264,7 +1276,15 @@ async function doSignIn(){
     /* Nouveau téléphone, ou retour après une déconnexion : si iOS a déjà donné
        son accord, l'appareil se réinscrit sans qu'on ait à le demander. */
     inscrireSiBesoin();
-  }catch(e){ toast(/Invalid/i.test(e.message) ? 'E-mail ou mot de passe incorrect' : 'Échec : '+e.message); }
+  }catch(e){
+    /* C2 — la personne a refusé de laisser retirer la bibliothèque posée ici.
+       Ce n'est pas un échec de connexion, et surtout pas « mot de passe
+       incorrect » : rien n'a été touché, ni la session, ni la base. On le dit
+       en clair et on en reste là — l'écran de connexion est toujours affiché,
+       elle peut réessayer, ou aller récupérer ses données autrement. */
+    if(e && e.annule) return toast('Connexion annulée — la bibliothèque de cet appareil n\'a pas été touchée');
+    toast(/Invalid/i.test(e.message) ? 'E-mail ou mot de passe incorrect' : 'Échec : '+e.message);
+  }
 }
 /* Contrôle minimal de forme : une adresse sans arobase ou sans point après
    n'est pas une adresse. On ne cherche pas à valider plus loin — seul un envoi
@@ -1298,6 +1318,10 @@ async function doSignUp(){
        pour un compte précédent. Autant inscrire tout de suite. */
     inscrireSiBesoin();
   }catch(e){
+    /* C2 — refus de laisser retirer la bibliothèque de l'ancien propriétaire.
+       Le compte, lui, VIENT D'ÊTRE CRÉÉ côté serveur : on le dit, sinon la
+       personne réessaierait et se heurterait à « un compte existe déjà ». */
+    if(e && e.annule) return toast('Compte créé, mais connexion annulée : la bibliothèque de cet appareil n\'a pas été touchée');
     if(e.message === 'CONFIRM'){
       /* D4 — l'étape la plus fragile du parcours n'avait qu'un toast de 2,2 s
          pour instruction, et l'écran restait sur le formulaire de création : il

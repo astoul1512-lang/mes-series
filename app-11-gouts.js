@@ -20,6 +20,14 @@
 function migrerGouts(){
   if(!db.gouts || typeof db.gouts !== 'object') db.gouts = {};
   const g = db.gouts;
+  /* C4 (09/08) — les dates par sous-bloc. Contrôle de PRÉSENCE seulement : la
+     recopie de l'ancienne date globale sur chaque bloc est une transformation
+     ponctuelle, et sa place est dans le registre des migrations (app-01, n° 4).
+     Ici on garantit juste que l'objet existe — cette fonction tourne aussi sur
+     un `db.gouts` arrivé d'un autre appareil, où la clé peut manquer sans que
+     `db.v` l'avoue. Sans elle, un bloc vaudrait `undefined` et `Number()` le
+     ramènerait à 0 : le premier distant venu gagnerait tout. */
+  if(!g.majBlocs || typeof g.majBlocs !== 'object' || Array.isArray(g.majBlocs)) g.majBlocs = {};
   /* Les genres que l'on aime, choisis à la main. Vide = on déduit.
 
      POINT 11 (02/08) — CETTE CLÉ EST REMPLACÉE PAR `genresFam`, ET ELLE RESTE.
@@ -316,12 +324,28 @@ function genresDeclaresFondus(){
   return out;
 }
 
-/* B8 — toute modification des goûts est datée. C'est cet horodatage, et lui
-   seul, qui départage deux appareils à la synchro : les préférences ne se
-   fusionnent pas champ par champ, la plus récente gagne en bloc. Passer par
-   une fonction plutôt que de le poser à la main dans les sept endroits qui
-   modifient : le huitième aurait été oublié. */
+/* B8 — toute modification des goûts est datée. C'est cet horodatage qui
+   départage deux appareils à la synchro. Passer par une fonction plutôt que de
+   le poser à la main dans les sept endroits qui modifient : le huitième aurait
+   été oublié.
+
+   C4 (09/08) — ELLE PREND MAINTENANT LE NOM DU SOUS-BLOC TOUCHÉ.
+   Une seule date pour tout `db.gouts`, ça voulait dire qu'un « Pas pour moi »
+   sur une suggestion écrasait à la synchro suivante les genres, les acteurs et
+   les plateformes réglés le même jour sur l'autre appareil. Chaque écrivain
+   dit désormais ce qu'il a touché, et `fusionnerGouts` (app-01) arbitre bloc
+   par bloc. Les noms valides sont les clés de `GOUT_BLOCS`, déclaré là-bas.
+
+   PLUSIEURS NOMS SONT ACCEPTÉS : `duelPasVu` touche `pasVus` ET `graines` d'un
+   seul geste, il n'y a pas de raison de l'obliger à appeler deux fois.
+
+   SANS NOM, ON DATE TOUT. C'est l'ancien comportement, et c'est le repli sûr :
+   un appelant qui oublie de se nommer écrase comme avant — défaut connu et
+   borné — au lieu de ne rien dater, ce qui lui ferait perdre sa modification
+   dès la première synchro. Entre deux mauvais défauts, on prend le moins
+   grave. Un nom inconnu est ignoré, donc traité comme une absence de nom. */
 function toucheGouts(){
+  const blocs = Array.prototype.slice.call(arguments).filter(n => GOUT_BLOCS[n]);
   if(db.gouts){
     /* POINT 11 — LA MIGRATION SE REJOUE ICI, et c'est le meilleur endroit du
        fichier pour la poser : c'est déjà le passage obligé de toute
@@ -332,7 +356,13 @@ function toucheGouts(){
        vaut mot pour mot pour la recopie. Elle ne fait rien quand rien n'a
        bougé : deux `join` et une comparaison de chaînes. */
     migrerGenresFam();
-    db.gouts.maj = Date.now();
+    const t = Date.now();
+    /* `maj` continue d'être écrit et de monter au serveur : un appareil resté
+       en v88 arbitre encore dessus et doit continuer de fonctionner. */
+    db.gouts.maj = t;
+    if(!db.gouts.majBlocs || typeof db.gouts.majBlocs !== 'object' || Array.isArray(db.gouts.majBlocs))
+      db.gouts.majBlocs = {};
+    (blocs.length ? blocs : Object.keys(GOUT_BLOCS)).forEach(n=>{ db.gouts.majBlocs[n] = t; });
   }
   saveDB();
 }
@@ -458,7 +488,7 @@ function poserAvis(media, id, v){
   if(db.avisRetires && db.avisRetires[media]) delete db.avisRetires[media][cle];
   /* POINT 2 — un pouce chasse le 🤷 posé avant lui. Sans ça un titre porterait
      deux réponses à la fois, et les écrans se contrediraient l'un l'autre. */
-  if(estNeutre(media, id)){ retirerNeutre(media, id); toucheGouts(); }
+  if(estNeutre(media, id)){ retirerNeutre(media, id); toucheGouts('divers'); }
   apresAvis();
   return v;
 }
@@ -817,7 +847,7 @@ function besoinAmorcage(){
 /* On sort de la grille par une action explicite, jamais par surprise. */
 function finirAmorcage(){
   db.gouts.amorcageFait = true;
-  toucheGouts();
+  toucheGouts('graines');
   if(typeof oublierSuggestions === 'function') oublierSuggestions();
   render();
 }
@@ -826,7 +856,7 @@ function poserGraine(media, id, nom, famille){
   const i = db.gouts.graines.findIndex(x=>x.media===media && String(x.id)===String(id));
   if(i >= 0) db.gouts.graines.splice(i, 1);
   else db.gouts.graines.push({ media:media, id:id, nom:nom||'', famille:famille||'' });
-  toucheGouts();
+  toucheGouts('graines');
   /* Les suggestions repartent des nouvelles graines : sans ça, la vitrine
      resterait celle d'avant jusqu'au prochain démarrage. */
   if(typeof oublierSuggestions === 'function') oublierSuggestions();
@@ -2965,7 +2995,7 @@ function duelPasVu(media, id){
   const gr = (db.gouts && db.gouts.graines) || [];
   const i = gr.findIndex(x => x.media === media && String(x.id) === String(id));
   if(i >= 0){ gr.splice(i, 1); if(typeof oublierSuggestions === 'function') oublierSuggestions(); }
-  toucheGouts();
+  toucheGouts('pasVus','graines');
   duelSuivant();
   render();
 }
@@ -3314,7 +3344,7 @@ function ficheDuel(media, id){
     const m = db.movies[id];
     if(m) actions = '<button class="btn block" style="'+(m.seen ? 'background:var(--ok);color:#08130d' : '')+
         '" onclick="toggleMovie('+num+')'+revenir+'">'+
-        I.check+(m.seen ? ' Vu le '+fmtDate(new Date(m.watchedAt).toISOString().slice(0,10)) : ' Marquer comme vu')+'</button>';
+        I.check+(m.seen ? (dateVue(m.watchedAt) ? ' Vu le '+dateVue(m.watchedAt) : ' Vu') : ' Marquer comme vu')+'</button>';
     /* Un film hors bibliothèque : `marquerFilmVu` l'ajoute ET pose la question
        « tu as aimé ? » (lot A) — le même chemin que depuis un aperçu. Pas de
        rappel de la feuille : l'ajout est asynchrone, le redessin arriverait
@@ -3870,7 +3900,7 @@ function bascGoutFamGenre(famille, val){
   const l = listeGoutFam(famille);
   const i = l.indexOf(val);
   if(i >= 0) l.splice(i,1); else { l.push(val); retirerExclu(val); }
-  oublierSuggestions(); toucheGouts(); render();
+  oublierSuggestions(); toucheGouts('genres'); render();
 }
 /* Une exclusion vaut pour les trois familles et pour les deux taxonomies : on
    la pose donc sur le nom CANONIQUE et on retire le genre de la liste aimée de
@@ -3889,7 +3919,7 @@ function bascGoutExclu(nom){
       });
     });
   }
-  oublierSuggestions(); toucheGouts(); render();
+  oublierSuggestions(); toucheGouts('genres'); render();
 }
 /* « Écarté » se lit sur le nom canonique : une base d'avant le point 11 peut
    contenir « Action & Adventure » là où la puce dit maintenant « Action », et
@@ -3907,13 +3937,13 @@ function retirerExclu(nom){
 }
 function retirerActeur(id){
   db.gouts.acteurs = db.gouts.acteurs.filter(a=>String(a.id) !== String(id));
-  oublierSuggestions(); toucheGouts(); render();
+  oublierSuggestions(); toucheGouts('acteurs'); render();
 }
 function ajouterActeur(id, nom){
   if(db.gouts.acteurs.some(a=>String(a.id) === String(id))) return;
   db.gouts.acteurs.push({ id:id, nom:nom });
   rechActeur = { q:'', res:null, occupe:false, seq:rechActeur.seq };
-  oublierSuggestions(); toucheGouts(); render();
+  oublierSuggestions(); toucheGouts('acteurs'); render();
 }
 
 async function chercherActeur(q){
@@ -4165,7 +4195,7 @@ function setToutesOrigines(v){
   if(!!g.toutesOrigines === !!v) return;
   g.toutesOrigines = !!v;
   oublierSuggestions();
-  toucheGouts();
+  toucheGouts('divers');
   render();
 }
 

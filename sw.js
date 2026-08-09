@@ -39,7 +39,18 @@ self.addEventListener('install', e => {
     caches.open(CACHE)
       /* Pas de .catch() ici : si un fichier manque, l'installation doit échouer
          pour que l'ancienne version, elle, reste utilisable hors-ligne. */
-      .then(c => c.addAll(SHELL))
+      /* C6 (09/08) — `{cache:'reload'}` FORCE LE RÉSEAU, ET C'EST TOUT L'ENJEU.
+         `addAll` sur des URL nues passe par le cache HTTP du navigateur (mode
+         `default`). GitHub Pages sert ces fichiers avec un `max-age` : à
+         l'installation d'une v89, `addAll` pouvait donc récupérer un
+         `index.html` tout frais et un `app-11-gouts.js` encore en v88, sorti du
+         cache HTTP. Le résultat — un cache de version MÉLANGÉE — était ensuite
+         servi durablement, puisque la règle est « cache d'abord ». C'est
+         exactement ce que le commentaire du haut de ce fichier promet
+         d'empêcher (« installe la nouvelle version d'un bloc »), et ce qu'il
+         n'empêchait pas. Le chemin de secours plus bas (ligne ~73) utilisait
+         déjà `{cache:'reload'}` ; il manquait ici, là où ça compte le plus. */
+      .then(c => c.addAll(SHELL.map(u => new Request(u, { cache:'reload' }))))
       .then(() => self.skipWaiting())
   );
 });
