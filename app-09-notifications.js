@@ -92,7 +92,21 @@ function migrerNotif(){
    Le pliage vit dans une fonction à part parce qu'il s'applique à TROIS
    entrées — la base locale (migration 3), une base réparée au démarrage, et un
    objet venu d'un autre appareil par la synchro. Trois copies auraient divergé.
-   Idempotent : rejouable sans effet. */
+   Idempotent : rejouable sans effet.
+
+   S7 (09/08) — CE PLIAGE RESTE. La spec demandait de le retirer, et ce serait
+   une régression : ce n'est pas un repli défensif, c'est LA MIGRATION, et elle
+   est la seule. La base locale de quelqu'un qui n'a pas rouvert l'app depuis le
+   30/07 porte encore `{cine, stream, vod}`. Sans ce pliage, elle ne resterait
+   pas en l'état : la ligne suivante de `migrerNotif` remettrait `maison` à
+   `true` par défaut, et quelqu'un qui avait ÉTEINT « À la maison » recevrait de
+   nouveau les notifications qu'il a refusées.
+
+   Son jumeau serveur (`genresVoulus`, notifier/index.ts) reste lui aussi, pour
+   la raison symétrique : tant qu'un appareil peut écrire l'ancienne forme dans
+   `push_reglages`, la replier vaut mieux que la lire de travers. Les deux
+   partiront ENSEMBLE, au lot qui suivra la bascule complète de la version — la
+   preuve à exiger est le contrôle n°4 de la migration 012. */
 function normaliserFilmsNotif(f){
   if(!f || typeof f !== 'object') return false;
   const avaitAncien = typeof f.stream === 'boolean' || typeof f.vod === 'boolean';
