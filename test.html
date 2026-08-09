@@ -6166,6 +6166,311 @@ window.MODE_TEST = true;
     vrai(/copierCode/.test(h), 'le code est pourtant utilisable : les boutons doivent être là');
   });
 
+  /* ============================================================
+     SPEC-08 — B5 : l'affichage d'abord, et les requêtes qui s'annulent
+     ============================================================
+     Le décor est le même pour tout le groupe : on FABRIQUE les étages plutôt
+     que de les laisser naître des critères. `chargerGrilleRech` rebâtit le
+     moteur à chaque rechargement complet (`r.flux = null`), un moteur posé à la
+     main serait donc jeté avant d'avoir servi. On remplace `etagesRech` le
+     temps du test — c'est la seule façon de tenir un nombre d'étages connu, et
+     donc de compter des requêtes.
+     `view` est laissé hors de `search` : `peindreRech` sort alors immédiatement
+     et aucune jaquette n'est construite. Cette page n'a le droit d'aller ni sur
+     le réseau, ni sur les images de TMDB. */
+  function decorB5(nbEtages, parEtage, parPage){
+    const r = rechVierge('film');
+    const flux = (id) => ({ p:{ __id:id }, media:'movie', page:0, pages:3, total:null,
+                            tampon:[], fini:false, echec:false });
+    const etages = [];
+    for(let e = 0; e < nbEtages; e++){
+      const l = [];
+      for(let f = 0; f < parEtage; f++) l.push(flux(e+':'+f));
+      etages.push({ compte:true, recoupe:false, flux:l });
+    }
+    const appels = [];
+    /* Le point de mesure est LA PEINTURE, pas la fin de la fonction : avec un
+       réseau instantané (celui de cette page), l'amorçage de fond a le temps de
+       passer un paquet entier avant que la promesse de `chargerGrilleRech` ne
+       se dénoue. On note donc combien de requêtes étaient parties au moment où
+       les premières jaquettes sont arrivées à l'écran — c'est exactement ce que
+       B5 prétend réduire, et rien d'autre. */
+    const mesure = { avantPeinture: null };
+    const vraiePeinture = window.peindreRech;
+    window.peindreRech = function(){
+      const r2 = etatRech();
+      if(mesure.avantPeinture === null && !r2.loading && r2.res && r2.res.length)
+        mesure.avantPeinture = appels.length;
+      return vraiePeinture.apply(this, arguments);
+    };
+    window.etagesRech = function(){ return etages; };
+    window.chargerGenres = function(){ return Promise.resolve(null); };
+    window.tmdb = function(path, params, extra){
+      appels.push({ path:path, page:params && params.page, signal: extra && extra.signal });
+      const res = [];
+      for(let i = 0; i < (parPage == null ? 60 : parPage); i++)
+        res.push({ id: appels.length * 1000 + i, poster_path:'/p.jpg', genre_ids:[],
+                   title:'T'+i, vote_average:5 });
+      /* 1 000 résultats par flux : le total attendu est donc connu d'avance. */
+      return Promise.resolve({ page:1, total_pages:3, total_results:1000, results:res });
+    };
+    return { r:r, etages:etages, appels:appels, mesure:mesure };
+  }
+  /* Laisse tourner l'amorçage de fond jusqu'à ce qu'il ait fini. Les réponses
+     sont immédiates : quelques tours de file suffisent, la borne n'est là que
+     pour qu'un test cassé échoue au lieu de bloquer la page. */
+  async function finirFondB5(r){
+    for(let i = 0; i < 200 && r.flux && r.flux.amorce; i++)
+      await new Promise(res => setTimeout(res, 0));
+  }
+
+  groupe('SPEC-08 — B5 : l\'affichage d\'abord');
+
+  testAsync('B5 — la grille s\'affiche après le PREMIER étage, pas après les six', async ()=>{
+    const vue = view; view = 'home';
+    const vraiEtages = window.etagesRech, vraiGenres = window.chargerGenres,
+          vraiTmdb = window.tmdb, vraiePeinture = window.peindreRech;
+    try{
+      /* Six étages de deux flux : douze requêtes d'amorçage avant B5, avant la
+         moindre jaquette. Le premier étage sert 42 titres à lui seul, donc la
+         fournée n'a besoin d'aucun autre étage. */
+      const d = decorB5(6, 2, 60);
+      await chargerGrilleRech();
+      egal(d.mesure.avantPeinture, 2, 'l\'amorçage lit encore des étages dont personne n\'a besoin pour peindre');
+      egal(d.r.res.length, RECH_CIBLE, 'la fournée n\'est pas pleine alors que le premier étage suffisait');
+      vrai(d.r.flux.amorce === true, 'le compteur se croit déjà exact alors qu\'il manque cinq étages');
+      /* Et le reste suit, tout seul, derrière la grille déjà peinte. */
+      await finirFondB5(d.r);
+      egal(d.appels.length, 12, 'les étages restants n\'ont jamais été amorcés : le compteur resterait faux');
+    } finally {
+      window.etagesRech = vraiEtages; window.chargerGenres = vraiGenres;
+      window.tmdb = vraiTmdb; window.peindreRech = vraiePeinture; view = vue;
+    }
+  });
+
+  testAsync('B5 — le compteur dit « … » puis le chiffre exact, et c\'est le MÊME chiffre qu\'avant', async ()=>{
+    const vue = view; view = 'home';
+    const vraiEtages = window.etagesRech, vraiGenres = window.chargerGenres,
+          vraiTmdb = window.tmdb, vraiePeinture = window.peindreRech;
+    try{
+      const d = decorB5(4, 3, 60);
+      await chargerGrilleRech();
+      vrai(/…/.test(texteCompteurGrilleRech()), 'un chiffre provisoire est annoncé comme définitif');
+      vrai(/…/.test(texteCompteurBarreRech()), 'la barre annonce un total qu\'elle sait incomplet');
+      await finirFondB5(d.r);
+      /* Douze flux à 1 000 résultats : le total qu'aurait donné l'amorçage
+         complet d'avant B5, au résultat près. */
+      egal(d.r.total, 12000, 'le total final n\'est plus celui de l\'amorçage complet');
+      egal(d.r.flux.exact, true, 'le total est complet et se dit pourtant « moins de »');
+      vrai(!/…/.test(texteCompteurGrilleRech()), 'le compteur reste provisoire une fois l\'amorçage fini');
+      vrai(/12\s?000/.test(texteCompteurGrilleRech().replace(/ | /g,' ')),
+           'le compteur n\'affiche pas le total exact');
+    } finally {
+      window.etagesRech = vraiEtages; window.chargerGenres = vraiGenres;
+      window.tmdb = vraiTmdb; window.peindreRech = vraiePeinture; view = vue;
+    }
+  });
+
+  testAsync('B5 — un étage traversé ne coûte pas son amorçage à la fournée', async ()=>{
+    /* La régression que ce lot rendait possible : la page 1 d'un flux jamais lu
+       était GRATUITE avant B5 (l'amorçage la payait, hors budget). Tombée dans
+       la boucle, facturée, elle raccourcissait les fournées qui traversent
+       plusieurs étages — sans que rien ne le signale. Quatre titres par page et
+       trois flux par étage : il FAUT traverser pour remplir 42. */
+    const vue = view; view = 'home';
+    const vraiEtages = window.etagesRech, vraiGenres = window.chargerGenres,
+          vraiTmdb = window.tmdb, vraiePeinture = window.peindreRech;
+    try{
+      const d = decorB5(8, 3, 4);
+      await chargerGrilleRech();
+      egal(d.r.res.length, RECH_CIBLE, 'la fournée est plus courte qu\'avant B5 : le budget a payé l\'amorçage');
+    } finally {
+      window.etagesRech = vraiEtages; window.chargerGenres = vraiGenres;
+      window.tmdb = vraiTmdb; window.peindreRech = vraiePeinture; view = vue;
+    }
+  });
+
+  testAsync('B5 — un étage qui ne répond pas ne fait pas tourner la boucle sans fin', async ()=>{
+    /* RELECTURE DU 09/08 — le défaut que la gratuité de la première page avait
+       ouvert. « Neuf » avait d'abord été écrit `f.total == null` : or `f.total`
+       n'est posé que par une lecture RÉUSSIE, donc un flux qui échoue restait
+       neuf indéfiniment et ne coûtait jamais son tour. Aucune des trois sorties
+       de boucle ne pouvait alors se déclencher — `etageFiniRech` exige
+       `!f.echec`, `lu` reste vrai, et le budget n'est jamais entamé. Mesuré :
+       401 requêtes en 13 ms, spinner éternel, aucun bandeau, et la rafale
+       continue même après avoir quitté l'écran.
+       Le décor : le premier étage répond, le second jamais — c'est-à-dire un
+       étage qu'on n'a JAMAIS réussi à lire, le seul cas où le défaut s'ouvre.
+       Le faux réseau capitule au bout de 200 appels, sans quoi la version
+       fautive figerait cette page au lieu d'y échouer : un test qui bloque ne
+       dit rien. */
+    const vue = view; view = 'home';
+    const vraiEtages = window.etagesRech, vraiGenres = window.chargerGenres,
+          vraiTmdb = window.tmdb, vraiePeinture = window.peindreRech;
+    try{
+      const d = decorB5(2, 1, 4);
+      const reseauOk = window.tmdb;
+      let appels = 0;
+      window.tmdb = function(path, params){
+        appels++;
+        if(appels > 200)                       // filet : on laisse la boucle sortir
+          return Promise.resolve({ page:1, total_pages:1, total_results:0, results:[] });
+        const id = String((params && params.__id) || '');
+        if(id.charAt(0) !== '0') return Promise.reject(new Error('RESEAU'));
+        return reseauOk.apply(this, arguments);
+      };
+      await chargerGrilleRech();
+      vrai(appels <= 30, 'la boucle de fournée part en rafale : ' + appels + ' requêtes pour une seule fournée');
+      egal(d.r.loading, false, 'le spinner tourne encore : la fournée n\'est jamais sortie de sa boucle');
+      /* Et le second étage, lui, est bien marqué en échec : il se retentera. */
+      vrai(d.etages[1].flux.every(f => f.echec), 'un étage injoignable n\'est pas marqué en échec : il ne sera jamais retenté');
+    } finally {
+      window.etagesRech = vraiEtages; window.chargerGenres = vraiGenres;
+      window.tmdb = vraiTmdb; window.peindreRech = vraiePeinture; view = vue;
+    }
+  });
+
+  testAsync('B5 — le jeu ne montre pas le chiffre que la grille refuse de montrer', async ()=>{
+    /* RELECTURE DU 09/08 — « Jouer » est collé au compteur, et depuis B5 on y
+       entre PENDANT l'amorçage de fond. Le jeu lisait `r.total` en direct : il
+       annonçait « 1 / moins de 2 000 » sur un paquet de 8 000, pendant que la
+       grille, elle, disait « … ». Deux écrans du même lot qui se contredisent. */
+    const vue = view; view = 'home';
+    const vraiEtages = window.etagesRech, vraiGenres = window.chargerGenres,
+          vraiTmdb = window.tmdb, vraiePeinture = window.peindreRech;
+    try{
+      const d = decorB5(4, 2, 60);
+      await chargerGrilleRech();
+      vrai(amorceEnCoursRech(), 'le décor du test est faux : l\'amorçage devrait être en cours');
+      d.r.jeu = { carte:{ id:1, __media:'movie', genre_ids:[], poster_path:null, title:'F' },
+                  i:0, vues:1, fini:false, gardes:0, err:'', loading:false, plates:null };
+      vrai(/…/.test(corpsJeuRech()), 'le jeu annonce un total partiel comme s\'il était le bon');
+      d.r.jeu.carte = null; d.r.jeu.fini = true;
+      vrai(/tour du paquet/.test(corpsJeuRech()),
+           'la fin de paquet chiffre un tour dont personne ne connaît encore la taille');
+      d.r.jeu = null;
+      await finirFondB5(d.r);
+      d.r.jeu = { carte:{ id:1, __media:'movie', genre_ids:[], poster_path:null, title:'F' },
+                  i:0, vues:1, fini:false, gardes:0, err:'', loading:false, plates:null };
+      vrai(!/…/.test(corpsJeuRech()), 'le jeu reste sur « … » alors que le total est connu');
+      vrai(/8\s?000/.test(corpsJeuRech().replace(/ | /g,' ')), 'le jeu n\'affiche pas le total exact');
+    } finally {
+      window.etagesRech = vraiEtages; window.chargerGenres = vraiGenres;
+      window.tmdb = vraiTmdb; window.peindreRech = vraiePeinture; view = vue;
+    }
+  });
+
+  groupe('SPEC-08 — B5 : un abandon volontaire n\'est pas une panne');
+
+  testAsync('B5 — abandonner sa propre génération n\'allume aucun bandeau', async ()=>{
+    /* LE cas limite du lot. Les correctifs B3/B4 ont fait de toute lecture
+       ratée un `echec`, et d'un `echec` sans fournée une panne affichée. Une
+       requête que NOUS coupons rejette exactement comme une coupure réseau —
+       si on ne les distingue pas, poser un mot de plus fait clignoter
+       « Pas de connexion » sur une grille en parfait état. */
+    const vue = view; view = 'home';
+    const vraiEtages = window.etagesRech, vraiGenres = window.chargerGenres,
+          vraiTmdb = window.tmdb, vraiePeinture = window.peindreRech;
+    try{
+      const d = decorB5(3, 2, 60);
+      /* Un réseau qui ne répond QUE lorsqu'on l'abandonne. */
+      window.tmdb = function(path, params, extra){
+        return new Promise((ok, ko)=>{
+          const sig = extra && extra.signal;
+          if(!sig) return;
+          const partir = ()=>{ const e = new Error('abandon'); e.name = 'AbortError'; ko(e); };
+          if(sig.aborted) partir(); else sig.addEventListener('abort', partir, { once:true });
+        });
+      };
+      d.r.res = [{ id:1, __media:'movie', genre_ids:[], poster_path:null }];
+      const enVol = chargerGrilleRech();
+      await new Promise(res => setTimeout(res, 0));
+      vrai(d.r.flux && d.r.flux.ctrl, 'la génération n\'a pas de signal d\'abandon à donner');
+      d.r.flux.ctrl.abort();
+      await enVol;
+      egal(d.r.err, '', 'un abandon volontaire s\'affiche comme une panne réseau');
+      egal(d.r.res.length, 1, 'la grille déjà peinte a été effacée par notre propre abandon');
+      vrai(d.etages[0].flux.every(f => !f.echec),
+           'un flux qu\'on a cessé d\'écouter est marqué en échec : il sera « retenté » pour rien');
+    } finally {
+      window.etagesRech = vraiEtages; window.chargerGenres = vraiGenres;
+      window.tmdb = vraiTmdb; window.peindreRech = vraiePeinture; view = vue;
+    }
+  });
+
+  testAsync('B5 — mais un dépassement de délai reste une panne, lui', async ()=>{
+    /* L'autre moitié de la même règle, et la raison pour laquelle le NOM de
+       l'erreur ne peut pas trancher : le délai de quinze secondes de `tmdb`
+       (C8.5) abandonne AUSSI avec `AbortError`. Ce n'est pas nous, donc c'est
+       une panne, et elle doit se voir. */
+    const vue = view; view = 'home';
+    const vraiEtages = window.etagesRech, vraiGenres = window.chargerGenres,
+          vraiTmdb = window.tmdb, vraiePeinture = window.peindreRech;
+    try{
+      const d = decorB5(2, 1, 60);
+      window.tmdb = function(){
+        const e = new Error('délai dépassé'); e.name = 'AbortError';
+        return Promise.reject(e);
+      };
+      await chargerGrilleRech();
+      egal(d.r.err, 'Pas de connexion', 'un délai dépassé passe pour un abandon volontaire : le spinner tourne dans le vide');
+    } finally {
+      window.etagesRech = vraiEtages; window.chargerGenres = vraiGenres;
+      window.tmdb = vraiTmdb; window.peindreRech = vraiePeinture; view = vue;
+    }
+  });
+
+  testAsync('B5 — poser un mot de plus coupe VRAIMENT les requêtes précédentes', async ()=>{
+    const vue = view; view = 'home';
+    const vraiEtages = window.etagesRech, vraiGenres = window.chargerGenres,
+          vraiTmdb = window.tmdb, vraiRender = window.render,
+          vraiePeinture = window.peindreRech;
+    try{
+      const d = decorB5(3, 2, 60);
+      const signaux = [];
+      window.render = function(){};
+      window.tmdb = function(path, params, extra){
+        signaux.push(extra && extra.signal);
+        return new Promise(()=>{});          // ne répond jamais : la requête reste en vol
+      };
+      chargerGrilleRech();
+      await new Promise(res => setTimeout(res, 0));
+      vrai(signaux.length > 0, 'aucune requête de grille n\'est partie');
+      vrai(signaux.every(s => s && !s.aborted), 'les requêtes partent déjà abandonnées');
+      const premiers = signaux.slice();
+      relancerRech();                        // le mot suivant
+      await new Promise(res => setTimeout(res, 0));
+      vrai(premiers.every(s => s.aborted),
+           'les requêtes de la génération précédente vont au bout : des dizaines d\'orphelines en vol');
+    } finally {
+      window.etagesRech = vraiEtages; window.chargerGenres = vraiGenres;
+      window.tmdb = vraiTmdb; window.render = vraiRender;
+      window.peindreRech = vraiePeinture; view = vue;
+    }
+  });
+
+  testAsync('B5 — couper le réseau pendant l\'amorçage de fond ne touche ni la grille ni le compteur', async ()=>{
+    /* Le quatrième critère d'acceptation : la grille déjà peinte RESTE
+       (règle B3), et le compteur garde son dernier état connu. */
+    const vue = view; view = 'home';
+    const vraiEtages = window.etagesRech, vraiGenres = window.chargerGenres,
+          vraiTmdb = window.tmdb, vraiePeinture = window.peindreRech;
+    try{
+      const d = decorB5(4, 2, 60);
+      await chargerGrilleRech();
+      const grille = d.r.res.length, compte = d.r.total;
+      vrai(grille > 0 && compte > 0, 'le décor du test est faux : rien n\'a été peint');
+      window.tmdb = function(){ return Promise.reject(new Error('RESEAU')); };
+      await finirFondB5(d.r);
+      egal(d.r.err, '', 'une panne de l\'amorçage de fond allume le bandeau alors que la grille va bien');
+      egal(d.r.res.length, grille, 'la grille déjà peinte a été effacée par une panne d\'arrière-plan');
+      vrai(d.r.total >= compte, 'le compteur a reculé sous son dernier état connu');
+    } finally {
+      window.etagesRech = vraiEtages; window.chargerGenres = vraiGenres;
+      window.tmdb = vraiTmdb; window.peindreRech = vraiePeinture; view = vue;
+    }
+  });
+
   /* ==================== Bilan ====================
      Écrit UNE FOIS, après la file asynchrone. `window.__testsFinis` est le
      signal que le lanceur attend : sans lui il lirait un bilan encore

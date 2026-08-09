@@ -81,7 +81,16 @@ const RECH_JEU_STOCK = 6;        // en dessous, une source va chercher la suite
    Relecture du 02/08, défaut 2.5. */
 const RECH_AMORCE_PAR_FOIS = 6;
 
-let rechTimer = null, rechSeq = 0, rechAbort = null, grilleSeq = 0, jeuSeq = 0;
+/* B5 (09/08/2026) — `grilleAbort` porte le signal d'abandon de la GÉNÉRATION de
+   grille en cours, exactement comme `rechAbort` le fait depuis toujours pour la
+   recherche par titre. Sans lui, `grilleSeq` faisait le seul travail qu'un
+   numéro puisse faire : IGNORER une réponse périmée. Les requêtes, elles,
+   allaient au bout — poser trois mots d'affilée laissait des dizaines de
+   requêtes orphelines en vol, qui continuaient de consommer le quota TMDB et de
+   ralentir celles qui comptaient encore. Le numéro dit « je ne t'écoute plus » ;
+   le signal dit « arrête-toi ». Les deux sont nécessaires, et ils ne se
+   remplacent pas l'un l'autre. */
+let rechTimer = null, rechSeq = 0, rechAbort = null, grilleSeq = 0, grilleAbort = null, jeuSeq = 0;
 
 /* ============================== Les familles =============================
    Les quatre puces restent en haut, collantes (§4.4). Ce ne sont pas des
@@ -831,6 +840,11 @@ function relancerRech(){
      `charge` reste vrai : c'est lui qui empêche `viewRecherche` de relancer un
      chargement en croyant l'écran neuf. */
   r.total = null; r.page = 1; r.pages = 1; r.err = ''; r.errSuite = false;
+  /* B5 — ON ABANDONNE AVANT DE JETER. `r.flux = null` suffisait à oublier le
+     moteur précédent, pas à arrêter ce qu'il avait mis en vol : ses requêtes
+     continuaient jusqu'au bout, dans le vide. L'ordre compte — abandonner
+     APRÈS avoir perdu la référence rendrait le signal injoignable. */
+  avorterGrilleRech();
   r.flux = null;
   oublierDefil('search');
   /* LES CRITÈRES RESTENT SOUS LA MAIN PENDANT LA PARTIE (§4.7) — encore
@@ -884,6 +898,25 @@ function lancerTitre(){
 }
 function avorterRech(){
   if(rechAbort){ try{ rechAbort.abort(); }catch(e){} rechAbort = null; }
+}
+/* B5 — le même geste, pour la grille. Appelé par `relancerRech` et par tout
+   rechargement COMPLET de la grille : dans les deux cas la génération
+   précédente n'intéresse plus personne, et ce qu'elle a en vol non plus.
+   Volontairement muet sur « Voir plus » (`suite`), qui prolonge la génération
+   en cours au lieu d'en ouvrir une nouvelle. */
+function avorterGrilleRech(){
+  if(grilleAbort){ try{ grilleAbort.abort(); }catch(e){} grilleAbort = null; }
+}
+/* B5 — LE CAS LIMITE QUI COMPTE : UN ABANDON VOLONTAIRE N'EST PAS UNE PANNE.
+   Un `fetch` abandonné rejette avec `AbortError`, et le délai maximal de 15 s
+   de `tmdb` (C8.5) rejette AVEC LE MÊME NOM. Le nom de l'erreur ne peut donc
+   pas trancher : un dépassement de délai est une vraie panne, qu'il faut
+   compter et afficher, tandis qu'un abandon décidé par nous ne doit ni marquer
+   le flux en échec, ni allumer le bandeau « Pas de connexion » (B3/B4).
+   On ne regarde donc pas l'erreur, mais NOTRE signal : lui seul sait si c'est
+   nous qui avons coupé. */
+function abandonneRech(F){
+  return !!(F && F.ctrl && F.ctrl.signal && F.ctrl.signal.aborted);
 }
 async function chercherTitre(q){
   const r = etatRech();
@@ -1483,12 +1516,46 @@ function melangerRech(liste){
    transport (429, coupure, dépassement du délai) est un `echec`, qui se
    retente à la fournée suivante — voir le défaut 2.2 de la relecture. */
 function fluxEpuiseRech(f){ return f.fini || (f.page > 0 && f.page >= f.pages); }
-async function lirePageFluxRech(f, seq){
+/* B5 — UN SEUL VOL À LA FOIS PAR FLUX. Depuis ce lot, deux appelants peuvent
+   viser le même flux au même instant : l'amorçage de fond, qui tourne pendant
+   que la grille est déjà à l'écran, et la fournée d'un « Voir plus » demandé
+   pendant ce temps-là. Deux lectures simultanées du même flux liraient DEUX
+   FOIS la même page (`f.page + 1` calculé avant que l'autre l'ait incrémenté),
+   puis sauteraient la suivante : des doublons à l'écran et un trou dans le
+   catalogue, tous deux invisibles au test. Les lectures d'un même flux sont
+   donc mises à la file — et seulement celles d'un même flux, les autres
+   continuent en parallèle.
+   `then(suite, suite)` et pas `then(suite)` : un échec ne doit pas bloquer la
+   file pour toujours, il se retente à la fournée d'après (défaut 2.2). */
+function lirePageFluxRech(f, seq, F){
+  const vol = () => volPageFluxRech(f, seq, F);
+  f.file = f.file ? f.file.then(vol, vol) : vol();
+  return f.file;
+}
+/* B5 — QU'EST-CE QU'UNE LECTURE PÉRIMÉE ? Deux réponses, et il fallait les deux.
+   · Une fournée est périmée quand SA GÉNÉRATION a été remplacée (`grilleSeq`) —
+     c'est la règle d'origine, elle n'a pas bougé.
+   · L'amorçage de fond, lui, TRAVERSE les générations : « Voir plus » en ouvre
+     une nouvelle sans changer de moteur, et couper l'amorçage à ce moment-là
+     figerait le compteur définitivement. Ce qui le périme vraiment, c'est
+     `relancerRech`, qui jette `r.flux`. Il passe donc `seq = null` et se juge
+     à l'identité du moteur. */
+function perimeRech(seq, F){
+  return seq == null ? etatRech().flux !== F : seq !== grilleSeq;
+}
+async function volPageFluxRech(f, seq, F){
   if(fluxEpuiseRech(f)) return false;
+  if(perimeRech(seq, F)) return false;
   const p = Object.assign({}, f.p);
   p.page = String(f.page + 1);
-  const d = await tmdb('/discover/'+f.media, p);
-  if(seq !== grilleSeq) return false;
+  /* B5 — LA REQUÊTE PORTE ENFIN LE SIGNAL D'ABANDON DE SA GÉNÉRATION.
+     `chercherTitre` en passait un depuis toujours ; la grille, non — et c'est
+     elle qui part à CHAQUE mot posé, sur des dizaines de flux à la fois.
+     On se BRANCHE sur le délai combiné de C8.5 (app-01) : `tmdb` fabrique déjà
+     son propre contrôleur, y greffe le signal de l'appelant ET ses quinze
+     secondes. Il n'y a rien à réécrire ici, juste un signal à fournir. */
+  const d = await tmdb('/discover/'+f.media, p, (F && F.ctrl) ? { signal: F.ctrl.signal } : null);
+  if(perimeRech(seq, F)) return false;
   f.page = f.page + 1;
   f.echec = false;                       // une lecture réussie efface l'échec
   f.pages = d.total_pages || 1;
@@ -1506,9 +1573,94 @@ function etageFiniRech(e){
   return e.flux.every(f => fluxEpuiseRech(f) && !f.tampon.length && !f.echec);
 }
 
+/* B5 — LE TOTAL, RECALCULÉ À TOUT MOMENT PLUTÔT QU'UNE FOIS POUR TOUTES.
+   L'amorçage ne se termine plus avant l'affichage : il se poursuit derrière la
+   grille, et le compteur doit pouvoir se reposer la même question à chaque
+   paquet. Le calcul est identique à celui d'avant, mot pour mot — il a
+   seulement été sorti de `chargerGrilleRech` pour être appelable deux fois. */
+function totaliserRech(F){
+  let total = 0, moinsDe = false, lus = 0, attendus = 0;
+  F.etages.forEach(e => {
+    if(!e.compte) return;
+    /* DÉFAUT 3.1 — « moins de » ne s'affiche plus dès qu'un étage porte
+       plusieurs flux, mais seulement quand ils peuvent SE RECOUPER. Deux
+       médias (films et séries) et deux tranches d'époque disjointes
+       partitionnent : leur somme est exacte. Ce sont les origines de
+       natures différentes qui se recoupent — une coproduction
+       franco-américaine sort des deux côtés. */
+    if(e.flux.length > 1 && e.recoupe) moinsDe = true;
+    e.flux.forEach(f => { attendus++; total += (f.total || 0); if(f.total != null) lus++; });
+  });
+  /* DÉFAUT 3.1 — une requête d'amorçage qui échoue comptait pour zéro sans
+     que rien ne le dise : le bandeau pouvait annoncer « 0 résultat »
+     au-dessus de 42 jaquettes. Un total incomplet s'annonce « moins de ».
+     Comparé aux flux QUI COMPTENT, pas à tous : les étages « 13 langues » ne
+     comptent pas — leur total est un sous-ensemble de celui du monde. */
+  if(lus < attendus) moinsDe = true;
+  return { total: total, exact: !moinsDe };
+}
+/* B5 — l'amorçage d'une liste de flux, par paquets de six. Rendu autonome pour
+   servir les deux temps : le premier étage, attendu, et tout le reste, en
+   arrière-plan. Un flux déjà lu (`f.total != null`) est sauté : la fournée a
+   pu passer avant nous, et sa lecture vaut la nôtre. */
+async function amorcerFluxRech(liste, seq, F){
+  const àlire = liste.filter(f => f.total == null);
+  for(let k = 0; k < àlire.length; k += RECH_AMORCE_PAR_FOIS){
+    await Promise.all(àlire.slice(k, k + RECH_AMORCE_PAR_FOIS)
+      .map(f => lirePageFluxRech(f, seq, F)
+                  /* Un abandon volontaire ne marque rien : ce flux n'a pas
+                     échoué, on a cessé de l'écouter. */
+                  .catch(()=>{ if(!abandonneRech(F)) f.echec = true; })));
+    if(perimeRech(seq, F) || abandonneRech(F)) return false;
+  }
+  return true;
+}
+/* B5 — L'AMORÇAGE DE FOND. Il tourne APRÈS que la grille est peinte, sans que
+   personne l'attende, et rafraîchit le compteur au fil de l'eau.
+   Il ne se garde pas par `grilleSeq` mais par l'IDENTITÉ du moteur `F` : un
+   « Voir plus » incrémente `grilleSeq` tout en gardant le même moteur, et
+   couper l'amorçage à ce moment-là figerait le compteur pour de bon. Ce qui
+   invalide vraiment le fond, c'est `relancerRech`, qui jette `r.flux` — donc
+   `etatRech().flux !== F`, que l'on relit à chaque paquet. */
+async function amorcerFondRech(F){
+  /* UN SEUL FOND À LA FOIS. Un « Voir plus » demandé pendant l'amorçage arrive
+     au bout de `chargerGrilleRech`, qui relancerait un second fond sur le même
+     moteur : deux boucles liraient les mêmes flux à tour de rôle, pour rien. */
+  if(F.fond) return;
+  F.fond = true;
+  try{
+    for(let k = 0; k < F.reste.length; k += RECH_AMORCE_PAR_FOIS){
+      const paquet = F.reste.slice(k, k + RECH_AMORCE_PAR_FOIS).filter(f => f.total == null);
+      await Promise.all(paquet.map(f => lirePageFluxRech(f, null, F)
+        .catch(()=>{ if(!abandonneRech(F)) f.echec = true; })));
+      if(etatRech().flux !== F || abandonneRech(F)) return;
+      const t = totaliserRech(F);
+      etatRech().total = t.total; F.exact = t.exact;
+      peindreCompteurRech();
+    }
+    if(etatRech().flux !== F) return;
+    /* Fini : le compteur cesse d'être provisoire et redevient le chiffre exact
+       d'avant B5 — c'est la non-régression que l'acceptation demande. */
+    F.amorce = false;
+    const t = totaliserRech(F);
+    etatRech().total = t.total; F.exact = t.exact;
+    peindreCompteurRech();
+    /* Le jeu porte le même compteur, mais dans un écran que `peindreCompteurRech`
+       ne sait pas retoucher (ses nœuds n'existent pas). Une seule peinture, à la
+       toute fin, pour qu'il cesse d'afficher « … » sans attendre la carte
+       suivante. Pendant les paquets, rien : le jeu affiche « … » d'un bout à
+       l'autre de l'amorçage, il n'a donc rien à rafraîchir. */
+    if(view === 'search' && etatRech().jeu) render();
+  }finally{ F.fond = false; }
+}
+
 /* ===== LA FOURNÉE ===== */
 async function chargerGrilleRech(suite){
   const r = etatRech();
+  /* B5 — un rechargement COMPLET ouvre une nouvelle génération : celle d'avant
+     n'intéresse plus personne, on coupe ce qu'elle a en vol. « Voir plus »
+     prolonge la génération en cours et ne coupe donc rien. */
+  if(!suite) avorterGrilleRech();
   const seq = ++grilleSeq;
   /* POINT 5 / POINT 7 — ON NE VIDE PAS `r.res` ICI. Les affiches précédentes
      restent à l'écran jusqu'à l'arrivée des nouvelles ; elles sont remplacées
@@ -1518,13 +1670,26 @@ async function chargerGrilleRech(suite){
   if(!suite){ r.page = 1; r.total = null; r.flux = null; }
   r.loading = true; r.err = ''; r.errSuite = false;
   peindreRech();
+  /* B5 — le moteur est déclaré ICI, hors du `try`, pour que le `catch` puisse
+     encore demander « est-ce que c'est moi qui ai coupé ? ». */
+  let F = null;
   try{
     const médias = mediasRech();
     await Promise.all(médias.map(m => chargerGenres(m).catch(()=>null)));
     if(seq !== grilleSeq) return;
 
-    if(!r.flux) r.flux = { etages: etagesRech(), i:0, exact:true };
-    const F = r.flux;
+    if(!r.flux){
+      r.flux = { etages: etagesRech(), i:0, exact:true, amorce:false, fond:false, reste:[], ctrl:null };
+      /* B5 — un contrôleur par GÉNÉRATION de grille, posé sur le moteur : c'est
+         lui que `relancerRech` abandonnera, et c'est son signal que chaque
+         requête de flux emporte. `grilleAbort` en garde une poignée, parce que
+         `r.flux` sera mis à `null` avant qu'on puisse le rappeler. */
+      if(typeof AbortController !== 'undefined'){
+        r.flux.ctrl = new AbortController();
+        grilleAbort = r.flux.ctrl;
+      }
+    }
+    F = r.flux;
 
     /* PREMIÈRE FOURNÉE — l'amorçage donne le total de chaque étage, donc un
        compteur exact malgré la décomposition. Ces pages ne sont pas perdues :
@@ -1535,43 +1700,39 @@ async function chargerGrilleRech(suite){
        mesuré à 324 requêtes simultanées dans le pire cas réel (puce Animation,
        tous les genres, trois origines, trois époques, deux durées). C'est le
        chemin le plus direct vers une rafale de 429 — laquelle déclenchait à son
-       tour le défaut 2.2, et la grille se figeait. On amorce par paquets. */
+       tour le défaut 2.2, et la grille se figeait. On amorce par paquets.
+
+       B5 (09/08/2026) — L'AFFICHAGE D'ABORD. Même par paquets, l'amorçage lisait
+       la page 1 de TOUS les flux de TOUS les étages avant de servir une seule
+       jaquette : 48 requêtes dans le cas courant, 324 dans le pire — et tout ça
+       uniquement pour que le compteur soit juste dès la première seconde. On
+       n'attend plus que le PREMIER étage, celui dont la fournée va sortir ; le
+       reste est amorcé derrière la grille déjà peinte, et le compteur se précise
+       au fil de l'eau. C'est l'esprit du compteur vivant, tenu jusqu'au bout :
+       il vaut mieux un chiffre qui se resserre qu'un écran qui attend. */
     if(!suite){
       const tous = [];
       F.etages.forEach(e => e.flux.forEach(f => tous.push(f)));
-      for(let k = 0; k < tous.length; k += RECH_AMORCE_PAR_FOIS){
-        await Promise.all(tous.slice(k, k + RECH_AMORCE_PAR_FOIS)
-          .map(f => lirePageFluxRech(f, seq).catch(()=>{ f.echec = true; })));
-        if(seq !== grilleSeq) return;
-      }
-      let total = 0, moinsDe = false, lus = 0, attendus = 0;
-      F.etages.forEach(e => {
-        if(!e.compte) return;
-        /* DÉFAUT 3.1 — « moins de » ne s'affiche plus dès qu'un étage porte
-           plusieurs flux, mais seulement quand ils peuvent SE RECOUPER. Deux
-           médias (films et séries) et deux tranches d'époque disjointes
-           partitionnent : leur somme est exacte. Ce sont les origines de
-           natures différentes qui se recoupent — une coproduction
-           franco-américaine sort des deux côtés. */
-        if(e.flux.length > 1 && e.recoupe) moinsDe = true;
-        e.flux.forEach(f => { attendus++; total += (f.total || 0); if(f.total != null) lus++; });
-      });
-      /* DÉFAUT 3.1 — une requête d'amorçage qui échoue comptait pour zéro sans
-         que rien ne le dise : le bandeau pouvait annoncer « 0 résultat »
-         au-dessus de 42 jaquettes. Un total incomplet s'annonce « moins de ». */
-      /* Comparé aux flux QUI COMPTENT, pas à tous : les étages « 13 langues »
-         ne comptent pas — leur total est un sous-ensemble de celui du monde. */
-      if(lus < attendus) moinsDe = true;
-      r.total = total;
-      F.exact = !moinsDe;
+      const premier = F.etages.length ? F.etages[0].flux.slice() : [];
+      F.reste = tous.filter(f => premier.indexOf(f) < 0);
+      if(!(await amorcerFluxRech(premier, seq, F))) return;
+      const t = totaliserRech(F);
+      r.total = t.total;
+      F.exact = t.exact;
+      /* Le compteur est PROVISOIRE tant qu'il reste des étages à amorcer : il
+         s'affiche « … » plutôt qu'un chiffre qu'on sait faux. */
+      F.amorce = F.reste.length > 0;
       /* DÉFAUT 2.3 — RIEN REÇU N'EST PAS ZÉRO RÉSULTAT. Chaque lecture de page
          est enveloppée d'un `catch`, ce qui rendait la branche « Pas de
          connexion » inatteignable : hors ligne, l'écran accusait la phrase
          (« Rien avec cette phrase, retire un mot ») et le seul bouton offert
          effaçait tout le travail. C'est une régression de ce lot — avant, la
-         panne remontait. */
-      const luTotal = tous.filter(f => f.total != null).length;
-      if(!luTotal && tous.length) throw new Error('RESEAU');
+         panne remontait.
+         B5 — la question se pose maintenant sur le premier étage seulement.
+         C'est le bon moment : hors ligne, il échoue tout entier, et la panne
+         remonte AVANT l'affichage au lieu d'attendre les 324 autres. */
+      const luTotal = premier.filter(f => f.total != null).length;
+      if(!luTotal && premier.length) throw new Error('RESEAU');
     }
 
     const tamis = tamisActifRech();
@@ -1598,16 +1759,37 @@ async function chargerGrilleRech(suite){
       let pris = 0, lu = false;
       for(const f of e.flux){
         if(!f.tampon.length && !fluxEpuiseRech(f)){
-          tours++; lu = true;
+          /* B5 — LA PREMIÈRE PAGE D'UN FLUX JAMAIS LU NE COÛTE PAS DE TOUR.
+             Avant ce lot, elle était lue par l'amorçage, donc HORS budget : la
+             boucle arrivait sur un étage aux tampons déjà pleins. Maintenant
+             que seul le premier étage est amorcé, cette même lecture tombe dans
+             la boucle — la facturer raccourcirait les fournées qui traversent
+             un étage, une régression que rien n'aurait signalée. On rend donc
+             gratuit ce qui l'était déjà. C'est borné : un flux n'est neuf
+             qu'une fois.
+
+             RELECTURE DU 09/08 — « NEUF » VEUT DIRE JAMAIS TENTÉ, PAS JAMAIS LU.
+             Écrit `f.total == null`, ce test rendait gratuite CHAQUE tentative
+             d'un flux qui échoue — `f.total` n'est posé que par une lecture
+             réussie. La boucle ne pouvait alors plus sortir : l'étage n'était
+             pas fini (`etageFiniRech` exige `!f.echec`), `lu` restait vrai, et
+             le budget n'était jamais entamé. Mesuré : 399 requêtes en 5 ms sur
+             un étage hors ligne, spinner éternel et aucun bandeau. Un premier
+             échec doit donc coûter son tour comme les autres. */
+          const neuf = (f.page === 0 && !f.echec);
+          if(!neuf) tours++;
+          lu = true;
           /* DÉFAUT 2.2 — UNE COUPURE RÉSEAU N'EST PAS UNE FIN DE CATALOGUE.
              L'échec marquait le flux « fini » DÉFINITIVEMENT : la grille se
              figeait, « Voir plus » disparaissait sans message et ne revenait
              pas même une fois le réseau revenu, pendant que le compteur
              continuait d'annoncer le total complet. On marque un ÉCHEC, qui se
-             retente ; seul `page >= pages` veut dire « épuisé ». */
-          const lue = await lirePageFluxRech(f, seq)
-                        .catch(()=>{ f.echec = true; return false; });
-          if(seq !== grilleSeq) return;
+             retente ; seul `page >= pages` veut dire « épuisé ».
+             B5 — sauf si c'est NOUS qui avons coupé : un abandon volontaire ne
+             marque aucun échec et ne compte dans aucun des deux compteurs. */
+          const lue = await lirePageFluxRech(f, seq, F)
+                        .catch(()=>{ if(!abandonneRech(F)) f.echec = true; return false; });
+          if(seq !== grilleSeq || abandonneRech(F)) return;
           if(lue) luesOk++; else if(f.echec) luesEchec++;
         }
         if(!f.tampon.length) continue;
@@ -1652,8 +1834,18 @@ async function chargerGrilleRech(suite){
     r.page = r.page + (suite ? 1 : 0);
     r.loading = false; r.charge = true; r.err = ''; r.errSuite = false;
     peindreRech();
+
+    /* B5 — ET SEULEMENT MAINTENANT, LE RESTE DE L'AMORÇAGE. Les jaquettes sont
+       à l'écran ; les étages suivants se font lire derrière, et le compteur se
+       précise tout seul. Volontairement PAS attendu : `chargerGrilleRech` a
+       fini son travail, tout ce qui suit est du confort. Les erreurs de ce
+       chemin-là ne doivent surtout pas remonter dans le `catch` ci-dessous —
+       elles allumeraient le bandeau alors que la grille, elle, va très bien. */
+    if(F.amorce && F.reste.length && !F.fond) amorcerFondRech(F).catch(()=>{});
   }catch(e){
-    if(seq !== grilleSeq) return;
+    /* B5 — un abandon volontaire n'allume aucun bandeau : la génération
+       suivante est déjà partie et c'est elle qui parlera. */
+    if(seq !== grilleSeq || abandonneRech(F)) return;
     r.loading = false; r.charge = true;
     r.err = (e && e.message === 'BADKEY') ? 'Service indisponible' : 'Pas de connexion';
     /* B3/B4 — quel chemin a échoué, pour que « Réessayer » refasse le bon. */
@@ -2036,14 +2228,50 @@ function resumeRepriseRech(){
    satisfaisant. Il n'y a pas de bouton « voir les résultats » — ils sont déjà
    à l'écran. Il ne reste que « Jouer », qui hérite de la sélection courante. */
 function barreCompteurRech(){
+  return '<div class="rbarre"><div class="rnb" id="rnbarre">'+texteCompteurBarreRech()+'</div>'+
+    '<button class="btn mini" onclick="ouvrirJeuRech()">🎲 Jouer</button></div>';
+}
+/* B5 — L'ÉTAT PROVISOIRE DU COMPTEUR. Tant que les étages suivants ne sont pas
+   amorcés, le total connu est celui du premier étage seulement : c'est un vrai
+   chiffre, mais pas LE chiffre. L'afficher puis le voir tripler serait pire que
+   ne rien dire. On dit donc « … », qui promet exactement ce qu'on tient — un
+   compte en cours — et il devient le chiffre exact quand l'amorçage se termine.
+   Le décompte final est le même qu'avant B5 : mêmes flux, mêmes `total_results`,
+   seul l'ORDRE des lectures a changé. */
+function amorceEnCoursRech(){
+  const F = etatRech().flux;
+  return !!(F && F.amorce);
+}
+function texteCompteurBarreRech(){
   const r = etatRech();
   const n = r.total;
-  const txt = r.loading && n === null ? '<span class="spin"></span>'
-            : n === null ? '—'
-            : prefixeCompteurRech()+'<b id="rnb">'+n.toLocaleString('fr-FR')+'</b> '+
-              esc(familleRech().nom);
-  return '<div class="rbarre"><div class="rnb">'+txt+'</div>'+
-    '<button class="btn mini" onclick="ouvrirJeuRech()">🎲 Jouer</button></div>';
+  if(r.loading && n === null) return '<span class="spin"></span>';
+  if(n === null) return '—';
+  if(amorceEnCoursRech()) return '<b id="rnb">…</b> '+esc(familleRech().nom);
+  return prefixeCompteurRech()+'<b id="rnb">'+n.toLocaleString('fr-FR')+'</b> '+
+         esc(familleRech().nom);
+}
+function texteCompteurGrilleRech(){
+  const r = etatRech();
+  if(r.total == null) return 'Résultats';
+  if(amorceEnCoursRech()) return '… résultats';
+  return prefixeCompteurRech()+r.total.toLocaleString('fr-FR')+
+         ' résultat'+(r.total > 1 ? 's' : '');
+}
+/* B5 — PENDANT L'AMORÇAGE DE FOND, ON NE REPEINT QUE LE COMPTEUR.
+   `peindreRech` reconstruit `#rres` en entier, les quarante-deux jaquettes
+   comprises. Le faire à chaque paquet de six flux ferait clignoter la grille
+   pendant plusieurs secondes — exactement ce que les points 5 et 7 ont passé un
+   lot à supprimer. Les deux compteurs sont donc réécrits sur place, et rien
+   d'autre ne bouge. Si l'écran a changé entre-temps, les nœuds n'existent plus
+   et la fonction ne fait rien : c'est le comportement voulu. */
+function peindreCompteurRech(){
+  if(view !== 'search') return;
+  if(etatRech().jeu) return;
+  const b = document.getElementById('rnbarre');
+  if(b) b.innerHTML = texteCompteurBarreRech();
+  const g = document.getElementById('rgtitre');
+  if(g) g.innerHTML = texteCompteurGrilleRech();
 }
 /* LE COMPTEUR DOIT DIRE CE QU'IL COMPTE. `total_results` est celui de TMDB, et
    TMDB ne sait rien de ce qu'on retire chez nous : ni l'animation asiatique
@@ -2404,9 +2632,7 @@ function grilleRech(){
       '<button class="btn ghost" onclick="viderRech()">Repartir de zéro</button></div>';
   /* B3 — le bandeau, au-dessus de la grille conservée. */
   let h = r.err ? bandeauErrRech() : '';
-  h += '<div class="gtitre">'+(r.total != null
-      ? prefixeCompteurRech()+r.total.toLocaleString('fr-FR')+' résultat'+(r.total>1?'s':'')
-      : 'Résultats')+'</div>'+
+  h += '<div class="gtitre" id="rgtitre">'+texteCompteurGrilleRech()+'</div>'+
     '<div class="rang3">'+r.res.map(x=>jaquetteRech(x)).join('')+'</div>';
   /* « Voir plus » existe tant qu'un étage n'est pas épuisé — et non plus tant
      qu'il reste des pages à une requête unique : il n'y a plus « une » requête. */
@@ -2900,7 +3126,10 @@ function corpsJeuRech(){
      dit, et il propose d'élargir la phrase ou de revenir à la grille, au lieu
      de reboucler en silence sur des titres déjà écartés. */
   if(!j.carte && j.fini){
-    const n = etatRech().total;
+    /* B5 (relecture du 09/08) — même retenue qu'au compteur du jeu : tant que
+       l'amorçage de fond tourne, on ne sait pas de combien de titres on a fait
+       le tour. On le dit sans chiffre plutôt qu'avec un chiffre faux. */
+    const n = amorceEnCoursRech() ? null : etatRech().total;
     const gardes = j.gardes;
     return '<div class="empty jfini">'+
       '<div class="jfem">🎬</div>'+
@@ -2939,9 +3168,16 @@ function corpsJeuRech(){
       (etatRech().total != null
         /* Le même préfixe que la grille : sans lui, la grille disait « moins de
            43 » et le jeu « 43 » — deux écrans du même lot qui se contredisent.
-           Défaut 3.1 de la relecture. */
-        ? '<span class="jcpt">'+j.vues+' / '+prefixeCompteurRech()+
-          etatRech().total.toLocaleString('fr-FR')+'</span>'
+           Défaut 3.1 de la relecture.
+           RELECTURE DU 09/08, B5 — et la même RETENUE que la grille. « Jouer »
+           est collé au compteur : on y entre pendant l'amorçage de fond, qui
+           est l'état normal depuis B5. Lu en direct, `r.total` affichait ici le
+           total partiel — « 1 / moins de 2 000 » pour un paquet de 8 000, qui
+           quadruplait à la carte suivante — pendant que la grille, elle,
+           disait « … ». Deux écrans du même lot qui se contredisent : c'est
+           exactement le défaut 3.1, une deuxième fois. */
+        ? '<span class="jcpt">'+j.vues+' / '+(amorceEnCoursRech() ? '…'
+            : prefixeCompteurRech()+etatRech().total.toLocaleString('fr-FR'))+'</span>'
         : '')+
       /* RELECTURE, DÉFAUT 3.7 — grisé pendant un ajout comme les trois gestes
          du bas : changer un critère jette la carte affichée, et le compteur
