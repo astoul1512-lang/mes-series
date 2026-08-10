@@ -1043,7 +1043,7 @@ function collisionsCss(src){
     souci += soucis.length;
   }
 
-  /* --- 15. SPEC-04/05 — LA LISTE BLANCHE DU RELAIS N'A NI TROU NI SURPLUS ---
+  /* --- 14. SPEC-04/05 — LA LISTE BLANCHE DU RELAIS N'A NI TROU NI SURPLUS ---
 
      Décision d'Adrien du 10/08/2026, prise en retirant `profil_humeur` : la
      liste blanche fermée de `functions/ia/config.ts` doit correspondre
@@ -1089,6 +1089,81 @@ function collisionsCss(src){
         ? soucis.length + ' écart(s)'
         : declarees.size + ' tâches déclarées, ' + appelees.size + ' appelées, aucune orpheline'));
     }
+    soucis.forEach(d => console.log('   ! ' + d));
+    souci += soucis.length;
+  }
+
+  /* --- 15. SPEC-07 — LA COUCHE DE PEINTURE RESTE UNE COUCHE DE PEINTURE ---
+
+     Le §0.3 et le §1.2 de SPEC-07 sont des contraintes de DIFF, pas de
+     comportement : « app.css est le seul fichier touché », « les jetons :root
+     gardent leurs noms et leurs rôles », « --accent inchangé », « les nouveaux
+     jetons portent tous le préfixe --px- ». Rien de tout ça ne se voit dans
+     test.html, qui ne charge pas la feuille de style — mais tout se lit dans le
+     fichier, et c'est ici que le dépôt lit ses fichiers.
+
+     Ce que ce contrôle attrape, et qu'aucun autre n'attrape : le jour où
+     quelqu'un « améliorera » l'accent en le passant en dégradé dans `:root`,
+     des dizaines d'icônes et de textes qui le lisent deviendront illisibles,
+     et rien ne le dira. */
+  {
+    const fs = require('fs'), chemin = require('path');
+    const css = fs.readFileSync(chemin.join(__dirname, '..', 'app.css'), 'utf8');
+    const soucis = [];
+
+    const racine = /:root\{([\s\S]*?)\}/g;
+    const jetons = {};
+    let m;
+    while((m = racine.exec(css))){
+      (m[1].match(/--[a-z0-9-]+\s*:[^;]*/gi) || []).forEach(d=>{
+        const i = d.indexOf(':');
+        jetons[d.slice(0, i).trim()] = d.slice(i + 1).trim();
+      });
+    }
+    /* Les jetons d'origine gardent leurs noms — tout le code des specs 04, 05
+       et 06 les lit. */
+    ['--bg','--surface','--surface2','--line','--text','--muted','--accent',
+     '--accent-dim','--ok','--warn','--radius'].forEach(n=>{
+      if(!jetons[n]) soucis.push('le jeton ' + n + ' a disparu de :root');
+    });
+    if(jetons['--accent'] !== '#3d8bff')
+      soucis.push('--accent a changé (' + jetons['--accent'] + ') : il est lu en texte et en icône, '
+                  + 'un dégradé n\'y a pas de sens — SPEC-07 §2.4');
+    /* Tout jeton AJOUTÉ porte le préfixe `--px-`. */
+    const connus = ['--bg','--surface','--surface2','--line','--text','--muted','--accent',
+                    '--accent-dim','--ok','--warn','--radius','--safe-b','--safe-t'];
+    Object.keys(jetons).forEach(n=>{
+      if(connus.indexOf(n) < 0 && n.indexOf('--px-') !== 0)
+        soucis.push(n + ' : un jeton ajouté sans le préfixe --px- (SPEC-07 §1.4)');
+    });
+    /* §0.2 — aucune salutation, nulle part. */
+    if(/bonsoir|bonjour|salut\b/i.test(css))
+      soucis.push('une salutation est apparue dans app.css : le §0.2 l\'écarte explicitement');
+    /* §3 — SPEC-07 N'AJOUTE AUCUN PORTEUR DE `backdrop-filter` SAUF LE TOAST.
+       La règle de la spec n'est pas « il n'y en a que quatre dans le dépôt » —
+       il y en avait déjà plus, sur des puces et des badges posés sur une
+       affiche, et ceux-là ne défilent pas et ne contiennent aucun défilement.
+       La règle est : « aucun backdrop-filter NOUVEAU sur un élément qui défile
+       ou contient le défilement ». On borne donc ce que la SECTION SPEC-07 a le
+       droit d'ajouter, ce qui est vérifiable et suffisant : `body .toast`, et
+       rien d'autre. */
+    const iPremium = css.indexOf('SPEC-07 — DESIGN PREMIUM');
+    if(iPremium < 0) soucis.push('la section SPEC-07 a disparu d\'app.css');
+    else{
+      const bloc = css.slice(iPremium).replace(/\/\*[\s\S]*?\*\//g, ' ');
+      const re = /([^{}]+)\{[^{}]*backdrop-filter/g;
+      let b2;
+      while((b2 = re.exec(bloc))){
+        const sel = b2[1].split('}').pop().trim().replace(/\s+/g, ' ');
+        if(sel && sel !== 'body .toast')
+          soucis.push('backdrop-filter ajouté par SPEC-07 sur « ' + sel +
+                      ' » : le §3 ne l\'admet que sur le toast');
+      }
+    }
+    console.log('premium       → ' + (soucis.length
+      ? soucis.length + ' écart(s)'
+      : Object.keys(jetons).filter(n => n.indexOf('--px-') === 0).length +
+        ' jetons --px-, --accent intact, verre borné'));
     soucis.forEach(d => console.log('   ! ' + d));
     souci += soucis.length;
   }

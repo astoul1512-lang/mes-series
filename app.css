@@ -2375,3 +2375,232 @@ body.rphnette .rphrase{background:#15171e}
   .tabpip{position:absolute;top:2px;right:50%;margin-right:-20px;min-width:16px;height:16px;
     border-radius:8px;background:var(--warn);color:#1b1200;font-style:normal;
     font-size:10px;font-weight:800;line-height:16px;text-align:center;padding:0 4px;z-index:2}
+
+/* =============================== SPEC-07 — DESIGN PREMIUM ===============================
+
+   Écrit le 10/08/2026, lots A, B et C d'un seul tenant.
+
+   CE BLOC EST UNE COUCHE DE PEINTURE, ET RIEN D'AUTRE. Le §0.3 est la
+   contrainte qui l'a écrit : SPEC-07 ne modifie QUE `app.css` (plus les trois
+   numéros de version). Zéro HTML, zéro JS, zéro classe renommée, zéro classe
+   ajoutée. Un effet qui aurait exigé du markup a été ABANDONNÉ, pas contourné —
+   c'est le cas des sous-titres en italique de la maquette 16, qui étaient de
+   l'habillage de démo.
+
+   ── POURQUOI TOUTES LES RÈGLES SONT PORTÉES PAR `body` ──
+   Le contrôle n° 4 de `tests/lance-tests.js` refuse qu'un nom de classe soit
+   déclaré NU dans deux sections différentes — et il a raison : c'est comme ça
+   que `.dinfo` avait été redéfini à distance. Or SPEC-07 ne fait QUE réhabiller
+   des classes qui existent déjà ailleurs dans ce fichier. Les porter par `body`
+   dit exactement ce qu'elles sont — une surcharge assumée, appliquée en
+   dernier — et laisse le contrôle distinguer une PEINTURE d'une REDÉCLARATION.
+   Ce n'est pas un contournement du contrôle : c'est la forme qui rend son
+   verdict juste.
+
+   ── CE QUI NE BOUGE PAS ──
+   · `--accent` est INCHANGÉ : des dizaines d'endroits le lisent en texte ou en
+     icône, où un dégradé n'a aucun sens (§2.4).
+   · Aucune géométrie porteuse de sens : ni `display`, ni `position`, ni
+     largeur, ni hauteur, ni grille, ni zone tactile. La SEULE exception est le
+     §2.3 (typographie), qui est la piste elle-même.
+   · Les transitions ajoutées ne portent que sur `transform`, `opacity`,
+     `background`, `border-color` et `box-shadow` — jamais sur une propriété qui
+     déclenche un calcul de mise en page (§3).
+   · Aucun `backdrop-filter` NOUVEAU : les seuls porteurs restent `header`,
+     `nav`, le toast et les feuilles, tous fixes et déjà composités.
+   · Aucune extraction de couleur, aucun canvas, aucun filtre sur les `<img>`
+     des rails (§2.2 et §3). Le halo coloré des affiches est donc une ombre à la
+     couleur d'ACCENT atténuée, et pas la couleur de l'image : c'est
+     l'approximation assumée du rendu de la maquette, faute de pouvoir la
+     calculer sans un canvas par jaquette.
+   · Aucune salutation, nulle part (§0.2). */
+
+  :root{
+    --px-grad:   linear-gradient(135deg,#5b9bff 0%,#3d6bff 100%);
+    --px-lueur:  0 6px 22px rgba(61,107,255,.38);
+    --px-verre:  linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,.012));
+    --px-bord:   rgba(255,255,255,.075);
+    --px-ombre:  0 10px 34px rgba(0,0,0,.35);
+  }
+
+/* ---------- Lot A — §2.1 : verre, lumière et profondeur ---------- */
+
+  /* LE FOND AMBIANT, POSÉ SUR `html` ET PAS SUR `body`. Le §2.1 explique
+     pourquoi : `background-attachment:fixed` est buggué sur iOS, et un
+     pseudo-élément fixe de `body` demanderait du markup. `html` ne défile pas
+     sous l'app — c'est `.app` qui défile dedans — donc le dégradé tient sans
+     sauter. Un seul paint, aucune animation.
+     REPLI PRÉVU (§2.1) si un iPhone montre un décrochage au défilement : poser
+     les deux lueurs sur `.app` en `background` simple, recalées plus discrètes.
+     À noter en commentaire daté le jour où c'est fait, pas avant : le repli
+     n'est pas gratuit, il rend le fond solidaire du défilement. */
+  html{
+    background:
+      radial-gradient(50% 42% at 0% 0%,   #141b33 0%, rgba(20,27,51,0) 100%),
+      radial-gradient(52% 40% at 100% 100%, #1a1030 0%, rgba(26,16,48,0) 100%),
+      var(--bg);
+    background-repeat:no-repeat;
+  }
+  /* `body` porte déjà `background:var(--bg)` dans le socle, ce qui masquerait
+     les deux lueurs : on le rend transparent. La couleur de secours reste sur
+     `html`, donc rien n'est jamais blanc. */
+  body{background:transparent}
+
+  /* Le verre EXISTE DÉJÀ sur ces deux-là (`backdrop-filter:blur(18px)`), il
+     était simplement invisible sous un fond à 94 % d'opacité. On baisse le
+     fond, et le flou se voit — c'est tout le changement. */
+  body header{background:rgba(10,11,17,.55);border-bottom-color:var(--px-bord)}
+  body nav{background:rgba(10,11,17,.55);border-top-color:var(--px-bord)}
+
+  /* Les surfaces. `.card` et `.crow` du socle, `.pf12cercle` et `.pf12b` du
+     profil, `.rphrase` et les accordéons de SPEC-05, `.duoband` de SPEC-06 :
+     tout le monde reçoit la même matière, pour que les écrans neufs ne
+     détonnent pas (§1.3). */
+  body .card,
+  body .crow,
+  body .pf12cercle,
+  body .pf12b,
+  body .rphrase,
+  body .facc,
+  body .duoband,
+  body .rmatch,
+  body .iapq{
+    background-image:var(--px-verre);
+    border-color:var(--px-bord);
+    box-shadow:var(--px-ombre);
+    transition:background-color .25s,border-color .25s,box-shadow .25s;
+  }
+  /* Le bandeau du duel garde son dégradé propre : la matière s'ajoute par
+     dessus au lieu de l'effacer. */
+  body .duoband{
+    background-image:var(--px-verre),linear-gradient(140deg,#1b1f2e,#12131a);
+  }
+
+/* ---------- Lot B — §2.2 : les affiches qui rayonnent ---------- */
+
+  /* Liseré et ombre NEUTRE sur toutes les jaquettes. Le rayon monte de 2 à 3 px
+     là où il était sous 12 — c'est de la matière, pas de la géométrie : la
+     boîte, elle, ne bouge pas d'un pixel. */
+  body .poster,
+  body .vgn .poster,
+  body .gcard .poster,
+  body .filmrow .poster,
+  body .pcard .wrapimg,
+  body .dmaff{
+    border:1px solid rgba(255,255,255,.09);
+    border-radius:12px;
+    box-shadow:0 10px 28px rgba(0,0,0,.45);
+  }
+  /* MESURE À FAIRE, ET LE REPLI EST DÉJÀ ÉCRIT (§3). Les ombres portées sur des
+     dizaines d'affiches d'un rail sont le seul risque de fluidité de ce lot ; à
+     mesurer sur iPhone, défilement d'une vitrine chargée, avant/après. Si le
+     rail perd en fluidité, le repli consiste à retirer `body .vgn .poster` et
+     `body .filmrow .poster` de la liste ci-dessus (les rails) et à leur laisser
+     le liseré seul — les écrans peu peuplés (`.dhead`, `.dcartes`, `.rcarte`,
+     `.pcard`) gardant l'ombre. Ne pas inventer un autre repli : celui-ci est
+     borné et réversible. */
+
+  /* Le halo COLORÉ est réservé aux écrans à affiche unique ou double — la fiche
+     et le duel. En rangée, extraire la couleur dominante coûterait un canvas
+     par jaquette : interdit (§2.2). Ici c'est donc la couleur d'accent
+     atténuée, et le commentaire le dit pour que personne ne croie à une
+     extraction. */
+  body .dhead .poster{
+    box-shadow:0 12px 34px rgba(0,0,0,.55), 0 0 42px rgba(61,139,255,.16);
+  }
+  body .dcartes .dcarte{
+    box-shadow:0 12px 34px rgba(0,0,0,.5), 0 0 38px rgba(61,139,255,.14);
+  }
+
+  /* Micro-zoom : transform SEULEMENT, jamais de reflow. */
+  body .poster:active,
+  body .pcard:active .wrapimg{ transform:scale(.96); }
+  body .poster,
+  body .pcard .wrapimg{ transition:transform .2s, box-shadow .25s; }
+
+/* ---------- Lot B — §2.3 : la typographie qui respire ----------
+
+   SEULE EXCEPTION GÉOMÉTRIQUE DU LOT, et elle est la piste elle-même. Ce qui
+   n'est PAS touché, et c'est écrit dans la spec : le corps de texte, les puces
+   et les boutons. La densité d'information actuelle est un choix. */
+
+  /* L'en-tête est `sticky` : sa hauteur peut grandir de quelques pixels. Vérifié
+     avant de le faire — aucun JS du dépôt ne lit la hauteur de `.htitle` ni
+     celle de `header` (ni `offsetHeight`, ni `getBoundingClientRect` sur eux). */
+  body .htitle{font-size:23px;letter-spacing:-.5px}
+  /* Les petites capitales grises disparaissent : un titre de rangée est un
+     titre, pas une étiquette de formulaire. Le compteur `.cnt` garde sa forme. */
+  body .sectitle{
+    text-transform:none;font-size:14.5px;font-weight:800;
+    color:var(--text);letter-spacing:-.25px;margin:26px 16px 12px;
+  }
+  /* Les grands titres : le hero de Découvrir et le titre de fiche. */
+  body .d4nom{font-size:31px;letter-spacing:-.03em}
+  body .dhead h2{font-size:26px;letter-spacing:-.01em}
+
+/* ---------- Lot C — §2.4 : l'accent bijou et les micro-détails ---------- */
+
+  /* Le dégradé et la lueur, sur ce qui APPELLE À L'ACTION et sur ce qui est
+     ACTIF. `--accent` lui-même ne change pas : il continue de servir aux textes
+     et aux icônes, où un dégradé n'aurait pas de sens. */
+  body .btn{background-image:var(--px-grad);box-shadow:var(--px-lueur);
+    transition:transform .2s,box-shadow .25s,background-color .25s}
+  body .btn.ghost{background-image:none;box-shadow:none}
+  body .chip.on{background-image:var(--px-grad);box-shadow:var(--px-lueur)}
+  body .rbadge{background-image:var(--px-grad)}
+  body .pcard .pbar>i{background-image:var(--px-grad)}
+  /* La jauge de stabilité de SPEC-06 et la barre de progression du duel : deux
+     jauges, la même matière. */
+  body .djb i{background-image:var(--px-grad)}
+  body .dbarre i{background-image:var(--px-grad)}
+  /* Le bouton « Jouer » du bandeau duel hérite de `.btn` : rien à ajouter.
+     La pastille de l'onglet actif, elle, s'éclaire de l'intérieur. */
+  body #navpip::before{
+    background:rgba(85,140,255,.18);
+    box-shadow:inset 0 0 18px rgba(85,140,255,.22);
+  }
+  /* Les mots-pilules de la Recherche. La variante neutre reçoit la teinte
+     bleue de la maquette ; les variantes de sens (violet IA, vert contexte,
+     orange duo) gardent la leur — leur couleur PORTE une information, la
+     recouvrir la détruirait. */
+  body .rpils .rmot{
+    background-image:linear-gradient(135deg,#5b9bff2e,#3d6bff2e);
+    border-color:#5b9bff5c;color:#a8ccff;
+    transition:transform .2s,background-color .25s,border-color .25s;
+  }
+  body .rpils .rmot.ia,
+  body .rpils .rmot.ctx,
+  body .rpils .rmot.duo,
+  body .rpils .rmot.vide{background-image:none}
+
+  /* Micro-réactions. `scale(.96)` sur ce qui se touche : transform seul, aucun
+     reflow, et les zones tactiles restent identiques au pixel près. */
+  body .btn:active,
+  body .chip:active,
+  body .rond:active,
+  body .preset:active,
+  body .fopt:active,
+  body .rtb:active{transform:scale(.96)}
+  body .chip,
+  body .preset,
+  body .fopt,
+  body .rtb{transition:transform .2s,background-color .25s,border-color .25s}
+
+  /* Le toast passe au verre, comme l'en-tête et la barre : il flotte au-dessus
+     du contenu, il a le droit de le laisser transparaître. C'est le SEUL
+     porteur de `backdrop-filter` que SPEC-07 ajoute — le §3 interdit d'en poser
+     sur un élément qui défile ou qui contient le défilement, et le toast est
+     fixe. (Le dépôt en comptait déjà d'autres avant ce lot, sur des puces et
+     des badges posés sur une affiche : eux non plus ne défilent pas.) */
+  body .toast{
+    background:rgba(26,28,37,.75);border-color:rgba(255,255,255,.1);
+    -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);
+  }
+
+  /* Respect du réglage système : quelqu'un qui a demandé moins d'animation
+     n'a pas demandé un écran plat, mais il a demandé qu'il ne bouge pas. */
+  @media (prefers-reduced-motion:reduce){
+    body .btn:active,body .chip:active,body .rond:active,
+    body .preset:active,body .fopt:active,body .rtb:active,
+    body .poster:active,body .pcard:active .wrapimg{transform:none}
+  }
