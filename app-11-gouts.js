@@ -2030,7 +2030,7 @@ function requeteHumeur(media, cadre, cle, variante){
   }
   /* SPEC-04 lot C §2 (a) — L'AFFINAGE DE LA RECETTE SELON LE PROFIL, et il se
      fait ICI, localement, sans une requête. Le §2 confie cet affinage à l'IA ;
-     le relais du lot B, lui, ne rend pour `profil_humeur` qu'une PHRASE, pas
+     le relais du lot B, lui, ne rendait pour `profil_humeur` qu'une PHRASE, pas
      des critères `/discover`. Deviner des mots-clés TMDB dans du texte libre
      serait précisément l'à-peu-près que le §0.4 interdit ailleurs. On garde
      donc le sens de la règle — « Frissonner pour CET utilisateur, ce n'est pas

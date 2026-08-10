@@ -29,10 +29,10 @@ function assertEquals(a: unknown, b: unknown, msg = ""): void {
 }
 
 import { rpc, servir, oublierFournisseurs, attenteDe, CACHE_FOURNISSEURS_MS } from "./relais.ts";
-import { construire, valider, INTERDIT_EMOTION, CONSIGNE_COMMUNE } from "./gabarits.ts";
+import { construire, valider, tacheConnue, INTERDIT_EMOTION, CONSIGNE_COMMUNE } from "./gabarits.ts";
 import {
   BUDGET_GLOBAL_JOUR, BUDGET_UTILISATEUR_JOUR, FOURNISSEURS, MAX_JETONS_SORTIE,
-  ORIGINES, TIMEOUT_MS,
+  ORIGINES, TACHES, TIMEOUT_MS,
 } from "./config.ts";
 
 Deno.env.set("SUPABASE_URL", "https://projet.supabase.co");
@@ -447,7 +447,6 @@ Deno.test("chaque tâche borne ce qui part, en nombre et en longueur", () => {
 Deno.test("sans matière, pas de gabarit — et donc pas de requête", () => {
   assertEquals(construire("pitch_jour", {}), null);
   assertEquals(construire("intitules_rangees", { intitules: [] }), null);
-  assertEquals(construire("profil_humeur", {}), null);
   assertEquals(construire("tache_qui_nexiste_pas", { titre: "X" }), null);
 });
 
@@ -458,7 +457,11 @@ Deno.test("sans matière, pas de gabarit — et donc pas de requête", () => {
    écrits EN DUR ici, une fois, et c'est le seul endroit du dépôt où ils le
    sont : si quelqu'un change la config, ce test tombe et pose la question. */
 const LONGUEURS: Record<string, number> = {
-  pitch_jour: 220, pitch_humeur: 220, profil_humeur: 120, intitules_rangees: 60,
+  pitch_jour: 220, pitch_humeur: 220, intitules_rangees: 60,
+  // SPEC-05 lot B. `envie_phrase` et `ambiance_desc` ne rendent pas de texte
+  // libre : leur `maxlong` ne borne que le NOM d'une ambiance, et le cas
+  // ci-dessous les traite à part.
+  pourquoi_lui: 220,
 };
 
 Deno.test("la validation suit la longueur maximale de CHAQUE tâche", () => {
@@ -1147,8 +1150,8 @@ Deno.test("M33 — chaque fournisseur réserve avec SES limites, dans le bon sen
      · l'étage 3 refusait TOUTES les requêtes, parce que le modèle OpenRouter
        choisi ne déclarait pas `structured_outputs`.
 
-   Deux tâches sur quatre — `pitch_jour` et `profil_humeur`, celles du lot
-   quotidien — étaient donc indisponibles à 100 %, tous les jours, en silence.
+   Les deux tâches du lot quotidien — `pitch_jour` et `intitules_rangees` —
+   étaient donc indisponibles à 100 %, tous les jours, en silence.
 
    > **Un test qui remplace le monde extérieur n'éprouve pas le monde extérieur.**
    > Un faux fournisseur répond toujours ce qu'on lui demande de répondre. Ce
@@ -1265,4 +1268,155 @@ Deno.test("R-γ — une liste de sortie trop longue est refusée", () => {
   assertEquals(valider("intitules_rangees", { textes: douze.concat("Une de trop") }), null,
     "treize intitulés passent : le nombre d'éléments n'est pas borné");
   assertEquals(valider("intitules_rangees", { textes: Array(5000).fill("x") }), null);
+});
+
+/* ============ SPEC-05 lot B — LES TROIS TÂCHES DE LA RECHERCHE ============
+
+   Ce que ces cas empêchent :
+     · qu'un critère inventé par le modèle s'applique à une recherche ;
+     · qu'un critère inventé fasse tomber la traduction ENTIÈRE (le §6 dit
+       « rejeté silencieusement », pas « tout est perdu ») ;
+     · que le vocabulaire fermé quitte le serveur ;
+     · que « pourquoi il te correspond » échappe à la règle §0.4 ;
+     · qu'une des trois nouvelles tâches oublie de demander un jeton. */
+
+Deno.test("SPEC-05 — les trois tâches sont dans la liste blanche, et rien de plus", () => {
+  ["envie_phrase", "ambiance_desc", "pourquoi_lui"].forEach((t) => {
+    assert(tacheConnue(t), t + " manque à la liste blanche");
+  });
+  assertEquals(tacheConnue("titre_oublie"), false,
+    "« titre sur le bout de la langue » est hors périmètre (§0.9) et ne doit pas exister");
+  assertEquals(tacheConnue("comme_x_mais"), false, "« comme X mais » est explicitement écarté");
+});
+
+Deno.test("SPEC-05 — un critère inventé tombe, les justes restent", () => {
+  const r = valider("envie_phrase", {
+    criteres: [
+      { cle: "genre", val: "polar" },
+      { cle: "genre", val: "cyberpunk" },       // inventé : n'existe pas dans la table
+      { cle: "humeur", val: "triste" },          // clé inventée
+      { cle: "duree", val: "court" },
+      { cle: "note", val: "12" },                // valeur hors table
+    ],
+  });
+  assert(r, "toute la traduction est tombée pour un critère faux");
+  // `assertEquals` compare par identité : sur une liste, on compare les formes.
+  assertEquals(JSON.stringify(r!.criteres),
+    JSON.stringify([{ cle: "genre", val: "polar" }, { cle: "duree", val: "court" }]));
+});
+
+Deno.test("SPEC-05 — rien de reconnu rend null, pas une liste vide", () => {
+  assertEquals(valider("envie_phrase", { criteres: [{ cle: "x", val: "y" }] }), null);
+  assertEquals(valider("envie_phrase", { criteres: [] }), null);
+  assertEquals(valider("envie_phrase", { texte: "un braquage stylé" }), null,
+    "un texte libre est passé là où seuls des critères sont admis");
+});
+
+Deno.test("SPEC-05 — le même critère deux fois ne compte qu'une", () => {
+  const r = valider("envie_phrase", {
+    criteres: [{ cle: "genre", val: "polar" }, { cle: "genre", val: "polar" }],
+  });
+  assertEquals(r!.criteres!.length, 1);
+});
+
+Deno.test("SPEC-05 — le nombre de critères est borné", () => {
+  const trop = [];
+  for (let i = 0; i < 9; i++) trop.push({ cle: "genre", val: "polar" });
+  assertEquals(valider("envie_phrase", { criteres: trop }), null,
+    "un fournisseur bavard fait traverser autant de critères qu'il veut");
+});
+
+Deno.test("SPEC-05 — ambiance_desc rend aussi un nom et un emoji, tous deux facultatifs", () => {
+  const r = valider("ambiance_desc", {
+    criteres: [{ cle: "genre", val: "horreur" }, { cle: "gore", val: "non" }],
+    nom: "Frissons doux", emoji: "🌙",
+  });
+  assertEquals(r!.nom, "Frissons doux");
+  assertEquals(r!.emoji, "🌙");
+  const sansNom = valider("ambiance_desc", { criteres: [{ cle: "genre", val: "horreur" }] });
+  assert(sansNom, "une ambiance sans nom est refusée alors qu'on sait la nommer");
+  assertEquals(sansNom!.nom, undefined);
+  // Un nom émotif par procuration tombe comme n'importe quel texte.
+  const emotif = valider("ambiance_desc", {
+    criteres: [{ cle: "genre", val: "horreur" }], nom: "Ton coup de cœur",
+  });
+  assertEquals(emotif!.nom, undefined, "le §0.4 ne s'applique pas au nom d'une ambiance");
+});
+
+Deno.test("SPEC-05 — le vocabulaire fermé part dans le prompt, avec l'interdiction d'en sortir", () => {
+  const g = construire("envie_phrase", { phrase: "un braquage stylé, pas trop long" });
+  assert(g, "le gabarit ne se construit pas");
+  assert(g!.consigne.includes("polar"), "la table des genres n'est pas énumérée au modèle");
+  assert(g!.consigne.includes("ep25"), "les formats épisodes ne sont pas énumérés");
+  assert(/QUE les couples/.test(g!.consigne), "l'interdiction d'inventer n'est pas écrite");
+  assert(g!.consigne.includes("un braquage stylé"), "la demande n'est pas transmise");
+  // Sans demande, pas de requête : on ne paie pas pour du vide.
+  assertEquals(construire("envie_phrase", {}), null);
+});
+
+Deno.test("SPEC-05 — ambiance_desc demande un nom, envie_phrase non", () => {
+  const a = construire("ambiance_desc", { phrase: "des soirées frissons sans gore" });
+  const e = construire("envie_phrase", { phrase: "des soirées frissons sans gore" });
+  assert(/nom court/.test(a!.consigne), "l'ambiance ne demande pas de nom");
+  assertEquals(/nom court/.test(e!.consigne), false,
+    "l'envie demande un nom dont personne ne fera rien");
+});
+
+Deno.test("SPEC-05 — pourquoi_lui reste factuel et borné à deux lignes", () => {
+  const g = construire("pourquoi_lui", {
+    titre: "Baby Driver", genres: ["Action"], note: 7.5,
+    criteres: ["polar", "de moins de 2 h"], aimes: ["Drive"],
+  });
+  assert(g!.consigne.includes(CONSIGNE_COMMUNE.split("\n")[0]),
+    "la règle §0.4 n'est pas rappelée au modèle");
+  assert(g!.consigne.includes("Baby Driver"));
+  assert(g!.consigne.includes("polar"), "les critères actifs ne sont pas transmis");
+  assert(/synopsis officiel/.test(g!.consigne),
+    "rien n'empêche le modèle de refaire le résumé qui est affiché juste dessous");
+  assertEquals(construire("pourquoi_lui", { genres: ["Action"] }), null,
+    "sans titre, il n'y a rien à dire — et on paie quand même");
+  // Et la sortie passe par la même barrière que les pitchs.
+  assertEquals(valider("pourquoi_lui", { texte: "Dans la veine de Drive, que tu as adoré." }), null);
+  assert(valider("pourquoi_lui", { texte: "Un polar nerveux d'1 h 53, dans la veine de Drive." }));
+});
+
+Deno.test("SPEC-05 — les nouvelles tâches n'échappent pas au jeton ni à l'origine", async () => {
+  const f = faireSemblant({ fournisseurs: null, reponses: {} });
+  try {
+    const sansJeton = await servir(requete({ tache: "envie_phrase", params: { phrase: "x" } },
+                                           { jeton: null }));
+    assertEquals(sansJeton.status, 401, "une tâche Recherche passe sans compte connecté");
+    const mauvaiseOrigine = await servir(requete({ tache: "pourquoi_lui", params: { titre: "X" } },
+                                                 { origine: "https://ailleurs.example" }));
+    assertEquals(mauvaiseOrigine.status, 403, "une tâche Recherche accepte n'importe quelle origine");
+    assertEquals(f.etages().length, 0, "un fournisseur a été appelé alors que la porte était fermée");
+  } finally { f.rendre(); }
+});
+
+/* ============ LA LISTE BLANCHE EST FERMÉE, ET ELLE LE RESTE ============
+
+   Décision d'Adrien du 10/08/2026, à l'occasion du retrait de `profil_humeur` :
+   cette liste doit correspondre EXACTEMENT aux tâches réellement appelées par
+   le front. Une porte que personne n'ouvre n'est pas une porte fermée, c'est
+   une porte de plus — appelable par quiconque connaît l'adresse du relais et
+   détient un jeton, consommant budget et quota fournisseur sans rien rendre.
+
+   Le seuil est écrit EN DUR ici, comme les longueurs maximales et pour la même
+   raison : lire `Object.keys(TACHES)` des deux côtés de l'égalité ferait un
+   test qui bouge avec ce qu'il éprouve. Ajouter une tâche fera donc tomber ce
+   cas — c'est voulu, on l'ajoutera ici le jour où elle sera branchée.
+
+   Le pendant côté front est le contrôle n° 14 de `tests/lance-tests.js` : il
+   relit les `appelIA('…')` des fichiers d'écran et les recoupe avec cette
+   liste. Les deux ensemble ferment la boucle ; l'un sans l'autre ne dit rien. */
+Deno.test("la liste blanche compte SIX tâches, exactement celles qui ont un appelant", () => {
+  const attendues = ["pitch_jour", "pitch_humeur", "intitules_rangees",
+                     "envie_phrase", "ambiance_desc", "pourquoi_lui"].sort();
+  assertEquals(JSON.stringify(Object.keys(TACHES).sort()), JSON.stringify(attendues),
+    "la liste blanche ne correspond plus aux tâches appelées — ajoute l'appelant, " +
+    "ou retire la tâche, mais pas les deux à moitié");
+  assertEquals(tacheConnue("profil_humeur"), false,
+    "`profil_humeur` est revenue sans appelant : voir le pavé de config.ts");
+  assertEquals(construire("profil_humeur", { humeur: "frisson" }), null);
+  assertEquals(valider("profil_humeur", { texte: "x" }), null);
 });

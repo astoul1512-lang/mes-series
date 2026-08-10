@@ -228,7 +228,12 @@ const ETAT_PARTAGE = {
      refermer — la recherche, et depuis C2 la feuille de confirmation générique
      d'app-02 elle-même (`confirmerDansFeuille`), qui s'en sert pour traiter
      « refermée sans qu'on ait répondu » comme un NON. */
-  FERMETURES: ['app-02-outils.js','app-12-recherche.js']
+  FERMETURES: ['app-02-outils.js','app-12-recherche.js'],
+  /* SPEC-05 — le brouillon d'ambiance en cours d'écriture. Il est DÉCLARÉ dans
+     app-15 (la feuille qui le dessine) et complété par app-14 quand l'IA
+     traduit une description en réglages : c'est le même objet, à deux moments
+     de sa vie. Il meurt avec la feuille, il n'entre jamais dans `db`. */
+  brouillonAmb: ['app-14-ia.js','app-15-filtres.js']
 };
 
 function ecrituresEtat(fichiers, lire){
@@ -1029,6 +1034,56 @@ function collisionsCss(src){
     console.log('abandon       → ' + (soucis.length
       ? soucis.length + ' écart(s)'
       : marques + ' marques d\'échec, toutes gardées ; la grille passe son signal'));
+    soucis.forEach(d => console.log('   ! ' + d));
+    souci += soucis.length;
+  }
+
+  /* --- 15. SPEC-04/05 — LA LISTE BLANCHE DU RELAIS N'A NI TROU NI SURPLUS ---
+
+     Décision d'Adrien du 10/08/2026, prise en retirant `profil_humeur` : la
+     liste blanche fermée de `functions/ia/config.ts` doit correspondre
+     EXACTEMENT aux tâches que le front appelle. Une tâche déclarée sans
+     appelant n'est pas inoffensive — elle est appelable par quiconque connaît
+     l'adresse du relais et détient un jeton, elle consomme du budget et du
+     quota fournisseur, et elle n'apporte rien.
+
+     Le pendant côté serveur est un cas de `index.test.ts` qui fige la liste des
+     six. Celui-ci regarde l'autre bout : tous les `appelIA('…')` du front. Les
+     deux ensemble ferment la boucle — un seul des deux ne dit rien, puisque
+     c'est justement leur DÉSACCORD qu'on cherche. */
+  {
+    const fs = require('fs'), chemin = require('path');
+    const racine = chemin.join(__dirname, '..');
+    const soucis = [];
+    const cfg = fs.readFileSync(chemin.join(racine, 'supabase/functions/ia/config.ts'), 'utf8');
+    const bloc = /export const TACHES[^{]*\{([\s\S]*?)\n\};/.exec(cfg);
+    if(!bloc) soucis.push('config.ts : la table TACHES est introuvable');
+    else{
+      /* Les commentaires sont retirés : ils CITENT des noms de tâches (dont
+         `profil_humeur`, dans le pavé qui explique son retrait), et les lire
+         ferait croire à des entrées qui n'existent plus. */
+      const net = bloc[1].replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+      const declarees = new Set((net.match(/^\s*([a-z_]+)\s*:/gm) || [])
+        .map(x => x.replace(/[\s:]/g, '')));
+      const appelees = new Set();
+      for(const f of FICHIERS){
+        const src = fs.readFileSync(chemin.join(racine, f), 'utf8');
+        let m;
+        const re = /appelIA\(\s*'([a-z_]+)'/g;
+        while((m = re.exec(src))) appelees.add(m[1]);
+      }
+      [...declarees].forEach(t=>{
+        if(!appelees.has(t))
+          soucis.push(t + ' : déclarée dans la liste blanche, appelée par aucun écran');
+      });
+      [...appelees].forEach(t=>{
+        if(!declarees.has(t))
+          soucis.push(t + ' : appelée par le front, absente de la liste blanche — 400 garanti');
+      });
+      console.log('liste blanche → ' + (soucis.length
+        ? soucis.length + ' écart(s)'
+        : declarees.size + ' tâches déclarées, ' + appelees.size + ' appelées, aucune orpheline'));
+    }
     soucis.forEach(d => console.log('   ! ' + d));
     souci += soucis.length;
   }

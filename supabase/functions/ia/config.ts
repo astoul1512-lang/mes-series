@@ -109,7 +109,7 @@ export const FOURNISSEURS: Fournisseur[] = [
 // le gabarit est construit ici, côté serveur. Sans ça, ce relais serait une
 // API de génération de texte gratuite ouverte à qui trouve son adresse.
 //
-// CES QUATRE ENTRÉES SONT DU CODE, PAS DES DONNÉES, contrairement à l'échelle
+// CES ENTRÉES SONT DU CODE, PAS DES DONNÉES, contrairement à l'échelle
 // des fournisseurs — les changer demande un redéploiement. Le pavé d'en-tête de
 // ce fichier dit que « l'ordre, les limites et les étages de départ sont des
 // données » : c'est vrai de l'ordre et des limites (table `ia_fournisseurs`),
@@ -139,11 +139,56 @@ export const TACHES: Record<string, Tache> = {
   // Le pitch d'une humeur : quelques mots, à la demande, plusieurs fois par
   // soirée. Étage 2 d'emblée.
   pitch_humeur:      { etage_depart: 2, maxlong: 220, maxtitres: 8 },
-  // L'affinage d'une recette selon le profil : c'est de la sélection
-  // éditoriale, elle part de l'étage 1.
-  profil_humeur:     { etage_depart: 1, maxlong: 120, maxtitres: 12 },
   // Des variantes de titres de rangées : court et fréquent, étage 2.
   intitules_rangees: { etage_depart: 2, maxlong: 60,  maxtitres: 12 },
+  //
+  // ---- `profil_humeur` A ÉTÉ RETIRÉE — décision d'Adrien du 10/08/2026 ----
+  //
+  // Elle existait depuis le lot B et n'a JAMAIS EU D'APPELANT. La raison est
+  // dans SPEC-04 §2 : le paragraphe demande à l'IA (a) d'affiner la recette
+  // d'une humeur selon le profil et (b) d'écrire le pitch du hero, mais il
+  // n'accorde qu'UNE requête par humeur touchée. Or `profil_humeur` rendait une
+  // PHRASE de 120 caractères, pas des critères `/discover` : elle ne pouvait
+  // pas affiner une requête TMDB sans qu'on se mette à deviner des mots-clés
+  // dans du texte libre — exactement l'à-peu-près que le §0.4 proscrit ailleurs.
+  //
+  // Le lot C a donc donné la requête unique au PITCH (la seule des deux moitiés
+  // qui se voit) et fait l'affinage LOCALEMENT, à partir des 👍/👎 — voir
+  // `recetteAffineeHumeur` (app-14) et `requeteHumeur` (app-11).
+  //
+  // POURQUOI LA RETIRER PLUTÔT QUE DE LA LAISSER DORMIR : parce que cette liste
+  // est une LISTE BLANCHE FERMÉE, et qu'une liste fermée qui contient une porte
+  // dont personne ne se sert n'est plus fermée, elle est juste plus grande. Une
+  // tâche déclarée est une tâche appelable par quiconque connaît l'adresse du
+  // relais et détient un jeton : elle consomme du budget, elle consomme du
+  // quota fournisseur, et elle n'apporte rien en échange.
+  //
+  // LA RÈGLE QUI EN DÉCOULE, et le contrôle qui la tient : cette liste doit
+  // correspondre EXACTEMENT aux tâches réellement appelées par le front. Le cas
+  // « la liste blanche ne contient QUE des tâches qui ont un appelant » de
+  // `index.test.ts` échouera le jour où l'une des deux listes bougera sans
+  // l'autre. Une tâche qu'on ajoute « pour plus tard » fera tomber ce test :
+  // c'est voulu, on l'ajoutera le jour où elle sera branchée.
+  //
+  // Si `profil_humeur` revient un jour, ce sera avec un schéma de CRITÈRES —
+  // comme `envie_phrase` — et elle remplacera alors l'affinage local.
+
+  // ---- SPEC-05 lot B (10/08) — LES TROIS TÂCHES DE LA RECHERCHE ----
+  //
+  // La liste blanche s'ouvre de trois entrées et referme derrière elle : le §6
+  // de SPEC-05 les nomme, et il n'en nomme pas une quatrième.
+  //
+  // `envie_phrase` et `ambiance_desc` ne rendent PAS du texte libre : elles
+  // rendent des IDENTIFIANTS de critères, choisis dans les tables que le
+  // gabarit énumère. C'est ce qui les rend sûres — un critère inventé ne
+  // s'applique pas, il tombe. Elles partent de l'étage 1 : traduire une envie
+  // en critères demande de la compréhension, pas de la fluidité, et une erreur
+  // s'y voit tout de suite (des pilules fausses à l'écran).
+  envie_phrase:      { etage_depart: 1, maxlong: 60,  maxtitres: 8  },
+  ambiance_desc:     { etage_depart: 1, maxlong: 60,  maxtitres: 8  },
+  // « Pourquoi il te correspond » : deux lignes, à l'ouverture d'un aperçu,
+  // donc court et fréquent — étage 2, comme le pitch d'humeur.
+  pourquoi_lui:      { etage_depart: 2, maxlong: 220, maxtitres: 8  },
 };
 
 // ---------------------------------------------------------------------------

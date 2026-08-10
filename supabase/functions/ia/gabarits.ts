@@ -161,6 +161,78 @@ const SCHEMA_LISTE = {
   required: ["textes"],
 };
 
+// ---------------------------------------------------------------------------
+// SPEC-05 §6 — LE VOCABULAIRE FERMÉ DES CRITÈRES
+//
+// « `envie_phrase` et `ambiance_desc` ne peuvent renvoyer QUE des identifiants
+// des tables du §1 (LE GABARIT SERVEUR LES LISTE) — un critère inventé est
+// rejeté silencieusement. »
+//
+// D'où cette table, et d'où le fait qu'elle soit ICI et pas côté client : c'est
+// elle qui borne ce que le modèle a le droit de dire, et une borne qui vit chez
+// l'appelant n'est pas une borne. Le client, lui, sait traduire ces clés en
+// paramètres TMDB — c'est son travail, pas celui du relais.
+//
+// POURQUOI DES CLÉS DE GENRE ET PAS LES NOMS TMDB. Les noms de genres TMDB
+// dépendent de la langue demandée (`db.lang`) : figer « Science-Fiction » ici
+// casserait la traduction pour quelqu'un dont l'app est en anglais, et laisser
+// le client envoyer sa liste rendrait la borne pilotable depuis le client —
+// c'est-à-dire plus une borne du tout. Seize clés stables, traduites côté
+// client, et le problème n'existe pas.
+//
+// AJOUTER UNE VALEUR ICI DEMANDE UN REDÉPLOIEMENT, et c'est voulu : le
+// vocabulaire d'un modèle n'est pas un réglage.
+// ---------------------------------------------------------------------------
+export const CRITERES_PERMIS: Record<string, string[]> = {
+  fam:     ["tout", "film", "serie", "anime"],
+  genre:   ["comedie", "drame", "polar", "thriller", "horreur", "sf", "fantastique",
+            "action", "aventure", "romance", "mystere", "guerre", "western",
+            "familial", "histoire", "documentaire"],
+  epoque:  ["2020s", "2010s", "2000s", "1990s", "1980s", "avant"],
+  duree:   ["court", "moyen", "long", "ep25", "ep50"],
+  origine: ["fr", "us", "eu", "monde", "ja", "zh", "ko"],
+  note:    ["6", "7", "8", "exc"],
+  statut:  ["finie", "encours"],
+  gore:    ["non"],
+  pasvu:   ["non"],
+};
+
+const VOCABULAIRE_CRITERES = [
+  "LES SEULS COUPLES AUTORISÉS :",
+  ...Object.keys(CRITERES_PERMIS).map(
+    (c) => "  " + c + " : " + CRITERES_PERMIS[c].join(" | "),
+  ),
+  "Sens : fam = la famille de titres · genre = le genre · epoque = la décennie ·",
+  "duree = la durée d'un film ou d'un épisode · origine = le pays ou la langue ·",
+  "note = la note minimale (exc = 8+) · statut = série finie ou en cours ·",
+  "gore=non = écarter le gore · pasvu=non = seulement ce qui n'a pas été vu.",
+].join("\n");
+
+const SCHEMA_CRITERES = {
+  type: "object",
+  properties: {
+    criteres: {
+      type: "array",
+      maxItems: 8,
+      items: {
+        type: "object",
+        properties: { cle: { type: "string" }, val: { type: "string" } },
+        required: ["cle", "val"],
+      },
+    },
+  },
+  required: ["criteres"],
+};
+const SCHEMA_AMBIANCE = {
+  type: "object",
+  properties: {
+    nom: { type: "string" },
+    emoji: { type: "string" },
+    criteres: SCHEMA_CRITERES.properties.criteres,
+  },
+  required: ["criteres"],
+};
+
 /* R-8 (relecture du 10/08, second tour) — LA MÊME GARDE AUX TROIS ENDROITS.
    `[B4]` n'avait corrigé R4 que dans `servir`. `construire` et `valider`
    faisaient toujours `TACHES[tache]`, donc trouvaient `constructor` et ses
@@ -218,25 +290,6 @@ export function construire(tache: string, params: unknown): Gabarit | null {
     return { consigne: lignes.filter(Boolean).join("\n"), schema: SCHEMA_TEXTE };
   }
 
-  if (tache === "profil_humeur") {
-    const humeur = texte(p.humeur, 30);
-    if (!humeur) return null;
-    return {
-      consigne: [
-        CONSIGNE_COMMUNE,
-        "",
-        "L'ambiance demandée est « " + humeur + " ».",
-        "En une phrase de 120 caractères au plus, dis quelle FORME de cette",
-        "ambiance conviendrait à quelqu'un dont les goûts ressemblent à ceci.",
-        "Décris la sélection, pas la personne.",
-        "",
-        aimes.length ? "TITRES AIMÉS : " + aimes.join(", ") : "TITRES AIMÉS : aucun",
-        genres ? "GENRES LES PLUS AIMÉS : " + genres : "",
-      ].filter(Boolean).join("\n"),
-      schema: SCHEMA_TEXTE,
-    };
-  }
-
   if (tache === "intitules_rangees") {
     const base = liste(p.intitules, t.maxtitres, 60);
     if (!base.length) return null;
@@ -254,6 +307,66 @@ export function construire(tache: string, params: unknown): Gabarit | null {
       schema: SCHEMA_LISTE,
     };
   }
+
+  // ------------------- SPEC-05 lot B — LA RECHERCHE -------------------
+
+  if (tache === "pourquoi_lui") {
+    if (!titre) return null;
+    const criteres = liste(p.criteres, 8, 60);
+    return {
+      consigne: [
+        CONSIGNE_COMMUNE,
+        "",
+        "La personne cherche avec des critères précis. Dis en DEUX LIGNES au",
+        "plus (220 caractères maximum) ce qui relie CE titre à CES critères et,",
+        "s'il y a lieu, à un titre qu'elle a déjà aimé. Reste factuel : ce que",
+        "le titre EST. N'invente aucun fait, ne résume pas l'intrigue — le",
+        "synopsis officiel est affiché juste en dessous.",
+        "",
+        "TITRE : " + titre,
+        genres ? "GENRES : " + genres : "",
+        note ? "NOTE PUBLIQUE : " + note + "/10" : "",
+        forme ? "FORME : " + forme : "",
+        criteres.length ? "CRITÈRES ACTIFS DE LA RECHERCHE : " + criteres.join(", ") : "",
+        aimes.length
+          ? "TITRES DÉJÀ AIMÉS (tu peux en citer UN au plus, « dans la veine de X ») : " +
+            aimes.join(", ")
+          : "",
+      ].filter(Boolean).join("\n"),
+      schema: SCHEMA_TEXTE,
+    };
+  }
+
+  if (tache === "envie_phrase" || tache === "ambiance_desc") {
+    const phrase = texte(p.phrase, 300);
+    if (!phrase) return null;
+    const ambiance = tache === "ambiance_desc";
+    return {
+      consigne: [
+        CONSIGNE_COMMUNE,
+        "",
+        "Traduis la demande ci-dessous en CRITÈRES DE RECHERCHE.",
+        "",
+        "RÈGLE ABSOLUE, et elle prime sur l'envie d'être utile : tu ne peux",
+        "employer QUE les couples (cle, val) énumérés ci-dessous. Tout ce que tu",
+        "inventerais serait jeté sans être appliqué. Si la demande ne correspond",
+        "à rien de cette liste, rends une liste VIDE — c'est une réponse valable,",
+        "et bien meilleure qu'un critère approximatif.",
+        "Ne rends que ce que la demande dit VRAIMENT. Trois critères justes",
+        "valent mieux que huit devinés. Huit au maximum.",
+        "",
+        VOCABULAIRE_CRITERES,
+        "",
+        ambiance
+          ? "Rends AUSSI un nom court (30 caractères au plus, sans guillemets) et " +
+            "UN emoji qui résument l'ambiance demandée."
+          : "",
+        "",
+        "LA DEMANDE : " + phrase,
+      ].filter(Boolean).join("\n"),
+      schema: ambiance ? SCHEMA_AMBIANCE : SCHEMA_CRITERES,
+    };
+  }
   return null;
 }
 
@@ -266,7 +379,11 @@ export function construire(tache: string, params: unknown): Gabarit | null {
 // rejeter. On rejette — c'est la seule des deux options qui ne produise jamais
 // une phrase coupée au milieu sous les yeux de quelqu'un.
 // ---------------------------------------------------------------------------
-export function valider(tache: string, brut: unknown): { texte?: string; textes?: string[] } | null {
+export type Critere = { cle: string; val: string };
+export type Rendu = { texte?: string; textes?: string[]; criteres?: Critere[];
+                      nom?: string; emoji?: string };
+
+export function valider(tache: string, brut: unknown): Rendu | null {
   if (!tacheConnue(tache)) return null;
   const t = TACHES[tache];
   if (!t || !brut || typeof brut !== "object") return null;
@@ -294,6 +411,42 @@ export function valider(tache: string, brut: unknown): { texte?: string; textes?
       l.push(v);
     }
     return l.length ? { textes: l } : null;
+  }
+
+  if (tache === "envie_phrase" || tache === "ambiance_desc") {
+    if (!Array.isArray(o.criteres)) return null;
+    if (o.criteres.length > 8) return null;
+    /* « UN CRITÈRE INVENTÉ EST REJETÉ SILENCIEUSEMENT » (§6) — le mot
+       « silencieusement » est le cœur de la règle, et il dit bien : on jette
+       L'ENTRÉE, pas la réponse. C'est l'inverse d'`intitules_rangees`, où un
+       seul mauvais fait tout tomber, et la différence n'est pas un caprice :
+       là-bas un décalage renommerait une rangée avec le titre d'une autre, ici
+       un critère faux en moins laisse une recherche simplement plus large.
+       Une entrée douteuse coûte donc un critère, pas la traduction entière. */
+    const vus: Record<string, string[]> = {};
+    const gardes: Critere[] = [];
+    for (const x of o.criteres) {
+      if (!x || typeof x !== "object") continue;
+      const c = x as Record<string, unknown>;
+      const cle = typeof c.cle === "string" ? c.cle.trim().toLowerCase() : "";
+      const val = typeof c.val === "string" ? c.val.trim() : "";
+      if (!Object.prototype.hasOwnProperty.call(CRITERES_PERMIS, cle)) continue;
+      if (CRITERES_PERMIS[cle].indexOf(val) < 0) continue;
+      const deja = vus[cle] || (vus[cle] = []);
+      if (deja.indexOf(val) >= 0) continue;       // deux fois le même : une fois suffit
+      deja.push(val);
+      gardes.push({ cle, val });
+    }
+    if (!gardes.length) return null;              // rien de reconnu = rien à poser
+    if (tache === "envie_phrase") return { criteres: gardes };
+    /* Le nom et l'emoji sont facultatifs : une ambiance sans nom se laisse
+       nommer par la personne, elle ne se refuse pas pour autant. */
+    const nom = propre(o.nom);
+    const emoji = typeof o.emoji === "string" ? o.emoji.trim().slice(0, 4) : "";
+    const out: Rendu = { criteres: gardes };
+    if (nom) out.nom = nom.slice(0, 30);
+    if (emoji) out.emoji = emoji;
+    return out;
   }
 
   const v = propre(o.texte);

@@ -361,8 +361,13 @@ function intituleIA(cle, defaut){
    proscrit ailleurs. L'affinage est donc fait ICI, localement et gratuitement,
    à partir des 👍/👎 (voir `recetteAffineeHumeur`), et la requête unique va au
    pitch, qui est la seule des deux moitiés que la personne voit.
-   `profil_humeur` reste dans la liste blanche du relais, sans appelant, en
-   attendant un lot qui lui donnera un schéma de critères. */
+   `profil_humeur` A ÉTÉ RETIRÉE de la liste blanche du relais — Adrien, le
+   10/08, à la lecture de ce compte rendu : une liste FERMÉE qui garde une porte
+   dont personne ne se sert n'est plus fermée, elle est juste plus grande. Le
+   pavé de `functions/ia/config.ts` porte le détail, et deux contrôles tiennent
+   désormais l'accord entre les tâches déclarées et les tâches appelées (un cas
+   d'`index.test.ts`, le contrôle n° 15 du lanceur). Si elle revient un jour, ce
+   sera avec un schéma de CRITÈRES, comme `envie_phrase`. */
 
 let iaHumeursEnCours = {};
 
@@ -499,4 +504,302 @@ function amorcerBientotDuJour(){
         chargerSuggestions();
     }).catch(()=>{});
   }, 1200);   // on laisse la vitrine finir ses propres requêtes d'abord
+}
+
+/* ==================== SPEC-05 lot B — L'IA DE LA RECHERCHE ====================
+
+   Écrit le 10/08/2026. Trois tâches, trois déclencheurs, et pas un de plus :
+
+     `envie_phrase`  — à la VALIDATION d'une envie dans la barre. Jamais à la
+                       frappe (§3), et jamais quand `/search/multi` a répondu :
+                       un titre trouvé, c'est zéro requête IA.
+     `ambiance_desc` — au bouton « ✦ Traduire en réglages » de la feuille de
+                       création d'ambiance. Un geste explicite, une requête.
+     `pourquoi_lui`  — à l'ouverture d'un aperçu depuis une recherche AVEC une
+                       sélection active. Cache 30 jours par (titre, empreinte
+                       des critères).
+
+   Tout est derrière l'interrupteur « IA de la Recherche », SÉPARÉ de celui de
+   Découvrir et éteint lui aussi à la livraison. Éteint, la barre ne fait que
+   titres et personnes (comportement actuel), la création d'ambiance n'a que
+   l'onglet manuel, et la carte « Pourquoi lui » n'existe pas. Le §6 est
+   catégorique là-dessus : « le socle sans IA est le produit, pas un mode
+   dégradé ». */
+
+/* Le vocabulaire du relais, traduit dans celui de l'app. Le serveur ne connaît
+   que des CLÉS stables (« sf », « polar ») ; l'app, elle, pose des noms de
+   genres TMDB, qui dépendent de la langue. La traduction se fait donc ici, et
+   c'est le bon endroit : le relais n'a pas à savoir en quelle langue tourne
+   l'app de quelqu'un. `genreParNom` rend `null` sur un genre absent de la
+   famille — le critère tombe alors tout seul, sans bruit. */
+const IA_GENRES_CLES = {
+  comedie:'Comédie', drame:'Drame', polar:'Crime', thriller:'Thriller',
+  horreur:'Horreur', sf:'Science-Fiction', fantastique:'Fantastique',
+  action:'Action', aventure:'Aventure', romance:'Romance', mystere:'Mystère',
+  guerre:'Guerre', western:'Western', familial:'Familial', histoire:'Histoire',
+  documentaire:'Documentaire'
+};
+
+/* Poser les critères rendus par le relais dans l'état de la Recherche. On passe
+   par `poserMotRech` — la mécanique existante — et surtout PAS par une écriture
+   directe : c'est elle qui sait basculer un multiple, écarter un ingrédient
+   d'ambiance recouvert, et relancer la requête. Une IA n'a pas de passe-droit
+   sur les règles de l'écran. */
+function appliquerCriteresIA(criteres){
+  if(!Array.isArray(criteres) || !criteres.length) return 0;
+  const r = etatRech();
+  let n = 0;
+  criteres.forEach(c=>{
+    if(!c || typeof c !== 'object') return;
+    const cle = String(c.cle || ''), val = String(c.val || '');
+    if(cle === 'fam'){ if(['tout','film','serie','anime'].indexOf(val) >= 0){ r.fam = val; n++; } return; }
+    if(cle === 'genre'){
+      const nom = IA_GENRES_CLES[val];
+      if(!nom) return;
+      /* On ne pose que ce que la famille courante sait exprimer : un genre
+         absent du catalogue rendrait `null` à la construction de la requête et
+         resterait affiché en pilule — une pilule qui ne filtre rien est un
+         mensonge à l'écran. */
+      if(typeof genreParNom === 'function' && genreParNom(mediaRech(), nom) == null) return;
+      if(listeRech('genre').map(String).indexOf(nom) < 0){ poserMotRech('genre', nom); n++; }
+      return;
+    }
+    if(['epoque','duree','origine'].indexOf(cle) >= 0){
+      if(listeRech(cle).map(String).indexOf(val) < 0){ poserMotRech(cle, val); n++; }
+      return;
+    }
+    if(['note','statut','gore','pasvu'].indexOf(cle) >= 0){ poserMotRech(cle, val); n++; }
+  });
+  return n;
+}
+
+/* --------------------------- LE ROUTEUR D'ENVIE (§3) --------------------------- */
+
+/* « Le texte ressemble-t-il à une envie ? » — heuristique LOCALE et simple,
+   telle que le §3 la décrit : plus de trois mots, et aucun résultat de titre.
+   Volontairement bête : une heuristique compliquée deviendrait une deuxième
+   intelligence, non mesurée, qu'il faudrait maintenir. */
+function ressembleAUneEnvieIA(q, nTitres, nGens){
+  if(nTitres > 0 || nGens > 0) return false;
+  return String(q || '').trim().split(/\s+/).filter(Boolean).length > 3;
+}
+
+let envieEnCoursIA = false;
+
+function routerEnvieIA(q, nTitres, nGens){
+  if(!iaActive('recherche')) return;
+  if(envieEnCoursIA) return;
+  if(!ressembleAUneEnvieIA(q, nTitres, nGens)) return;
+  envieEnCoursIA = true;
+  setTimeout(()=>{ traduireEnvieIA(q).catch(()=>{}); }, 0);
+}
+
+async function traduireEnvieIA(q){
+  try{
+    const r = etatRech();
+    const d = await appelIA('envie_phrase', { phrase: String(q || '').slice(0, 300) });
+    noterRequeteIA();
+    const criteres = (d && Array.isArray(d.criteres)) ? d.criteres : null;
+    if(!criteres || !criteres.length){
+      /* §3.3 — RIEN DE RECONNU : un message honnête, AUCUNE pilule fantôme,
+         AUCUN résultat modifié. C'est aussi la réponse quand tous les
+         fournisseurs sont saturés : de son point de vue, c'est la même chose,
+         et lui inventer deux messages différents ne l'aiderait pas. */
+      toast('✦ Pas compris — décris un genre, une époque, une durée…');
+      return;
+    }
+    /* Le champ se vide : l'envie est devenue des pilules, la garder dans la
+       barre laisserait l'écran en mode « recherche de titre » par-dessus. */
+    r.q = ''; r.qtitres = []; r.qgens = [];
+    const n = appliquerCriteresIA(criteres);
+    if(!n){ toast('✦ Pas compris — décris un genre, une époque, une durée…'); return; }
+    if(typeof relancerRech === 'function') relancerRech();
+    toast('✦ Compris : une envie — 1 requête');
+  }finally{
+    envieEnCoursIA = false;
+  }
+}
+
+/* ------------------ « TRADUIRE EN RÉGLAGES » (§2, ambiance) ------------------ */
+
+function corpsCreaAmbianceIALotB(b){
+  return '<textarea class="ambdesc" id="ambdesc" rows="3" '+
+      'placeholder="ex. des soirées frissons mais jamais de gore, plutôt des séries, '+
+      '50 min max, du bien noté">'+esc(b.desc || '')+'</textarea>'+
+    '<div class="ambex">'+
+      '<button onclick="exempleAmbianceIA(\'des soirées frissons mais jamais de gore, plutôt des séries, 50 min max, du bien noté\')">frissons sans gore</button>'+
+      '<button onclick="exempleAmbianceIA(\'du rire léger, des épisodes courts, rien de sombre\')">rire léger</button>'+
+    '</div>'+
+    '<button class="btn block" style="margin-top:11px" onclick="traduireAmbianceIA()">'+
+      '✦ Traduire en réglages</button>'+
+    indicateurQuotaIA();
+}
+
+function exempleAmbianceIA(t){
+  const el = document.getElementById('ambdesc');
+  if(el){ el.value = t; }
+  if(brouillonAmb) brouillonAmb.desc = t;
+}
+
+async function traduireAmbianceIA(){
+  const b = brouillonAmb;
+  if(!b) return;
+  const el = document.getElementById('ambdesc');
+  const phrase = String((el && el.value) || b.desc || '').trim();
+  b.desc = phrase;
+  if(!phrase){ toast('Décris l\'ambiance en une phrase'); return; }
+  const d = await appelIA('ambiance_desc', { phrase: phrase.slice(0, 300) });
+  noterRequeteIA();
+  const criteres = (d && Array.isArray(d.criteres)) ? d.criteres : null;
+  if(!criteres || !criteres.length){
+    /* §6 — « réponse malformée → bascule automatique sur le manuel, sans
+       réessai », et avec un mot d'excuse : la personne vient de taper trois
+       lignes, lui rendre un écran muet serait grossier. */
+    if(!brouillonAmb) return;
+    brouillonAmb.onglet = 'man';
+    peindreCreaAmbiance();
+    toast('✦ Pas compris — règle-la à la main, c\'est deux touches');
+    return;
+  }
+  if(!brouillonAmb) return;
+  const g = brouillonAmb.regles;
+  criteres.forEach(c=>{
+    const cle = String(c.cle || ''), val = String(c.val || '');
+    if(cle === 'fam'){ g.fam = val; return; }
+    if(cle === 'genre'){ const n = IA_GENRES_CLES[val]; if(n && g.genre.indexOf(n) < 0) g.genre.push(n); return; }
+    if(['epoque','duree','origine'].indexOf(cle) >= 0){ if(g[cle].indexOf(val) < 0) g[cle].push(val); return; }
+    if(['note','statut','gore','pasvu'].indexOf(cle) >= 0) g[cle] = val;
+  });
+  if(d.nom) brouillonAmb.nom = d.nom;
+  if(d.emoji) brouillonAmb.emoji = d.emoji;
+  brouillonAmb.source = 'ia';
+  brouillonAmb.onglet = 'man';
+  peindreCreaAmbiance();
+  toast('✦ Réglages déduits — vérifie et corrige avant d\'enregistrer');
+}
+
+/* ------------------------ L'INDICATEUR DE QUOTA ------------------------ */
+
+/* SPEC-04 §4.4 et SPEC-05 §6 : l'indicateur est INTERDIT sur l'écran principal
+   et AUTORISÉ dans les feuilles IA « à la demande ». Il vit donc ici, et nulle
+   part ailleurs. Ce qu'il compte est LOCAL — les requêtes parties de cet
+   appareil dans la minute — et il le dit sans prétendre connaître l'état du
+   fournisseur, que le client ne voit jamais. Un chiffre honnête et modeste
+   plutôt qu'un chiffre faux et rassurant. */
+const IA_QUOTA_CLE = 'ms.iaquota.v1';
+const IA_QUOTA_MINUTE = 15;
+
+function lireQuotaIA(){
+  let l = [];
+  try{ l = JSON.parse(localStorage.getItem(IA_QUOTA_CLE) || '[]'); }catch(e){ l = []; }
+  if(!Array.isArray(l)) l = [];
+  const limite = Date.now() - 60000;
+  return l.filter(t => typeof t === 'number' && t > limite);
+}
+function noterRequeteIA(){
+  const l = lireQuotaIA();
+  l.push(Date.now());
+  try{ localStorage.setItem(IA_QUOTA_CLE, JSON.stringify(l.slice(-40))); }catch(e){}
+}
+function indicateurQuotaIA(){
+  const reste = Math.max(0, IA_QUOTA_MINUTE - lireQuotaIA().length);
+  const pct = Math.round(reste / IA_QUOTA_MINUTE * 100);
+  return '<div class="iaq"><i style="width:'+pct+'%"></i>'+
+    '<span>'+reste+' / '+IA_QUOTA_MINUTE+' requêtes restantes cette minute</span></div>';
+}
+
+/* ------------------ « POURQUOI IL TE CORRESPOND » (§8) ------------------ */
+
+/* Cache 30 jours par (titre, empreinte des critères) : le §6 le demande, et il
+   a raison — la réponse dépend des DEUX. Le même titre sous une autre
+   sélection mérite une autre phrase ; le même titre sous la même sélection n'en
+   mérite pas une seconde. */
+const IA_POURQUOI_TTL = 30 * 86400000;
+const IA_POURQUOI_MAX = 120;
+
+function empreinteCriteresIA(){
+  const r = etatRech();
+  return [r.fam, r.ambiance || '', r.amb || '',
+          listeRech('genre').join('+'), listeRech('origine').join('+'),
+          listeRech('epoque').join('+'), listeRech('duree').join('+'),
+          listeRech('plate').join('+'), r.note || '', r.pasvu || '',
+          r.statut || '', r.gore || '', r.avec || ''].join('|');
+}
+
+function clePourquoiIA(media, id){
+  return media + ':' + id + '@' + empreinteCriteresIA();
+}
+
+/* L'ENTRÉE, et le TEXTE, sont deux choses distinctes — et les confondre coûtait
+   une rafale. Un échec est mémorisé avec un texte vide (voir plus bas) ; si
+   l'appelant ne regardait que le texte, il ne verrait rien en cache et
+   redemanderait à chaque ré-ouverture de l'aperçu. `entreePourquoiIA` répond
+   « on a déjà demandé », `lirePourquoiIA` répond « et voici ce qu'on affiche ». */
+function entreePourquoiIA(media, id){
+  const o = lireCacheIA();
+  const e = o.rech.pourquoi[clePourquoiIA(media, id)];
+  return (e && e.quand > Date.now() - IA_POURQUOI_TTL) ? e : null;
+}
+function lirePourquoiIA(media, id){
+  if(!iaActive('recherche')) return null;
+  const e = entreePourquoiIA(media, id);
+  return e ? texteIAAcceptable(e.texte, 220) : null;
+}
+
+let pourquoiEnCoursIA = {};
+
+/* Appelé par l'aperçu. Rend TOUT DE SUITE ce qu'il a (souvent rien), et va
+   chercher le reste en arrière-plan : l'aperçu ne l'attend jamais. */
+function blocPourquoiIA(media, id, titre){
+  if(!iaActive('recherche')) return '';
+  /* §8 — la carte n'a de sens qu'AVEC une sélection active : « pourquoi il te
+     correspond » suppose un « à quoi ». Sans critères, on ne dépense rien. */
+  if(typeof selectionActiveRech !== 'function' || !selectionActiveRech()) return '';
+  const t = lirePourquoiIA(media, id);
+  if(t) return '<div class="iapq"><b>✦ Pourquoi il te correspond</b><p>'+esc(t)+'</p></div>';
+  /* Déjà demandé — et refusé, ou rendu invalide : on n'y revient pas. « Une
+     tentative, pas de rafale » vaut aussi pour un écran qu'on rouvre. */
+  if(entreePourquoiIA(media, id)) return '';
+  demanderPourquoiIA(media, id, titre);
+  /* Rien à l'écran tant que rien n'est arrivé : le §6 dit « la carte ne
+     s'affiche pas », pas « un cadre vide clignote ». */
+  return '';
+}
+
+function demanderPourquoiIA(media, id, titre){
+  const cle = clePourquoiIA(media, id);
+  if(pourquoiEnCoursIA[cle]) return;
+  pourquoiEnCoursIA[cle] = true;
+  setTimeout(()=>{ chargerPourquoiIA(media, id, titre, cle).catch(()=>{}); }, 0);
+}
+
+async function chargerPourquoiIA(media, id, titre, cle){
+  try{
+    const mots = (typeof motsPhraseRech === 'function') ? motsPhraseRech().map(m => m.mot) : [];
+    const d = await appelIA('pourquoi_lui', {
+      titre: titre || '', genres: genresAimesIA(5),
+      forme: media === 'tv' ? 'série' : 'film',
+      criteres: mots, aimes: titresAimesIA(6)
+    });
+    noterRequeteIA();
+    const texte = d ? texteIAAcceptable(d.texte, 220) : null;
+    const o = lireCacheIA();
+    /* On mémorise l'échec aussi, avec un texte vide : sans ça, chaque
+       ré-affichage de l'aperçu relancerait une requête pour la même réponse.
+       C'est « une tentative, pas de rafale » appliqué à un écran qu'on rouvre. */
+    o.rech.pourquoi[cle] = { quand: Date.now(), texte: texte || '' };
+    const cles = Object.keys(o.rech.pourquoi);
+    if(cles.length > IA_POURQUOI_MAX){
+      const garde = cles.sort((a, b)=> o.rech.pourquoi[b].quand - o.rech.pourquoi[a].quand)
+                        .slice(0, IA_POURQUOI_MAX);
+      const neuf = {};
+      garde.forEach(k=>{ neuf[k] = o.rech.pourquoi[k]; });
+      o.rech.pourquoi = neuf;
+    }
+    ecrireCacheIA(o);
+    if(texte && typeof view !== 'undefined' && view === 'preview' && typeof render === 'function')
+      render();
+  }finally{
+    delete pourquoiEnCoursIA[cle];
+  }
 }

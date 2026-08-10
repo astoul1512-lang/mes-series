@@ -7531,6 +7531,232 @@ window.MODE_TEST = true;
     egal(paramsSocleRech('tv').with_status, '3|4');
   });
 
+
+  /* ============ SPEC-05 lot B — l'IA de la Recherche ============
+
+     Ce que ces cas empêchent :
+       · qu'une requête IA parte pendant la frappe, ou alors qu'un titre a été
+         trouvé (le §3 accorde ZÉRO requête à ce cas-là) ;
+       · qu'un critère rendu par le modèle soit posé autrement que par la
+         mécanique de l'écran — une IA n'a pas de passe-droit sur les règles ;
+       · qu'une pilule fantôme s'affiche quand rien n'a été compris ;
+       · que la carte « Pourquoi lui » se redemande à chaque ré-ouverture ;
+       · que l'interrupteur « Recherche » éteint laisse passer quoi que ce soit. */
+  groupe('SPEC-05 lot B — envie, ambiance décrite, pourquoi lui');
+
+  function rechIA(fam){
+    const r = rechNG(fam || 'film');
+    db.gouts.ia = { decouvrir:false, recherche:true };
+    db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
+    genresTMDB.movie = [{id:80,nom:'Crime'},{id:18,nom:'Drame'},{id:35,nom:'Comédie'}];
+    genresTMDB.tv = [{id:80,nom:'Crime'}];
+    try{ localStorage.removeItem(IA_CLE); localStorage.removeItem(IA_QUOTA_CLE); }catch(e){}
+    return r;
+  }
+
+  test('RB1 — l\'heuristique d\'envie ne se déclenche jamais sur un titre trouvé', ()=>{
+    egal(ressembleAUneEnvieIA('un braquage stylé pas trop long', 0, 0), true);
+    egal(ressembleAUneEnvieIA('un braquage stylé pas trop long', 3, 0), false,
+         'une envie part alors que TMDB a trouvé des titres : le §3 dit zéro requête');
+    egal(ressembleAUneEnvieIA('un braquage stylé pas trop long', 0, 2), false,
+         'une envie part alors qu\'une personne a été trouvée');
+    egal(ressembleAUneEnvieIA('severance', 0, 0), false, 'un mot seul est traité comme une envie');
+    egal(ressembleAUneEnvieIA('game of thrones', 0, 0), false, 'trois mots ne font pas une envie');
+    egal(ressembleAUneEnvieIA('the last of us', 0, 0), true,
+         'quatre mots franchissent le seuil du §3 — et c\'est pourquoi le seuil ne suffit pas seul : '+
+         'ce cas ne se produit que si TMDB n\'a RIEN trouvé, ce qui n\'arrive pas sur un vrai titre');
+  });
+
+  testAsync('RB2 — interrupteur Recherche éteint : zéro requête depuis la barre', async ()=>{
+    const r = rechIA('film');
+    db.gouts.ia.recherche = false;
+    let appels = 0;
+    const vrai_ = window.sbFetch;
+    window.sbFetch = async ()=>{ appels++; return { criteres:[] }; };
+    try{
+      routerEnvieIA('un braquage stylé pas trop long', 0, 0);
+      await new Promise(r2=> setTimeout(r2, 30));
+      egal(appels, 0, 'la barre a parlé au relais avec l\'interrupteur éteint');
+    }finally{ window.sbFetch = vrai_; }
+  });
+
+  testAsync('RB3 — une envie comprise devient des pilules, et rien d\'autre ne bouge', async ()=>{
+    const r = rechIA('film');
+    const vrai_ = window.sbFetch, vraiRelance = window.relancerRech, vraiToast = window.toast;
+    let dits = [];
+    window.sbFetch = async ()=>({ criteres:[ { cle:'genre', val:'polar' },
+                                             { cle:'duree', val:'court' },
+                                             { cle:'note',  val:'7' } ] });
+    window.relancerRech = function(){}; window.toast = m => dits.push(m);
+    try{
+      await traduireEnvieIA('un braquage stylé pas trop long');
+      egal(listeRech('genre'), ['Crime'], 'le genre traduit n\'a pas été posé');
+      egal(listeRech('duree'), ['court']);
+      egal(r.note, '7');
+      egal(r.q, '', 'le champ garde l\'envie : l\'écran resterait en mode « titre »');
+      vrai(dits.some(m => /1 requête/.test(m)), 'la ligne de confirmation manque');
+    }finally{ window.sbFetch = vrai_; window.relancerRech = vraiRelance; window.toast = vraiToast; }
+  });
+
+  testAsync('RB4 — rien de compris : un message honnête, AUCUNE pilule fantôme', async ()=>{
+    const r = rechIA('film');
+    const vrai_ = window.sbFetch, vraiRelance = window.relancerRech, vraiToast = window.toast;
+    let dits = [];
+    window.sbFetch = async ()=>({ indisponible:true });     // fournisseurs saturés
+    window.relancerRech = function(){}; window.toast = m => dits.push(m);
+    try{
+      await traduireEnvieIA('bloumf zorglub tagada tsoin');
+      egal(listeRech('genre'), [], 'une pilule est apparue sans qu\'on ait rien compris');
+      egal(r.note, null);
+      vrai(dits.some(m => /Pas compris/.test(m)), 'aucun message honnête');
+    }finally{ window.sbFetch = vrai_; window.relancerRech = vraiRelance; window.toast = vraiToast; }
+  });
+
+  test('RB5 — les critères se posent par la mécanique de l\'écran, pas à la main', ()=>{
+    vrai(codeDe(appliquerCriteresIA).indexOf('poserMotRech') >= 0,
+         'l\'IA écrit dans l\'état sans passer par poserMotRech : elle contourne les règles');
+    /* Un genre que la famille ne sait pas exprimer n'est pas posé : une pilule
+       qui ne filtre rien serait un mensonge à l'écran. */
+    const r = rechIA('film');
+    genresTMDB.movie = [{id:18,nom:'Drame'}];
+    const vraiRelance = window.relancerRech; window.relancerRech = function(){};
+    try{ egal(appliquerCriteresIA([{ cle:'genre', val:'western' }]), 0); }
+    finally{ window.relancerRech = vraiRelance; }
+    egal(listeRech('genre'), [], 'un genre absent du catalogue a été posé quand même');
+    /* Et une clé inventée ne pose rien du tout. */
+    window.relancerRech = function(){};
+    try{ egal(appliquerCriteresIA([{ cle:'humeur', val:'triste' }]), 0); }
+    finally{ window.relancerRech = vraiRelance; }
+  });
+
+  testAsync('RB6 — une description malformée bascule sur le manuel, sans réessai', async ()=>{
+    rechIA('film');
+    ouvrirCreaAmbiance(null);
+    brouillonAmb.onglet = 'ia';
+    brouillonAmb.desc = 'des soirées frissons';
+    let appels = 0;
+    const vrai_ = window.sbFetch, vraiToast = window.toast;
+    window.sbFetch = async ()=>{ appels++; return { indisponible:true }; };
+    window.toast = function(){};
+    try{
+      await traduireAmbianceIA();
+      egal(appels, 1, 'un réessai : le §6 l\'interdit');
+      egal(brouillonAmb.onglet, 'man', 'on ne bascule pas sur le réglage manuel');
+    }finally{ window.sbFetch = vrai_; window.toast = vraiToast; closeSheet(); }
+  });
+
+  testAsync('RB7 — une description comprise remplit les réglages, et tout reste modifiable', async ()=>{
+    rechIA('film');
+    ouvrirCreaAmbiance(null);
+    brouillonAmb.onglet = 'ia';
+    brouillonAmb.desc = 'frissons sans gore, des séries, 50 min max, du bien noté';
+    const vrai_ = window.sbFetch, vraiToast = window.toast;
+    window.sbFetch = async ()=>({ criteres:[ { cle:'fam', val:'serie' },
+                                             { cle:'gore', val:'non' },
+                                             { cle:'duree', val:'ep50' },
+                                             { cle:'note', val:'8' } ],
+                                  nom:'Frissons doux', emoji:'🌙' });
+    window.toast = function(){};
+    try{
+      await traduireAmbianceIA();
+      const g = brouillonAmb.regles;
+      egal(g.fam, 'serie'); egal(g.gore, 'non'); egal(g.duree, ['ep50']); egal(g.note, '8');
+      egal(brouillonAmb.nom, 'Frissons doux'); egal(brouillonAmb.emoji, '🌙');
+      egal(brouillonAmb.source, 'ia', 'le badge ne dit pas d\'où viennent les réglages');
+      /* « L'IA propose, l'utilisateur décide » : toucher une ligne le dit. */
+      sansEcran(()=> cyclerAmb('gore'));
+      egal(brouillonAmb.regles.gore, null, 'la ligne n\'est plus modifiable');
+      egal(brouillonAmb.source, 'modifie', 'le badge prétend encore que tout vient de l\'IA');
+    }finally{ window.sbFetch = vrai_; window.toast = vraiToast; closeSheet(); }
+  });
+
+  test('RB8 — l\'onglet IA n\'existe pas quand l\'interrupteur est éteint', ()=>{
+    rechIA('film');
+    db.gouts.ia.recherche = false;
+    egal(iaRechDispo(), false);
+    ouvrirCreaAmbiance(null);
+    const f = document.getElementById('sheetin');
+    egal(f.querySelectorAll('.ongl').length, 0,
+         'un onglet « ✦ Décris-la » est proposé alors que rien ne se passera derrière');
+    closeSheet();
+    db.gouts.ia.recherche = true;
+    vrai(iaRechDispo(), 'l\'onglet IA reste caché alors que l\'interrupteur est allumé');
+  });
+
+  test('RB9 — « Pourquoi lui » ne s\'affiche pas sans sélection active', ()=>{
+    const r = rechIA('film');
+    egal(selectionActiveRech(), false);
+    egal(blocPourquoiIA('movie', 42, 'X'), '',
+         'la carte s\'affiche sans critères : « pourquoi il te correspond » à QUOI ?');
+    /* Interrupteur éteint : rien non plus, même avec une sélection. */
+    r.genre = ['Drame'];
+    db.gouts.ia.recherche = false;
+    egal(blocPourquoiIA('movie', 42, 'X'), '');
+  });
+
+  test('RB10 — le cache de « Pourquoi lui » dépend du titre ET des critères', ()=>{
+    const r = rechIA('film');
+    r.genre = ['Drame'];
+    const c1 = clePourquoiIA('movie', 42);
+    r.note = 'exc';
+    const c2 = clePourquoiIA('movie', 42);
+    vrai(c1 !== c2, 'la même phrase serait resservie sous une autre sélection');
+    const o = lireCacheIA();
+    o.rech.pourquoi[c2] = { quand: Date.now(), texte:'Un polar nerveux, dans la veine de Drive.' };
+    ecrireCacheIA(o);
+    egal(lirePourquoiIA('movie', 42), 'Un polar nerveux, dans la veine de Drive.');
+    vrai(blocPourquoiIA('movie', 42, 'X').indexOf('Pourquoi il te correspond') >= 0);
+    /* Trente et un jours plus tard, elle a expiré. */
+    const o2 = lireCacheIA();
+    o2.rech.pourquoi[c2].quand = Date.now() - 31 * 86400000;
+    ecrireCacheIA(o2);
+    egal(lirePourquoiIA('movie', 42), null, 'une phrase de plus de 30 jours est resservie');
+  });
+
+  testAsync('RB11 — un échec est mémorisé : pas de rafale en rouvrant l\'aperçu', async ()=>{
+    const r = rechIA('film');
+    r.genre = ['Drame'];
+    let appels = 0;
+    const vrai_ = window.sbFetch;
+    window.sbFetch = async ()=>{ appels++; return { indisponible:true }; };
+    try{
+      const cle = clePourquoiIA('movie', 77);
+      await chargerPourquoiIA('movie', 77, 'X', cle);
+      egal(appels, 1);
+      /* Le second affichage ne redemande pas : l'échec est en cache. */
+      egal(blocPourquoiIA('movie', 77, 'X'), '');
+      await new Promise(r2=> setTimeout(r2, 20));
+      egal(appels, 1, 'chaque ré-ouverture de l\'aperçu repaie la même réponse');
+    }finally{ window.sbFetch = vrai_; }
+  });
+
+  test('RB12 — le synopsis reste intact sous la carte', ()=>{
+    const c = codeDe(viewPreview);
+    const iPq = c.indexOf('blocPourquoiIA');
+    const iSyn = c.indexOf('Synopsis');
+    vrai(iPq >= 0 && iSyn > iPq,
+         'la carte a pris la place du synopsis — le §8 exige qu\'il reste dessous, intact');
+    vrai(/from === 'search'/.test(c),
+         'la carte s\'affiche hors d\'une recherche, où il n\'y a aucun critère à expliquer');
+  });
+
+  test('RB13 — l\'indicateur de quota ne sort jamais des feuilles IA', ()=>{
+    rechIA('film');
+    /* Il est dans la feuille de création d'ambiance… */
+    vrai(indicateurQuotaIA().indexOf('requêtes restantes') >= 0);
+    vrai(codeDe(corpsCreaAmbianceIALotB).indexOf('indicateurQuotaIA') >= 0);
+    /* …et nulle part ailleurs : ni sur les pilules, ni sur la grille, ni sur
+       le hero de Découvrir. SPEC-04 §4.4 : « coût affiché nulle part ». */
+    [pilulesRech, grilleRech, barreTriRech, carteMatchRech, propositionJourHtml, vitrineBody]
+      .forEach(f=> vrai(codeDe(f).indexOf('indicateurQuotaIA') < 0,
+        'un indicateur de quota s\'est invité sur un écran principal'));
+  });
+
+  test('RB14 — le compte de la minute glisse, il ne s\'accumule pas', ()=>{
+    try{ localStorage.setItem(IA_QUOTA_CLE, JSON.stringify([Date.now() - 90000, Date.now()])); }catch(e){}
+    egal(lireQuotaIA().length, 1, 'une requête d\'il y a 90 s compte encore dans la minute');
+  });
+
   /* ==================== Bilan ====================
      Écrit UNE FOIS, après la file asynchrone. `window.__testsFinis` est le
      signal que le lanceur attend : sans lui il lirait un bilan encore

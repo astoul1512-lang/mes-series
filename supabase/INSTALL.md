@@ -210,12 +210,42 @@ absence d'`Origin`, préflight, `/tv/123` accepté, `/account` et
 seule barrière devant la clé TMDB : ne pas livrer une modification de ce
 dossier sans les avoir joués.
 
-Les 66 tests du relais `ia` couvrent le même genre de barrières : origine
+Les 76 tests du relais `ia` couvrent le même genre de barrières : origine
 inconnue, absence de jeton, jeton refusé, tâche hors liste blanche, budget
 atteint, compteur plein, bascule sur `429`, tous les étages épuisés, réponse
 malformée, réponse trop longue, et la règle §0.4 (aucun texte généré ne prête un
 sentiment à qui que ce soit). Ils vérifient AUSSI ce qui serait envoyé aux
 fournisseurs : aucun prompt venu du client, aucun identifiant, aucune adresse.
+
+**SPEC-05 lot B (10/08/2026) — la liste blanche compte désormais SIX tâches.**
+Aux trois de Découvrir (`pitch_jour`, `pitch_humeur`, `intitules_rangees`)
+s'ajoutent les trois de la Recherche :
+
+| tâche | déclencheur | rend | étage de départ |
+|---|---|---|---|
+| `envie_phrase` | validation d'une envie écrite dans la barre | une liste de critères | 1 |
+| `ambiance_desc` | « ✦ Traduire en réglages » d'une ambiance | des critères + un nom + un emoji | 1 |
+| `pourquoi_lui` | ouverture d'un aperçu depuis une recherche | deux lignes de texte | 2 |
+
+Les deux premières ne rendent PAS de texte libre : elles rendent des
+identifiants choisis dans un **vocabulaire fermé**, `CRITERES_PERMIS` en tête de
+`functions/ia/gabarits.ts`. Le gabarit l'énumère au modèle et la validation le
+recoupe à la réception ; un critère inventé est jeté sans que le reste tombe.
+Ajouter une valeur à ce vocabulaire demande un redéploiement de la fonction —
+c'est voulu, le vocabulaire d'un modèle n'est pas un réglage.
+
+**`profil_humeur` a été RETIRÉE** au même moment (décision d'Adrien du 10/08) :
+elle n'avait aucun appelant, et une liste blanche fermée qui garde une porte
+inutilisée n'est plus fermée. Le pavé de `functions/ia/config.ts` dit pourquoi
+en détail. Deux contrôles tiennent maintenant l'accord entre les tâches
+DÉCLARÉES et les tâches APPELÉES — un cas d'`index.test.ts` qui fige la liste
+des six, et le contrôle n° 15 de `tests/lance-tests.js` qui relit les
+`appelIA('…')` du front. Ajouter une tâche « pour plus tard » fera tomber les
+deux : c'est voulu.
+
+Aucune migration SQL n'accompagne ce lot : `ia_journal.tache` est du texte
+libre, les compteurs et les budgets sont les mêmes, et les trois tâches passent
+par la même échelle de fournisseurs.
 
 ### Et les tests SQL — ceux-là, rien d'autre ne les remplace
 

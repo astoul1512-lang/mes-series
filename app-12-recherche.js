@@ -1032,6 +1032,14 @@ async function chercherTitre(q){
       .slice(0, RECH_GENS);
     r.qloading = false; r.qerr = '';
     peindreRech();
+    /* SPEC-05 §3 — LE ROUTEUR D'ENVIE, ET IL EST PLACÉ ICI EXPRÈS : APRÈS la
+       réponse de `/search/multi`, jamais pendant la frappe. Le §3 le dit deux
+       fois — « jamais d'appel IA pendant la frappe », « uniquement à la
+       validation ». La règle de routage est simple et honnête : un résultat de
+       titre pertinent → comportement ACTUEL, zéro requête IA ; sinon, et
+       seulement si le texte ressemble à une envie, on traduit.
+       `routerEnvieIA` sort tout de suite si l'interrupteur est éteint. */
+    if(typeof routerEnvieIA === 'function') routerEnvieIA(q, r.qtitres.length, r.qgens.length);
   }catch(e){
     if((e && e.name === 'AbortError') || seq !== rechSeq) return;
     r.qloading = false; r.qtitres = []; r.qgens = [];

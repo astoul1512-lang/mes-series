@@ -533,6 +533,15 @@ function viewPreview(){
     '</div>';
   }
 
+  /* SPEC-05 §8 — « ✦ POURQUOI IL TE CORRESPOND », AU-DESSUS DU SYNOPSIS ET
+     JAMAIS À SA PLACE. Le §8 le dit en toutes lettres : « le synopsis officiel
+     reste affiché dessous, intact ». La carte n'apparaît que si l'aperçu vient
+     d'une recherche AVEC une sélection active et que l'interrupteur « IA de la
+     Recherche » est allumé ; sinon `blocPourquoiIA` rend une chaîne vide et cet
+     écran est exactement celui d'avant, à la ligne près. */
+  if((params||{}).from === 'search' && typeof blocPourquoiIA === 'function')
+    html += blocPourquoiIA(isTv ? 'tv' : 'movie', d.id, title);
+
   if(d.overview) html += '<div class="sectitle">Synopsis</div><div class="overview" style="margin-top:0">'+esc(d.overview)+'</div>';
   else html += '<div class="overview muted" style="font-style:italic">Pas de synopsis disponible en français.</div>';
 
