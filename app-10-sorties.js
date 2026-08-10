@@ -94,10 +94,22 @@ const datesFR = {};                  // id → { cine:[...], stream:[...] }
 
    Ce qui n'est PAS persisté : rien d'autre. `premiere` voyage avec le reste
    parce qu'elle vient de la même réponse et qu'elle sert au même écran. */
+/* CORRECTION DE RELECTURE (10/08) — LE TTL GLISSANT NE TENAIT PAS LA PHRASE.
+
+   Il valait 24 h à partir de l'ÉCRITURE, alors que le déclencheur, lui, est
+   QUOTIDIEN. Qui ouvre l'app une fois par jour vers la même heure retrouvait
+   donc des entrées vieilles de 24 h et quelques minutes — expirées — et
+   repayait ses soixante requêtes presque tous les jours. Le cache promettait
+   « une fois par jour » et livrait « presque toujours ».
+
+   Il est maintenant calé sur le JOUR (`todayISO`), comme le déclencheur : une
+   entrée écrite aujourd'hui vaut pour aujourd'hui, quelle que soit l'heure. Une
+   date de sortie ne change pas d'un jour à l'autre — c'était l'argument
+   d'Adrien, et il vaut aussi pour la forme du cache. */
 const DATESFR_CLE = 'ms.datesfr.v1';
-const DATESFR_TTL = 24 * 3600000;
 const DATESFR_MAX = 400;             // au-delà, on repart d'un cache neuf
 let datesFRLues = false;
+function datesFRDuJour(e){ return !!(e && e.j === todayISO()); }
 
 function lireDatesFR(){
   if(datesFRLues) return;
@@ -105,10 +117,9 @@ function lireDatesFR(){
   let o = null;
   try{ o = JSON.parse(localStorage.getItem(DATESFR_CLE) || 'null'); }catch(e){ o = null; }
   if(!o || typeof o !== 'object' || Array.isArray(o)) return;
-  const limite = Date.now() - DATESFR_TTL;
   Object.keys(o).forEach(id=>{
     const e = o[id];
-    if(!e || typeof e !== 'object' || !(e.q > limite)) return;
+    if(!datesFRDuJour(e)) return;
     if(!Array.isArray(e.cine) || !Array.isArray(e.stream)) return;
     datesFR[id] = e;
   });
@@ -122,6 +133,9 @@ function ecrireDatesFR(){
     const garde = ids.length > DATESFR_MAX
       ? ids.sort((a, b)=> (datesFR[b].q || 0) - (datesFR[a].q || 0)).slice(0, DATESFR_MAX)
       : ids;
+    /* Une seule sérialisation, en fin de course. Elle était appelée après CHAQUE
+       film : jusqu'à soixante sérialisations complètes du blob d'affilée, pour
+       le même résultat. Relevé en relecture. */
     const o = {};
     garde.forEach(id=>{ o[id] = datesFR[id]; });
     localStorage.setItem(DATESFR_CLE, JSON.stringify(o));
@@ -130,7 +144,7 @@ function ecrireDatesFR(){
 
 async function dateFRDe(id){
   lireDatesFR();
-  if(datesFR[id] && datesFR[id].q > Date.now() - DATESFR_TTL) return datesFR[id];
+  if(datesFRDuJour(datesFR[id])) return datesFR[id];
   const rep = await tmdb('/movie/' + id + '/release_dates');
   const fr = ((rep.results || []).find(r => r.iso_3166_1 === 'FR') || {}).release_dates || [];
   const prendre = types => fr.filter(d => types.includes(d.type) && d.release_date)
@@ -141,8 +155,7 @@ async function dateFRDe(id){
     .flatMap(r => (r.release_dates || []).map(d => (d.release_date || '').slice(0, 10)))
     .filter(Boolean).sort();
   datesFR[id] = { cine: prendre(SORTIES_TYPES.cine), stream: prendre(SORTIES_TYPES.stream),
-                  premiere: toutes[0] || null, q: Date.now() };
-  ecrireDatesFR();
+                  premiere: toutes[0] || null, q: Date.now(), j: todayISO() };
   return datesFR[id];
 }
 
@@ -400,8 +413,15 @@ async function chargerBientotPerso(){
       }));
     }
     out.sort((a, b) => a.dfr.localeCompare(b.dfr));
+    /* L'écriture du cache des dates se fait ICI, une seule fois, et non plus
+       après chaque film — voir le commentaire d'`ecrireDatesFR`. */
+    ecrireDatesFR();
     bientotPerso = { films: out, cle: cle, attente: false };
   }catch(e){
+    /* Une panne au milieu du paquet ne doit pas jeter les dates DÉJÀ obtenues :
+       elles sont bonnes, elles ont coûté une requête chacune, et sans cette
+       ligne le prochain passage les repaierait toutes. */
+    ecrireDatesFR();
     bientotPerso.attente = false;
     return;                       // on retentera au prochain passage
   }
