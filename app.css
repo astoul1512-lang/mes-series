@@ -2313,3 +2313,65 @@ body.rphnette .rphrase{background:#15171e}
   .iapq b{display:block;font-size:11.5px;font-weight:800;letter-spacing:.08em;
     text-transform:uppercase;color:#c9b8ff}
   .iapq p{margin:5px 0 0;font-size:13.5px;line-height:1.45;color:var(--text)}
+
+/* ===== SPEC-06 — LE DUEL ACCESSIBLE =====
+
+   Le bandeau de Découvrir, la carte et le panthéon de Mon profil, la jauge de
+   stabilité, les deux boutons « pas vu » de l'écran de duel, et la pastille de
+   la barre du bas. Aucune classe du duel existant n'est touchée : ce lot ajoute
+   des portes d'entrée, il ne redessine pas le moteur. */
+
+  /* --- Le bandeau « Duel du jour » (§2.1) --- */
+  .duoband{display:flex;align-items:center;gap:12px;margin:14px 16px;padding:12px;
+    border-radius:var(--radius);border:1px solid var(--line);
+    background:linear-gradient(140deg,#1b1f2e,#12131a)}
+  .dbaff{position:relative;flex:none;width:96px;height:64px}
+  .dba1,.dba2{position:absolute;top:0;width:44px;height:64px;border-radius:6px;
+    object-fit:cover;box-shadow:0 4px 12px rgba(0,0,0,.45)}
+  .dba1{left:0;transform:rotate(-6deg)}
+  .dba2{right:0;transform:rotate(6deg)}
+  .dbvs{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2;
+    width:26px;height:26px;border-radius:50%;background:var(--surface2);
+    border:1px solid var(--line);display:grid;place-items:center;
+    font-size:9px;font-weight:800;color:var(--text)}
+  .dbtxt{flex:1;min-width:0}
+  .dbtxt b{display:block;font-size:14.5px;line-height:1.25;margin:2px 0 2px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dbkick{font-size:10.5px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--muted)}
+  .dbgo{flex:none}
+
+  /* --- La jauge de stabilité (§4.3) --- */
+  .djauge{margin-top:10px}
+  .djb{height:6px;border-radius:3px;background:var(--surface2);overflow:hidden}
+  .djb i{display:block;height:100%;background:var(--accent);border-radius:3px;
+    transition:width .3s}
+  .djauge span{display:block;font-size:11.5px;color:var(--muted);margin-top:5px}
+
+  /* --- La carte et le panthéon de Mon profil (§4.1, §4.2) --- */
+  .dprof{padding:14px}
+  .dpttl{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:750}
+  .dpant{display:flex;align-items:flex-end;justify-content:center;gap:10px;margin-top:14px}
+  .dmarche{width:29%;text-align:center}
+  .dmaff{width:100%;border-radius:8px;display:block;object-fit:cover}
+  .dmarche.or .dmaff{height:132px}
+  .dmarche.argent .dmaff,.dmarche.bronze .dmaff{height:106px}
+  .dmnom{font-size:11px;margin-top:5px;line-height:1.2;height:2.4em;overflow:hidden}
+  .dmsoc{margin-top:4px;border-radius:6px 6px 0 0;background:var(--surface2);
+    padding:5px 0;font-size:12px;font-weight:800}
+  .dmarche.or .dmsoc{background:rgba(212,175,55,.22);color:#e7cd7a;padding:11px 0}
+  .dmarche.argent .dmsoc{background:rgba(200,208,220,.16);color:#cfd6e2}
+  .dmarche.bronze .dmsoc{background:rgba(191,124,73,.18);color:#e0a97a}
+  .dpact{display:flex;gap:8px;margin-top:14px}
+  .dpact .btn{flex:1}
+
+  /* --- « Je ne l'ai pas vu », rebranché (§6.1) --- */
+  .dpasvu{display:flex;gap:8px;margin-top:8px}
+  .dpasvu button{flex:1;min-width:0;background:none;border:1px solid var(--line);
+    color:var(--muted);border-radius:10px;padding:8px 10px;font-size:11.5px;
+    font-family:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* --- La pastille de la barre du bas (§4.4) --- */
+  .tabpip{position:absolute;top:2px;right:50%;margin-right:-20px;min-width:16px;height:16px;
+    border-radius:8px;background:var(--warn);color:#1b1200;font-style:normal;
+    font-size:10px;font-weight:800;line-height:16px;text-align:center;padding:0 4px;z-index:2}

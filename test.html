@@ -84,6 +84,7 @@ window.MODE_TEST = true;
 <script src="./app-13-inscription.js"></script>
 <script src="./app-14-ia.js"></script>
 <script src="./app-15-filtres.js"></script>
+<script src="./app-16-duel-plus.js"></script>
 <script src="./app-08-reglages.js"></script>
 
 <script>
@@ -7755,6 +7756,343 @@ window.MODE_TEST = true;
   test('RB14 — le compte de la minute glisse, il ne s\'accumule pas', ()=>{
     try{ localStorage.setItem(IA_QUOTA_CLE, JSON.stringify([Date.now() - 90000, Date.now()])); }catch(e){}
     egal(lireQuotaIA().length, 1, 'une requête d\'il y a 90 s compte encore dans la minute');
+  });
+
+
+  /* ==================== SPEC-06 — le Duel accessible ====================
+
+     Ce que ces cas empêchent :
+       · que le bandeau devienne une rangée de SPEC-04 (§1.1) ou s'affiche là
+         où le §1.4 l'interdit ;
+       · que la paire du jour change sous le doigt ou d'un rendu à l'autre ;
+       · que « je ne l'ai pas vu » redevienne irréversible ;
+       · que la jauge mente — c'est une formule, elle se vérifie ;
+       · qu'un texte de l'app affiche un total restant de titres à départager
+         (§0.4 : le compteur encourage, il ne décourage jamais). */
+  groupe('SPEC-06 — bandeau, éclair, profil, jauge, partage');
+
+  function duelBase(n){
+    baseVierge();
+    for(let i = 1; i <= (n || 12); i++) db.movies[i] = film(i, ['Drame'], true);
+    try{ localStorage.removeItem(DUELJOUR_CLE); localStorage.removeItem(ECLAIRS_CLE); }catch(e){}
+    eclairFaitCetteSession = false;
+    duel = Object.assign({}, DUEL_VIDE);
+    return db;
+  }
+
+  test('D-J1 — la formule de la jauge, telle que le §4.3 l\'écrit', ()=>{
+    duelBase(12);
+    /* 5 titres × 5 duels → 25/25 → 100, plafonné à 97. */
+    for(let i = 1; i <= 5; i++) ecrireClassement('film', i, 1000 + i, 5);
+    egal(stabiliteDuel('film'), 97, 'le plafond de 97 % ne mord pas — 100 % serait un mensonge');
+    /* 5 × 2 → 10/25 → 40. */
+    for(let i = 1; i <= 5; i++) ecrireClassement('film', i, 1000 + i, 2);
+    egal(stabiliteDuel('film'), 40);
+    /* 3 titres classés × 5 duels → 15/25 → 60. */
+    db.classement.film = {};
+    for(let i = 1; i <= 3; i++) ecrireClassement('film', i, 1000 + i, 5);
+    egal(stabiliteDuel('film'), 60);
+    /* Rien de joué → 0. */
+    db.classement.film = {};
+    egal(stabiliteDuel('film'), 0);
+  });
+
+  test('D-J2 — la jauge est monotone : un duel de plus ne la fait jamais baisser', ()=>{
+    duelBase(12);
+    for(let i = 1; i <= 5; i++) ecrireClassement('film', i, 1000 + i, 2);
+    const avant = stabiliteDuel('film');
+    ecrireClassement('film', 1, 1050, 3);
+    vrai(stabiliteDuel('film') >= avant, 'jouer un duel a fait reculer la jauge');
+    /* Et un titre déjà à cinq duels ne la fait pas monter davantage : le min(n,5)
+       du §4.3 borne la contribution de chacun. */
+    for(let i = 1; i <= 5; i++) ecrireClassement('film', i, 1000 + i, 5);
+    const plafond = stabiliteDuel('film');
+    ecrireClassement('film', 1, 1050, 40);
+    egal(stabiliteDuel('film'), plafond, 'un seul titre très joué fait grimper la jauge à lui seul');
+  });
+
+  test('D-J3 — aucun écran n\'affiche un total restant de titres à départager', ()=>{
+    duelBase(12);
+    for(let i = 1; i <= 5; i++) ecrireClassement('film', i, 1000 + i, 5);
+    projeterPodium('film');
+    const h = sansEcran(()=> carteDuelProfil() + jaugeDuelHtml('film'));
+    vrai(!/reste|restant|encore \d+/i.test(h),
+         'un total restant s\'affiche : le §0.4 dit que le compteur encourage, jamais l\'inverse');
+    vrai(/stable à/.test(h), 'la jauge ne dit pas « stable à N % »');
+  });
+
+  test('D-1 — la paire du jour est figée pour la journée', ()=>{
+    duelBase(14);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    const a = sansEcran(()=> bandeauDuelJour());
+    vrai(a.indexOf('duoband') >= 0, 'le bandeau ne s\'affiche pas alors que tout est réuni');
+    const memo = JSON.parse(localStorage.getItem(DUELJOUR_CLE));
+    egal(memo.date, todayISO());
+    /* Le rendre dix fois ne recompose rien : la paire est mémorisée. */
+    for(let i = 0; i < 10; i++) sansEcran(()=> bandeauDuelJour());
+    egal(JSON.parse(localStorage.getItem(DUELJOUR_CLE)).paire, memo.paire,
+         'la paire du jour a changé sous le doigt');
+    /* Le lendemain, elle se recompose. */
+    memo.date = HIER;
+    localStorage.setItem(DUELJOUR_CLE, JSON.stringify(memo));
+    sansEcran(()=> bandeauDuelJour());
+    egal(JSON.parse(localStorage.getItem(DUELJOUR_CLE)).date, todayISO(),
+         'la paire de la veille est resservie aujourd\'hui');
+  });
+
+  test('D-2 — le bandeau disparaît dans TOUS les cas du §1.4', ()=>{
+    duelBase(14);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    vrai(sansEcran(()=> bandeauDuelJour()).indexOf('duoband') >= 0);
+    /* Une fois joué. */
+    marquerDuelJourJoue();
+    egal(sansEcran(()=> bandeauDuelJour()), '', 'le bandeau survit au duel du jour');
+    /* Sans famille jouable. */
+    duelBase(2);
+    egal(sansEcran(()=> bandeauDuelJour()), '',
+         'un module de duel vide s\'affiche dans Découvrir');
+    /* Pendant une session de duel en cours. */
+    duelBase(14);
+    duel.actif = true;
+    egal(sansEcran(()=> bandeauDuelJour()), '');
+    duel = Object.assign({}, DUEL_VIDE);
+  });
+
+  test('D-3 — le bandeau n\'est PAS une rangée, et il s\'ancre sur la position', ()=>{
+    const c = codeDe(vitrineBody);
+    vrai(/iR === 1/.test(c) && c.indexOf('bandeauDuelJour') >= 0,
+         'l\'ancrage n\'est pas positionnel : réordonner les rangées le perdrait');
+    /* Il ne passe par aucune des mécaniques de rangée de SPEC-04. */
+    const b = codeDe(bandeauDuelJour);
+    ['RANGEE_MINI','finRangee','vgtout','Aussi pour toi','tamiser']
+      .forEach(m => vrai(b.indexOf(m) < 0, 'le bandeau touche à « '+m+' » : c\'est un encart, pas une rangée'));
+    /* Et il ne coûte AUCUNE requête : ni TMDB, ni relais IA. */
+    ['tmdb(','appelIA('].forEach(m => vrai(b.indexOf(m) < 0,
+      'le bandeau ouvre une requête — le §1.6 exige zéro coût réseau'));
+  });
+
+  test('D-4 — le duel du jour est une session de UN, sur le moteur existant', ()=>{
+    duelBase(14);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    sansEcran(()=> bandeauDuelJour());
+    sansEcran(()=> jouerDuelJour());
+    egal(duel.mode, 'jour');
+    vrai(duel.actif && duel.paire && duel.paire.length === 2, 'aucune paire servie');
+    const g = duel.paire[0], p = duel.paire[1];
+    const nAvant = duelsJoues('film', g.id);
+    sansEcran(()=> appliquerVote(0));
+    /* Le vote est passé par le chemin habituel : le score est écrit. */
+    egal(duelsJoues('film', g.id), nAvant + 1, 'le vote n\'a pas été écrit dans le classement');
+    vrai(scoreClassement('film', g.id) > scoreClassement('film', p.id) ||
+         duelsJoues('film', p.id) > 0, 'le perdant n\'a pas été touché');
+    /* Et la partie s'arrête là : une session de un. */
+    egal(duel.ecran, 'resultat', 'un second duel a été servi');
+    egal(JSON.parse(localStorage.getItem(DUELJOUR_CLE)).joue, true,
+         'le bandeau reviendra alors que le duel a été joué');
+  });
+
+  test('D-5 — « les deux » et « pas vu » comptent aussi comme joué', ()=>{
+    duelBase(14);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    sansEcran(()=>{ bandeauDuelJour(); jouerDuelJour(); duelPasse(); });
+    egal(duel.ecran, 'resultat', '« je ne sais pas » n\'a pas terminé le duel du jour');
+    egal(JSON.parse(localStorage.getItem(DUELJOUR_CLE)).joue, true);
+    /* Et par « pas vu ». */
+    duelBase(14);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    sansEcran(()=>{
+      bandeauDuelJour(); jouerDuelJour();
+      duelPasVu(duel.paire[0].media, duel.paire[0].id);
+    });
+    egal(JSON.parse(localStorage.getItem(DUELJOUR_CLE)).joue, true,
+         '« pas vu » ne compte pas comme joué : le bandeau harcèlerait');
+  });
+
+  test('D-6 — « Je ne l\'ai pas vu » est REBRANCHÉ sur l\'écran de duel', ()=>{
+    duelBase(12);
+    const d = sansEcran(()=>{ ouvrirDuel('film'); return duel; });
+    const h = sansEcran(()=> ecranDuelJeu());
+    vrai(/duelPasVu\(/.test(h),
+         'le bouton du §6.1 manque : duelPasVu redevient du code mort');
+    /* Deux boutons, un par titre — pas de question « lequel ? ». */
+    const boite = document.createElement('div'); boite.innerHTML = h;
+    egal(boite.querySelectorAll('.dpasvu button').length, 2);
+    /* Et « Je ne sais pas / les deux » est toujours là. */
+    vrai(/duelPasse\(\)/.test(h), 'le bouton du milieu a disparu');
+  });
+
+  test('D-7 — « pas vu » est RÉVERSIBLE : le titre revient dans « Titres écartés »', ()=>{
+    duelBase(12);
+    db.gouts.graines = [{ media:'movie', id:'3', nom:'F3', famille:'film' }];
+    db.gouts.grainesSuspendues = [];
+    const d = sansEcran(()=>{ ouvrirDuel('film'); return duel; });
+    sansEcran(()=> duelPasVu('movie', 3));
+    vrai(db.gouts.pasVus.indexOf('movie:3') >= 0, 'le titre n\'est pas récusé');
+    /* LA GRAINE N'EST PLUS DÉTRUITE : elle est suspendue. */
+    egal(db.gouts.graines.length, 0);
+    egal(db.gouts.grainesSuspendues.length, 1, 'la graine a été effacée pour de bon');
+    /* Il apparaît dans « Titres écartés », avec la bonne mention. */
+    const ec = titresEcartes();
+    const t = ec.find(x => x.media === 'movie' && String(x.id) === '3');
+    vrai(t && t.pasVu, 'le titre récusé n\'apparaît pas dans « Titres écartés »');
+    vrai(sansEcran(()=> blocEcartes()).indexOf('pas vu') >= 0,
+         'la mention « pas vu » manque : un 👎 et un « pas vu » ne se reprennent pas pareil');
+    /* Et la reprise le rend éligible ET restitue sa graine. */
+    sansEcran(()=> reprendreEcarte('movie', 3));
+    egal(db.gouts.pasVus.indexOf('movie:3'), -1, 'le titre reste récusé après reprise');
+    egal(db.gouts.graines.length, 1, 'la graine n\'a pas été restituée');
+    egal(db.gouts.grainesSuspendues.length, 0);
+    vrai(titresEligiblesDuel('film').some(x => String(x.id) === '3'),
+         'le titre repris n\'est pas éligible à la session suivante');
+  });
+
+  test('D-8 — un 👎 se reprend toujours comme avant', ()=>{
+    duelBase(12);
+    poserAvis('movie', 4, -1);
+    const t = titresEcartes().find(x => String(x.id) === '4');
+    vrai(t && !t.pasVu, 'un 👎 est présenté comme un « pas vu »');
+    sansEcran(()=> reprendreEcarte('movie', 4));
+    egal(avisDe('movie', 4), 0, 'le 👎 n\'a pas été retiré');
+  });
+
+  test('D-9 — la pastille compte juste, plafonne à « 9+ », et disparaît à zéro', ()=>{
+    duelBase(12);
+    egal(compteDuelPastille(), 12, 'les nouveaux titres ne sont pas comptés');
+    egal(texteDuelPastille(), '9+', 'au-delà de 9, le §4.4 demande « 9+ »');
+    /* Tous départagés : plus de pastille. */
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    db.podium.film = [];
+    for(let i = 1; i <= 12; i++) db.podium.film.push(String(i));
+    egal(compteDuelPastille(), 0);
+    egal(texteDuelPastille(), '', 'une pastille vide reste affichée');
+  });
+
+  test('D-10 — la carte est en tête du profil, et le bloc de Mes goûts est intact', ()=>{
+    const c = codeDe(viewProfile);
+    const iCarte = c.indexOf('carteDuelProfil');
+    const iCartes = c.indexOf('cartesProfil');
+    vrai(iCarte >= 0 && iCarte < iCartes, 'la carte n\'est pas en tête de Mon profil');
+    /* §0.6 — rien ne disparaît : le bloc Duel de Mes goûts est toujours appelé. */
+    vrai(codeDe(viewGouts).indexOf('carteDuelGouts') >= 0,
+         'le bloc Duel de Mes goûts a été déménagé au lieu d\'être doublé');
+    vrai(codeDe(viewGouts).indexOf('blocEcartes') >= 0, '« Titres écartés » a disparu');
+  });
+
+  test('D-11 — le panthéon exige TROIS titres, pas deux', ()=>{
+    duelBase(12);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    vrai(sansEcran(()=> pantheonHtml('film')).indexOf('dpant') >= 0);
+    db.podium.film = ['1','2'];
+    egal(sansEcran(()=> pantheonHtml('film')), '',
+         'un podium à deux marches s\'affiche : ce n\'est pas un podium');
+  });
+
+  test('D-12 — « bâti sur N duels » ne compte pas chaque duel deux fois', ()=>{
+    duelBase(12);
+    /* Un duel touche DEUX titres : deux entrées à n=1 valent UN duel. */
+    ecrireClassement('film', 1, 1016, 1);
+    ecrireClassement('film', 2, 984, 1);
+    egal(totalDuelsFamille('film'), 1, 'le total annonce le double de la réalité');
+  });
+
+  test('D-13 — l\'éclair ne se pose qu\'une fois par titre, et une par session', ()=>{
+    duelBase(12);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    let ouvertes = 0;
+    const vraiOpen = window.openSheet;
+    window.openSheet = ()=>{ ouvertes++; };
+    try{
+      db.movies[20] = film(20, ['Drame'], true);
+      proposerDuelEclair('movie', 20, 'F20');
+      egal(eclairsPoses().indexOf('movie:20') >= 0, true, 'le titre n\'est pas mémorisé');
+      /* Un second titre dans la même session n'ouvre rien (§3.3). */
+      db.movies[21] = film(21, ['Drame'], true);
+      proposerDuelEclair('movie', 21, 'F21');
+      egal(eclairsPoses().indexOf('movie:21'), -1,
+           'un second éclair a été posé dans la même session d\'app');
+      /* Et le même titre, session suivante, ne revient pas. */
+      eclairFaitCetteSession = false;
+      proposerDuelEclair('movie', 20, 'F20');
+      egal(ouvertes, 0, 'la feuille s\'est ouverte alors que les minuteurs sont différés');
+    }finally{ window.openSheet = vraiOpen; }
+  });
+
+  test('D-14 — pas d\'éclair sans adversaire légitime', ()=>{
+    duelBase(12);
+    db.podium = { film:[], serie:[], anime:[], maj:0 };
+    db.movies[30] = film(30, ['Drame'], true);
+    proposerDuelEclair('movie', 30, 'F30');
+    egal(eclairsPoses().indexOf('movie:30'), -1,
+         'une question a été posée sans podium : le duel ne voudrait rien dire');
+  });
+
+  test('D-15 — un vote éclair passe par le chemin existant, « je ne sais pas » n\'écrit rien', ()=>{
+    duelBase(12);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    const avant = duelsJoues('film', 1);
+    sansEcran(()=> voterEclair('movie', 1, 'film', 2, 1));
+    egal(duelsJoues('film', 1), avant + 1, 'le vote éclair n\'a pas été écrit');
+    vrai(scoreClassement('film', 1) > 1001, 'le gagnant n\'a pas monté');
+    /* « Je ne sais pas » est le bouton qui ferme la feuille : il n'appelle pas
+       `voterEclair`, donc rien n'est écrit. */
+    vrai(codeDe(ouvrirFeuilleEclair).indexOf('closeSheet()"') >= 0,
+         '« Je ne sais pas » écrit quelque chose');
+  });
+
+  test('D-16 — l\'éclair se déclenche sur un geste local, jamais sur une synchro', ()=>{
+    /* La garantie est de FORME : l'accroche est dans `applyWatched` et dans
+       `marquerFilmVu`, deux fonctions qu'aucun import ni aucune synchro
+       n'emprunte. Un drapeau « c'est un import » aurait pu être oublié ; un
+       chemin de code qui n'existe pas ne s'oublie pas. */
+    vrai(codeDe(applyWatched).indexOf('proposerDuelEclair') >= 0,
+         'la fin de série ne déclenche plus rien');
+    vrai(codeDe(applyWatched).indexOf('finiAvant') >= 0,
+         'sans l\'état d\'avant, une série déjà finie reposerait la question');
+    vrai(codeDe(marquerFilmVu).indexOf('proposerDuelEclair') >= 0,
+         'la fin de film ne déclenche plus rien');
+    vrai(codeDe(mergeRemote).indexOf('proposerDuelEclair') < 0,
+         'une synchro peut ouvrir la feuille éclair');
+  });
+
+  test('D-17 — le partage : trois titres au minimum, et un texte en dernier recours', ()=>{
+    duelBase(12);
+    db.podium.film = ['1','2'];
+    egal(nomsPodium('film').length, 2);
+    db.podium.film = ['1','2','3'];
+    egal(nomsPodium('film'), ['F1','F2','F3']);
+    /* Le repli texte dit la même chose sans dépendre d'aucune capacité. */
+    const c = codeDe(partagerPodium);
+    vrai(c.indexOf('navigator.canShare') >= 0 && c.indexOf('createObjectURL') >= 0 &&
+         c.indexOf('partagerPodiumTexte') >= 0,
+         'les trois chemins du §5.2 ne sont pas tous là');
+    /* Et l'affiche est chargée en CORS, sans quoi le canvas se souille et
+       `toBlob` échoue à la dernière étape. */
+    vrai(codeDe(chargerAffichePartage).indexOf("crossOrigin = 'anonymous'") >= 0,
+         'sans crossOrigin, l\'image ne se génère jamais');
+  });
+
+  testAsync('D-18 — l\'image se génère même quand les affiches ne chargent pas', async ()=>{
+    duelBase(12);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    db.podium.film = ['1','2','3'];
+    /* Réseau coupé : chaque affiche échoue, et l'image sort quand même. */
+    const vraieImage = window.Image;
+    window.Image = function(){ const o = {}; setTimeout(()=>{ if(o.onerror) o.onerror(); }, 0);
+                               return o; };
+    try{
+      const b = await construirePodiumPng('film');
+      vrai(b && b.size > 0, 'aucune image produite hors ligne');
+    }finally{ window.Image = vraieImage; }
   });
 
   /* ==================== Bilan ====================

@@ -745,8 +745,16 @@ function toggleMovie(id){
    pas encore dans la bibliothèque. `addMovie` fait l'ajout et l'enregistrement ;
    ici on n'ajoute que la question, une fois l'ajout réellement abouti. */
 function marquerFilmVu(id){
+  const dejaVu = !!(db.movies[id] && db.movies[id].seen);
   const p = addMovie(id, true);
-  const suite = ()=>{ if(typeof signalerFilmVu === 'function') signalerFilmVu(id); };
+  const suite = ()=>{
+    if(typeof signalerFilmVu === 'function') signalerFilmVu(id);
+    /* SPEC-06 §3.1 — un film qui PASSE à vu, par un geste de la personne. Le
+       remarquer une seconde fois sur un film déjà vu ne serait pas une fin de
+       visionnage, ce serait un doublon. */
+    if(!dejaVu && typeof proposerDuelEclair === 'function')
+      proposerDuelEclair('movie', id, (db.movies[id] || {}).title);
+  };
   if(p && typeof p.then === 'function') p.then(suite, ()=>{});
   else suite();
 }

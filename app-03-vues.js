@@ -287,6 +287,22 @@ function renderNav(){
   }
   const boutons = nav.querySelectorAll('.tab');
   tabs.forEach(([id], i)=> boutons[i].classList.toggle('on', id === cur));
+  /* SPEC-06 §4.4 — LA PASTILLE DE « MON PROFIL ». Elle est posée ICI et pas
+     dans le gabarit du dessus pour une raison de forme du code : la barre n'est
+     construite QU'UNE FOIS (la garde `childElementCount`), alors que son état
+     se remet à jour à chaque rendu — exactement comme la classe `.on` juste
+     au-dessus. Un compte écrit dans le gabarit ne changerait plus jamais.
+     `nouveauxADepartager` est recalculé aux mêmes moments que le bloc Duel
+     (entrée d'onglet, fin de session, 👍) et jamais en continu. */
+  const iProfil = tabs.findIndex(([id])=> id === 'profile');
+  if(iProfil >= 0 && boutons[iProfil]){
+    const n = (typeof texteDuelPastille === 'function') ? texteDuelPastille() : '';
+    let p = boutons[iProfil].querySelector('.tabpip');
+    if(n){
+      if(!p){ p = document.createElement('i'); p.className = 'tabpip'; boutons[iProfil].appendChild(p); }
+      p.textContent = n;
+    }else if(p) p.remove();
+  }
   const pip = document.getElementById('navpip');
   const idx = tabs.findIndex(([id])=> id === cur);
   pip.classList.toggle('cache', idx < 0);
@@ -1277,6 +1293,12 @@ function viewProfile(){
       ' finie'+(doneShows>1?'s':'')+'</div>'+
   '</div></div>';
 
+  /* SPEC-06 §4.1 — LA CARTE DU DUEL, EN TÊTE DE MON PROFIL. Elle vient juste
+     après l'en-tête et le bloc d'identité, au-dessus des entrées existantes :
+     c'est ce que la maquette 14 montre. `carteDuelProfil` rend '' quand aucune
+     famille n'est jouable — l'écran est alors exactement celui d'avant.
+     Le bloc Duel de Mes goûts, lui, reste où il est (§0.6). */
+  if(typeof carteDuelProfil === 'function') html += carteDuelProfil();
   html += ligneCerclePf12();
 
   html += '<div class="chips" id="pfchips" style="padding-top:12px">'+tabs.map(([id,l,n])=>

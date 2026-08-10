@@ -1399,7 +1399,7 @@ function fusionnerAbosIgnores(rem){
 const GOUT_BLOCS = {
   genres:     ['genres','genresFam','genresFamDe','exclus','animeOui','animeSous'],
   acteurs:    ['acteurs'],
-  graines:    ['graines','amorcageFait'],
+  graines:    ['graines','amorcageFait','grainesSuspendues'],
   plates:     ['plates','platesDemande','suggMesPlates'],
   pasVus:     ['pasVus'],
   pasPourMoi: ['pasPourMoi'],

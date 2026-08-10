@@ -90,7 +90,7 @@ const FICHIERS = [
   'app-01-noyau.js','app-02-outils.js','app-03-vues.js','app-04-decouvrir.js',
   'app-05-plateformes.js','app-06-serie.js','app-07-partage.js',
   'app-08-reglages.js','app-09-notifications.js','app-10-sorties.js','app-11-gouts.js',
-  'app-12-recherche.js','app-13-inscription.js','app-14-ia.js','app-15-filtres.js'
+  'app-12-recherche.js','app-13-inscription.js','app-14-ia.js','app-15-filtres.js','app-16-duel-plus.js'
 ];
 
 /* ---------------------------------------------------------------------------
@@ -206,7 +206,7 @@ const ETAT_PARTAGE = {
             `db.gouts.ia`, les deux interrupteurs, depuis `basculerIA`. Tout le
             reste de son état (les textes générés) vit en localStorage, hors
             synchro, comme le §4.3 l'exige. */
-         'app-14-ia.js','app-15-filtres.js'],
+         'app-14-ia.js','app-15-filtres.js','app-16-duel-plus.js'],
   ui:   ['app-02-outils.js','app-03-vues.js','app-04-decouvrir.js','app-05-plateformes.js',
          'app-06-serie.js','app-07-partage.js','app-10-sorties.js','app-11-gouts.js',
          'app-12-recherche.js','app-15-filtres.js'],
@@ -233,7 +233,12 @@ const ETAT_PARTAGE = {
      app-15 (la feuille qui le dessine) et complété par app-14 quand l'IA
      traduit une description en réglages : c'est le même objet, à deux moments
      de sa vie. Il meurt avec la feuille, il n'entre jamais dans `db`. */
-  brouillonAmb: ['app-14-ia.js','app-15-filtres.js']
+  brouillonAmb: ['app-14-ia.js','app-15-filtres.js'],
+  /* SPEC-06 §2.3 — la session de duel. app-16 y écrit UNE fois, dans
+     `jouerDuelJour`, et selon le même protocole qu'`ouvrirDuel` : `oublierDuel()`
+     d'abord (qui règle le vote en vol et tue le minuteur), puis la session de
+     taille un. Le §0.3 interdit un second moteur, pas une seconde porte. */
+  duel: ['app-11-gouts.js','app-16-duel-plus.js']
 };
 
 function ecrituresEtat(fichiers, lire){

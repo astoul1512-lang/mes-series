@@ -1253,7 +1253,16 @@ function vitrineBody(){
      ne sait pas s'expliquer dans son titre, c'est la rangée qui est mal
      conçue — c'est au moteur de la nommer mieux, pas à l'écran de la
      rattraper avec une seconde ligne. */
-  rangees.forEach(r=>{
+  rangees.forEach((r, iR)=>{
+    /* SPEC-06 §1.3 — LE POINT D'ANCRAGE UNIQUE DU BANDEAU « DUEL DU JOUR ».
+       Il s'insère APRÈS LA PREMIÈRE RANGÉE RENDUE, quelle qu'elle soit — on
+       s'ancre sur la POSITION, jamais sur le nom d'une rangée : si le tableau
+       du §1 de SPEC-04 est réordonné un jour, le bandeau suivra sans retouche.
+       Ce n'est PAS une rangée (§1.1) : pas de numéro, pas de règle des 10, pas
+       de tuile « Tout voir », et ses deux titres ne vont jamais dans « Aussi
+       pour toi ». C'est la SEULE ligne que SPEC-06 ajoute à ce fichier — le
+       §8 en fait un critère d'acceptation vérifiable au diff. */
+    if(iR === 1 && typeof bandeauDuelJour === 'function') html += bandeauDuelJour();
     /* SPEC-04 lot C — l'intitulé peut avoir été réécrit par le lot quotidien.
        `intituleIA` rend le titre d'origine dès que l'IA est éteinte, que le lot
        n'est pas là, ou que la rangée n'en fait pas partie : la ligne ci-dessous
