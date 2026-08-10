@@ -507,10 +507,59 @@ const RECH_DUREES = [
   { id:'moyen',  mot:'de moins de 2 h',   p:{ 'with_runtime.gte':'1', 'with_runtime.lte':'120' } },
   { id:'long',   mot:'de plus de 2 h',    p:{ 'with_runtime.gte':'120' } }
 ];
+/* SPEC-05 §1 — DURÉE / FORMAT, ÉTENDU AUX ÉPISODES. Les trois entrées
+   ci-dessus ne parlent que de films : `with_runtime` sur `/discover/tv` désigne
+   la durée d'un ÉPISODE, pas celle d'une saison, et c'est très exactement ce
+   qu'on veut demander d'une série (« des épisodes de 25 minutes »).
+   MESURÉ le 10/08/2026 sur le relais, plancher de 100 votes :
+     · `with_runtime.gte=1&with_runtime.lte=25` → 1 152 séries
+       (Mushoku Tensei, Bleach, Tagesschau) ;
+     · `…lte=50` → 2 377 séries (Supernatural, Dr House, Les Experts).
+   Le `gte=1` n'est pas décoratif : sans lui, TMDB fait entrer les fiches sans
+   durée renseignée, qui valent 0 — la leçon est déjà écrite dans RECH_DUREES. */
+const RECH_DUREES_EP = [
+  { id:'ep25', mot:'en épisodes de 25 min ou moins', p:{ 'with_runtime.gte':'1', 'with_runtime.lte':'25' } },
+  { id:'ep50', mot:'en épisodes de 50 min ou moins', p:{ 'with_runtime.gte':'1', 'with_runtime.lte':'50' } }
+];
+/* La table de durées qui s'applique à la famille active. C'est la SEULE
+   évolution du pilotage par famille demandée par le §1 : hier la durée
+   disparaissait hors « Films », aujourd'hui elle change de valeurs. */
+function dureesRech(){
+  return mediaRech() === 'movie' ? RECH_DUREES : RECH_DUREES_EP;
+}
+function dureeRech(id){
+  return RECH_DUREES.concat(RECH_DUREES_EP).find(x => x.id === id) || null;
+}
+
+/* SPEC-05 §1 — SÉRIE / ANIMÉ : TERMINÉE OU EN COURS. Nouveau, donc mesuré
+   avant d'être figé (10/08/2026, relais, plancher de 100 votes) :
+     · `with_status=3` (Ended) → 3 057 séries (Mentalist, Supernatural, GoT) ;
+     · `with_status=0` (Returning Series) → 508 (House of the Dragon, Lioness) ;
+     · `with_status=3|4` (Ended OU Canceled) → 3 785.
+   On retient `3|4` pour « terminée » : une série annulée ne reprendra pas, et
+   quelqu'un qui demande « une histoire qui se finit » ne fait pas la
+   différence entre les deux — 728 titres de plus, et aucun faux positif.
+   Le OU par barre verticale FONCTIONNE sur ce champ, contrairement à
+   `with_genres` (voir `variantesGenreRech`) : c'est mesuré, pas supposé. */
+const RECH_STATUTS = [
+  { id:'finie',   mot:'qui se finit',  p:{ with_status:'3|4' } },
+  { id:'encours', mot:'encore en cours', p:{ with_status:'0' } }
+];
+function statutRech(id){ return RECH_STATUTS.find(x => x.id === id) || null; }
+
+/* SPEC-05 §1 — « SANS GORE ». Le mot-clé TMDB 10292 (`gore`), le même que la
+   recette « frisson » de Découvrir écarte déjà côté films. Mesuré le 10/08 :
+   l'horreur sans gore rend 3 316 films — le filtre resserre, il ne vide pas. */
+const RECH_SANS_GORE = '10292';
+
 const RECH_NOTES = [
   { id:'6', mot:'correct',         v:6   },
   { id:'7', mot:'bien noté',       v:7   },
-  { id:'8', mot:'très bien noté',  v:7.5 }
+  { id:'8', mot:'très bien noté',  v:7.5 },
+  /* SPEC-05 §1 — NOUVEAU. Le plancher de Découvrir pour « Acclamés par la
+     critique », qui y rend 470 films et 1 124 séries : la valeur est déjà
+     mesurée dans le dépôt, on ne la remesure pas, on la réutilise. */
+  { id:'exc', mot:'excellent',     v:8   }
 ];
 
 /* L'ordre dans lequel les mots s'écrivent dans la phrase. Il n'est pas l'ordre
@@ -527,7 +576,15 @@ const RECH_MOTS = [
      Il ne part pas à TMDB — TMDB ne connaît pas ta bibliothèque — le retrait se
      fait chez nous, après réception. */
   { cle:'pasvu',   titre:'Déjà vu ou pas ?' },
-  { cle:'plate',   titre:'Où tu regardes ?' }
+  { cle:'plate',   titre:'Où tu regardes ?' },
+  /* SPEC-05 §1 — les trois critères ajoutés par la feuille Filtres. Ils
+     entrent dans la MÊME table que les sept d'origine, et pas dans une table
+     parallèle : la phrase, les pilules, le compteur vivant et le jeu 🎲 lisent
+     tous celle-ci. Un critère qui ne serait pas ici serait un critère qui ne
+     compte pas. */
+  { cle:'statut',  titre:'Finie ou en cours ?' },
+  { cle:'gore',    titre:'Du sang ?' },
+  { cle:'avec',    titre:'Avec qui ?' }
 ];
 
 /* ================================ L'état ================================
@@ -546,6 +603,16 @@ function etatRech(){
        restent uniques : un plancher ne se cumule pas, un binaire non plus. */
     amb:null, sans:[], genre:[], origine:[], epoque:[], duree:[], note:null,
     pasvu:null, plate:[],
+    /* SPEC-05 lot A — les trois critères neufs (§1) et l'ambiance ENREGISTRÉE.
+       Attention au faux jumeau : `amb` ci-dessus est une TUILE D'ENVIE mesurée
+       (`RECH_AMBIANCES`, données du dépôt) ; `ambiance` est l'identifiant d'une
+       ambiance que la PERSONNE a créée et rangée dans ses goûts (§2). Les deux
+       cohabitent et se cumulent — le §7 demande justement de conserver les
+       tuiles « comme données ». */
+    statut:null, gore:null, avec:null, ambiance:null,
+    /* Le meilleur match : l'index du titre montré en carte (§5). Il cycle sur
+       « Suivant → » et se remet à zéro dès que la sélection change. */
+    matchI:0,
     /* B3/B4 — `errSuite` dit si la panne courante vient de « Voir plus »
        (fournée suivante) plutôt que d'un chargement complet. */
     total:null, res:[], page:1, pages:1, loading:false, err:'', errSuite:false,
@@ -815,12 +882,19 @@ function ouvrirPreciserRech(){
   const file = fileCriteresRech();
   ouvrirMotRech((libres.length ? libres[0] : file[0]).cle);
 }
+/* SPEC-05 §9 — « TOUT EFFACER NE TOUCHE PAS À L'AMBIANCE ACTIVE ». C'est un
+   critère d'acceptation, et il tient à une distinction de sens : les filtres
+   sont ponctuels, l'ambiance est un objet que la personne a créé et posé. Les
+   effacer d'un même geste effacerait, sans le dire, un travail de réglage.
+   `r.ambiance` et le `matchI` de la carte sont donc préservés ; tout le reste
+   part. On retire l'ambiance en re-touchant sa puce, comme le dit le §2. */
 function viderRech(){
   const r = etatRech();
   clearTimeout(rechTimer); avorterRech();
   r.q = ''; r.qtitres = []; r.qgens = [];
   r.amb = null; r.sans = []; r.genre = []; r.origine = [];
   r.epoque = []; r.duree = []; r.note = null; r.pasvu = null; r.plate = [];
+  r.statut = null; r.gore = null; r.avec = null;
   r.touche = true;
   relancerRech();
 }
@@ -1009,7 +1083,7 @@ function sansVusDemandeRech(){
   /* La promesse est portée par le NOM de l'ambiance, pas par l'un de ses
      ingrédients : tant que « Un classique que j'ai raté » est à l'écran, elle
      tient, même si l'on a retiré un mot de la recette. */
-  return !!(r.pasvu === 'non' || (a && a.sansVus));
+  return !!(critereUnRech('pasvu') === 'non' || (a && a.sansVus));
 }
 function garderPasVusRech(res){
   if(!sansVusDemandeRech()) return res;
@@ -1092,6 +1166,54 @@ function listeRech(cle){
 function unRech(cle){ const l = listeRech(cle); return l.length ? l[0] : null; }
 function aMotRech(cle){
   return estMultiRech(cle) ? listeRech(cle).length > 0 : etatRech()[cle] != null;
+}
+
+/* ============ SPEC-05 §2 — L'AMBIANCE ENREGISTRÉE SE CUMULE ============
+
+   Une ambiance active pose des critères, et les filtres ponctuels s'y AJOUTENT
+   (ET logique, §2). Deux lectures cohabitent donc, et il faut les tenir
+   séparées ou tout se mélange :
+
+     · `listeRech(cle)` / `etatRech()[cle]` — ce que la PERSONNE a posé à la
+       main, ici et maintenant. C'est ce qu'on écrit, ce qu'on bascule, ce que
+       « Tout effacer » vide, et ce que les pilules retirables retirent.
+     · `critereRech(cle)` / `critereUnRech(cle)` — ce que la RECHERCHE
+       cherche vraiment, ambiance comprise. C'est ce que la requête TMDB lit.
+
+   Confondre les deux, c'est recopier les règles de l'ambiance dans l'état
+   ponctuel au premier basculement — et alors retirer l'ambiance ne retirerait
+   plus rien, parce que ses règles seraient devenues des filtres. Le §2 est
+   explicite là-dessus : les règles de l'ambiance s'affichent en pilules NON
+   retirables une à une, on retire l'ambiance entière ou rien. */
+function ambiancesEnregistrees(){
+  const g = (typeof db === 'object' && db && db.gouts) ? db.gouts : null;
+  return (g && Array.isArray(g.ambiances)) ? g.ambiances : [];
+}
+function ambianceEnregistree(id){
+  if(!id) return null;
+  return ambiancesEnregistrees().find(a => a && a.id === id) || null;
+}
+function reglesAmbianceActive(){
+  const a = ambianceEnregistree(etatRech().ambiance);
+  return (a && a.regles && typeof a.regles === 'object') ? a.regles : null;
+}
+function critereRech(cle){
+  const l = listeRech(cle).map(String);
+  const g = reglesAmbianceActive();
+  if(!g) return l;
+  const b = Array.isArray(g[cle]) ? g[cle] : (g[cle] != null && g[cle] !== '' ? [g[cle]] : []);
+  b.forEach(v=>{ const s = String(v); if(s && l.indexOf(s) < 0) l.push(s); });
+  return l;
+}
+/* Un critère unique : la main de la personne l'emporte sur l'ambiance. Poser
+   « très bien noté » alors que l'ambiance dit « bien noté » doit obéir à la
+   personne — c'est elle qui vient de parler. */
+function critereUnRech(cle){
+  const v = etatRech()[cle];
+  if(v != null && v !== '') return v;
+  const g = reglesAmbianceActive();
+  const b = g ? g[cle] : null;
+  return (b != null && b !== '' && !Array.isArray(b)) ? b : null;
 }
 
 /* ============ LE MOTEUR MULTI-FLUX — POINTS 6, 13 ET 14 ============
@@ -1199,13 +1321,31 @@ function paramsSocleRech(media){
   }
 
   /* 3. Les mots explicites qui ne se décomposent jamais. */
-  const no = RECH_NOTES.find(x => x.id === r.note);
+  const no = RECH_NOTES.find(x => x.id === critereUnRech('note'));
   if(no){
     p['vote_average.gte'] = String(no.v);
     /* Trier ou filtrer par la note EXIGE un plancher de votes, sinon un 10/10
        à trois voix passe devant tout. C'est la même constante que Découvrir. */
     p['vote_count.gte'] = String(Math.max(RECH_VOTES_MINI, DISC_VOTES_MINI));
   }
+  /* SPEC-05 §1 — LES TROIS CRITÈRES NEUFS. Le statut ne veut rien dire sur un
+     film : `with_status` n'existe pas sur `/discover/movie`, et l'envoyer
+     quand même ferait refuser la requête entière par TMDB. La feuille ne le
+     propose donc pas hors séries/animés, et cette garde est la seconde
+     barrière — un état hérité d'une ambiance créée sous « Séries » puis
+     activée sous « Films » passerait sinon au travers. */
+  const st = statutRech(critereUnRech('statut'));
+  if(st && media !== 'movie') Object.assign(p, st.p);
+  /* « Sans gore » s'ajoute aux mots-clés déjà écartés, il ne les remplace
+     pas — même règle que `ajouterSansRech` pour les genres. */
+  if(critereUnRech('gore') === 'non'){
+    const l = String(p.without_keywords || '').split(',').filter(x => x);
+    if(l.indexOf(RECH_SANS_GORE) < 0) l.push(RECH_SANS_GORE);
+    p.without_keywords = l.join(',');
+  }
+  /* « Avec {proche} » ne part PAS à TMDB : c'est un croisement de deux
+     bibliothèques, il est 100 % local (§4). Il vit dans le score et dans les
+     raisons, pas dans la requête. */
   const plates = platesChoisiesRech();
   if(plates.length){
     /* `with_watch_providers` accepte le OU nativement : plusieurs plateformes
@@ -1239,7 +1379,7 @@ function ajouterSansRech(p, ids){
    `878` disparaît sans un mot. On décompose donc en autant de flux que de
    genres, ce que le moteur d'union sait déjà faire. */
 function genresPosesRech(media){
-  return listeRech('genre').map(nom => genreParNom(media, nom)).filter(id => id != null);
+  return critereRech('genre').map(nom => genreParNom(media, nom)).filter(id => id != null);
 }
 function variantesGenreRech(media, socle){
   const ids = genresPosesRech(media);
@@ -1257,7 +1397,7 @@ function variantesGenreRech(media, socle){
    `with_original_language` fusionnent en une requête (`fr|ja`) ; dès que les
    paramètres diffèrent, il faut un flux par groupe. */
 function variantesOrigineRech(){
-  const ids = listeRech('origine');
+  const ids = critereRech('origine');
   if(!ids.length) return [ {} ];
   const groupes = {};
   ids.forEach(id => {
@@ -1310,7 +1450,7 @@ function fusionnerIntervallesRech(bornes){
   return out;
 }
 function variantesEpoqueRech(champDate){
-  const ids = listeRech('epoque');
+  const ids = critereRech('epoque');
   if(!ids.length) return [ {} ];
   const bornes = ids.map(id => RECH_EPOQUES.find(x => x.id === id)).filter(x => x)
     .map(e => ({ de:e.de, a:e.a, aPlusUn: joursApresRech(e.a, 1) }));
@@ -1330,7 +1470,7 @@ function joursApresRech(iso, n){
 }
 function variantesDureeRech(media){
   if(media !== 'movie') return [ {} ];
-  const ids = listeRech('duree');
+  const ids = critereRech('duree');
   if(!ids.length) return [ {} ];
   const bornes = ids.map(id => RECH_DUREES.find(x => x.id === id)).filter(x => x).map(d => {
     const g = Number(d.p['with_runtime.gte'] != null ? d.p['with_runtime.gte'] : 0);
@@ -1400,7 +1540,7 @@ function traitementAnimRech(){
    le rang 1 est vide par construction : Adrien a tranché « purement
    aléatoire ». */
 function rangsOrigineRech(){
-  return !familleRech().anime && !listeRech('origine').length;
+  return !familleRech().anime && !critereRech('origine').length;
 }
 function etagesRech(){
   const médias = mediasRech();
@@ -1830,7 +1970,19 @@ async function chargerGrilleRech(suite){
        règle anti-monotonie : elle réordonne, elle ne retire rien. */
     fournee = espacerGenresRech(melangerRech(fournee));
 
+    /* SPEC-05 §5 — LE TRI « MES GOÛTS » S'APPLIQUE À LA FOURNÉE, PAS À L'ÉCRAN.
+       Il ordonne ce qui ARRIVE, et il ne retouche jamais ce qui est déjà
+       affiché : « fusion-tri, PAS de re-tri visuel de ce qui est déjà à
+       l'écran », et derrière cette phrase il y a la règle transverse de
+       SPEC-04 — jamais de changement sous le doigt. Basculer le contrôle de
+       tri, en revanche, RÉORDONNE tout : c'est un geste explicite, et il a
+       le droit de bouger l'écran (`basculerTriRech`). */
+    if(typeof ordonnerParGoutRech === 'function') fournee = ordonnerParGoutRech(fournee);
+
     r.res = suite ? r.res.concat(fournee) : fournee;
+    /* Une sélection qui change remet la carte « meilleur match » sur son n° 1 :
+       « Suivant → » ne se souvient pas d'une recherche qui n'existe plus. */
+    if(!suite) r.matchI = 0;
     r.page = r.page + (suite ? 1 : 0);
     r.loading = false; r.charge = true; r.err = ''; r.errSuite = false;
     peindreRech();
@@ -1872,7 +2024,7 @@ function resteRech(){
 
 function platesChoisiesRech(){
   const r = etatRech(), mes = (typeof mesPlates === 'function') ? mesPlates() : [];
-  const choix = listeRech('plate');
+  const choix = critereRech('plate');
   if(!choix.length) return [];
   if(choix.map(String).indexOf('mes') >= 0) return mes.map(x => x.id);
   return choix.map(v => { const u = mes.find(x => String(x.id) === String(v)); return u ? u.id : null; })
@@ -2096,9 +2248,23 @@ function peindreRech(){
   const c = document.querySelector('.qclear');
   if(c) c.classList.toggle('masque', !etatRech().q);
 }
+/* SPEC-05 §5 et §7 — L'ORDRE DE L'ÉCRAN A CHANGÉ, PAS LE MOTEUR.
+   Hier : la grande phrase « Je veux… », les tuiles d'envie, la grille.
+   Aujourd'hui : la rangée d'ambiances, les pilules (qui remplacent la phrase —
+   « même grammaire, des mots retirables, format compact »), la carte du
+   meilleur match, le contrôle de tri, la grille.
+   Les tuiles d'envie ne disparaissent pas : le §7 dit qu'elles rejoignent la
+   section Genre de la feuille Filtres, et qu'elles restent des données. Elles
+   ne sont donc plus une rangée d'écran, elles sont une liste dans la feuille. */
 function corpsRech(){
   if(enRechercheTitre()) return corpsTitreRech();
-  return blocPhraseRech() + blocEnviesRech() + grilleRech();
+  /* Le mode duo a besoin de la bibliothèque du proche pour ses raisons. Elle
+     est souvent déjà là (Découvrir la charge pour « Vu par tes proches ») ;
+     sinon on la demande une fois, en arrière-plan, et l'écran se repeint à
+     l'arrivée. Jamais bloquant : sans elle, le duo n'ajoute simplement rien. */
+  if(typeof amorcerDuoRech === 'function') amorcerDuoRech();
+  return rangeeAmbiancesRech() + blocPhraseRech() + carteMatchRech() +
+         barreTriRech() + grilleRech();
 }
 
 /* ------------------ Un nom tapé : titres, puis personnes ------------------ */
@@ -2164,14 +2330,23 @@ function motsPhraseRech(){
       const l = listeRech('epoque').map(id => { const e = RECH_EPOQUES.find(x=>x.id===id); return e ? e.mot : null; }).filter(x=>x);
       if(l.length) out.push({ cle:'epoque', mot: ouRech(l) });
     }
-    if(m.cle === 'duree' && listeRech('duree').length && mediaRech() === 'movie'){
-      const l = listeRech('duree').map(id => { const d = RECH_DUREES.find(x=>x.id===id); return d ? d.mot : null; }).filter(x=>x);
+    /* SPEC-05 §1 — la durée parle désormais AUSSI hors films : les valeurs
+       changent (épisodes), la ligne ne disparaît plus. */
+    if(m.cle === 'duree' && listeRech('duree').length){
+      const l = listeRech('duree').map(id => { const d = dureeRech(id); return d ? d.mot : null; }).filter(x=>x);
       if(l.length) out.push({ cle:'duree', mot: ouRech(l) });
     }
     if(m.cle === 'note' && r.note){
       const n = RECH_NOTES.find(x=>x.id===r.note); if(n) out.push({ cle:'note', mot:n.mot });
     }
     if(m.cle === 'plate' && listeRech('plate').length) out.push({ cle:'plate', mot:libellePlateRech() });
+    /* Les trois critères du lot A. « Avec {proche} » se lit en toutes lettres :
+       c'est le mot le plus lourd de la sélection, il ne se devine pas. */
+    if(m.cle === 'statut' && r.statut){
+      const s = statutRech(r.statut); if(s) out.push({ cle:'statut', mot:s.mot });
+    }
+    if(m.cle === 'gore' && r.gore === 'non') out.push({ cle:'gore', mot:'sans gore' });
+    if(m.cle === 'avec' && r.avec) out.push({ cle:'avec', mot:'avec '+nomProcheRech(r.avec) });
   });
   /* L'ordre de LECTURE, pas l'ordre de pose : « un film comique français des
      années 90 de moins de 2 h » se lit tout seul. */
@@ -2194,23 +2369,19 @@ function libellePlateRech(){
 function phraseTexte(){
   return ('Je veux '+familleRech().art+' '+motsPhraseRech().map(m=>m.mot).join(' ')).trim();
 }
+/* SPEC-05 §5 — LES PILULES REMPLACENT LA GRANDE PHRASE, et c'est la seule
+   chose qui change ici : « la MÉCANIQUE est conservée ; seul le RENDU change ».
+   `motsPhraseRech` (l'état des critères), `barreCompteurRech` (le compteur
+   vivant) et la puce « Reprendre » sont réutilisés tels quels — on ne réécrit
+   pas ce qui marche pour changer une forme.
+
+   Ce qui disparaît : « Je veux » et l'article de famille. La grammaire reste
+   celle de la phrase — des mots qu'on retire — mais compacte, une ligne, avec
+   retour à la ligne. Le corps des pilules est dans `app-15-filtres.js`, avec le
+   reste de la couche SPEC-05. */
 function blocPhraseRech(){
   const r = etatRech();
-  const mots = motsPhraseRech();
-  let h = '<div class="rphrase"><div class="rp">'+
-    'Je veux <span class="rmot fixe">'+esc(familleRech().art)+'</span> ';
-  mots.forEach(m=>{
-    h += '<button class="rmot" onclick="ouvrirMotRech(\''+escJs(m.cle)+'\')">'+esc(m.mot)+'</button> ';
-  });
-  /* On ne voit jamais sept champs vides : seulement la phrase qui marche déjà,
-     et une seule invitation à l'affiner. LOT R2, point 19 : cette invitation
-     ouvre désormais UN CHOIX au lieu d'imposer toujours le même mot. */
-  /* POINT 5 — « + préciser » ouvre UNE QUESTION, plus jamais une liste. La
-     première question libre de la file ; « Peu importe → » mène aux suivantes,
-     la flèche gauche ramène aux précédentes. */
-  if(critLibresRech().length)
-    h += '<button class="rmot vide" onclick="ouvrirPreciserRech()">+ préciser</button>';
-  h += '</div>'+ barreCompteurRech() +'</div>';
+  let h = '<div class="rphrase">'+ pilulesRech() + barreCompteurRech() +'</div>';
   if(r.reprise)
     h += '<div class="wrap" style="padding-top:8px">'+
       '<button class="chip" onclick="reprendreRech()">↩ Reprendre : '+
@@ -2272,6 +2443,10 @@ function peindreCompteurRech(){
   if(b) b.innerHTML = texteCompteurBarreRech();
   const g = document.getElementById('rgtitre');
   if(g) g.innerHTML = texteCompteurGrilleRech();
+  /* SPEC-05 §4 — le bouton « Voir les N titres » de la feuille Filtres compte
+     le même total, et il se remet à jour SANS que la feuille soit redessinée :
+     la redessiner refermerait l'accordéon sous le doigt. */
+  if(typeof rafraichirBoutonFiltres === 'function') rafraichirBoutonFiltres();
 }
 /* LE COMPTEUR DOIT DIRE CE QU'IL COMPTE. `total_results` est celui de TMDB, et
    TMDB ne sait rien de ce qu'on retire chez nous : ni l'animation asiatique
@@ -2632,8 +2807,14 @@ function grilleRech(){
       '<button class="btn ghost" onclick="viderRech()">Repartir de zéro</button></div>';
   /* B3 — le bandeau, au-dessus de la grille conservée. */
   let h = r.err ? bandeauErrRech() : '';
+  /* SPEC-05 §5 — le titre montré en carte n'est pas dupliqué dans la grille.
+     `titreMatchRech()` rend `null` dès qu'il n'y a pas de sélection active :
+     sans carte, la grille est exactement celle d'avant. */
+  const enCarte = (typeof titreMatchRech === 'function') ? titreMatchRech() : null;
+  const cleCarte = enCarte ? (enCarte.__media+':'+enCarte.id) : null;
+  const liste = cleCarte ? r.res.filter(x => (x.__media+':'+x.id) !== cleCarte) : r.res;
   h += '<div class="gtitre" id="rgtitre">'+texteCompteurGrilleRech()+'</div>'+
-    '<div class="rang3">'+r.res.map(x=>jaquetteRech(x)).join('')+'</div>';
+    '<div class="rang3">'+liste.map(x=>jaquetteRech(x)).join('')+'</div>';
   /* « Voir plus » existe tant qu'un étage n'est pas épuisé — et non plus tant
      qu'il reste des pages à une requête unique : il n'y a plus « une » requête. */
   if(resteRech())
@@ -2700,6 +2881,12 @@ function jaquetteRech(x){
     '<div class="jqnom">'+esc(nom)+'</div>'+
     '<div class="jqmeta">'+esc(year(date))+
       (n?' · <span class="jqnote">'+I.star+n.toFixed(1)+'</span>':'')+'</div>'+
+    /* SPEC-05 §5 — UNE RAISON SOUS CHAQUE AFFICHE, et seulement en tri
+       « mes goûts ». C'est la condition qui rend ce tri acceptable là où
+       l'ancien `trierParGout` ne l'était pas : un ordre qu'on ne s'explique
+       pas est un ordre qu'on subit (voir le commentaire du point 13). En tri
+       « note », la note suffit et il n'y a pas de ligne. */
+    ((typeof raisonGoutRech === 'function') ? raisonGoutRech(x, media) : '')+
   '</button>';
 }
 /* La pastille d'une jaquette, d'après le STATUT du titre. Rend une chaîne vide

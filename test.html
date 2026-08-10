@@ -83,6 +83,7 @@ window.MODE_TEST = true;
 <script src="./app-12-recherche.js"></script>
 <script src="./app-13-inscription.js"></script>
 <script src="./app-14-ia.js"></script>
+<script src="./app-15-filtres.js"></script>
 <script src="./app-08-reglages.js"></script>
 
 <script>
@@ -3278,12 +3279,19 @@ window.MODE_TEST = true;
   test('« + préciser » ouvre UNE question, et « Peu importe » mène à la suivante', ()=>{
     const r = rechVierge('film');
     r.amb = null;
+    /* SPEC-05 §4 ET §7 — L'INVITATION A CHANGÉ DE DESTINATION, PAS DE NATURE.
+       Le tableau du §7 dit : « + préciser » (une question) → feuille Filtres
+       accordéon. La pilule vide ouvre donc désormais la feuille entière, et
+       c'est le seul point de ce cas qui bouge. Le chemin « une question à la
+       fois » reste vivant et reste éprouvé ci-dessous : il sert au JEU
+       (`ouvrirAjoutRech(1)`), où la phrase n'est pas à l'écran, et le
+       cul-de-sac du point 19 doit y rester fermé. */
     const boite = document.createElement('div');
     boite.innerHTML = blocPhraseRech();
     const b = boite.querySelector('.rmot.vide');
-    vrai(b, 'l\'invitation à préciser a disparu');
-    vrai(/ouvrirPreciserRech\(\)/.test(b.getAttribute('onclick')),
-         '« + préciser » rouvre la liste des sept champs : le point 5 est perdu');
+    vrai(b, 'l\'invitation à affiner a disparu');
+    vrai(/ouvrirFiltresRech\(\)/.test(b.getAttribute('onclick')),
+         'la pilule vide n\'ouvre pas la feuille Filtres : le §4 est perdu');
 
     const file = fileCriteresRech();
     ouvrirPreciserRech();
@@ -7169,6 +7177,358 @@ window.MODE_TEST = true;
          'le lot IA se déclenche avant que l\'écran soit construit — le §4.3 l\'interdit');
     vrai(codeDe(propositionJourHtml).indexOf('appelIA') < 0,
          'le hero appelle le relais pendant son rendu : c\'est une attente déguisée');
+  });
+
+
+  /* ============ SPEC-05 lot A — la Recherche nouvelle génération ============
+
+     Ce que ces cas empêchent :
+
+       · qu'un critère que « + préciser » savait poser hier devienne
+         inatteignable (le §1 exige un SUR-ENSEMBLE STRICT — c'est la règle
+         d'or de la spec, et la seule qui puisse faire régresser un usage
+         quotidien sans qu'on s'en aperçoive) ;
+       · qu'une ambiance recopie ses règles dans les filtres ponctuels — alors
+         la retirer ne retirerait plus rien ;
+       · que « Tout effacer » emporte l'ambiance active (§9) ;
+       · que le tri « mes goûts » FILTRE au lieu de trier, ou qu'il réordonne
+         ce qui est déjà à l'écran ;
+       · que le titre montré en carte soit aussi dans la grille ;
+       · qu'un `with_status` parte sur `/discover/movie`, que TMDB refuserait. */
+  groupe('SPEC-05 lot A — pilules, filtres, ambiances, match, tri');
+
+  function rechNG(fam){
+    const r = rechVierge(fam || 'tout');
+    db.avis = { tv:{}, movie:{} };
+    db.podium = { film:[], serie:[], anime:[], maj:0 };
+    db.gouts.ambiances = [];
+    r.ambiance = null; r.statut = null; r.gore = null; r.avec = null; r.matchI = 0;
+    try{ localStorage.removeItem(TRI_CLE); }catch(e){}
+    return r;
+  }
+  /* La feuille est du HTML : on la lit dans une boîte détachée plutôt que
+     d'ouvrir vraiment `#sheetin`, qui appartient à d'autres cas. */
+  function boiteHtml(html){
+    const d = document.createElement('div'); d.innerHTML = html; return d;
+  }
+  function sectionsOuvertes(){
+    return sectionsFiltresRech().map(s=>{
+      sectionFiltreOuverte = s.id;
+      return { id:s.id, html: optionsSectionFiltre(s.id) };
+    });
+  }
+
+  test('RA1 — la feuille Filtres est un sur-ensemble STRICT de « + préciser »', ()=>{
+    const r = rechNG('serie');
+    genresTMDB.tv = [{id:18,nom:'Drame'},{id:35,nom:'Comédie'}];
+    genresTMDB.movie = [{id:18,nom:'Drame'}];
+    db.gouts.plates = [{ id:8, nom:'Netflix' }];
+    const parSection = {};
+    sectionsOuvertes().forEach(s=>{ parSection[s.id] = s.html; });
+    /* Les sept critères d'hier ont chacun leur section, et « genre » couvre à
+       la fois les tuiles mesurées et les genres TMDB. */
+    ['genre','epoque','duree','origine','plate','note'].forEach(c=>{
+      vrai(parSection[c] && parSection[c].length > 0, 'la section « '+c+' » est vide ou absente');
+    });
+    vrai(/poserMotRech\('pasvu','non'\)/.test(parSection.divers || ''),
+         '« que je n\'ai pas vu » a disparu de la feuille');
+    /* Et chaque VALEUR des tables mesurées est proposée, pas seulement la
+       section : c'est là que se cachait le risque de perte. */
+    RECH_EPOQUES.forEach(e=> vrai(parSection.epoque.indexOf(e.id) >= 0,
+      'l\'époque « '+e.mot+' » a disparu'));
+    RECH_NOTES.forEach(n=> vrai(parSection.note.indexOf("'"+n.id+"'") >= 0,
+      'la note « '+n.mot+' » a disparu'));
+    originesRech().forEach(o=> vrai(parSection.origine.indexOf("'"+o.id+"'") >= 0,
+      'l\'origine « '+o.mot+' » a disparu'));
+    ambiancesRech().forEach(a=> vrai(parSection.genre.indexOf("'"+a.id+"'") >= 0,
+      'la tuile « '+(a.t||a.mot)+' » a disparu'));
+    vrai(parSection.genre.indexOf('Comédie') >= 0, 'les genres TMDB ont disparu');
+    vrai(parSection.plate.indexOf('Netflix') >= 0, 'les plateformes déclarées ont disparu');
+  });
+
+  test('RA2 — les listes restent pilotées par la famille', ()=>{
+    const r = rechNG('anime');
+    egal(originesRech().length, 3, 'la règle « animés = 3 origines » est cassée');
+    sectionFiltreOuverte = 'duree';
+    /* Hors films, la durée ne disparaît plus : elle parle en épisodes. */
+    const d = optionsSectionFiltre('duree');
+    vrai(d.indexOf('ep25') >= 0 && d.indexOf('ep50') >= 0, 'les formats épisodes manquent');
+    vrai(d.indexOf("'court'") < 0, 'une durée de film est proposée sur les animés');
+    r.fam = 'film';
+    const d2 = optionsSectionFiltre('duree');
+    vrai(d2.indexOf("'court'") >= 0 && d2.indexOf('ep25') < 0,
+         'les formats épisodes sont proposés sur les films');
+    /* Et « Série / animé » n'existe pas dans la famille Films. */
+    vrai(!sectionsFiltresRech().some(s => s.id === 'statut'),
+         'le statut est proposé sur les films — TMDB refuserait la requête');
+    r.fam = 'serie';
+    vrai(sectionsFiltresRech().some(s => s.id === 'statut'), 'le statut manque sur les séries');
+  });
+
+  test('RA3 — les sous-genres animés n\'apparaissent que sur Animés et Tout', ()=>{
+    const r = rechNG('tout');
+    genresTMDB.tv = [{id:18,nom:'Drame'}]; genresTMDB.movie = [{id:18,nom:'Drame'}];
+    sectionFiltreOuverte = 'genre';
+    vrai(optionsSectionFiltre('genre').indexOf('shonen') >= 0, 'absents sur « Tout »');
+    r.fam = 'anime';
+    vrai(optionsSectionFiltre('genre').indexOf('shonen') >= 0, 'absents sur « Animés »');
+    r.fam = 'film';
+    vrai(optionsSectionFiltre('genre').indexOf('shonen') < 0, 'proposés sur « Films »');
+  });
+
+  test('RA4 — une ambiance ne recopie JAMAIS ses règles dans les filtres', ()=>{
+    const r = rechNG('tout');
+    sansEcran(()=>{
+      enregistrerAmbiance({ id:'a1', emoji:'🌙', nom:'Soirée',
+        regles: ambianceRegles({ fam:'serie', genre:['Drame'], note:'8', gore:'non' }),
+        creeLe:1 });
+    });
+    const vraiRelance = window.relancerRech; window.relancerRech = function(){};
+    try{ basculerAmbiance('a1'); }finally{ window.relancerRech = vraiRelance; }
+    egal(r.ambiance, 'a1');
+    egal(listeRech('genre'), [], 'les règles de l\'ambiance ont contaminé les filtres');
+    egal(r.note, null, 'la note de l\'ambiance a été recopiée dans l\'état ponctuel');
+    /* Mais la RECHERCHE, elle, les voit. */
+    egal(critereRech('genre'), ['Drame'], 'l\'ambiance n\'est pas prise en compte');
+    egal(critereUnRech('note'), '8');
+    egal(critereUnRech('gore'), 'non');
+    /* Et le geste est réversible d'un second appui. */
+    window.relancerRech = function(){};
+    try{ basculerAmbiance('a1'); }finally{ window.relancerRech = vraiRelance; }
+    egal(r.ambiance, null);
+    egal(critereRech('genre'), [], 'retirer l\'ambiance n\'a rien retiré');
+  });
+
+  test('RA5 — la main de la personne l\'emporte sur l\'ambiance', ()=>{
+    const r = rechNG('tout');
+    sansEcran(()=> enregistrerAmbiance({ id:'a1', emoji:'🌙', nom:'S',
+      regles: ambianceRegles({ note:'7', genre:['Drame'] }), creeLe:1 }));
+    r.ambiance = 'a1';
+    r.note = 'exc';
+    egal(critereUnRech('note'), 'exc', 'l\'ambiance écrase le choix de la personne');
+    r.genre = ['Comédie'];
+    egal(critereRech('genre').sort(), ['Comédie','Drame'], 'les genres ne se cumulent pas');
+  });
+
+  test('RA6 — « Tout effacer » ne touche pas l\'ambiance active (§9)', ()=>{
+    const r = rechNG('tout');
+    sansEcran(()=> enregistrerAmbiance({ id:'a1', emoji:'🌙', nom:'S',
+      regles: ambianceRegles({ genre:['Drame'] }), creeLe:1 }));
+    r.ambiance = 'a1'; r.genre = ['Comédie']; r.gore = 'non'; r.statut = 'finie';
+    const vraiRelance = window.relancerRech; window.relancerRech = function(){};
+    try{ viderRech(); }finally{ window.relancerRech = vraiRelance; }
+    egal(r.ambiance, 'a1', 'l\'ambiance a été emportée par « Tout effacer »');
+    egal(listeRech('genre'), []);
+    egal(r.gore, null); egal(r.statut, null);
+    egal(critereRech('genre'), ['Drame'], 'l\'ambiance ne s\'applique plus après effacement');
+  });
+
+  test('RA7 — le sous-bloc « ambiances » est daté seul', ()=>{
+    rechNG('tout');
+    vrai(Array.isArray(GOUT_BLOCS.ambiances) && GOUT_BLOCS.ambiances.indexOf('ambiances') >= 0,
+         'sans sous-bloc, créer une ambiance écraserait les genres de l\'autre appareil');
+    db.gouts.majBlocs = {};
+    sansEcran(()=> enregistrerAmbiance({ id:'a2', emoji:'✨', nom:'X',
+      regles:ambianceRegles(null), creeLe:1 }));
+    vrai(db.gouts.majBlocs.ambiances > 0, 'le bloc n\'a pas été daté');
+    egal(db.gouts.majBlocs.genres, undefined, 'les genres ont été datés au passage');
+    egal(db.gouts.majBlocs.plates, undefined, 'les plateformes ont été datées au passage');
+  });
+
+  test('RA8 — le plafond de 12 ambiances tient', ()=>{
+    rechNG('tout');
+    sansEcran(()=>{
+      for(let i = 0; i < 14; i++)
+        enregistrerAmbiance({ id:'a'+i, emoji:'✨', nom:'A'+i, regles:ambianceRegles(null), creeLe:i });
+    });
+    egal(db.gouts.ambiances.length, AMB_MAX, 'le plafond du §2 ne mord pas');
+    /* Modifier une ambiance existante passe toujours, plafond ou pas. */
+    sansEcran(()=> enregistrerAmbiance({ id:'a3', emoji:'🔥', nom:'Changée',
+      regles:ambianceRegles(null), creeLe:3 }));
+    egal(db.gouts.ambiances.length, AMB_MAX);
+    egal((db.gouts.ambiances.find(a=>a.id==='a3')||{}).nom, 'Changée',
+         'on ne peut plus modifier une ambiance quand le plafond est atteint');
+  });
+
+  test('RA9 — les pilules disent la sélection, et chacune se retire', ()=>{
+    const r = rechNG('serie');
+    genresTMDB.tv = [{id:18,nom:'Drame'}];
+    r.genre = ['Drame']; r.epoque = ['1990s']; r.gore = 'non'; r.statut = 'finie';
+    const b = boiteHtml(pilulesRech());
+    const txt = b.textContent;
+    ['drame','des années 90','sans gore','qui se finit'].forEach(m=>
+      vrai(txt.toLowerCase().indexOf(m) >= 0, 'la pilule « '+m+' » manque'));
+    /* Chaque pilule porte son retrait, et le retrait passe par la mécanique
+       existante — celle qui sait distinguer un ingrédient d'ambiance mesurée
+       d'un mot posé à la main. */
+    const boutons = [].slice.call(b.querySelectorAll('.rmot')).filter(x=> !x.classList.contains('vide'));
+    vrai(boutons.length >= 4, 'des pilules manquent');
+    boutons.forEach(x=> vrai(/peuImporteRech\('/.test(x.getAttribute('onclick') || ''),
+      'une pilule ne sait pas se retirer'));
+    /* L'époque et la durée sont du CONTEXTE (vert), « avec » est du duo
+       (orange) : la couleur porte du sens, pas de la décoration. */
+    egal(PILULE_TON.epoque, 'ctx'); egal(PILULE_TON.duree, 'ctx'); egal(PILULE_TON.avec, 'duo');
+  });
+
+  test('RA10 — l\'ambiance a une pilule NON retirable ligne à ligne (§2)', ()=>{
+    const r = rechNG('tout');
+    sansEcran(()=> enregistrerAmbiance({ id:'a1', emoji:'🌙', nom:'Soirée',
+      regles:ambianceRegles({ genre:['Drame'] }), creeLe:1 }));
+    r.ambiance = 'a1';
+    const b = boiteHtml(pilulesRech());
+    const fixe = b.querySelector('.rmot.ia.fixe');
+    vrai(fixe && fixe.textContent.indexOf('Soirée') >= 0, 'la pilule d\'ambiance manque');
+    vrai(!fixe.getAttribute('onclick'),
+         'la pilule d\'ambiance se retire ligne à ligne : le §2 l\'interdit');
+  });
+
+  test('RA11 — le statut ne part jamais sur /discover/movie', ()=>{
+    const r = rechNG('serie');
+    r.statut = 'finie';
+    const pTv = paramsSocleRech('tv');
+    egal(pTv.with_status, '3|4', 'le statut ne part pas sur les séries');
+    const pFilm = paramsSocleRech('movie');
+    egal(pFilm.with_status, undefined,
+         'with_status part sur /discover/movie : TMDB refuse la requête entière');
+  });
+
+  test('RA12 — « sans gore » s\'AJOUTE aux mots-clés déjà écartés', ()=>{
+    const r = rechNG('film');
+    r.gore = 'non';
+    egal(paramsSocleRech('movie').without_keywords, RECH_SANS_GORE);
+    /* Sur une recette qui en écarte déjà : les deux, jamais l'un à la place
+       de l'autre. C'est le même piège qu'`ajouterSansRech` a déjà réparé une
+       fois pour les genres. */
+    r.amb = null;
+    const p = paramsSocleRech('movie');
+    vrai(String(p.without_keywords).split(',').indexOf(RECH_SANS_GORE) >= 0);
+  });
+
+  test('RA13 — le tri « mes goûts » TRIE, il ne filtre jamais', ()=>{
+    rechNG('film');
+    genresTMDB.movie = [{id:18,nom:'Drame'},{id:35,nom:'Comédie'}];
+    db.movies[1] = { id:1, title:'A', genres:['Drame'], seen:true, addedAt:1 };
+    db.avis.movie['1'] = { v:1, quand:1 };
+    const l = [
+      { id:9, __media:'movie', title:'Z', genre_ids:[35], vote_average:6 },
+      { id:8, __media:'movie', title:'Y', genre_ids:[18], vote_average:6 },
+      { id:7, __media:'movie', title:'X', genre_ids:[],   vote_average:9 }
+    ];
+    poserTriRech('note', true);
+    egal(ordonnerParGoutRech(l).map(x=>x.id), [9,8,7], 'le tri « note » ne doit rien réordonner ici');
+    poserTriRech('gouts', true);
+    const t = ordonnerParGoutRech(l);
+    egal(t.length, l.length, 'le tri a FILTRÉ — c\'est la règle qu\'il ne doit jamais franchir');
+    egal(t[0].id, 8, 'le titre du genre le plus regardé n\'est pas passé devant');
+    /* Et il est STABLE : deux titres de même score gardent leur ordre d\'arrivée,
+       celui qui porte la pertinence TMDB et l\'anti-monotonie. */
+    const memes = [{ id:1, __media:'movie', genre_ids:[], vote_average:5 },
+                   { id:2, __media:'movie', genre_ids:[], vote_average:5 }];
+    egal(ordonnerParGoutRech(memes).map(x=>x.id), [1,2], 'le tri n\'est pas stable');
+  });
+
+  test('RA14 — le choix de tri est mémorisé, et la raison suit le tri', ()=>{
+    rechNG('film');
+    genresTMDB.movie = [{id:18,nom:'Drame'}];
+    poserTriRech('gouts', true);
+    egal(triRech(), 'gouts', 'le choix n\'est pas mémorisé');
+    const x = { id:5, __media:'movie', title:'A', genre_ids:[18], vote_average:8.2 };
+    vrai(raisonGoutRech(x, 'movie').indexOf('rraison') >= 0, 'aucune raison en tri « mes goûts »');
+    poserTriRech('note', true);
+    egal(triRech(), 'note');
+    egal(raisonGoutRech(x, 'movie'), '',
+         'une raison s\'affiche en tri « note » : la note est déjà la raison');
+  });
+
+  test('RA15 — le défaut à la livraison est « note », le comportement d\'aujourd\'hui', ()=>{
+    try{ localStorage.removeItem(TRI_CLE); }catch(e){}
+    egal(triRech(), 'note', 'le tri par goûts s\'applique tout seul : c\'est le point 13 qui revient');
+  });
+
+  test('RA16 — une page qui arrive ne réordonne pas ce qui est à l\'écran', ()=>{
+    const c = codeDe(chargerGrilleRech);
+    vrai(c.indexOf('ordonnerParGoutRech(fournee)') >= 0,
+         'le tri ne s\'applique plus à la fournée');
+    vrai(c.indexOf('ordonnerParGoutRech(r.res)') < 0,
+         'le tri réordonne toute la grille à chaque « Voir plus » — règle « jamais sous le doigt »');
+    vrai(codeDe(basculerTriRech).indexOf('ordonnerParGoutRech(r.res)') >= 0,
+         'basculer le tri ne réordonne pas ce qui est déjà chargé');
+  });
+
+  test('RA17 — le meilleur match cycle et n\'est pas dupliqué dans la grille', ()=>{
+    const r = rechNG('film');
+    r.res = [ { id:1, __media:'movie', title:'A', vote_average:8 },
+              { id:2, __media:'movie', title:'B', vote_average:7 },
+              { id:3, __media:'movie', title:'C', vote_average:6 } ];
+    r.charge = true; r.total = 3;
+    /* Sans sélection, pas de carte : « le meilleur » ne veut rien dire. */
+    egal(titreMatchRech(), null, 'une carte s\'affiche sans aucun critère');
+    r.genre = ['Drame'];
+    egal(titreMatchRech().id, 1);
+    sansEcran(()=> matchSuivantRech());
+    egal(titreMatchRech().id, 2);
+    sansEcran(()=>{ matchSuivantRech(); matchSuivantRech(); });
+    egal(titreMatchRech().id, 1, '« Suivant → » ne cycle pas');
+    /* Et la grille ne le remontre pas. */
+    const g = boiteHtml(grilleRech());
+    const ids = [].slice.call(g.querySelectorAll('.jq'))
+      .map(b => (b.getAttribute('onclick').match(/ouvrirTitre\((\d+)/) || [])[1]);
+    egal(ids, ['2','3'], 'le titre montré en carte est dupliqué dans la grille');
+  });
+
+  test('RA18 — le duo est 100 % local et parle des DEUX côtés', ()=>{
+    const r = rechNG('film');
+    genresTMDB.movie = [{id:18,nom:'Drame'}];
+    db.movies[1] = { id:1, title:'A', genres:['Drame'], seen:true, addedAt:1 };
+    partage.suivis = [{ id:'u1', pseudo:'Sarah' }];
+    biblios['u1'] = { movies:{ 42:{ id:42, title:'Commun', genres:['Drame'] } }, shows:{} };
+    profilRechCache.duoSig = null;
+    r.avec = 'u1';
+    poserTriRech('gouts', true);
+    const x = { id:42, __media:'movie', title:'Commun', genre_ids:[18], vote_average:7 };
+    const raison = raisonGoutRech(x, 'movie');
+    vrai(raison.indexOf('toi :') >= 0 && raison.indexOf('Sarah :') >= 0,
+         'les deux côtés ne sont pas dits');
+    /* Le titre commun aux deux monte : c\'est la définition de l\'intersection. */
+    const seul = { id:43, __media:'movie', title:'Seul', genre_ids:[18], vote_average:7 };
+    vrai(scoreGoutRech(x) > scoreGoutRech(seul),
+         'un titre de la bibliothèque du proche ne pèse pas plus lourd');
+    /* La carte le dit aussi : « Votre » et non « Ton ». */
+    r.res = [x]; r.charge = true; r.genre = ['Drame'];
+    vrai(boiteHtml(carteMatchRech()).textContent.indexOf('Votre meilleur match') >= 0,
+         'la carte parle au singulier en mode duo');
+    partage.suivis = []; delete biblios['u1']; profilRechCache.duoSig = null;
+  });
+
+  test('RA19 — le compteur de la feuille dit le MÊME chiffre que la barre', ()=>{
+    const r = rechNG('film');
+    r.total = 1234;
+    /* Le même formatage que la barre — espace fine insécable comprise : c'est
+       `toLocaleString('fr-FR')` des deux côtés, et le comparer à une chaîne
+       écrite à la main ferait échouer le cas pour une raison typographique. */
+    vrai(texteVoirFiltresRech().indexOf((1234).toLocaleString('fr-FR')) >= 0,
+         'le bouton ne dit pas le total');
+    /* Et il garde la convention « moins de » des unions : deux compteurs qui
+       ne disent pas la même chose, c\'est un compteur qui ment. */
+    r.pasvu = 'non';
+    vrai(prefixeCompteurRech() === 'moins de ', 'le tamis ne déclenche plus le préfixe');
+    vrai(texteVoirFiltresRech().indexOf('moins de') >= 0,
+         'la feuille annonce un total exact que la barre annonce approché');
+  });
+
+  test('RA20 — la passerelle « enregistrer ces filtres » reprend la sélection', ()=>{
+    const r = rechNG('serie');
+    r.genre = ['Drame']; r.note = '8'; r.gore = 'non'; r.statut = 'finie';
+    const g = reglesDepuisSelectionRech();
+    egal(g.fam, 'serie'); egal(g.genre, ['Drame']); egal(g.note, '8');
+    egal(g.gore, 'non'); egal(g.statut, 'finie');
+    /* Et une ambiance ainsi construite, réactivée, rend la même recherche. */
+    const r2 = rechNG('tout');
+    sansEcran(()=> enregistrerAmbiance({ id:'a9', emoji:'✨', nom:'Reprise', regles:g, creeLe:1 }));
+    r2.ambiance = 'a9'; r2.fam = 'serie';
+    egal(critereRech('genre'), ['Drame']);
+    egal(critereUnRech('note'), '8');
+    egal(paramsSocleRech('tv').with_status, '3|4');
   });
 
   /* ==================== Bilan ====================

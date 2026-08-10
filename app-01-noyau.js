@@ -1412,6 +1412,9 @@ const GOUT_BLOCS = {
      retrouver éteinte sur la tablette n'aurait aucun sens.
      Le CACHE des textes, lui, reste local (localStorage) — §4.3. */
   ia:         ['ia'],
+  /* SPEC-05 §2 — les ambiances de la Recherche. Un bloc à elles : en créer une
+     ne doit pas dater les genres ni les graines. */
+  ambiances:  ['ambiances'],
   divers:     ['propose','toutesOrigines','jour','neutres']
 };
 

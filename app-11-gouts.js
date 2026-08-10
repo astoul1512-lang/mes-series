@@ -92,6 +92,11 @@ function migrerGouts(){
      SPEC-05 tranche que l'IA de la Recherche s'éteint séparément de celle de
      Découvrir. Un objet plutôt que deux booléens à plat, pour que le sous-bloc
      de synchro `ia` n'ait qu'une clé à porter. */
+  /* SPEC-05 §2 — LES AMBIANCES : des filtres nommés, créés par la personne.
+     Plafond de 12 (spec), sous-bloc de synchro `ambiances` — elles se fusionnent
+     donc sans écraser les genres ni les plateformes réglés le même jour sur
+     l'autre appareil, ce qui est très exactement le mécanisme de C4. */
+  if(!Array.isArray(g.ambiances)) g.ambiances = [];
   if(!g.ia || typeof g.ia !== 'object' || Array.isArray(g.ia)) g.ia = {};
   if(typeof g.ia.decouvrir !== 'boolean') g.ia.decouvrir = false;
   if(typeof g.ia.recherche !== 'boolean') g.ia.recherche = false;

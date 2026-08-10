@@ -261,7 +261,7 @@ const gesteAbouti = `async ()=>{
         go('search', {}, 'none');
         amorcerHistorique();
         await new Promise(r2=>setTimeout(r2,150));
-        const b = [...document.querySelectorAll('#app button, #app .chip')].find(x=>/préciser|filtr/i.test(x.textContent));
+        const b = [...document.querySelectorAll('#app button, #app .chip')].find(x=>/préciser|filtr|affiner/i.test(x.textContent));
         if(b) b.click();
         await new Promise(r2=>setTimeout(r2,250));
         const avant = { feuille: document.getElementById('sheet').classList.contains('show'),
@@ -278,7 +278,7 @@ const gesteAbouti = `async ()=>{
        'le bouton ferme la feuille et on RESTE dans l’app (avant correctif : sortie de l’app, recherche perdue)');
     if(!r1){ await decor(page); }   // la page est partie : on la remet en place pour la suite
     const r2 = await page.evaluate(async ()=>{
-      const b = [...document.querySelectorAll('#app button, #app .chip')].find(x=>/préciser|filtr/i.test(x.textContent));
+      const b = [...document.querySelectorAll('#app button, #app .chip')].find(x=>/préciser|filtr|affiner/i.test(x.textContent));
       if(b) b.click();
       await new Promise(r3=>setTimeout(r3,250));
       closeSheet();                                            // fermeture DANS l'app

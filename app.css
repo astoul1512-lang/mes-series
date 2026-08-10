@@ -2191,3 +2191,95 @@ body.rphnette .rphrase{background:#15171e}
      grille filtrée). Même contenu, habillage ordinaire. */
   .h4bande{padding:10px 0 2px}
   .h4bande .chips{padding-bottom:8px}
+
+/* ===== SPEC-05 lot A — LA RECHERCHE NOUVELLE GÉNÉRATION =====
+
+   Pilules, rangée d'ambiances, feuille Filtres en accordéon, carte du meilleur
+   match, contrôle de tri. Aucune classe de la Recherche d'hier n'est
+   redéclarée : `.rmot` reçoit seulement des VARIANTES (`.ia`, `.ctx`, `.duo`),
+   parce que la pilule EST le mot d'hier dans un format compact — SPEC-07 §2.4
+   s'appuie sur ce nom, il ne fallait pas en inventer un autre.
+   La couleur violette de l'IA est la même que celle des humeurs de Découvrir
+   (`#a78bfa`) : une seule couleur pour « ça vient d'un modèle », partout. */
+
+  /* --- Les pilules (§5) --- */
+  .rpils{display:flex;flex-wrap:wrap;align-items:center;gap:7px}
+  .rpils .rmot{display:inline-flex;align-items:center;gap:5px;padding:5px 11px;
+    border-radius:999px;font-size:12px;font-weight:650;line-height:1.25}
+  .rmot.ia{background:rgba(167,139,250,.13);border-color:#a78bfa66;color:#c9b8ff}
+  .rmot.ctx{background:rgba(62,207,142,.10);border-color:#3ecf8e55;color:#7fd8b0}
+  .rmot.duo{background:rgba(255,184,77,.10);border-color:#ffb84d55;color:#ffd9a0}
+  .rpx{opacity:.55;font-weight:800;font-size:11px}
+
+  /* --- La rangée d'ambiances (§2) --- */
+  .ambr{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;
+    padding:10px 16px 2px;-webkit-overflow-scrolling:touch}
+  .ambr::-webkit-scrollbar{display:none}
+  .preset{display:inline-flex;align-items:center;gap:6px;padding:8px 13px;border-radius:12px;
+    background:var(--surface);border:1px solid var(--line);color:var(--text);
+    font-size:12.5px;font-weight:700;white-space:nowrap;flex:none;font-family:inherit}
+  .preset.on{background:rgba(167,139,250,.15);border-color:#a78bfa88;color:#e6ddff}
+  .preset.plus{border-style:dashed;color:var(--muted);font-weight:600}
+
+  /* --- La feuille Filtres, en accordéon (§4) --- */
+  .faccs{margin-top:4px}
+  .facc{border-bottom:1px solid var(--line)}
+  .fhead{display:flex;align-items:center;gap:8px;padding:13px 2px;width:100%;
+    background:none;border:0;color:var(--text);font-family:inherit;text-align:left}
+  .fhead b{font-size:13.5px;font-weight:750;color:var(--text);flex:none}
+  .fsum{font-size:12px;color:#c9b8ff;margin-left:auto;text-align:right;max-width:55%;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fsum.vide{color:var(--muted)}
+  .fchev{color:var(--muted);display:flex;flex:none;transition:transform .2s}
+  .fchev svg{width:16px;height:16px}
+  .facc.on .fchev{transform:rotate(90deg)}
+  .fbody{padding:0 2px 13px}
+  .fsstitre{font-size:11.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+    color:var(--muted);margin:12px 0 0}
+  .fopts{display:flex;flex-wrap:wrap;gap:7px;margin-top:7px}
+  .fopt{background:var(--surface2);border:1px solid var(--line);color:#c6cad6;border-radius:999px;
+    padding:6px 13px;font-size:12.5px;font-weight:650;font-family:inherit}
+  .fopt.on{background:var(--accent-dim);border-color:#3d8bff77;color:#9cc4ff;font-weight:800}
+
+  /* --- La carte du meilleur match (§5) --- */
+  .rmatch{display:flex;gap:13px;align-items:center;margin:10px 16px 0;padding:12px;
+    border-radius:16px;background:var(--surface);border:1px solid #ffffff14}
+  .rmaff{width:74px;flex:none;background:none;border:0;padding:0}
+  .rmaff .poster{width:74px;height:111px;border-radius:10px}
+  .rmtxt{flex:1;min-width:0}
+  .rmkick{font-size:11px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:#c9b8ff}
+  .rmnom{font-size:16.5px;display:block;margin-top:3px;line-height:1.2}
+  .rmmeta{font-size:12px;color:var(--muted);margin-top:2px}
+  .rmraison{font-size:11.5px;color:#c9b8ff;margin-top:4px;line-height:1.35}
+  .rmact{display:flex;gap:8px;margin-top:9px}
+
+  /* --- Le contrôle de tri (§7) --- */
+  .rtri{display:flex;align-items:center;gap:8px;margin:14px 16px 0;
+    font-size:12px;color:var(--muted)}
+  .rtb{background:var(--surface2);border:1px solid var(--line);color:var(--muted);
+    border-radius:999px;padding:5px 12px;font-size:12px;font-weight:700;font-family:inherit}
+  .rtb.on{background:var(--accent-dim);border-color:#3d8bff77;color:#9cc4ff}
+  /* La raison sous une affiche : discrète, deux lignes au plus, jamais un pavé. */
+  .rraison{font-size:10.5px;color:#c9b8ff;margin-top:3px;line-height:1.35;
+    max-height:2.7em;overflow:hidden}
+
+  /* --- La feuille de création d'ambiance (§2) --- */
+  .ongl{display:flex;gap:8px;margin-top:10px}
+  .ongl button{flex:1;padding:9px 0;border-radius:10px;background:var(--surface2);
+    border:1px solid var(--line);color:var(--muted);font-size:13px;font-weight:700;font-family:inherit}
+  .ongl button.on{background:rgba(167,139,250,.13);border-color:#a78bfa77;color:#c9b8ff}
+  .ambtete{display:flex;align-items:center;gap:8px;margin-top:12px}
+  .ambemo{font-size:22px;background:none;border:0;padding:0;line-height:1;flex:none}
+  .ambnom{flex:1;min-width:0;background:var(--surface2);border:1px solid var(--line);
+    border-radius:10px;padding:8px 11px;color:var(--text);font:inherit;font-size:15px;
+    font-weight:700;outline:none}
+  .ambnom:focus{border-color:var(--accent)}
+  .ambsrc{font-size:11.5px;color:#c9b8ff;flex:none}
+  .ligambs{margin-top:6px}
+  .ligamb{display:flex;justify-content:space-between;align-items:center;gap:10px;
+    padding:11px 2px;border-bottom:1px solid var(--line);font-size:13.5px;width:100%;
+    background:none;border-left:0;border-right:0;border-top:0;color:var(--text);
+    font-family:inherit;text-align:left}
+  .ligamb:last-child{border-bottom:0}
+  .ligamb .val{color:#c9b8ff;font-weight:700;text-align:right;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:58%}
