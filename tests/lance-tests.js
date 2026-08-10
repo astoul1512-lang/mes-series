@@ -658,10 +658,14 @@ function collisionsCss(src){
           return { cast: lot('movie','Acteur').map(x=>Object.assign({media_type:'movie'}, x)) };
         if(/recommendations/.test(chemin)){
           const l = lot(/\/tv\//.test(chemin) ? 'tv' : 'movie', 'Reco');
-          l.push({ id:7777, poster_path:'/c.jpg', backdrop_path:'/c.jpg',
-                   title:'Le Commun', name:'Le Commun', release_date:'2011-01-01',
-                   first_air_date:'2011-01-01', vote_average:8, vote_count:4000,
-                   genre_ids:[18], original_language:'en' });
+          /* SPEC-04 — DIX titres communs et non plus un seul : depuis la règle
+             des 10, une rangée de croisement à un titre n'existe plus, et le
+             test ne prouverait donc plus rien de ce qu'il vient prouver. */
+          for(let k = 0; k < 10; k++)
+            l.push({ id:7770+k, poster_path:'/c'+k+'.jpg', backdrop_path:'/c'+k+'.jpg',
+                     title:'Le Commun '+k, name:'Le Commun '+k, release_date:'2011-01-01',
+                     first_air_date:'2011-01-01', vote_average:8, vote_count:4000,
+                     genre_ids:[18], original_language:'en' });
           return { results:l, total_pages:3 };
         }
         return { results: lot(/\/discover\/tv/.test(chemin) ? 'tv' : 'movie', 'Disc'),
@@ -675,22 +679,42 @@ function collisionsCss(src){
       db.gouts.pasPourMoi = {};
       db.gouts.acteurs = [{ id:2037, nom:'Cillian Murphy' }];
       db.gouts.plates  = [{ id:8, nom:'Netflix' }];
-      for(let i = 1; i <= 6; i++)
+      /* SPEC-04 — douze films vus et non plus six : c'est ce qui permet au
+         « Top 10 pour toi » d'exister, et donc d'être éprouvé. */
+      for(let i = 1; i <= 12; i++)
         db.movies[i] = { id:i, title:'Film '+i, genres:['Drame'], seen:true, watchedAt:1,
-                         addedAt:1, date:'2014-01-01', poster:'/f.jpg' };
+                         addedAt:1, date:'2014-01-01', poster:'/f.jpg', note:8 - i/100 };
       db.shows[50] = { id:50, name:'Série 50', genres:['Drame'], status:'Ended', poster:'/s.jpg',
                        seasons:{1:[{e:1,n:'E1',d:'2020-01-01',r:42}]}, watched:{'1x1':1},
                        addedAt:1, updated:1 };
       if(riche) [1,2,3,4].forEach(i => poserAvis('movie', i, 1));
       partage.suivis = [{ id:'ami', pseudo:'Léa' }];
-      biblios.ami = { movies:{ 900:{ id:900, title:'Chez Léa', poster:'/l.jpg',
-                                     genres:['Drame'], date:'2018-01-01', watchedAt:5 } } };
-      ui.disc.type = 'tout';
+      /* Douze titres chez Léa, pour la même raison : sous dix, « Vu par tes
+         proches » n'est plus une rangée. */
+      biblios.ami = { movies:{} };
+      for(let i = 0; i < 12; i++)
+        biblios.ami.movies[900+i] = { id:900+i, title:'Chez Léa '+i, poster:'/l.jpg',
+                                      genres:['Drame'], date:'2018-01-01', watchedAt:5 };
+      ui.disc.type = 'tout'; ui.disc.humeur = null;
+      try{ localStorage.removeItem(MEMO_CLE); }catch(e){}
+      memoRangees = null;
       oublierSuggestions();
       view = 'discover'; params = {};
       return chargerSuggestions(true).then(()=>{
         render();
+        /* SPEC-04 — on relève AUSSI ce qui ne se lit que sur l'écran peint :
+           les rangées trop courtes, les badges de famille et le compte de la
+           tuile « Tout voir ». Le moteur peut avoir raison en mémoire et la
+           vue se tromper — c'est déjà arrivé. */
+        const rails = [...document.querySelectorAll('#dres .rangee')];
+        const nomRail = r => (r.previousElementSibling||{}).textContent || '?';
         return { rangees: [...document.querySelectorAll('.sectitle')].map(e=>e.textContent),
+                 courtes: rails
+                   .filter(r => r.querySelectorAll('.vgn, .h4rangc').length < 10)
+                   .map(nomRail),
+                 badges: document.querySelectorAll('#dres .h4badge').length,
+                 tuiles: [...document.querySelectorAll('#dres .vgtoutbox i')]
+                   .map(e=>e.textContent).join(' '),
                  hero: (document.querySelector('.d4nom')||{}).textContent || null,
                  raison: (document.querySelector('.d4pq')||{}).textContent || null,
                  lien: !!document.querySelector('.d4lien'),
@@ -702,22 +726,40 @@ function collisionsCss(src){
     const rate = m => erreurs.push('lot D : ' + m);
 
     const riche = await dessine(true);
-    /* L'ordre du §3.4, et surtout la présence des DEUX rangées de cœur. */
-    ['Dans l\'esprit de Film', 'Ce que tes favoris ont en commun', 'Avec Cillian Murphy',
-     'Des drames pour toi', 'Vu par tes proches', 'Les incontournables des années',
-     'Sur Netflix', 'Sorties récentes', 'Bientôt'].forEach((attendu, i)=>{
+    /* L'ordre de SPEC-04 §1, et surtout la présence des DEUX rangées de cœur
+       (que la spec conserve) ET des cinq rangées neuves. */
+    ['Top 10 pour toi', 'Parce que tu as aimé Film', 'Ce que tes favoris ont en commun',
+     'Avec Cillian Murphy', 'Des drames pour toi', 'Vu par tes proches', 'Nouveautés',
+     'Acclamés par la critique', 'À finir en un week-end', 'Des pépites que tu as ratées',
+     'Les classiques à rattraper', 'Les incontournables des années',
+     'Sur Netflix', 'Bientôt'].forEach(attendu=>{
       if(!riche.rangees.some(t => t.indexOf(attendu) === 0)) rate('rangée manquante : ' + attendu);
     });
     const rang = t => riche.rangees.findIndex(x => x.indexOf(t) === 0);
-    if(!(rang('Dans l\'esprit de Film') < rang('Ce que tes favoris ont en commun')
+    /* « À finir en un week-end » est volontairement hors de cette chaîne : du
+       vendredi 17 h au dimanche elle remonte en 2ᵉ position, et un test d'ordre
+       qui échoue trois jours sur sept n'est pas un test. Sa place a son propre
+       contrôle, horloge simulée, dans `test.html`. */
+    if(!(rang('Top 10 pour toi') < rang('Parce que tu as aimé Film')
+      && rang('Parce que tu as aimé Film') < rang('Ce que tes favoris ont en commun')
       && rang('Ce que tes favoris ont en commun') < rang('Avec Cillian Murphy')
       && rang('Avec Cillian Murphy') < rang('Des drames pour toi')
       && rang('Des drames pour toi') < rang('Vu par tes proches')
-      && rang('Vu par tes proches') < rang('Les incontournables des années')
+      && rang('Vu par tes proches') < rang('Nouveautés')
+      && rang('Nouveautés') < rang('Acclamés par la critique')
+      && rang('Acclamés par la critique') < rang('Des pépites que tu as ratées')
+      && rang('Des pépites que tu as ratées') < rang('Les classiques à rattraper')
+      && rang('Les classiques à rattraper') < rang('Les incontournables des années')
       && rang('Les incontournables des années') < rang('Sur Netflix')
-      && rang('Sur Netflix') < rang('Sorties récentes')
-      && rang('Sorties récentes') < rang('Bientôt')))
-      rate('l\'ordre fixe du §3.4 n\'est pas respecté : ' + riche.rangees.join(' | '));
+      && rang('Sur Netflix') < rang('Bientôt')))
+      rate('l\'ordre fixe de SPEC-04 §1 n\'est pas respecté : ' + riche.rangees.join(' | '));
+    /* SPEC-04 — la règle des 10 se vérifie SUR L'ÉCRAN PEINT, pas seulement en
+       mémoire : aucune rangée de moins de dix affiches ne doit rester. */
+    if(riche.courtes.length)
+      rate('des rangées de moins de dix affiches sont à l\'écran : ' + riche.courtes.join(', '));
+    if(!riche.badges) rate('aucun badge FILM/SÉRIE/ANIMÉ en famille « Tout »');
+    if(!/les \d+/.test(riche.tuiles || ''))
+      rate('la tuile « Tout voir » ne dit pas combien de titres il y a');
     if(!riche.hero) rate('aucune proposition du jour en tête d\'écran');
     if(!/Parce que tu as aimé/.test(riche.raison || '')) rate('la proposition n\'a pas de raison lisible');
     if(!riche.lien) rate('le lien « Ajuster mes goûts » a disparu');
@@ -735,9 +777,37 @@ function collisionsCss(src){
     if(apres.hero === avant) rate('« Pas pour moi » ne remplace pas la carte');
     if(apres.avis) rate('« Pas pour moi » a écrit un 👎 : c\'est un rejet ferme, pas un report');
 
+    /* SPEC-04 §0.2 — L'HUMEUR, DE BOUT EN BOUT ET SUR L'ÉCRAN RÉEL : on touche
+       la puce, l'écran se recompose ; on la retouche, il revient EXACTEMENT
+       comme avant. C'est la promesse la plus facile à casser du lot, parce
+       qu'elle tient à une clé de cache. */
+    const repos = await page.evaluate(()=>
+      [...document.querySelectorAll('.sectitle')].map(e=>e.textContent).join('|'));
+    await page.click('.h4chips .h4chip:nth-child(2)');           // 😱 Frissonner
+    await page.waitForFunction(()=> !!document.querySelector('.h4chip.on'), null, {timeout:8000});
+    await page.waitForFunction(()=> !!document.querySelector('.d4tag.h4on'), null, {timeout:8000});
+    const humeur = await page.evaluate(()=>({
+      cles: [...document.querySelectorAll('.sectitle')].map(e=>e.textContent),
+      tag: (document.querySelector('.d4tag')||{}).textContent || '',
+      violet: !!document.querySelector('.d4act .btn.h4btn'),
+      famille: ui.disc.type, hum: ui.disc.humeur }));
+    if(humeur.cles.indexOf('De la tension, pas du sang') < 0)
+      rate('la rangée principale de l\'humeur n\'est pas à l\'écran : ' + humeur.cles.join(' | '));
+    if(!/Pour frissonner ce soir/.test(humeur.tag))
+      rate('le libellé du hero ne passe pas à l\'humeur : ' + humeur.tag);
+    if(!humeur.violet) rate('le bouton principal ne prend pas la couleur de l\'humeur');
+    if(humeur.famille !== 'tout') rate('poser une humeur a changé la famille : elles se cumulent');
+    await page.click('.h4chips .h4chip:nth-child(2)');           // second appui
+    await page.waitForFunction(()=> !document.querySelector('.h4chip.on'), null, {timeout:8000});
+    const retour = await page.evaluate(()=>
+      [...document.querySelectorAll('.sectitle')].map(e=>e.textContent).join('|'));
+    if(retour !== repos)
+      rate('un second appui ne rend pas EXACTEMENT l\'écran au repos :\n'+
+           '        avant  ' + repos + '\n        après  ' + retour);
+
     /* Le profil qui démarre : pas de rangée de cœur, mais un appel au duel. */
     const pauvre = await dessine(false);
-    if(pauvre.rangees.some(t => /^Dans l'esprit de/.test(t)))
+    if(pauvre.rangees.some(t => /^Parce que tu as aimé/.test(t)))
       rate('une rangée de cœur s\'ouvre sans le moindre 👍');
     if(!pauvre.appel) rate('aucun appel au duel sur un profil qui n\'a rien déclaré');
     if(!/incontournable/.test(pauvre.raison || ''))

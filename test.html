@@ -1332,29 +1332,54 @@ window.MODE_TEST = true;
       vrai(duel.tete && String(duel.tete.id) === '5', 'le vrai point de départ n\'est pas annoncé');
       const boite = document.createElement('div');
       boite.innerHTML = ecranDuelResultat();
-      vrai(boite.textContent.indexOf('Dans l\'esprit de') >= 0,
+      /* SPEC-04 — la rangée promise a changé de nom (§1 rangée 3). L'écran de
+         résultat annonçait encore « Dans l'esprit de X », une rangée qui
+         n'existe plus : la promesse portait sur un nom introuvable à l'écran
+         d'arrivée. Le test suit le renommage. */
+      vrai(boite.textContent.indexOf('Parce que tu as aimé') >= 0,
            'la promesse a disparu alors qu\'elle est vraie');
+      vrai(boite.textContent.indexOf('Dans l\'esprit de') < 0,
+           'l\'écran promet encore une rangée qui n\'existe plus');
+      vrai(boite.textContent.indexOf('remplace la rotation') < 0,
+           'depuis R5 l\'ancrage tourne : promettre la permanence serait faux dès demain');
     });
     fermerDuel();
   });
 
-  test('jouer une famille quand une autre alimente la rangée ne promet rien', ()=>{
-    baseVierge();
-    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
-    for(let i=21;i<=32;i++) db.shows[i] = serie(i, [ep(1,HIER)], {'1x1':1});
-    /* Un podium de films déjà en place : la rangée part de LUI, quelle que soit
-       la famille qu'on vient de départager. */
-    db.podium.film = ['1']; db.podium.maj = 1;
-    db.classement.film['1'] = { s:1400, n:5 };
-    ouvrirDuel('serie');
-    horsLigne(()=>{
-      db.classement.serie['21'] = { s:1300, n:4 };
-      terminerDuel();
-      egal(db.podium.serie[0], '21', 'le podium des séries n\'a pas été projeté');
-      vrai(!duel.tete,
-           'on promet une rangée bâtie sur la série alors qu\'elle partira du film');
-    });
-    fermerDuel();
+  /* R5 (10/08) — LE DÉCLENCHEUR A CHANGÉ, PAS LE CONTRAT. Avant, la promesse
+     était fausse quand une AUTRE famille portait déjà un podium : `graineEsprit`
+     prenait le premier podium non vide dans l'ordre films-séries-animés. Depuis
+     l'arbitrage R5, l'ancrage tourne chaque jour parmi les titres aimés et le
+     podium réunis — la promesse est donc fausse simplement les jours où la
+     rotation ne tombe pas sur notre titre.
+     Le contrat, lui, n'a pas bougé d'un mot : ON NE PROMET QUE SI LA FONCTION
+     QUI ALIMENTE LA RANGÉE DÉSIGNE NOTRE TITRE. C'est ce que ce test vérifie,
+     dans les deux sens, sans dépendre du jour où on le lance. */
+  test('on ne promet la rangée que si elle part vraiment de notre titre', ()=>{
+    const vraie = window.graineEsprit;
+    try{
+      const jouer = ()=>{
+        baseVierge();
+        for(let i=21;i<=32;i++) db.shows[i] = serie(i, [ep(1,HIER)], {'1x1':1});
+        ouvrirDuel('serie');
+        let t = null;
+        horsLigne(()=>{
+          db.classement.serie['21'] = { s:1300, n:4 };
+          terminerDuel();
+          egal(db.podium.serie[0], '21', 'le podium des séries n\'a pas été projeté');
+          t = duel.tete;
+        });
+        fermerDuel();
+        return t;
+      };
+      window.graineEsprit = ()=> ({ media:'tv', id:'21', nom:'S21',
+                                    famille:'serie', signal:'podium' });
+      vrai(jouer(), 'la rangée part bien de notre titre et on ne promet rien');
+      window.graineEsprit = ()=> ({ media:'movie', id:'999', nom:'Autre',
+                                    famille:'film', signal:'aime' });
+      vrai(!jouer(),
+           'on promet une rangée bâtie sur la série alors qu\'elle partira d\'ailleurs');
+    } finally { window.graineEsprit = vraie; }
   });
 
   test('le score survit à la partie : rejouer ne repart pas de 1000', ()=>{
@@ -4396,6 +4421,14 @@ window.MODE_TEST = true;
     baseVierge();
     ui.disc.type = type || 'tout';
     ui.disc.tri = 'populaire';
+    ui.disc.humeur = null;
+    /* SPEC-04 — la mémoire des rythmes et de l'anti-déjà-vu vit dans
+       `localStorage`, donc elle SURVIT d'un test à l'autre. Sans cette remise
+       à zéro, un test qui montre trois jours de suite le même identifiant
+       ferait reculer un titre dans le test suivant, qui échouerait alors pour
+       une raison qui n'est pas la sienne. */
+    try{ localStorage.removeItem(MEMO_CLE); }catch(e){}
+    memoRangees = null; memoFige = null;
     oublierSuggestions();
     const c = suggCourantes();
     Object.assign(c, suggVide());
@@ -4407,78 +4440,436 @@ window.MODE_TEST = true;
     id:id, media:media || 'movie', nom:'T'+id, affiche:'/p'+id+'.jpg', bandeau:null,
     date:'2015-01-01', note:7.5, votes:900, genre_ids:genres || [], langue:'en' }, extra || {});
 
+  /* SPEC-04 — LA RÈGLE DES 10 EST STRICTE, et elle change tous les tests qui
+     suivent : une rangée qui ne porte pas dix titres n'existe plus. `dL`
+     fabrique un lot de la bonne taille sans écrire dix lignes par rangée. */
+  const dL = (base, n, media, genres) =>
+    Array.from({ length: n === undefined ? 10 : n }, (_, i) => d_(base + i, media, genres));
+
   function vitrinePleine(){
     const c = vitrineVierge('tout');
-    c.esprit   = { titre:'Whiplash', id:1, media:'movie', signal:'aime', famille:'film', l:[d_(11)] };
-    c.favoris  = { l:[d_(12)] };
-    c.acteur   = { id:99, titre:'Cillian Murphy', l:[d_(13)] };
-    c.genre    = { nom:'Drame', titre:'Des drames pour toi', l:[d_(14)] };
-    c.sections = [{ cle:'serie', titre:'Des séries pour toi', l:[d_(15,'tv')] }];
-    c.cercle   = { l:[d_(16)] };
-    c.incont   = { cle:'1990', titre:'Les incontournables des années 90', l:[d_(17)] };
-    c.plates   = { titre:'Sur Netflix et Max', l:[d_(18)] };
-    c.nouveautes = [d_(19)];
-    c.avenir   = [d_(20)];
+    c.top10    = dL(100, 10);
+    c.esprit   = { titre:'Whiplash', id:1, media:'movie', signal:'aime', famille:'film', l:dL(110) };
+    c.favoris  = { l:dL(120) };
+    c.acteur   = { id:99, titre:'Cillian Murphy', l:dL(130) };
+    c.genre    = { nom:'Drame', titre:'Des drames pour toi', l:dL(140) };
+    c.sections = [{ cle:'serie', titre:'Des séries pour toi', l:dL(150, 10, 'tv') }];
+    c.cercle   = { l:dL(160) };
+    c.incont   = { cle:'1990', titre:'Les incontournables des années 90', l:dL(170) };
+    c.plates   = { titre:'Sur Netflix et Max', l:dL(180) };
+    c.nouveautes = dL(190);
+    c.acclames   = dL(200);
+    c.weekend    = dL(210);
+    c.pepites    = dL(220);
+    c.classiques = dL(230);
+    c.avenir     = dL(240);
     return c;
   }
+  /* « À finir en un week-end » remonte en 2ᵉ position du vendredi 17 h au
+     dimanche. Les tests d'ORDRE ne doivent pas dépendre du jour où on les
+     lance : ils comparent la liste privée de cette rangée, et la remontée a
+     son test à elle, horloge simulée. */
+  const sansWeekend = l => l.filter(c => c !== 'weekend');
 
-  test('les dix rangées sortent dans l\'ordre fixe du §3.4', ()=>{
+  test('les rangées sortent dans l\'ordre fixe de SPEC-04 §1', ()=>{
     vitrinePleine();
-    egal(rangeesSuggerees().map(r=>r.cle),
-      ['esprit','favoris','acteur:99','genre','serie','cercle','incont','plates','nouv','avenir'],
+    const cles = rangeesSuggerees().map(r=>r.cle);
+    vrai(cles.indexOf('weekend') >= 0, '« À finir en un week-end » a disparu de l\'écran');
+    egal(sansWeekend(cles),
+      ['top10','esprit','favoris','acteur:99','genre','serie','cercle','nouv',
+       'acclames','pepites','classiques','incont','plates','avenir'],
       'l\'ordre va du plus personnel au plus générique, il ne se négocie pas');
   });
 
   test('chaque rangée dit d\'où elle vient dans son titre', ()=>{
     vitrinePleine();
-    egal(rangeesSuggerees().map(r=>r.titre), [
-      'Dans l\'esprit de Whiplash', 'Ce que tes favoris ont en commun',
+    const t = rangeesSuggerees().map(r=>r.titre)
+      .filter(x => x !== 'À finir en un week-end');
+    egal(t, [
+      'Top 10 pour toi', 'Parce que tu as aimé Whiplash',
+      'Ce que tes favoris ont en commun',
       'Avec Cillian Murphy', 'Des drames pour toi', 'Des séries pour toi',
-      'Vu par tes proches', 'Les incontournables des années 90',
-      'Sur Netflix et Max', 'Sorties récentes', 'Bientôt']);
+      'Vu par tes proches', 'Nouveautés', 'Acclamés par la critique',
+      'Des pépites que tu as ratées', 'Les classiques à rattraper',
+      'Les incontournables des années 90',
+      'Sur Netflix et Max', 'Bientôt']);
   });
 
   test('une rangée qui n\'a rien à dire ne s\'affiche pas', ()=>{
     const c = vitrineVierge('tout');
     c.esprit = { titre:'X', id:1, media:'movie', l:[] };     // calculée mais vide
-    c.cercle = { l:[] };                                     // aucun proche n\'a rien de neuf
-    c.nouveautes = [d_(3)];
+    c.cercle = { l:[] };                                     // aucun proche n'a rien de neuf
+    c.nouveautes = dL(300);
     egal(rangeesSuggerees().map(r=>r.cle), ['nouv'],
          'une case vide produit une rangée : c\'est le plafond qui revient par la fenêtre');
   });
 
-  /* LOT E — POINT 10, LE PENDANT CÔTÉ ÉCRAN. Une rangée VIDE ne s'affiche pas
-     (ci-dessus) ; une rangée de DEUX titres, si. Il n'y a aucun plancher, et
-     c'est une décision explicite d'Adrien du 02/08 : « on l'affiche quand
-     même ». Une rangée courte dit quelque chose de vrai — « sur ce thème, tu
-     as déjà presque tout vu » — et la masquer cacherait une information. */
-  test('une rangée de deux titres est bien peinte, sans plancher d\'affichage', ()=>{
+  /* ===== PIERRE TOMBALE — LE PLANCHER D'AFFICHAGE EST REVENU =====
+     Ici vivait « une rangée de deux titres est bien peinte, sans plancher
+     d'affichage » (lot E, point 10), qui gravait une décision d'Adrien du
+     02/08 : « on l'affiche quand même ». SPEC-04 §0.5 et §0.6 tranchent dans
+     l'autre sens — « mieux vaut 3 rangées pleines que 9 trouées » — et la
+     règle devient STRICTE : dix titres ou la rangée n'existe pas.
+     Ce n'est pas la même décision retournée sans raison. Ce qui manquait au
+     lot E, c'était l'issue pour les titres orphelins : ils n'étaient nulle
+     part ailleurs, donc les cacher les perdait. Ils descendent maintenant dans
+     « Aussi pour toi ». Le test ci-dessous remplace l'ancien et vérifie les
+     DEUX moitiés de la nouvelle règle — le masquage et le repêchage. */
+  test('une rangée de neuf titres n\'existe pas, et ses titres ne sont pas perdus', ()=>{
     const c = vitrineVierge('tout');
-    c.esprit = { titre:'Whiplash', id:1, media:'movie', signal:'aime', famille:'film',
-                 l:[d_(11), d_(12)] };
-    const r = rangeesSuggerees().find(x => x.cle === 'esprit');
-    vrai(r, 'une rangée de deux titres a été masquée par un plancher');
-    egal(r.l.length, 2, 'la rangée a été amputée');
+    c.esprit     = { titre:'Whiplash', id:1, media:'movie', signal:'aime', famille:'film',
+                     l:dL(11, 9) };                       // neuf : sous la barre
+    c.nouveautes = dL(30, 9);                             // neuf aussi
+    const r = rangeesSuggerees();
+    vrai(!r.some(x => x.cle === 'esprit'), 'une rangée de neuf titres est passée à l\'écran');
+    const repli = r.find(x => x.cle === 'reste');
+    vrai(repli, '« Aussi pour toi » n\'a pas récupéré les orphelins');
+    egal(repli.l.length, 18, 'les deux rangées écartées font dix-huit titres à recaser');
+    egal(r[r.length - 1].cle, 'reste', '« Aussi pour toi » doit fermer l\'écran');
   });
 
-  test('un profil qui démarre voit quatre rangées, pas dix', ()=>{
+  test('« Aussi pour toi » obéit elle aussi à la règle des 10', ()=>{
     const c = vitrineVierge('tout');
-    /* Aucun 👍 : pas de cœur, pas de croisement, pas d\'acteur, pas de genre
-       mesurable. Il reste ce qui ne dépend de personne. */
-    c.sections   = [{ cle:'film', titre:'Des films pour toi', l:[d_(1)] }];
-    c.incont     = { cle:'1990', titre:'Les incontournables des années 90', l:[d_(2)] };
-    c.nouveautes = [d_(3)];
-    c.avenir     = [d_(4)];
+    c.esprit = { titre:'X', id:1, media:'movie', l:dL(11, 9) };
+    egal(rangeesSuggerees().length, 0,
+         'neuf orphelins ont suffi à ouvrir une rangée de repli');
+  });
+
+  test('un profil qui démarre voit quatre rangées, pas quinze', ()=>{
+    const c = vitrineVierge('tout');
+    /* Aucun 👍 : pas de cœur, pas de croisement, pas d'acteur, pas de genre
+       mesurable, pas un duel joué. Il reste ce qui ne dépend de personne. */
+    c.sections   = [{ cle:'film', titre:'Des films pour toi', l:dL(1) }];
+    c.incont     = { cle:'1990', titre:'Les incontournables des années 90', l:dL(20) };
+    c.nouveautes = dL(40);
+    c.avenir     = dL(60);
     egal(rangeesSuggerees().length, 4);
   });
 
   test('la proposition du jour ne se répète pas dans sa propre rangée', ()=>{
     const c = vitrinePleine();
-    c.esprit.l = [d_(11), d_(21)];
+    c.esprit.l = dL(11, 11);
     c.propositions = [Object.assign({ pourquoi:'Parce que tu as aimé Whiplash' }, d_(11))];
     const r = rangeesSuggerees().find(x=>x.cle === 'esprit');
-    egal(r.l.map(x=>x.id), [21],
+    vrai(r, 'la rangée a été masquée alors qu\'il lui restait dix titres');
+    vrai(r.l.every(x => x.id !== 11),
          'le titre montré en grand revient six vignettes plus bas');
+    egal(r.l.length, 10);
+  });
+
+  /* ==================== SPEC-04 LOT A ====================
+     La règle des 10, les quatre humeurs, les rythmes de renouvellement et
+     l'anti-déjà-vu. Comme pour le lot D : aucune requête réseau — on remplit
+     le cache à la main et on éprouve ce qui en sort.
+     ======================================================== */
+  groupe('SPEC-04 — la règle des 10 et la tuile « Tout voir »');
+
+  test('l\'élargissement d\'une rangée est plafonné à deux pages de plus', ()=>{
+    egal(SUGG_PAGES_MAX, 3, 'une page d\'origine plus deux, jamais davantage (§6)');
+    egal(SUGG_CIBLE, RANGEE_MINI,
+         'le remplissage doit viser la règle des 10, sinon l\'étape (a) du §0.5 ne sert à rien');
+  });
+
+  test('la tuile « Tout voir » ne paraît que s\'il y a vraiment plus à voir', ()=>{
+    vitrineVierge('tout');
+    egal(finRangee({ cle:'nouv', l:dL(1, 10) }), '',
+         'une rangée de dix promettait une grille qui n\'avait rien de plus à montrer');
+    const h = finRangee({ cle:'nouv', l:dL(1, 34) });
+    vrai(/Tout voir/.test(h), 'la tuile a disparu alors qu\'il reste des titres');
+    vrai(/les 34/.test(h), 'la tuile doit dire COMBIEN il y en a (§0.5)');
+  });
+
+  test('le badge de famille n\'existe qu\'en « Tout »', ()=>{
+    vitrineVierge('tout');
+    genresTMDB.tv = [{ id:16, nom:'Animation' }];
+    genresTMDB.movie = [{ id:16, nom:'Animation' }];
+    vrai(/FILM/.test(badgeFamille(d_(1,'movie'))), 'aucun badge sur un film en « Tout »');
+    vrai(/SÉRIE/.test(badgeFamille(d_(2,'tv'))));
+    vrai(/ANIMÉ/.test(badgeFamille(d_(3,'tv',[16],{ langue:'ja' }))),
+         'un animé doit se distinguer d\'une série : c\'est la même règle qu\'`estUnAnime`');
+    ui.disc.type = 'movie';
+    egal(badgeFamille(d_(1,'movie')), '',
+         'le badge répète la puce active sur chacune des affiches de l\'écran');
+    genresTMDB.tv = null; genresTMDB.movie = null;
+  });
+
+  groupe('SPEC-04 — les humeurs');
+
+  test('l\'humeur se cumule avec la famille, et se désélectionne d\'un second appui', ()=>{
+    vitrineVierge('tout');
+    ui.disc.type = 'anime';
+    egal(cleSugg(), 'anime|populaire');
+    ui.disc.humeur = 'frisson';
+    egal(cleSugg(), 'anime|populaire|frisson',
+         'la famille et l\'humeur doivent tenir dans la même clé, sinon l\'une écrase l\'autre');
+    const vraiRender = window.render, vraiToast = window.toast;
+    try{
+      window.render = function(){}; window.toast = function(){};
+      setHumeur('frisson');                       // second appui sur la même
+      egal(ui.disc.humeur, null, 'un second appui doit rendre l\'écran au repos');
+      egal(ui.disc.type, 'anime', 'retirer l\'humeur a aussi retiré la famille');
+      setHumeur('rire');
+      egal(ui.disc.humeur, 'rire');
+      setHumeur('frisson');                       // une seule humeur à la fois
+      egal(ui.disc.humeur, 'frisson');
+    } finally { window.render = vraiRender; window.toast = vraiToast; ui.disc.humeur = null; }
+  });
+
+  test('l\'écran d\'humeur suit l\'ordre de la maquette', ()=>{
+    vitrineVierge('tout');
+    ui.disc.humeur = 'frisson';
+    const c = suggCourantes();                    // l\'humeur a sa propre case de cache
+    Object.assign(c, suggVide());
+    c.etat = 'ok'; c.quand = Date.now();
+    c.humeur     = { principale:dL(400), sures:dL(420), courts:dL(440) };
+    c.top10      = dL(460, 10);
+    c.nouveautes = dL(480);
+    const r = rangeesSuggerees();
+    egal(r.map(x=>x.cle), ['hum','humsures','humcourts','top10','nouv']);
+    egal(r[0].titre, 'De la tension, pas du sang');
+    egal(r[2].titre, 'En une soirée ou un week-end');
+    ui.disc.humeur = null;
+  });
+
+  test('les recettes d\'humeur ne partent jamais sans ingrédients', ()=>{
+    vitrineVierge('tout');
+    genresTMDB.tv = [{ id:16, nom:'Animation' }];
+    genresTMDB.movie = [{ id:16, nom:'Animation' }];
+    HUMEURS.forEach(h=>{
+      [['movie','movie'], ['tv','tv']].forEach(([m, puce])=>{
+        const r = requeteHumeur(m, cadreSugg(puce), h.cle, 'principale');
+        vrai(r, 'aucune recette pour ' + h.cle + ' / ' + m);
+        const n = Object.keys(r.p).filter(k => /^with_|^without_|gte$|lte$/.test(k)).length;
+        vrai(n >= 3, 'la recette ' + h.cle + ' / ' + m + ' n\'a que ' + n + ' ingrédient(s) : '+
+             'la règle des trois de recettes.md vaut ici aussi');
+      });
+      const a = requeteHumeur('tv', cadreSugg('anime'), h.cle, 'principale');
+      vrai(a && a.p.with_original_language === 'ja',
+           'l\'humeur ' + h.cle + ' oublie que la puce Animés est japonaise par construction');
+    });
+    genresTMDB.tv = null; genresTMDB.movie = null;
+  });
+
+  test('« valeurs sûres » relève la note, « en une soirée » raccourcit', ()=>{
+    vitrineVierge('tout');
+    egal(requeteHumeur('movie', cadreSugg('movie'), 'rire', 'sures').p['vote_average.gte'], '8');
+    egal(requeteHumeur('tv', cadreSugg('tv'), 'frisson', 'courts').p.with_type, '2',
+         'une histoire complète côté séries, chez TMDB, ça s\'appelle une mini-série');
+    vrai(requeteHumeur('movie', cadreSugg('movie'), 'frisson', 'courts').p['with_runtime.lte'],
+         'côté films, « en une soirée » c\'est la durée et rien d\'autre');
+  });
+
+  test('le pitch d\'humeur ne prête jamais de sentiment à personne (§0.4)', ()=>{
+    const interdits = /ador|coup de c(œ|oe)ur|pr(é|e)f(é|e)r|tu as aim/i;
+    HUMEURS.forEach(h=>{
+      vrai(!interdits.test(h.raison), 'la raison de ' + h.cle + ' surjoue : ' + h.raison);
+      vrai(!interdits.test(h.principale) && !interdits.test(h.sures),
+           'le titre de rangée de ' + h.cle + ' surjoue');
+    });
+  });
+
+  groupe('SPEC-04 — le Top 10, les rythmes et l\'anti-déjà-vu');
+
+  test('le Top 10 part du duel, puis des 👍, et jamais d\'un 👎', ()=>{
+    baseVierge();
+    [1,2,3].forEach(i=>{
+      db.movies[i] = film(i, ['Drame']);
+      db.movies[i].poster = '/p' + i + '.jpg';
+    });
+    db.movies[1].note = 6; db.movies[2].note = 9; db.movies[3].note = 8;
+    poserAvis('movie', 3, 1);            // 👍
+    poserAvis('movie', 2, -1);           // 👎 : il ne doit jamais apparaître
+    ecrireClassement('film', 1, 1400, 5);
+    egal(top10Pour(cadreSugg('movie'), null).map(x=>x.id), [1, 3],
+         'le classement Elo passe devant le 👍, et le 👎 ne passe pas du tout');
+  });
+
+  test('le Top 10 ne verse jamais ses titres dans « Aussi pour toi »', ()=>{
+    const c = vitrineVierge('tout');
+    c.top10 = dL(500, 4);                 // quatre : sous la barre des dix
+    c.esprit = { titre:'X', id:1, media:'movie', l:dL(11, 9) };
+    const r = rangeesSuggerees();
+    vrai(!r.some(x => x.cle === 'top10'), 'un Top 10 de quatre titres est passé à l\'écran');
+    vrai(!r.some(x => x.cle === 'reste'),
+         'les titres de la bibliothèque ont été reproposés comme des découvertes');
+  });
+
+  test('« À finir en un week-end » remonte en 2ᵉ position du vendredi 17 h au dimanche', ()=>{
+    /* Horloge simulée : sans elle, la règle ne serait vérifiable qu'un jour
+       sur sept, c'est-à-dire jamais. Le 14/08/2026 est un vendredi. */
+    egal(weekEndEnAvant(new Date(2026, 7, 14, 16, 0)), false, 'vendredi 16 h, il est trop tôt');
+    egal(weekEndEnAvant(new Date(2026, 7, 14, 17, 0)), true,  'vendredi 17 h pile');
+    egal(weekEndEnAvant(new Date(2026, 7, 15,  9, 0)), true,  'samedi matin');
+    egal(weekEndEnAvant(new Date(2026, 7, 16, 22, 0)), true,  'dimanche soir');
+    egal(weekEndEnAvant(new Date(2026, 7, 17,  9, 0)), false, 'lundi, c\'est fini');
+    const garde = window.weekEndEnAvant;
+    try{
+      window.weekEndEnAvant = ()=> true;
+      vitrinePleine();
+      egal(rangeesSuggerees()[1].cle, 'weekend', 'le week-end venu, la rangée doit être 2ᵉ');
+      egal(rangeesSuggerees()[0].cle, 'top10', 'rien ne passe devant le Top 10');
+      window.weekEndEnAvant = ()=> false;
+      vitrinePleine();
+      vrai(rangeesSuggerees()[1].cle !== 'weekend', 'un mardi, la rangée reste à sa place');
+    } finally { window.weekEndEnAvant = garde; }
+  });
+
+  test('un titre montré trois jours de suite sans être ouvert recule', ()=>{
+    vitrineVierge('tout');
+    const l = dL(1, 3);
+    noterAffichage(l);
+    egal(reculerDejaVus(l).map(x=>x.id), [1,2,3], 'un seul jour a suffi à faire reculer un titre');
+    /* Trois jours au compteur À L'OUVERTURE DE L'ONGLET : c'est l'instantané du
+       jour qui décide (B1), donc on le reprend après avoir écrit. */
+    memoLire().vus['movie:2'] = { j: jourVitrine(), n: DEJAVU_JOURS };
+    memoFige = null;
+    egal(reculerDejaVus(l).map(x=>x.id), [1,3,2],
+         'trois jours sous les yeux sans une ouverture, et le titre reste en tête');
+    noterOuverture('movie', 2);
+    egal(reculerDejaVus(l).map(x=>x.id), [1,2,3],
+         'ouvrir un titre doit remettre son compteur à zéro, tout de suite');
+  });
+
+  /* ===== B1 — LE DÉFAUT TROUVÉ PAR LA RELECTURE DU 10/08 =====
+     `noterAffichage` tourne à la fin de `rangeesSuggerees`, donc APRÈS que la
+     rangée a été composée. Un titre à deux jours consécutifs passait à trois
+     juste après le premier rendu de la journée, et le rendu SUIVANT — même
+     journée, même session — le faisait reculer. Reproduit à l'époque :
+     `1 2 3 … 12` puis `2 3 … 12 1`, sans que personne n'ait rien touché.
+     Le test d'origine ne pouvait pas le voir : il écrivait le compteur à la
+     main et n'appelait jamais `rangeesSuggerees` deux fois de suite. */
+  test('deux compositions consécutives rendent exactement le même ordre', ()=>{
+    const c = vitrineVierge('tout');
+    c.nouveautes = dL(1, 12);
+    /* Le titre 1 en est à DEUX jours consécutifs, hier : c'est lui qui basculera
+       à trois au premier rendu d'aujourd'hui. */
+    memoLire().vus['movie:1'] = { j: jourVitrine() - 1, n: 2 };
+    memoFige = null;
+    const ordre = () => rangeesSuggerees().find(x=>x.cle === 'nouv').l.map(x=>x.id);
+    const un = ordre(), deux = ordre(), trois = ordre();
+    egal(deux, un, 'le rail s\'est réorganisé entre deux rendus de la même session');
+    egal(trois, un, 'et il continue de bouger au troisième');
+    egal(un[0], 1, 'le titre a reculé le jour même, au lieu d\'attendre demain');
+    egal((memoLire().vus['movie:1'] || {}).n, 3,
+         'le compteur doit quand même avancer : le recul est pour demain, pas pour jamais');
+  });
+
+  test('le recul décidé à l\'entrée d\'onglet s\'applique dès le premier rendu du lendemain', ()=>{
+    const c = vitrineVierge('tout');
+    c.nouveautes = dL(1, 12);
+    memoLire().vus['movie:1'] = { j: jourVitrine(), n: DEJAVU_JOURS };
+    memoFige = null;                        // nouvelle session : on reprend l'instantané
+    egal(rangeesSuggerees().find(x=>x.cle === 'nouv').l[0].id, 2,
+         'trois jours au compteur et le titre est toujours en tête');
+  });
+
+  test('le mélange du jour est stable : le rail ne bouge pas sous le doigt', ()=>{
+    vitrineVierge('tout');
+    const a = compoStable('acclames', dL(1, 12), 'semaine', 'jour').map(x=>x.id);
+    const b = compoStable('acclames', dL(1, 12), 'semaine', 'jour').map(x=>x.id);
+    egal(a, b, 'deux rendus de la même journée rendent deux ordres différents');
+    egal(a.slice().sort((x,y)=> x-y), dL(1, 12).map(x=>x.id),
+         'le mélange a perdu ou dupliqué un titre');
+  });
+
+  /* ===== LES RÉSERVES DE LA RELECTURE DU 10/08 ===== */
+
+  test('R1 — re-toucher la famille active revient à « Tout »', ()=>{
+    vitrineVierge('tout');
+    const vraiRender = window.render, vraiCharger = window.chargerDecouverte;
+    try{
+      window.render = function(){}; window.chargerDecouverte = function(){};
+      setDiscType('anime');  egal(ui.disc.type, 'anime');
+      setDiscType('anime');  egal(ui.disc.type, 'tout',
+        'la famille était le seul filtre qu\'on ne pouvait pas retirer par où on l\'avait posé');
+      setDiscType('tout');   egal(ui.disc.type, 'tout', '« Tout » n\'a rien au-dessus de lui');
+    } finally { window.render = vraiRender; window.chargerDecouverte = vraiCharger; }
+  });
+
+  test('R2 — « Bientôt » a son plancher de 3, pas celui de 10', ()=>{
+    const c = vitrineVierge('tout');
+    c.avenir = dL(1, 3);
+    const r = rangeesSuggerees();
+    vrai(r.some(x => x.cle === 'avenir'),
+         'trois sorties annoncées valent mieux que rien : la maquette code un plancher de 3');
+    c.avenir = dL(1, 2);
+    memoFige = null;
+    vrai(!rangeesSuggerees().some(x => x.cle === 'avenir'), 'deux titres passent sous le plancher');
+    vrai(!rangeesSuggerees().some(x => x.cle === 'reste'),
+         'un titre pas encore sorti n\'a rien à faire dans « Aussi pour toi »');
+  });
+
+  test('R3 — une pépite montrée deux semaines sans ouverture part se reposer un mois', ()=>{
+    const c = vitrineVierge('tout');
+    c.pepites = dL(1, 12);
+    egal(rangeesSuggerees().find(x=>x.cle === 'pepites').l.length, 12);
+    /* Quinze jours plus tard, sans une seule ouverture. */
+    const m = memoLire();
+    m.pep['movie:1'] = { d: jourVitrine() - PEPITE_PATIENCE, r: 0 };
+    memoFige = null;
+    rangeesSuggerees();                       // c'est ce passage qui prononce la mise au repos
+    vrai(m.pep['movie:1'].r > jourVitrine(), 'la pépite n\'a pas été mise au repos');
+    memoFige = null;
+    const apres = rangeesSuggerees().find(x=>x.cle === 'pepites');
+    vrai(apres.l.every(x => x.id !== 1), 'la pépite au repos est encore dans la rangée');
+    /* Et l'ouvrir la fait revenir tout de suite. */
+    noterOuverture('movie', 1);
+    egal(rangeesSuggerees().find(x=>x.cle === 'pepites').l.length, 12,
+         'ouvrir une pépite au repos doit la ramener');
+  });
+
+  test('R5 — l\'ancrage tourne chaque jour, podium compris, sans priorité permanente', ()=>{
+    baseVierge();
+    [1,2,3].forEach(i=>{ db.movies[i] = film(i, ['Drame']); poserAvis('movie', i, 1); });
+    db.podium = { film:['2'], serie:[], anime:[], maj:1 };
+    const cadre = cadreSugg('movie');
+    /* Le vivier compte les trois titres : le podium n'en confisque plus la
+       place. Sur trois jours consécutifs, trois ancrages différents. */
+    const vus = {};
+    for(let d = 0; d < 3; d++){
+      const g = graineEsprit(cadre);
+      vrai(g, 'aucun ancrage alors qu\'il y a trois titres aimés');
+      vus[g.id] = (vus[g.id] || 0) + 1;
+      /* On avance d'un jour en décalant la liste : `jourVitrine` lit la date,
+         on simule donc la rotation en tournant le vivier à la main. */
+      db.movies[100 + d] = film(100 + d, ['Drame']); poserAvis('movie', 100 + d, 1);
+    }
+    vrai(Object.keys(vus).length >= 2,
+         'le même ancrage revient tous les jours : la rangée ne se renouvelle plus');
+  });
+
+  test('R5 — « ton préféré » n\'est dit que si c\'est vraiment le n°1 du podium', ()=>{
+    baseVierge();
+    db.movies[7] = film(7, ['Drame']); poserAvis('movie', 7, 1);
+    db.podium = { film:['7'], serie:[], anime:[], maj:1 };
+    egal(graineEsprit(cadreSugg('movie')).signal, 'podium');
+    db.podium = { film:['999'], serie:[], anime:[], maj:1 };   // le n°1 est ailleurs
+    egal(graineEsprit(cadreSugg('movie')).signal, 'aime',
+         'l\'app prétend connaître un préféré qu\'elle n\'a pas départagé');
+  });
+
+  test('R8 — la composition figée d\'une famille ne contamine pas les autres', ()=>{
+    vitrineVierge('tout');
+    const surTout = compoStable('acclames', dL(1, 12), 'semaine', null).map(x=>x.id);
+    ui.disc.type = 'anime';
+    const surAnime = compoStable('acclames', dL(50, 12), 'semaine', null).map(x=>x.id);
+    egal(surAnime, dL(50, 12).map(x=>x.id),
+         'la composition de « Tout » s\'est imposée à la puce Animés');
+    ui.disc.type = 'tout';
+    egal(compoStable('acclames', dL(1, 12), 'semaine', null).map(x=>x.id), surTout,
+         'et le détour par une autre famille a abîmé celle de départ');
+  });
+
+  test('la composition d\'une rangée tient toute sa période', ()=>{
+    vitrineVierge('tout');
+    const un = compoStable('classiques', dL(1, 12), 'mois', null).map(x=>x.id);
+    /* La source rend autre chose entre-temps (TMDB a bougé, un titre est entré
+       dans la bibliothèque) : la composition mémorisée tient, et ce qui est
+       neuf s'ajoute EN FIN plutôt qu'au milieu du rail. */
+    const deux = compoStable('classiques', dL(1, 12).concat(dL(90, 2)), 'mois', null)
+      .map(x=>x.id);
+    egal(deux.slice(0, 12), un, 'le début du rail a bougé au milieu de sa période');
+    egal(deux.slice(12), [90, 91]);
   });
 
   groupe('LOT D — §3.3 : la proposition du jour');
@@ -4555,9 +4946,12 @@ window.MODE_TEST = true;
        n'était fait qu'au calcul suivant, le titre qu'on vient d'écarter en
        grand réapparaîtrait aussitôt dans la rangée d'où il vient. */
     const c = vitrineVierge('tout');
-    c.esprit = { titre:'X', id:1, media:'movie', l:[d_(5), d_(6)] };
+    c.esprit = { titre:'X', id:1, media:'movie', l:dL(5, 11) };
     refuserSugg(d_(5,'movie',[18]));
-    egal(rangeesSuggerees()[0].l.map(x=>x.id), [6]);
+    const r = rangeesSuggerees()[0];
+    vrai(r && r.cle === 'esprit', 'la rangée a disparu au lieu de perdre un titre');
+    vrai(r.l.every(x => x.id !== 5), 'un titre refusé reste dans la rangée déjà calculée');
+    egal(r.l.length, 10);
   });
 
   test('le malus de genre décale, il ne retire jamais rien', ()=>{
@@ -4675,7 +5069,7 @@ window.MODE_TEST = true;
     poserAvis('movie', 1, 1);
     const c = vitrineVierge('tout');
     db.movies[1] = film(1, ['Drame']);
-    c.nouveautes = [d_(9)];
+    c.nouveautes = dL(90);
     const html = vitrineBody();
     vrai(/Ajuster mes goûts/.test(html), 'le lien qui remplace les deux pavés a disparu aussi');
     vrai(!/TMDB/.test(html), 'l\'aveu technique sur les plateformes est encore à l\'écran');

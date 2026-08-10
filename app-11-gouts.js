@@ -955,6 +955,12 @@ function suggVide(){
            esprit:null, favoris:null, acteur:null, genre:null,
            sections:[], cercle:null, incont:null, plates:null,
            nouveautes:[], avenir:[],
+           /* SPEC-04 — les cinq rangées neuves. `top10` ne coûte aucune
+              requête (il est bâti sur la bibliothèque) ; les quatre autres
+              sont éditoriales et n'existent qu'au repos. `humeur` porte les
+              trois rangées de l'humeur affichée, et reste `null` au repos. */
+           top10:[], acclames:[], weekend:[], pepites:[], classiques:[],
+           humeur:null,
            /* Ce sur quoi l'app s'est appuyée, gardé pour pouvoir le montrer :
               « je ne sais pas ce que l'app croit savoir » était le reproche. */
            base:[], genresUtilises:[] };
@@ -967,10 +973,16 @@ let suggestions = suggVide();       // celles de la puce affichée
 /* E1 — LE TRI ENTRE DANS LA CLÉ DE CACHE. Sans ça, changer d'ordre n'aurait
    eu aucun effet visible pendant 24 h (`SUGG_TTL`) : la vitrine aurait resservi
    le calcul précédent, et le réglage aurait eu l'air cassé. */
+/* SPEC-04 — L'HUMEUR ENTRE DANS LA CLÉ, exactement pour la même raison que le
+   tri : sans ça, toucher une humeur n'aurait rien changé pendant 24 h. Et
+   surtout, c'est ce qui rend la DÉSÉLECTION instantanée et gratuite (§0.2) —
+   l'écran au repos est resté dans sa propre case du cache, on ne le recalcule
+   pas, on y revient. Un second appui ne coûte donc aucune requête. */
 function cleSugg(){
   const t = (ui.disc && ui.disc.type) || 'tout';
   const tri = (ui.disc && ui.disc.tri) || 'populaire';
-  return t + '|' + tri;
+  const hum = (ui.disc && ui.disc.humeur) || '';
+  return t + '|' + tri + (hum ? '|' + hum : '');
 }
 /* « Un calcul de vitrine est-il déjà en route pour la puce affichée ? »
    `render()` s'en sert pour ne pas en lancer un second alors que `veilleBiblio`
@@ -1560,19 +1572,47 @@ function titresAimesSugg(cadre){
        dit rien de plus que « tu as aimé » ;
      · rien du tout → pas de rangée de cœur, et l'app le dit ailleurs.
    Jamais « adoré » sur un simple 👍 : c'est le travers dénoncé au §1.1. */
+/* R5 (relecture du 10/08, arbitré par Adrien) — LE PODIUM ENTRE DANS LE VIVIER,
+   IL NE LE CONFISQUE PLUS.
+
+   Version d'avant : le n°1 du podium gagnait toujours, et la rotation
+   quotidienne n'était que le repli du cas « pas de podium ». Conséquence, une
+   fois un duel joué : la rangée affichait le MÊME ancrage tous les jours, pour
+   toujours. Ça contredisait le rythme annoncé au §1 rangée 3 (« X tourne chaque
+   jour »), et surtout l'esprit anti-déjà-vu de tout ce lot — une rangée qui ne
+   change jamais est une rangée qu'on cesse de regarder.
+
+   Arbitrage d'Adrien, et c'est une troisième voie : le podium ne disparaît pas
+   du calcul, il rejoint les 👍 dans un seul vivier tournant. Il y revient plus
+   souvent qu'un titre isolé — un podium de dix titres pèse dix entrées — mais
+   il n'a plus de priorité permanente.
+
+   LE SIGNAL RESTE HONNÊTE, et c'est ce qui rendait le changement délicat : la
+   même graine nourrit la proposition du jour, qui a le droit de dire « Ton film
+   préféré : X ». On ne le dit donc QUE si le titre tiré est réellement le n°1
+   de son podium ; les autres jours, on ne dit pas plus que « tu as aimé ». Le
+   §1.1 ne se négocie pas parce qu'on a changé de rotation. */
 function graineEsprit(cadre){
   const fams = famillesDuCadre(cadre);
-  for(let i = 0; i < fams.length; i++){
-    const id = (((db.podium || {})[fams[i]]) || [])[0];
-    if(id == null) continue;
-    const t = moteurCoeur(fams[i]).find(x => String(x.id) === String(id));
-    if(t && cadre.medias.indexOf(t.media) >= 0)
-      return { media:t.media, id:String(t.id), nom:t.nom, famille:fams[i], signal:'podium' };
-  }
-  const aimes = titresAimesSugg(cadre);
-  if(!aimes.length) return null;
-  const t = aimes[jourVitrine() % aimes.length];
-  return { media:t.media, id:t.id, nom:t.nom, famille:t.famille, signal:'aime' };
+  const vivier = [], vus = {};
+  const pousser = (t, famille)=>{
+    if(!t || cadre.medias.indexOf(t.media) < 0) return;
+    const k = t.media + ':' + t.id;
+    if(vus[k]) return; vus[k] = 1;
+    vivier.push({ media:t.media, id:String(t.id), nom:t.nom, famille:famille });
+  };
+  /* Les 👍 d'abord — ils sont déjà classés par légitimité — puis ce que le
+     duel a départagé et que les pouces ne connaissent pas encore. */
+  titresAimesSugg(cadre).forEach(t => pousser(t, t.famille));
+  fams.forEach(f => (((db.podium || {})[f]) || []).forEach(id=>{
+    const t = moteurCoeur(f).find(x => String(x.id) === String(id));
+    pousser(t, f);
+  }));
+  if(!vivier.length) return null;
+  const t = vivier[jourVitrine() % vivier.length];
+  const premier = (((db.podium || {})[t.famille]) || [])[0];
+  return Object.assign({}, t,
+    { signal: (premier != null && String(premier) === String(t.id)) ? 'podium' : 'aime' });
 }
 
 /* §3.6 — UNE SEULE RANGÉE ACTEUR, jamais trois. Trois rangées quasi
@@ -1771,6 +1811,639 @@ function cercleDepuisBiblios(gens, cadre){
     .map(e => e.x);
 }
 
+/* ===========================================================================
+   SPEC-04 LOT A (10/08/2026) — DÉCOUVRIR NOUVELLE GÉNÉRATION, LE SOCLE SANS IA
+
+   Quatre choses arrivent en même temps sur cet écran, et elles sont
+   indépendantes les unes des autres :
+
+     · LA RÈGLE DES 10 — un carrousel montre dix affiches ou n'existe pas ;
+     · QUATRE HUMEURS — qui se CUMULENT avec la famille (Tout/Films/Séries/Animés) ;
+     · CINQ RANGÉES DE PLUS — Top 10, Acclamés, Week-end, Pépites, Classiques ;
+     · DES RYTHMES — chaque rangée se renouvelle à sa cadence, jamais sous le doigt.
+
+   AUCUNE RANGÉE EXISTANTE NE DISPARAÎT (§1). Les rangées du moteur — « Dans
+   l'esprit de X » (renommée ici « Parce que tu as aimé X », §1 rangée 3), le
+   croisement des favoris, l'acteur, le genre, les sections, le cercle, les
+   incontournables, les plateformes, les nouveautés et « Bientôt » — sont toutes
+   conservées ; elles rejoignent simplement la nouvelle liste et la règle des 10.
+
+   CE QUE LA SPEC APPELLE « SUGGESTIONS DU JOUR » (sa rangée 1, source « moteur
+   existant ») N'EST PAS UNE RANGÉE DE PLUS, et c'est un choix qu'il faut
+   assumer : §3.2 de la spec fonctionnelle interdit un titre de rangée qui ne
+   dit pas d'où elle vient — « Suggestions du jour » ne dit rien. Ce sont donc
+   les rangées personnelles existantes, chacune nommée par sa source, qui
+   occupent ce créneau. Point à trancher par Adrien s'il voulait vraiment une
+   rangée nommée ainsi ; elle serait alors un doublon de ce qui est déjà à
+   l'écran, ou lui volerait ses titres (`vus` est partagé).
+=========================================================================== */
+
+/* LA RÈGLE DES 10, STRICTE (§0.5). Dix titres ou la rangée n'existe pas.
+   L'ordre des opérations est celui de la spec, et il est respecté à la lettre :
+     (a) on ÉLARGIT d'abord via TMDB — c'est `remplirSugg`, dont la cible est
+         déjà de dix et le garde-fou de trois pages (une page d'origine + DEUX
+         pages supplémentaires, exactement le plafond demandé au §6) ;
+     (b) si le compte n'y est toujours pas, la rangée ne s'affiche pas et ses
+         titres partent dans « Aussi pour toi » ;
+     (c) « Aussi pour toi » obéit à la même règle.
+   Ce qui change par rapport au lot D : celui-ci affichait une rangée de deux
+   titres au motif qu'« une rangée courte dit quelque chose de vrai ». La spec
+   tranche dans l'autre sens — « mieux vaut 3 rangées pleines que 9 trouées »
+   (§0.6) — et les orphelins ne sont plus perdus, ils vont dans la rangée de
+   repli. C'est le seul renversement de décision de ce lot ; il est explicite. */
+const RANGEE_MINI = 10;
+/* La seule exception, et elle vient de la maquette qui fait foi — voir le
+   commentaire au point d'appel, dans `rangeesSuggerees`. */
+const AVENIR_MINI = 3;
+/* Les rangées bâties sur une source FINIE ne peuvent pas s'élargir : le cercle
+   lit des bibliothèques déjà entières, le croisement des favoris ne se recroise
+   pas, « Bientôt » a été rangé par date d'un bloc. Elles passent quand même la
+   règle des 10 — c'est ce que la spec demande — mais sans étape (a). */
+
+/* ---------------------------------------------------------------------------
+   LES QUATRE HUMEURS (§2)
+
+   Chacune est une RECETTE TMDB MESURÉE, dans l'esprit de `recettes.md` : les
+   volumes ci-dessous ont été relevés en direct sur le relais le 10/08/2026,
+   famille par famille, AVANT d'être figés. Aucun seuil n'est deviné.
+
+   TROIS CHOSES QUE LA MESURE A APPRISES, et qu'on ne pouvait pas deviner :
+
+   1. TMDB N'A NI « HORREUR » NI « THRILLER » CÔTÉ SÉRIES. Sa taxonomie de
+      séries s'arrête à Mystère (9648). Mesuré : Mystère seul rend 571 séries,
+      mais ce sont Mentalist, New York Unité Spéciale et Esprits criminels —
+      du polar de prime time, pas du frisson. Les mots-clés, eux, rendent 160
+      séries et la tête de liste est Supernatural, FROM, Stranger Things,
+      Dexter, Twin Peaks, Black Mirror. C'est cette voie qui est retenue.
+
+   2. LE RÉGLAGE « TENSION VS GORE » MORD PEU. `without_keywords=10292` fait
+      passer les films d'horreur-thriller de 257 à 234 (−9 %), sans changer la
+      tête de liste. Il est gardé — il ne coûte rien et il retire ce qu'il
+      annonce — mais il ne fait pas à lui seul la promesse « de la tension,
+      jamais de gore » : c'est la couche IA du lot C qui l'affinera par profil.
+
+   3. « RÉFLÉCHIR » PAR MOTS-CLÉS SEULS EST TROP ÉTROIT. `twist ending | plot
+      twist | boucle temporelle` ne rend que 12 séries et 5 films : une rangée
+      de dix ne tiendrait pas trois jours. On ajoute donc « psychological »
+      (272553) côté séries — 78 titres, tête de liste Dark, Homeland, You,
+      Re:Zero — et on retombe sur les GENRES côté films (878|9648, 402 titres,
+      tête de liste Interstellar, Psychose, Seven, Inception).
+
+   Le libellé de l'humeur ne parle jamais de moteur (§3.2) : « De la tension,
+   pas du sang » dit ce qu'on va voir, pas comment c'est calculé.
+--------------------------------------------------------------------------- */
+/* `raison` est la ligne du hero d'humeur EN MODE SANS IA, et elle obéit au
+   §0.4 à la lettre : elle décrit la RECETTE — ce que le titre est, et d'où il
+   sort — jamais un sentiment prêté à quelqu'un. « Choisi sans gore » est
+   vérifiable dans la requête ; « tu vas adorer » ne l'est pas et n'existera
+   jamais dans cette app. Le lot C remplacera cette ligne par le pitch de l'IA
+   quand l'interrupteur sera allumé ; tant qu'il ne l'est pas, celle-ci est la
+   bonne réponse, pas un pis-aller. */
+const HUMEURS = [
+  { cle:'rire',      emoji:'😂', label:'Rire',             ceSoir:'Pour rire ce soir',
+    principale:'Drôle, mais pas que',         sures:'Le rire, valeurs sûres',
+    raison:'Choisi dans les comédies les mieux notées.' },
+  { cle:'frisson',   emoji:'😱', label:'Frissonner',       ceSoir:'Pour frissonner ce soir',
+    principale:'De la tension, pas du sang',  sures:'Le frisson, valeurs sûres',
+    raison:'De la tension — le gore est écarté de la sélection.' },
+  { cle:'reflechir', emoji:'🧠', label:'Réfléchir',        ceSoir:'Pour réfléchir ce soir',
+    principale:'Des idées qui restent',       sures:'Les idées, valeurs sûres',
+    raison:'Choisi parmi les récits à twist et les puzzles.' },
+  { cle:'detente',   emoji:'🛋', label:'Me vider la tête', ceSoir:'Pour te vider la tête ce soir',
+    principale:'Zéro effort, que du plaisir', sures:'La détente, valeurs sûres',
+    raison:'Court, léger, rien à suivre d\'un épisode à l\'autre.' }
+];
+function humeurDef(cle){ return HUMEURS.find(h => h.cle === cle) || null; }
+/* L'humeur affichée. `null` au repos — et « au repos » veut dire l'écran
+   d'avant SPEC-04, augmenté de ses nouvelles rangées, rien de plus. */
+function humeurActive(){
+  const h = (ui.disc && ui.disc.humeur) || null;
+  return humeurDef(h) ? h : null;
+}
+
+/* LES RECETTES, ET LEUR MESURE. Le nombre en fin de ligne est le
+   `total_results` relevé le 10/08/2026 sur le relais de l'app. Les mots-clés
+   ont été résolus par `/search/keyword`, jamais devinés :
+     10292  gore              · 12565  psychological thriller
+     272553 psychological     · 315058 horror        · 50009  survival horror
+     326438 twist ending      · 275311 plot twist    · 10854  boucle temporelle
+     193171 sitcom
+   Les genres partent en OU (barre) sauf quand le ET est la DÉFINITION de la
+   recette : `27,53` veut dire « horreur ET thriller », `16,35` veut dire
+   « animation ET comédie ». C'est la même règle qu'ailleurs dans l'app. */
+const RECETTES_HUMEUR = {
+  rire: {
+    /* On écarte le drame : sans ça la comédie dramatique remonte en masse, et
+       ce n'est pas ce qu'on demande quand on veut rire (leçon de recettes.md). */
+    movie: { with_genres:'35', without_genres:'18', 'vote_average.gte':'6.3', 'vote_count.gte':'400' }, // 1 349
+    tv:    { with_genres:'35', without_genres:'18', 'vote_average.gte':'7',   'vote_count.gte':'80'  }, //   887
+    anime: { with_genres:'16,35', 'vote_average.gte':'6.5', 'vote_count.gte':'40' }                     //   519
+  },
+  frisson: {
+    movie: { with_genres:'27,53', without_keywords:'10292',
+             'vote_average.gte':'6.3', 'vote_count.gte':'500' },                                        //   234
+    tv:    { with_keywords:'315058|50009|12565', 'vote_average.gte':'6.8', 'vote_count.gte':'80' },     //   160
+    anime: { with_genres:'16', with_keywords:'315058|50009|12565|272553', 'vote_count.gte':'40' }       //   120
+  },
+  reflechir: {
+    movie: { with_genres:'878|9648', 'vote_average.gte':'7', 'vote_count.gte':'1000' },                 //   402
+    tv:    { with_keywords:'326438|275311|10854|272553',
+             'vote_average.gte':'7.5', 'vote_count.gte':'80' },                                         //    78
+    /* 60 titres, et c'est la seule recette du lot qui a demandé deux passages :
+       le relais avait d'abord refusé cette URL, et le chiffre venait d'une
+       reconstruction par union de deux sous-requêtes. Re-mesurée en direct le
+       10/08 : 60, tête de liste Death Note, Steins;Gate, Psycho-Pass,
+       Evangelion, Kaiji. Un chiffre reconstruit n'est pas un chiffre mesuré,
+       et celui-ci l'est maintenant. */
+    anime: { with_genres:'16', with_keywords:'272553|10854|326438',
+             'vote_average.gte':'7.5', 'vote_count.gte':'40' }                                          //    60
+  },
+  detente: {
+    /* « Me vider la tête » = court et sans fil rouge. Côté films, la durée ;
+       côté séries, le mot-clé `sitcom`, qui rend exactement ce qu'on cherche
+       (Les Simpson, Friends, Modern Family, Futurama, The Office) là où le
+       genre Comédie rend 1 671 titres dont The Rookie et Shameless. */
+    movie: { with_genres:'35|10751', 'with_runtime.gte':'60', 'with_runtime.lte':'105',
+             'vote_average.gte':'6.3', 'vote_count.gte':'500' },                                        // 1 450
+    tv:    { with_keywords:'193171', 'vote_average.gte':'6.8', 'vote_count.gte':'80' },                 //   222
+    anime: { with_genres:'16,35', 'vote_count.gte':'40' }                                               //   545
+  }
+};
+
+/* Ce qui fait d'une requête une requête d'ANIMÉS : la langue et le genre
+   Animation. Écrit une fois — c'était recopié dans cinq requêtes. */
+function cadreAnimeParams(media, cadre){
+  if(cadre.origine !== 'anime') return {};
+  const a = genreParNom(media, 'Animation');
+  const p = { with_original_language:'ja' };
+  if(a != null) p.with_genres = String(a);
+  return p;
+}
+/* « Il y a quinze ans » — en années glissantes, jamais en date fixe : sinon la
+   recette vieillit toute seule (leçon de recettes.md, « un classique que j'ai
+   raté »). */
+function anneeMoins(n){
+  const a = Number(String(todayISO()).slice(0, 4));
+  return (isFinite(a) ? a - n : 2011) + '-12-31';
+}
+
+/* La requête d'une humeur, pour un média et une variante :
+     'principale' — la rangée de tête de l'humeur ;
+     'sures'      — les valeurs sûres, note ≥ 8 (§2) ;
+     'courts'     — l'intersection humeur × format court.
+   MESURÉ, et c'est important : « valeurs sûres » côté films de frisson ne rend
+   que QUATRE titres (Shining, Psychose, Obsession, Thriller de Michael
+   Jackson). La rangée ne s'affichera donc pas dans cette famille — c'est
+   exactement ce que la règle des 10 doit faire, et ses quatre titres partent
+   dans « Aussi pour toi ». Côté séries la même recette rend 45 titres. */
+function requeteHumeur(media, cadre, cle, variante){
+  const anime = cadre.origine === 'anime';
+  const base = (RECETTES_HUMEUR[cle] || {})[anime ? 'anime' : media];
+  if(!base) return null;
+  const p = Object.assign({ include_adult:'false', page:'1', sort_by:'popularity.desc' },
+                          base, cadreAnimeParams(media, cadre));
+  /* L'animé impose son genre Animation ; quand la recette en porte déjà un
+     (comédie), les deux partent en ET, ce qui est bien ce qu'on veut. */
+  if(anime && base.with_genres) p.with_genres = base.with_genres;
+  if(variante === 'sures'){ p['vote_average.gte'] = '8'; p.sort_by = 'vote_count.desc'; }
+  if(variante === 'courts'){
+    if(media === 'movie'){ p['with_runtime.gte'] = '60'; p['with_runtime.lte'] = '105'; }
+    /* Côté séries, « une histoire complète » a un nom chez TMDB : la
+       mini-série (`with_type=2`). Mesuré sur le frisson : 53 titres, tête de
+       liste Ça, The Haunting of Hill House, Bly Manor, The Outsider — c'est
+       très exactement la rangée qu'on décrit. Le nombre de saisons et
+       d'épisodes, lui, n'est filtrable NULLE PART dans `/discover`. */
+    else p.with_type = '2';
+  }
+  Object.assign(p, filtreMesPlates());
+  return { media:media, p:p };
+}
+
+/* ---------------------------------------------------------------------------
+   LES QUATRE RANGÉES ÉDITORIALES (§1, rangées 6 à 9)
+
+   Elles ne dépendent d'AUCUN goût déclaré, et c'est ce qui fait leur valeur :
+   elles sont pleines dès le premier jour, chez quelqu'un dont la bibliothèque
+   est vide. Toutes les mesures datent du 10/08/2026.
+--------------------------------------------------------------------------- */
+/* « Acclamés par la critique » : note ≥ 8 et le plancher de votes de la maison
+   (100, `DISC_VOTES_MINI`). Mesuré : 470 films, 1 124 séries, 325 animés. */
+const ACCLAMES_NOTE = '8';
+function requeteAcclames(media, cadre){
+  const p = Object.assign({ include_adult:'false', page:'1', sort_by:'vote_count.desc',
+                            'vote_average.gte': ACCLAMES_NOTE,
+                            'vote_count.gte': String(typeof DISC_VOTES_MINI === 'number'
+                                                     ? DISC_VOTES_MINI : 100) },
+                          cadreAnimeParams(media, cadre), filtreMesPlates());
+  return { media:media, p:p };
+}
+/* « À finir en un week-end ». La spec dit « séries : ≤ 2 saisons OU ≤ 10
+   épisodes ». CE FILTRE N'EXISTE PAS DANS `/discover` — ni nombre de saisons,
+   ni nombre d'épisodes — et il n'y a aucun moyen de l'obtenir sans ouvrir la
+   fiche de chaque titre, c'est-à-dire vingt requêtes par rangée. Le mot que
+   TMDB connaît pour « une histoire complète, courte » est la mini-série
+   (`with_type=2`) : mesuré, il rend WandaVision, Chernobyl, Le Jeu de la dame,
+   Frères d'armes — 695 séries, 40 animés. Côté films, la durée : 1 772 titres
+   entre 1 h et 1 h 45, vérifiés cohérents sur l'échantillon rendu. */
+function requeteWeekend(media, cadre){
+  const p = { include_adult:'false', page:'1', sort_by:'vote_count.desc' };
+  if(media === 'movie'){
+    p['with_runtime.gte'] = '60'; p['with_runtime.lte'] = '105';
+    p['vote_average.gte'] = '6.8'; p['vote_count.gte'] = '500';       // 1 772
+  } else {
+    p.with_type = '2';
+    if(cadre.origine === 'anime'){ p['vote_count.gte'] = '40'; }      //    40
+    else { p['vote_average.gte'] = '7'; p['vote_count.gte'] = '50'; } //   695
+  }
+  Object.assign(p, cadreAnimeParams(media, cadre), filtreMesPlates());
+  return { media:media, p:p };
+}
+/* « Des pépites que tu as ratées » — LA RANGÉE QUI A DEMANDÉ TROIS MESURES.
+   La spec dit « note ≥ 7,5 + popularité SOUS un plafond (à mesurer) ». TMDB
+   n'a pas de `popularity.lte` ; le plafond se pose donc sur `vote_count.lte`.
+   Restaient deux façons de trier dans cette fenêtre, et les deux ratent :
+     · `vote_average.desc` remonte des obscurités sans intérêt (telenovelas,
+       documentaires hispanophones à 200 votes) ;
+     · `popularity.desc` remonte les sorties de la semaine, pas encore votées —
+       Spider-Man, Toy Story 5, le Mandalorien. Une nouveauté n'est pas une
+       pépite ratée.
+   Ce qui marche est le troisième : `vote_count.desc` DANS la fenêtre, plus une
+   borne d'ancienneté de deux ans. On obtient « les plus connus des peu
+   connus », et la mesure le confirme : Lady Vengeance, Mississippi Burning,
+   Une séparation, Perfect Days, La Colline aux coquelicots. 829 films,
+   1 311 séries, 412 animés (Clannad, Angel Beats!, Mirai Nikki). */
+const PEPITES_FRAICHEUR = 2;
+function requetePepites(media, cadre){
+  const champ = media === 'movie' ? 'primary_release_date' : 'first_air_date';
+  const anime = cadre.origine === 'anime';
+  const p = { include_adult:'false', page:'1', sort_by:'vote_count.desc',
+              'vote_average.gte':'7.5' };
+  if(media === 'movie'){      p['vote_count.gte'] = '300'; p['vote_count.lte'] = '2000'; }
+  else if(anime){             p['vote_count.gte'] = '80';  p['vote_count.lte'] = '500';  }
+  else {                      p['vote_count.gte'] = '150'; p['vote_count.lte'] = '900';  }
+  p[champ + '.lte'] = anneeMoins(PEPITES_FRAICHEUR);
+  Object.assign(p, cadreAnimeParams(media, cadre), filtreMesPlates());
+  return { media:media, p:p };
+}
+/* « Les classiques à rattraper » : plus de quinze ans, note ≥ 7,5, et un
+   plancher de votes ÉLEVÉ — c'est lui qui fait la différence entre un classique
+   et un vieux film. Mesuré : 202 films (Inception, The Dark Knight, Fight Club,
+   Les Évadés), 328 séries, 171 animés. Le plancher diffère par famille, comme
+   pour les incontournables : le catalogue de séries est bien plus petit. */
+const CLASSIQUES_AGE = 15;
+function requeteClassiques(media, cadre){
+  const champ = media === 'movie' ? 'primary_release_date' : 'first_air_date';
+  const anime = cadre.origine === 'anime';
+  const p = { include_adult:'false', page:'1', sort_by:'vote_count.desc',
+              'vote_average.gte':'7.5',
+              'vote_count.gte': media === 'movie' ? '5000' : (anime ? '100' : '500') };
+  p[champ + '.lte'] = anneeMoins(CLASSIQUES_AGE);
+  Object.assign(p, cadreAnimeParams(media, cadre), filtreMesPlates());
+  return { media:media, p:p };
+}
+/* ===== LE BUDGET DE REQUÊTES, MESURÉ ET CONSIGNÉ (§6) =====
+
+   Mesuré le 10/08/2026 en rejouant `chargerSuggestions` contre un faux
+   catalogue construit pour être le PIRE cas : chaque rangée y est forcée
+   d'aller chercher ses deux pages supplémentaires. Ce sont donc des plafonds,
+   pas des moyennes.
+
+     Famille        avant SPEC-04   après   2ᵉ ouverture du jour
+     Tout                 42          66            0
+     Films                24          36            0
+     Animés               16          28            0
+     Tout + une humeur    (42)        24            0
+
+   TROIS CHOSES À LIRE LÀ-DEDANS.
+
+   1. LE SURCOÛT EST BORNÉ, et il est entièrement dû aux quatre rangées
+      éditoriales : quatre rangées × deux médias × trois pages au plus = 24.
+      C'est exactement l'écart mesuré sur « Tout ». Il n'y a pas de fuite
+      ailleurs.
+   2. UNE HUMEUR COÛTE MOINS CHER QUE LE REPOS (24 contre 66), parce qu'elle ne
+      demande QUE ses trois rangées et les nouveautés. Toucher une humeur n'est
+      donc pas un geste cher, et le second appui ne coûte rien du tout : le
+      repos est resté dans sa propre case de cache.
+   3. LA DEUXIÈME OUVERTURE DU JOUR COÛTE ZÉRO, sur les quatre colonnes. C'est
+      le cache de 24 h, inchangé. Le budget ci-dessus est un budget PAR JOUR et
+      par famille visitée, pas par ouverture d'écran.
+
+   Le script de mesure n'est pas versionné : il tient en cinquante lignes de
+   Playwright et se réécrit plus vite qu'il ne se maintient. Ce qui compte est
+   le chiffre, et il est ici. */
+
+/* La table des quatre, lue par le calcul ET par « Tout voir » : une seule
+   source pour la requête d'une rangée et pour la suite de cette rangée, sinon
+   la grille dépliée montre autre chose que le rail. */
+const RANGEES_EDITO = [
+  { cle:'acclames',   titre:'Acclamés par la critique',   requete:requeteAcclames,
+    periode:'semaine', melange:'jour' },
+  { cle:'weekend',    titre:'À finir en un week-end',     requete:requeteWeekend,
+    periode:'semaine', melange:null },
+  { cle:'pepites',    titre:'Des pépites que tu as ratées', requete:requetePepites,
+    periode:'semaine', melange:null },
+  { cle:'classiques', titre:'Les classiques à rattraper', requete:requeteClassiques,
+    periode:'mois',    melange:'semaine' }
+];
+function editoParCle(cle){ return RANGEES_EDITO.find(r => r.cle === cle) || null; }
+
+/* ---------------------------------------------------------------------------
+   « TOP 10 POUR TOI » (§1 rangée 2)
+
+   LA SEULE RANGÉE DE L'ÉCRAN QUI NE PROPOSE RIEN À DÉCOUVRIR : elle montre ce
+   que la personne a DÉJÀ vu, classé. Elle ne passe donc pas par `tamiser`, qui
+   retire précisément ce qui est dans la bibliothèque — et c'est volontaire, pas
+   un oubli. Elle ne coûte AUCUNE requête TMDB : tout est en local.
+
+   La construction suit la spec, dans l'ordre : le classement Elo du duel
+   (`db.classement`), puis les 👍, puis les mieux notés vus. Un titre 👎 n'y
+   entre jamais — poids 0 veut dire exclu, ici comme ailleurs.
+
+   Elle se met à jour IMMÉDIATEMENT après un duel ou un pouce, sans requête :
+   `signatureGouts` compte déjà les avis et le podium, `veilleBiblio` périme la
+   vitrine, et le recalcul ne redemande rien pour cette rangée-là.
+--------------------------------------------------------------------------- */
+const TOP10_TAILLE = 10;
+/* Les genres qui définissent une humeur, côté BIBLIOTHÈQUE cette fois : c'est
+   le seul moyen de recalculer le Top 10 sur une humeur sans requête. Noms
+   canoniques (libellé film), `genreCanon` s'occupe des séries. */
+const GENRES_HUMEUR = {
+  rire:      ['Comédie'],
+  frisson:   ['Horreur','Thriller','Mystère'],
+  reflechir: ['Science-Fiction','Drame','Mystère'],
+  detente:   ['Comédie','Familial','Animation']
+};
+function noteBiblio(media, id){
+  const o = media === 'tv' ? db.shows[id] : db.movies[id];
+  return (o && typeof o.note === 'number') ? o.note : 0;
+}
+function top10Pour(cadre, humeur){
+  const fams = famillesDuCadre(cadre);
+  const voulus = humeur ? (GENRES_HUMEUR[humeur] || []).map(n => String(n).toLowerCase()) : null;
+  const colle = t => {
+    if(!voulus) return true;
+    return (t.genres || []).some(g =>
+      voulus.indexOf(String((typeof genreCanon === 'function') ? genreCanon(g) : g)
+        .toLowerCase()) >= 0);
+  };
+  const out = [], vus = {};
+  const pousser = t => {
+    if(!t || out.length >= TOP10_TAILLE) return;
+    if(cadre.medias.indexOf(t.media) < 0) return;
+    if(!t.affiche) return;                        // une rangée d'affiches, pas de cases grises
+    if(avisDe(t.media, t.id) === -1) return;      // un 👎 n'est le top de personne
+    if(!colle(t)) return;
+    const k = t.media + ':' + t.id;
+    if(vus[k]) return; vus[k] = 1;
+    out.push({ id:Number(t.id), media:t.media, nom:t.nom, affiche:t.affiche, bandeau:null,
+               date:t.date || null, note:noteBiblio(t.media, t.id) || null, votes:0,
+               genre_ids:[], langue:null });
+  };
+  /* 1 — le classement Elo, toutes familles du cadre fondues sur le score. */
+  const parId = {};
+  fams.forEach(f => titresVus(f).forEach(t => { parId[f + ':' + t.id] = t; }));
+  const classes = [];
+  fams.forEach(f => classementTrie(f).forEach(id => {
+    const t = parId[f + ':' + id];
+    if(t) classes.push({ t:t, s:scoreClassement(f, id) });
+  }));
+  classes.sort((a, b) => b.s - a.s).forEach(e => pousser(e.t));
+  /* 2 — les 👍, puis 3 — les mieux notés vus. Deux passes sur la même liste :
+     `pousser` dédoublonne, un titre déjà classé ne repasse pas. */
+  const tous = [];
+  fams.forEach(f => titresVus(f).forEach(t => tous.push(t)));
+  tous.filter(t => aAime(t.media, t.id))
+      .sort((a, b) => noteBiblio(b.media, b.id) - noteBiblio(a.media, a.id))
+      .forEach(pousser);
+  tous.slice().sort((a, b) => noteBiblio(b.media, b.id) - noteBiblio(a.media, a.id))
+      .forEach(pousser);
+  return out;
+}
+
+/* ---------------------------------------------------------------------------
+   LES RYTHMES ET L'ANTI-DÉJÀ-VU (§1, règles transverses)
+
+   Trois promesses à tenir, et elles tirent dans le même sens :
+
+     · JAMAIS DE CHANGEMENT SOUS LE DOIGT. Un rail en cours de défilement ne
+       bouge pas. Tout ce qui suit est donc calculé sur la DATE (`jourVitrine`)
+       et jamais tiré au sort : `Math.random` ferait bouger l'écran d'un rendu
+       à l'autre, et un simple repeint suffirait à perdre le titre qu'on venait
+       de repérer.
+     · CHAQUE RANGÉE A SA CADENCE. « Acclamés » change de contenu chaque
+       semaine et d'ordre chaque jour ; « Classiques » chaque mois, et d'ordre
+       chaque semaine. Une composition retenue est REJOUÉE tant que sa période
+       n'a pas tourné.
+     · UN TITRE VU TROIS JOURS DE SUITE SANS ÊTRE OUVERT RECULE dans sa rangée.
+
+   OÙ C'EST RANGÉ, ET POURQUOI PAS DANS `db` : c'est de l'état d'écran, pas de
+   la donnée. Le mettre dans `db` le ferait voyager à chaque synchro, créerait
+   des conflits de fusion entre deux téléphones pour du contenu jetable, et
+   ferait grossir une base qui part en entier sur le réseau. Il vit donc dans
+   `localStorage`, sous sa propre clé, hors de tout ce que la synchro connaît.
+   Un stockage indisponible n'est pas une panne : on retombe sur « pas de
+   mémoire », c'est-à-dire l'ordre naturel de la source.
+--------------------------------------------------------------------------- */
+const MEMO_CLE = 'ms.rangees.v1';
+/* Au-delà, on oublie les plus anciens. Comme `REFUS_MAX` : un journal qui ne
+   se vide jamais finit par coûter plus cher que ce qu'il rend. */
+const MEMO_MAX = 600;
+const DEJAVU_JOURS = 3;
+const MEMO_PERIODES = { jour:1, semaine:7, mois:30 };
+/* §1 rangée 8 — l'anti-répétition PROPRE AUX PÉPITES : une pépite affichée
+   deux semaines sans être ouverte part se reposer un mois. C'est une règle
+   différente de l'anti-déjà-vu à trois jours, qui fait RECULER dans la rangée :
+   ici le titre en SORT. Une rangée dont le fond de catalogue dépasse les huit
+   cents titres peut se permettre d'en écarter ; une rangée personnelle, non. */
+const PEPITE_PATIENCE = 14;   // jours d'affichage sans ouverture
+const PEPITE_REPOS    = 30;   // jours de mise au repos
+let memoRangees = null;
+function memoLire(){
+  if(memoRangees) return memoRangees;
+  let o = null;
+  try{ o = JSON.parse(localStorage.getItem(MEMO_CLE) || 'null'); }catch(e){}
+  if(!o || typeof o !== 'object' || Array.isArray(o)) o = {};
+  if(!o.compo || typeof o.compo !== 'object') o.compo = {};
+  if(!o.vus   || typeof o.vus   !== 'object') o.vus   = {};
+  if(!o.pep   || typeof o.pep   !== 'object') o.pep   = {};
+  memoRangees = o;
+  return o;
+}
+
+/* ===========================================================================
+   B1 (relecture indépendante du 10/08) — LA DÉCISION SE PREND UNE FOIS PAR
+   JOUR, PAS À CHAQUE COMPOSITION.
+
+   LE DÉFAUT, ET IL ÉTAIT RÉEL. `noterAffichage` s'exécute à la FIN de
+   `rangeesSuggerees`, donc après que `reculerDejaVus` a déjà composé la
+   rangée. Un titre à deux jours consécutifs passait donc à trois APRÈS le
+   premier rendu de la journée — et le rendu suivant, dans la même session, le
+   faisait reculer. Reproduit sans réseau : la rangée sortait
+   `1 2 3 … 12` au premier appel et `2 3 … 12 1` au second, sans qu'on ait rien
+   touché. Or `render()` est rappelé constamment — un pouce, un toast, un
+   retour de fiche, une synchro — et `rangeeParCle` (donc « Tout voir »)
+   repasse aussi par là. C'était la violation frontale de l'invariant du §3.9 :
+   « une fois l'écran affiché, il ne bouge pas sous les doigts ».
+
+   LE CORRECTIF. On sépare LIRE et ÉCRIRE. La lecture se fait sur un instantané
+   pris au premier appel de la journée et qui ne bouge plus ; l'écriture
+   continue d'alimenter `localStorage` pour demain. Conséquence voulue : un
+   titre vu trois jours de suite recule le QUATRIÈME jour, pas au milieu du
+   troisième. C'est le prix de la stabilité, et c'est le bon prix.
+
+   Ce n'est pas un cas particulier de l'anti-déjà-vu : la mise au repos des
+   pépites passe par le même instantané, pour la même raison. Toute décision
+   qui change l'ordre ou le contenu d'un rail se prend ici, une fois.
+=========================================================================== */
+let memoFige = null;
+function memoDuJour(){
+  const j = jourVitrine();
+  if(memoFige && memoFige.jour === j) return memoFige;
+  const m = memoLire();
+  const dejaVu = {}, repos = {};
+  Object.keys(m.vus).forEach(k => { dejaVu[k] = m.vus[k].n || 0; });
+  Object.keys(m.pep).forEach(k => { if((m.pep[k].r || 0) > j) repos[k] = 1; });
+  memoFige = { jour:j, dejaVu:dejaVu, repos:repos };
+  return memoFige;
+}
+function memoEcrire(){
+  const m = memoLire();
+  const cles = Object.keys(m.vus);
+  if(cles.length > MEMO_MAX)
+    cles.sort((a, b) => (m.vus[a].j || 0) - (m.vus[b].j || 0))
+        .slice(0, cles.length - MEMO_MAX)
+        .forEach(k => { delete m.vus[k]; });
+  /* Le journal des pépites se plafonne aussi, et on jette d'abord ce qui est
+     sorti de repos depuis longtemps : c'est l'entrée qui ne dit plus rien. */
+  const pcles = Object.keys(m.pep);
+  if(pcles.length > MEMO_MAX)
+    pcles.sort((a, b) => Math.max(m.pep[a].d || 0, m.pep[a].r || 0)
+                       - Math.max(m.pep[b].d || 0, m.pep[b].r || 0))
+         .slice(0, pcles.length - MEMO_MAX)
+         .forEach(k => { delete m.pep[k]; });
+  try{ localStorage.setItem(MEMO_CLE, JSON.stringify(m)); }catch(e){}
+}
+/* Le numéro de la période courante. `jourVitrine` est déjà un numéro de jour
+   calculé sur la date locale : une semaine est un paquet de sept, un mois un
+   paquet de trente. Approximation assumée — on cherche une cadence, pas un
+   calendrier. */
+function periodeCourante(nom){
+  return Math.floor(jourVitrine() / (MEMO_PERIODES[nom] || 1));
+}
+function hachageMemo(s){
+  let h = 0;
+  for(let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return h;
+}
+/* Un mélange REPRODUCTIBLE : même graine, même ordre, du premier rendu de la
+   journée au dernier. C'est ce qui distingue « l'ordre change chaque jour » de
+   « l'ordre change sous le doigt », et seul le second est un défaut. */
+function melangeStable(l, graine){
+  return l.map((x, i) => ({ x:x, r: hachageMemo(graine + ':' + x.media + ':' + x.id + ':' + i) }))
+    .sort((a, b) => a.r - b.r)
+    .map(o => o.x);
+}
+/* La composition d'une rangée, figée pour la durée de sa période. Un titre
+   disparu de la source (ajouté à la bibliothèque, refusé) libère sa place ; ce
+   que la source a de neuf s'ajoute en fin de liste plutôt qu'au milieu, pour
+   que le début du rail reste celui d'hier. */
+/* R8 (relecture du 10/08) — LA CLÉ PORTE LA FAMILLE, et pas seulement le nom
+   de la rangée. `m.compo['acclames']` était partagé entre Tout, Films, Séries
+   et Animés : la composition figée d'une famille contaminait l'ordre des trois
+   autres pour toute la période, et on pouvait voir un rail d'animés ordonné
+   par ce qu'on avait vu la veille sur la puce Films. `cleSugg()` est déjà la
+   clé du cache de suggestions — c'est exactement le bon grain. */
+function compoStable(cle0, liste, periode, melange){
+  if(!liste || !liste.length) return [];
+  const cle = cle0 + '@' + cleSugg();
+  const m = memoLire();
+  const p = periodeCourante(periode);
+  const e = m.compo[cle];
+  let ordre;
+  if(e && e.p === p && Array.isArray(e.l)){
+    const par = {};
+    liste.forEach(x => { par[x.media + ':' + x.id] = x; });
+    ordre = e.l.map(k => par[k]).filter(Boolean);
+    const deja = {};
+    ordre.forEach(x => { deja[x.media + ':' + x.id] = 1; });
+    liste.forEach(x => { if(!deja[x.media + ':' + x.id]) ordre.push(x); });
+  } else {
+    ordre = liste.slice();
+    m.compo[cle] = { p:p, l: ordre.map(x => x.media + ':' + x.id) };
+    memoEcrire();
+  }
+  return melange ? melangeStable(ordre, cle + ':' + periodeCourante(melange)) : ordre;
+}
+/* On note qu'un titre a été MONTRÉ aujourd'hui. Trois jours consécutifs sans
+   ouverture et il recule. Écrit au plus une fois par jour et par titre : le
+   garde `bouge` évite d'écrire dans `localStorage` à chaque repeint. */
+function noterAffichage(l){
+  const m = memoLire(), j = jourVitrine();
+  let bouge = false;
+  (l || []).forEach(x => {
+    const k = x.media + ':' + x.id;
+    const e = m.vus[k];
+    if(!e){ m.vus[k] = { j:j, n:1 }; bouge = true; return; }
+    if(e.j === j) return;
+    e.n = (e.j === j - 1) ? (e.n || 1) + 1 : 1;
+    e.j = j; bouge = true;
+  });
+  if(bouge) memoEcrire();
+}
+/* Ouvrir un titre remet son compteur à zéro : la rangée a fait son travail. */
+/* Ouvrir un titre remet ses deux compteurs à zéro : la rangée a fait son
+   travail. L'instantané du jour est mis à jour LUI AUSSI, et c'est la seule
+   exception à B1 — mais elle est légitime : le §3.9 autorise l'écran à répondre
+   à une action directe, et ce changement-là ne peut que faire REMONTER un
+   titre, jamais le déplacer sous le doigt de quelqu'un qui n'a rien demandé. */
+function noterOuverture(media, id){
+  const m = memoLire();
+  const k = media + ':' + id;
+  const f = memoDuJour();
+  delete f.dejaVu[k]; delete f.repos[k];
+  if(!m.vus[k] && !m.pep[k]) return;
+  delete m.vus[k]; delete m.pep[k];
+  memoEcrire();
+}
+function reculerDejaVus(l){
+  const fige = memoDuJour().dejaVu;
+  const use = x => (fige[x.media + ':' + x.id] || 0) >= DEJAVU_JOURS;
+  const devant = l.filter(x => !use(x)), derriere = l.filter(use);
+  return derriere.length ? devant.concat(derriere) : l;
+}
+/* §1 rangée 8 — les pépites au repos sortent de la rangée. Lecture sur
+   l'instantané du jour (B1) ; l'écriture est dans `noterPepites`, appelée une
+   fois par jour au même moment que `noterAffichage`. */
+function filtrerPepites(l){
+  const repos = memoDuJour().repos;
+  return l.filter(x => !repos[x.media + ':' + x.id]);
+}
+function noterPepites(l){
+  const m = memoLire(), j = jourVitrine();
+  let bouge = false;
+  (l || []).forEach(x => {
+    const k = x.media + ':' + x.id;
+    const e = m.pep[k];
+    if(!e){ m.pep[k] = { d:j, r:0 }; bouge = true; return; }
+    if(e.r > j) return;                             // déjà au repos
+    if(!e.d){ e.d = j; bouge = true; return; }      // repos terminé : on repart
+    if(j - e.d < PEPITE_PATIENCE) return;
+    /* Deux semaines sous les yeux sans une ouverture : au repos pour un mois. */
+    e.r = j + PEPITE_REPOS; e.d = 0; bouge = true;
+  });
+  if(bouge) memoEcrire();
+}
+/* « À finir en un week-end » remonte en 2ᵉ position du vendredi 17 h au
+   dimanche soir (§1 rangée 7). L'horloge est passée en argument pour que le
+   test puisse la simuler — sans ça, la règle ne serait vérifiable qu'un jour
+   sur sept. */
+function weekEndEnAvant(quand){
+  const t = quand || new Date();
+  const j = t.getDay();                    // 0 dimanche … 5 vendredi, 6 samedi
+  if(j === 0 || j === 6) return true;
+  return j === 5 && t.getHours() >= 17;
+}
+
 async function chargerSuggestions(force){
   const type = (ui.disc && ui.disc.type) || 'tout';
   const c = suggCourantes();
@@ -1799,6 +2472,14 @@ async function chargerSuggestions(force){
       chargerPlates(discMedia()).catch(()=>{});
 
     const cadre = cadreSugg(type);
+    /* SPEC-04 — L'HUMEUR CHANGE LA NATURE DE L'ÉCRAN, pas seulement son
+       contenu : en mode humeur la spec ne décrit que SIX rangées (§2), et les
+       rangées personnelles de l'écran au repos n'y figurent pas. On ne les
+       demande donc pas. Ce n'est pas une économie de confort : c'est ce qui
+       fait qu'appuyer sur une humeur coûte 8 requêtes au lieu de 38, et que
+       le geste répond tout de suite. Le repos, lui, garde sa propre case de
+       cache intacte — on y revient sans rien recalculer. */
+    const hum = humeurActive();
     const vus = {};
     const auj = todayISO();
     const debut = isoIlYA(60);
@@ -1822,7 +2503,7 @@ async function chargerSuggestions(force){
     /* POINT 10 — la page 1 part comme avant, en parallèle avec tout le reste :
        elle sera consommée de toute façon, et c'est elle qui dit combien de pages
        TMDB a en réserve. Ce qui change est APRÈS, au dépouillement. */
-    sections.forEach(sec=>{
+    if(!hum) sections.forEach(sec=>{
       const r = requeteSection(sec);
       if(!r) return demandes.push(Promise.resolve({ kind:'section', sec:sec, flux:null }));
       demandes.push(sourceDouce(tmdb('/discover/'+r.media, r.p))
@@ -1837,8 +2518,8 @@ async function chargerSuggestions(force){
        seule fois et on répartit ensuite : sans ce dédoublonnage, la même
        requête partait deux fois à chaque calcul. */
     const recoCles = [];
-    if(esprit) recoCles.push(esprit.media+':'+esprit.id);
-    favoris.forEach(t=>{
+    if(esprit && !hum) recoCles.push(esprit.media+':'+esprit.id);
+    if(!hum) favoris.forEach(t=>{
       const k = t.media+':'+t.id;
       if(recoCles.indexOf(k) < 0) recoCles.push(k);
     });
@@ -1849,7 +2530,7 @@ async function chargerSuggestions(force){
                       l:(d&&d.results||[]).map(x=>normaliser(x, m)) })));
     });
 
-    acteurs.forEach(a => demandes.push(sourceDouce(tmdb('/person/'+a.id+'/combined_credits'))
+    if(!hum) acteurs.forEach(a => demandes.push(sourceDouce(tmdb('/person/'+a.id+'/combined_credits'))
       .then(d => ({ kind:'acteur', titre:a.nom, id:a.id,
                     l:((d&&d.cast)||[])
                       .filter(x => x.media_type === 'tv' || x.media_type === 'movie')
@@ -1857,7 +2538,7 @@ async function chargerSuggestions(force){
                       .map(x => normaliser(x, x.media_type)) }))));
 
     /* §3.4 rangée 4 — le genre au meilleur TAUX, nommé dans le titre. */
-    if(genreT) cadre.medias.forEach(m=>{
+    if(genreT && !hum) cadre.medias.forEach(m=>{
       const gid = genreParNom(m, genreT.nom);
       if(gid == null) return;
       const p = Object.assign({ include_adult:'false', page:'1' }, triSuggestions());
@@ -1876,11 +2557,36 @@ async function chargerSuggestions(force){
     });
 
     /* §3.4 rangée 6 — le cercle. Aucune requête TMDB : la matière est déjà là. */
-    demandes.push(titresDuCercle(cadre)
+    if(!hum) demandes.push(titresDuCercle(cadre)
       .then(l => ({ kind:'cercle', l:l }), () => ({ kind:'cercle', l:[] })));
 
+    /* SPEC-04 §1 — LES QUATRE RANGÉES ÉDITORIALES. Elles n'existent qu'au
+       repos : en mode humeur, l'écran de la spec n'en porte aucune. */
+    if(!hum) RANGEES_EDITO.forEach(def => cadre.medias.forEach(m=>{
+      const r = def.requete(m, cadre);
+      if(!r) return;
+      demandes.push(sourceDouce(tmdb('/discover/'+m, r.p))
+        .then(d => ({ kind:def.cle, media:m,
+                      flux: fluxSugg(m, r.p, (d&&d.results||[]).map(x=>normaliser(x, m)),
+                                     d && d.total_pages) })));
+    }));
+
+    /* SPEC-04 §2 — LES TROIS RANGÉES DE L'HUMEUR, et rien d'autre quand une
+       humeur est posée. La rangée principale s'élargit via TMDB avant de céder
+       (règle des 10) ; les deux autres ont le droit de disparaître, et
+       « valeurs sûres » disparaît RÉELLEMENT sur les films de frisson — quatre
+       titres mesurés, voir `requeteHumeur`. */
+    if(hum) ['principale','sures','courts'].forEach(v => cadre.medias.forEach(m=>{
+      const r = requeteHumeur(m, cadre, hum, v);
+      if(!r) return;
+      demandes.push(sourceDouce(tmdb('/discover/'+m, r.p))
+        .then(d => ({ kind:'hum:'+v, media:m,
+                      flux: fluxSugg(m, r.p, (d&&d.results||[]).map(x=>normaliser(x, m)),
+                                     d && d.total_pages) })));
+    }));
+
     /* §3.4 rangée 7 — les incontournables de la décennie du jour. */
-    cadre.medias.forEach(m=>{
+    if(!hum) cadre.medias.forEach(m=>{
       const r = requeteIncont(m, dec);
       demandes.push(sourceDouce(tmdb('/discover/'+m, r.p))
         .then(d => ({ kind:'incont', media:m,
@@ -1889,7 +2595,7 @@ async function chargerSuggestions(force){
     });
 
     /* §3.4 rangée 8 — ce qui est lançable ce soir, sur les abonnements déclarés. */
-    cadre.medias.forEach(m=>{
+    if(!hum) cadre.medias.forEach(m=>{
       const r = requetePlatesRangee(m);
       if(!r) return;
       demandes.push(sourceDouce(tmdb('/discover/'+m, r.p))
@@ -1929,7 +2635,7 @@ async function chargerSuggestions(force){
          catalogues. Même raison pour les rangées d'acteurs et « Dans l'esprit
          de » : leurs sources TMDB (filmographie, recommandations) n'acceptent
          aucun filtre de plateforme. La vitrine le dit sous les puces. */
-      for(let pg = 1; pg <= SUGG_AVENIR_PAGES; pg++){
+      for(let pg = 1; !hum && pg <= SUGG_AVENIR_PAGES; pg++){
         const pa = { include_adult:'false', page:String(pg), sort_by:'popularity.desc',
                      [champ+'.gte']:demain };
         if(cadre.origine === 'anime'){
@@ -2052,6 +2758,31 @@ async function chargerSuggestions(force){
       if(l.length) cerclePret = { l:l };
     });
 
+    /* SPEC-04 — LES TROIS RANGÉES DE L'HUMEUR, dépouillées en premier quand
+       une humeur est posée : ce sont elles le sujet de l'écran, et la rangée
+       principale ne doit pas se faire vider par les nouveautés servies plus
+       bas. Elles s'élargissent comme les autres (`remplirSugg`, cible dix,
+       deux pages supplémentaires au plus). */
+    let humPret = null;
+    if(hum){
+      const bloc = {};
+      for(const v of ['principale','sures','courts'])
+        bloc[v] = await remplirSugg(fluxDe('hum:'+v), vus, cadre, false, SUGG_CIBLE);
+      humPret = bloc;
+    }
+
+    /* 8 — Nouveautés. Elle passe AVANT les rangées éditoriales : une sortie de
+       la semaine a plus de valeur qu'un classique, et l'ordre de dépouillement
+       suit l'ordre d'affichage. */
+    const nouv = await remplirSugg(fluxDe('nouv'), vus, cadre, false, SUGG_CIBLE);
+
+    /* SPEC-04 — LES QUATRE RANGÉES ÉDITORIALES, dans leur ordre d'affichage.
+       Elles se partagent `vus` comme tout le reste : « Acclamés » sert en
+       premier, « Classiques » hérite. */
+    const edito = {};
+    for(const def of RANGEES_EDITO)
+      edito[def.cle] = hum ? [] : await remplirSugg(fluxDe(def.cle), vus, cadre, false, SUGG_CIBLE);
+
     /* 7 — Les incontournables de la décennie du jour */
     let incontPret = null;
     {
@@ -2066,14 +2797,72 @@ async function chargerSuggestions(force){
       if(l.length) platesPret = { titre:titreRangeePlates(), l:l };
     }
 
-    const nouv = await remplirSugg(fluxDe('nouv'), vus, cadre, false, SUGG_CIBLE);
+    /* SPEC-04 §1 rangée 2 — LE TOP 10. Aucune requête, aucun tamis : il montre
+       la bibliothèque, pas des découvertes. En mode humeur il se recalcule sur
+       les genres de l'humeur et retombe sur le Top 10 de la famille s'il
+       n'atteint pas dix titres, exactement comme le §2 le demande. */
+    let top10 = top10Pour(cadre, hum);
+    if(hum && top10.length < TOP10_TAILLE) top10 = top10Pour(cadre, null);
 
     /* « Bientôt » : on ne mélange pas les médias un pour un comme ailleurs —
        c'est la DATE qui range la rangée. Une affiche est exigée : un titre
        annoncé sans visuel n'est qu'une ligne de texte dans un carrousel. */
+    /* R7 (relecture du 10/08) — « BIENTÔT » RÉUNIT DEUX SOURCES, comme le §1
+       rangée 10 le demande depuis le début : ce qui sort (le vivier TMDB
+       ci-dessus) ET ce que la personne attend déjà (`bientotPerso`, app-10 —
+       ses films « à voir » et ceux dont la cloche est allumée, avec leur date
+       FRANÇAISE, qui n'est pas celle de la fiche d'origine).
+
+       CES TITRES-LÀ SONT DÉJÀ DANS LA BIBLIOTHÈQUE : ils ne passent donc pas
+       par `tamiser`, qui les retirerait tous — comme le Top 10, et pour la même
+       raison. Ce n'est pas une entorse : « Bientôt » ne répond pas à « que
+       découvrir ? » mais à « qu'est-ce qui arrive ? », et la réponse la plus
+       utile est précisément celle qu'on attend soi-même. La vignette portera sa
+       coche « déjà chez toi », ce qui rend la différence lisible sans un mot.
+
+       ON LIT `bientotPerso`, ON NE LE DÉCLENCHE PAS — et c'est une décision, pas
+       une paresse. `filmsBientot()` planifie `chargerBientotPerso`, qui demande
+       la date française PUIS les plateformes de CHAQUE film suivi : une à deux
+       requêtes par film. Sur une liste « à voir » de cinquante titres, c'est
+       cinquante à cent requêtes ajoutées à l'ouverture de Découvrir — pour une
+       demi-rangée. Le dépôt a déjà retiré un sondage de dix-neuf requêtes pour
+       exactement ce motif (`sonderPlates`), et le §6 demande de consigner le
+       budget, pas de le faire exploser en silence.
+       On se sert donc de ce qui est DÉJÀ chargé : « À suivre » le remplit, et
+       Découvrir en profite sans rien payer. Tant que la personne n'a pas ouvert
+       « À suivre », « Bientôt » est ce qu'elle était avant ce lot — la moitié
+       TMDB, qui suffit. À signaler à Adrien : c'est la seule moitié de R7 que
+       je livre, et c'est délibéré. */
+    const persoAvenir = [];
+    /* Ce bloc ne parle que de FILMS : sur les puces Séries et Animés, il n'a
+       rien à dire et ne doit pas s'inviter. */
+    if(cadre.medias.indexOf('movie') >= 0) try{
+      const dedans = {};
+      const dejaCharges = (typeof bientotPerso === 'object' && bientotPerso &&
+                           Array.isArray(bientotPerso.films)) ? bientotPerso.films : [];
+      dejaCharges.forEach(f=>{
+        const m = db.movies[f.id];
+        /* Le cache d'app-10 peut dater d'avant un « vu » : on revérifie ici
+           plutôt que de faire confiance à sa clé. Un film déjà vu n'arrive
+           plus, il est arrivé. */
+        if(!m || m.seen || !m.poster || !f.dfr || dedans[f.id]) return;
+        dedans[f.id] = 1;
+        persoAvenir.push({ id:Number(f.id), media:'movie', nom:f.titre || m.title,
+                           affiche:m.poster, bandeau:m.backdrop || null, date:f.dfr,
+                           note:m.note || null, votes:0, genre_ids:[], langue:null });
+      });
+    }catch(e){ /* une source muette vaut mieux qu'une rangée en panne */ }
+
+    const decouvertes = tamiser([].concat(...parKind('avenir').map(r => r.l || [])),
+                                vus, cadre, false)
+      .filter(x => x.affiche && x.date);
+    /* Les deux sources fondues puis rangées par DATE — c'est la règle de cette
+       rangée, et elle vaut pour les deux moitiés : mélanger deux blocs
+       chronologiques sans les refondre ferait sauter la chronologie au milieu. */
+    const dejaLa = {};
+    persoAvenir.forEach(x => { dejaLa[x.media + ':' + x.id] = 1; });
     const avenir = trierParDate(
-      tamiser([].concat(...parKind('avenir').map(r => r.l || [])), vus, cadre, false)
-        .filter(x => x.affiche && x.date)
+      persoAvenir.concat(decouvertes.filter(x => !dejaLa[x.media + ':' + x.id]))
     ).slice(0, SUGG_AVENIR_MAX);
 
     /* §3.3 — LA PROPOSITION DU JOUR. Un seul titre, plein cadre, avec sa raison
@@ -2087,8 +2876,14 @@ async function chargerSuggestions(force){
        les incontournables sinon, ce qui est exactement l'échelle du §2.4 — et
        elle est décalée d'un cran par jour : la proposition change demain sans
        jamais bouger dans la journée (§3.9). */
-    const source = espritPret ? espritPret.l : (incontPret ? incontPret.l : []);
-    const raison = raisonDuJour(espritPret ? esprit : null);
+    /* SPEC-04 §2 — LE HERO D'HUMEUR : le meilleur candidat de la recette, non
+       vu, déjà tamisé par le profil (`remplirSugg` a fait les deux). La réserve
+       reste celle du §3.8 — « Pas pour moi » doit remplacer la carte tout de
+       suite, y compris en mode humeur. */
+    const source = hum ? ((humPret && humPret.principale) || [])
+                       : (espritPret ? espritPret.l : (incontPret ? incontPret.l : []));
+    const raison = hum ? ((humeurDef(hum) || {}).raison || '')
+                       : raisonDuJour(espritPret ? esprit : null);
     const propositions = [];
     for(let i = 0; i < Math.min(PROPOSITIONS_RESERVE, source.length); i++)
       propositions.push(Object.assign({ pourquoi:raison }, source[(jour + i) % source.length]));
@@ -2103,6 +2898,11 @@ async function chargerSuggestions(force){
         esprit:espritPret, favoris:favorisPret, acteur:acteurPret, genre:genrePret,
         sections:sectionsPretes, cercle:cerclePret, incont:incontPret, plates:platesPret,
         nouveautes:nouv.slice(0, SUGG_MAX),
+        /* SPEC-04 — les cinq neuves. `humeur` vaut `null` au repos, ce qui est
+           lu par `rangeesSuggerees` comme « compose l'écran d'origine ». */
+        top10:top10, humeur:humPret,
+        acclames:edito.acclames || [], weekend:edito.weekend || [],
+        pepites:edito.pepites || [], classiques:edito.classiques || [],
         /* Gardé en entier, pas coupé à SUGG_MAX : c'est cette liste-là que la
            grille « Tout voir » déroule, et elle est déjà dans l'ordre. */
         avenir:avenir,
@@ -2174,25 +2974,124 @@ function rangeesSuggerees(){
     if(typeof estRefuseSugg === 'function' && estRefuseSugg(x.media, x.id)) return false;
     return true;
   });
-  const poser = (cle, titre, l)=>{
-    const liste = (typeof classerParMalus === 'function') ? classerParMalus(propre(l)) : propre(l);
-    if(liste.length) out.push({ cle:cle, titre:titre, l:liste });
+  /* SPEC-04 — `brut` d'abord, `out` ensuite : la règle des 10 se prononce sur
+     la liste ENTIÈRE, une fois toutes les rangées composées. Une rangée écartée
+     n'est pas perdue, ses titres partent dans « Aussi pour toi ». */
+  const brut = [];
+  const poser = (cle, titre, l, opts)=>{
+    if(!l || !l.length) return;
+    let liste = (typeof classerParMalus === 'function') ? classerParMalus(propre(l)) : propre(l);
+    /* Anti-déjà-vu : trois jours d'affilée sous les yeux sans être ouvert, et
+       le titre passe derrière. Il ne sort pas de la rangée — il recule. */
+    liste = reculerDejaVus(liste);
+    if(liste.length) brut.push(Object.assign({ cle:cle, titre:titre, l:liste }, opts || {}));
   };
 
   const s = suggestions;
-  if(s.esprit && s.esprit.l.length)  poser('esprit',  'Dans l\'esprit de '+s.esprit.titre, s.esprit.l);
-  if(s.favoris && s.favoris.l.length) poser('favoris','Ce que tes favoris ont en commun', s.favoris.l);
-  if(s.acteur && s.acteur.l.length)  poser('acteur:'+s.acteur.id, 'Avec '+s.acteur.titre, s.acteur.l);
-  if(s.genre && s.genre.l.length)    poser('genre',   s.genre.titre, s.genre.l);
-  (s.sections || []).forEach(x=>{ if(x.l.length) poser(x.cle, x.titre, x.l); });
-  if(s.cercle && s.cercle.l.length)  poser('cercle',  'Vu par tes proches', s.cercle.l);
-  if(s.incont && s.incont.l.length)  poser('incont',  s.incont.titre, s.incont.l);
-  if(s.plates && s.plates.l.length)  poser('plates',  s.plates.titre, s.plates.l);
-  if((s.nouveautes || []).length)    poser('nouv',    'Sorties récentes', s.nouveautes);
-  /* « Bientôt » vient après « Sorties récentes » : on lit le présent avant
-     l'avenir, et une rangée vide (peu d'animés annoncés, par exemple) ne
-     s'affiche tout simplement pas. */
-  if((s.avenir || []).length)        poser('avenir',  'Bientôt', s.avenir);
+  const hum = humeurActive();
+  const hdef = hum ? humeurDef(hum) : null;
+  /* Le Top 10 ne passe ni par `propre` ni par le malus des refus : ce sont des
+     titres de la bibliothèque, pas des propositions. Il ne verse rien dans
+     « Aussi pour toi » non plus (`sansRepli`) — reproposer ce qu'on a déjà vu
+     serait le contraire d'une découverte. */
+  const poserTop = ()=>{
+    const l = (s.top10 || []).slice(0, TOP10_TAILLE);
+    if(l.length) brut.push({ cle:'top10', titre:'Top 10 pour toi', l:l,
+                             top:true, sansRepli:true });
+  };
+
+  if(hum && s.humeur){
+    /* L'ORDRE DE LA MAQUETTE (§2), et rien de plus : hero d'humeur, rangée
+       principale, valeurs sûres, format court, Top 10, nouveautés. */
+    poser('hum',       hdef ? hdef.principale : 'Pour ce soir', s.humeur.principale);
+    poser('humsures',  hdef ? hdef.sures : 'Valeurs sûres',     s.humeur.sures);
+    poser('humcourts', 'En une soirée ou un week-end',          s.humeur.courts);
+    poserTop();
+    poser('nouv', 'Nouveautés', s.nouveautes);
+  } else {
+    /* L'ORDRE AU REPOS. Du plus personnel au plus générique, comme le §3.4 le
+       demandait déjà, avec les cinq rangées de SPEC-04 insérées à leur place.
+       « Dans l'esprit de X » devient « Parce que tu as aimé X » (§1 rangée 3)
+       et « Sorties récentes » devient « Nouveautés » (§1 rangée 5) : les deux
+       rangées existent toujours, seul leur libellé suit la spec. */
+    poserTop();
+    if(s.esprit)  poser('esprit',  'Parce que tu as aimé ' + s.esprit.titre, s.esprit.l);
+    if(s.favoris) poser('favoris', 'Ce que tes favoris ont en commun', s.favoris.l);
+    if(s.acteur)  poser('acteur:'+s.acteur.id, 'Avec ' + s.acteur.titre, s.acteur.l);
+    if(s.genre)   poser('genre',   s.genre.titre, s.genre.l);
+    (s.sections || []).forEach(x => poser(x.cle, x.titre, x.l));
+    if(s.cercle)  poser('cercle',  'Vu par tes proches', s.cercle.l);
+    poser('nouv',  'Nouveautés', s.nouveautes);
+    /* Les quatre éditoriales, chacune à sa cadence : le contenu ne change qu'à
+       la fin de sa période, l'ordre se remélange plus souvent. */
+    RANGEES_EDITO.forEach(def =>
+      poser(def.cle, def.titre,
+            compoStable(def.cle,
+              /* §1 rangée 8 — les pépites au repos sortent avant tout le reste :
+                 les filtrer APRÈS la composition figée les remplacerait par des
+                 trous, alors qu'il faut qu'elles cèdent leur place. */
+              def.cle === 'pepites' ? filtrerPepites(s.pepites || []) : (s[def.cle] || []),
+              def.periode, def.melange)));
+    if(s.incont)  poser('incont', s.incont.titre, s.incont.l);
+    if(s.plates)  poser('plates', s.plates.titre, s.plates.l);
+    /* « Bientôt » vient après les nouveautés : on lit le présent avant
+       l'avenir. Elle ne verse pas ses restes dans « Aussi pour toi » — un
+       titre pas encore sorti n'est pas une proposition pour ce soir. */
+    /* R2 (relecture du 10/08) — « BIENTÔT » A SON PROPRE PLANCHER, ET C'EST
+       LA MAQUETTE QUI LE DIT. Elle code `rangee("Bientôt", …, 3)`, et l'en-tête
+       de la spec dit que la maquette FAIT FOI. Le texte du §0.5 (« dix ou
+       rien ») et la maquette se contredisent donc sur cette rangée-là, et la
+       maquette a raison sur le fond : une rangée de dates n'est pas une rangée
+       de découvertes. Trois sorties annoncées, c'est trois informations vraies
+       et datées ; les cacher parce qu'il n'y en a pas dix reviendrait à taire
+       une sortie que la personne attend. `sansRepli` reste : un titre pas
+       encore sorti n'a rien à faire dans « Aussi pour toi ». */
+    poser('avenir', 'Bientôt', s.avenir, { sansRepli:true, mini:AVENIR_MINI });
+  }
+
+  /* ===== LA RÈGLE DES 10 (§0.5) =====
+     Dix affiches ou la rangée n'existe pas. L'élargissement TMDB a déjà eu
+     lieu au calcul (`remplirSugg`, cible dix, deux pages supplémentaires au
+     plus) : ici on ne fait que prononcer la sentence, et récupérer ce qui
+     tombe. */
+  const orphelins = [], montres = {};
+  brut.forEach(r=>{
+    if(r.l.length < (r.mini || RANGEE_MINI)){
+      if(!r.sansRepli) orphelins.push.apply(orphelins, r.l);
+      return;
+    }
+    r.l.forEach(x=>{ montres[x.media + ':' + x.id] = 1; });
+    out.push(r);
+  });
+
+  /* « Aussi pour toi » — les orphelins, dédupliqués de ce qui est déjà à
+     l'écran, et soumis à la même règle des 10. Elle ferme l'écran. */
+  const dedup = {}, repli = [];
+  orphelins.forEach(x=>{
+    const k = x.media + ':' + x.id;
+    if(montres[k] || dedup[k]) return;
+    dedup[k] = 1; repli.push(x);
+  });
+  if(repli.length >= RANGEE_MINI)
+    out.push({ cle:'reste', titre:'Aussi pour toi', l:repli, fige:true });
+
+  /* Du vendredi 17 h au dimanche, « À finir en un week-end » remonte en 2ᵉ
+     position (§1 rangée 7). Elle ne dépasse jamais la première rangée : le
+     Top 10 est ce qui appartient le plus à la personne. */
+  if(!hum && weekEndEnAvant()){
+    const i = out.findIndex(r => r.cle === 'weekend');
+    if(i > 1) out.splice(1, 0, out.splice(i, 1)[0]);
+  }
+
+  /* Ce qui est réellement passé sous les yeux aujourd'hui — dix par rangée,
+     c'est ce que le rail montre. Écrit au plus une fois par jour et par titre. */
+  noterAffichage([].concat.apply([],
+    out.filter(r => !r.top).map(r => r.l.slice(0, RANGEE_APERCU))));
+  /* Les pépites tiennent leur propre compte : deux semaines d'affichage sans
+     ouverture, et elles partent un mois. Écrit ici, LU sur l'instantané du
+     jour — c'est la séparation que B1 impose. */
+  const pep = out.find(r => r.cle === 'pepites');
+  if(pep) noterPepites(pep.l.slice(0, RANGEE_APERCU));
   return out;
 }
 
@@ -2265,6 +3164,39 @@ async function chargerPageRangee(cle, page, vus){
     const bloc = suggCourantes()[cle === 'favoris' ? 'favoris' : 'cercle'];
     const tout = (bloc && bloc.l) || [];
     return { titres: tout.filter(x => !vus[x.media+':'+x.id]), pages:1 };
+  }
+
+  /* SPEC-04 — DEUX RANGÉES SANS SUITE. Le Top 10 est borné à dix par
+     définition, et « Aussi pour toi » est déjà le fond du panier : tout ce qui
+     restait y est. La grille dépliée sert donc ce qui est en mémoire. */
+  if(cle === 'top10' || cle === 'reste'){
+    if(page > 1) return { titres:[], pages:1 };
+    const r = (typeof rangeeParCle === 'function') ? rangeeParCle(cle) : null;
+    const tout = (r && r.l) || [];
+    return { titres: tout.filter(x => !vus[x.media+':'+x.id]), pages:1 };
+  }
+
+  /* SPEC-04 — LES QUATRE RANGÉES ÉDITORIALES ET LES TROIS RANGÉES D'HUMEUR.
+     Exactement la requête qui a bâti la rangée, page suivante. Une seule
+     source pour le rail et pour la grille : sinon « Tout voir » montre autre
+     chose que ce qu'on vient de quitter, ce qui était le reproche d'Adrien sur
+     la toute première version de la tuile. */
+  const edito = editoParCle(cle);
+  const varHum = { hum:'principale', humsures:'sures', humcourts:'courts' }[cle];
+  if(edito || varHum){
+    const humc = humeurActive();
+    if(varHum && !humc) return { titres:[], pages:1 };
+    const paquets = [], totaux = [];
+    for(const m of cadre.medias){
+      const r = edito ? edito.requete(m, cadre) : requeteHumeur(m, cadre, humc, varHum);
+      if(!r) continue;
+      r.p.page = String(page);
+      const d = await sourceDouce(tmdb('/discover/'+m, r.p));
+      totaux.push((d&&d.total_pages)||1);
+      paquets.push(tamiser(((d&&d.results)||[]).map(x=>normaliser(x, m)), vus, cadre, false));
+    }
+    if(!paquets.length) return { titres:[], pages:1 };
+    return { titres: entrelacerSugg(paquets), pages: Math.max.apply(null, totaux) };
   }
 
   /* Le genre du jour, les incontournables et les plateformes : exactement la
@@ -3754,10 +4686,20 @@ function ecranDuelResultat(){
         '<button class="djq" onclick="ouvrirApercuDuel(\''+x.media+'\','+x.id+')">'+
           affDuel({ affiche:x.affiche, nom:x.nom }, 'djqaff')+
           '<span class="djqnom">'+esc(x.nom)+'</span></button>').join('')+'</div>';
+    /* SPEC-04 + R5 — DEUX CORRECTIONS DANS UNE SEULE PHRASE, et la seconde
+       n'était dans aucun rapport.
+       1. La rangée promise s'appelle désormais « Parce que tu as aimé X »
+          (§1 rangée 3). On promettait une rangée dont le nom n'existe plus.
+       2. Elle ne « remplace la rotation au hasard » plus vraiment : depuis
+          l'arbitrage R5, l'ancrage TOURNE chaque jour parmi les titres aimés et
+          le podium. Promettre la permanence serait donc faux dès demain. On
+          promet ce qui est vrai — que ça change tout de suite — et rien de plus.
+          C'est la même règle que le §1.1 : l'app ne prétend jamais en savoir,
+          ni en tenir, plus qu'elle n'en sait. */
     html += '<div class="wrap" style="padding-top:10px"><div class="card dnote">'+
-      '<b>'+esc(tete.nom)+'</b> devient ton point de départ. La rangée '+
-      '« Dans l\'esprit de '+esc(tete.nom)+' » remplace la rotation au hasard, '+
-      'dès maintenant.</div></div>';
+      '<b>'+esc(tete.nom)+'</b> devient ton point de départ. Découvrir s\'ouvre '+
+      'sur la rangée « Parce que tu as aimé '+esc(tete.nom)+' », dès maintenant.'+
+      '</div></div>';
   }
   /* R1 · point 12 — « Continuer → » n'ouvre l'écran suivant que s'il a quelque
      chose à demander. Tout est déjà qualifié : le bouton dit « Terminer » et
