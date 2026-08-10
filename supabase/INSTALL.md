@@ -210,7 +210,7 @@ absence d'`Origin`, préflight, `/tv/123` accepté, `/account` et
 seule barrière devant la clé TMDB : ne pas livrer une modification de ce
 dossier sans les avoir joués.
 
-Les 76 tests du relais `ia` couvrent le même genre de barrières : origine
+Les 77 tests du relais `ia` couvrent le même genre de barrières : origine
 inconnue, absence de jeton, jeton refusé, tâche hors liste blanche, budget
 atteint, compteur plein, bascule sur `429`, tous les étages épuisés, réponse
 malformée, réponse trop longue, et la règle §0.4 (aucun texte généré ne prête un
