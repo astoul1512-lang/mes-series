@@ -53,6 +53,7 @@ Dans *SQL Editor*, exécuter les fichiers de `migrations/` **dans l'ordre**.
 | `011_suivi_en_retour.sql` | « Suivre en retour », et la notification d'un nouvel abonné |
 | `012_durcissements.sql` | verrou sur les codes de partage, droits alignés, purge, défaut corrigé |
 | `013_push_endpoint.sql` | **SPEC-01 · C7** — un appareil sonne pour le compte connecté, et pour lui seul |
+| `014_relais_ia.sql` | **SPEC-04 · lot B** — l'échelle des fournisseurs d'IA, les compteurs, les budgets et le journal |
 
 Avant d'exécuter `005`, y remplacer deux marques :
 
@@ -110,6 +111,13 @@ Dans *Edge Functions → Secrets* :
 |---|---|
 | `TMDB_KEY` | une clé TMDB. Les deux formats marchent : clé v3 courte, ou jeton v4 (long, commençant par `eyJ`). |
 | `VAPID_PRIVEE` | la clé privée VAPID des notifications push. |
+| `GEMINI_API_KEY` | une clé Google AI Studio. Elle sert aux **deux** étages Gemini de l'échelle IA — c'est la même clé, seul le modèle change. |
+| `OPENROUTER_API_KEY` | une clé OpenRouter, pour l'étage de secours. |
+
+Les deux clés d'IA ne sont pas obligatoires : sans elles, le relais `ia` rend
+`{indisponible:true}` et l'app fonctionne exactement comme si l'IA était
+éteinte. C'est le mode dégradé de SPEC-04 §4.5, et il est le socle, pas un
+pis-aller.
 
 `SUPABASE_URL` et `SUPABASE_SERVICE_ROLE_KEY` sont fournis automatiquement par
 la plateforme : ne pas les créer.
@@ -127,6 +135,7 @@ désactivé** :
 supabase functions deploy tmdb             --no-verify-jwt
 supabase functions deploy supprimer-compte --no-verify-jwt
 supabase functions deploy notifier         --no-verify-jwt
+supabase functions deploy ia               --no-verify-jwt
 ```
 
 `verify_jwt` est désactivé volontairement, pour une raison différente à chaque
@@ -141,6 +150,12 @@ fois — et chacune est protégée autrement :
   associe à ce jeton.
 - **`notifier`** est appelée par le planificateur, qui n'a pas de session. Elle
   est protégée par le secret partagé de `005`.
+- **`ia`** EXIGE pourtant un jeton, et ce n'est pas une contradiction : la
+  plateforme rejetterait les requêtes `OPTIONS` du navigateur avant d'arriver au
+  code, et un préflight CORS n'en porte jamais. La fonction vérifie donc le
+  jeton elle-même — comme `supprimer-compte` — et refuse en `401` tout ce qui
+  n'en a pas. Elle est en outre protégée par la liste blanche des origines, la
+  liste blanche fermée des tâches, et deux plafonds de requêtes.
 
 ### 5 bis. L'adresse depuis laquelle l'app a le droit d'appeler `tmdb`
 
@@ -186,6 +201,7 @@ Les tests du relais tournent sans réseau et sans Supabase :
 
 ```
 deno test --allow-env supabase/functions/tmdb/index.test.ts
+deno test --allow-env supabase/functions/ia/index.test.ts
 ```
 
 Ils couvrent les deux listes blanches — origine connue, origine inconnue,
@@ -194,10 +210,20 @@ absence d'`Origin`, préflight, `/tv/123` accepté, `/account` et
 seule barrière devant la clé TMDB : ne pas livrer une modification de ce
 dossier sans les avoir joués.
 
+Les 25 tests du relais `ia` couvrent le même genre de barrières : origine
+inconnue, absence de jeton, jeton refusé, tâche hors liste blanche, budget
+atteint, compteur plein, bascule sur `429`, tous les étages épuisés, réponse
+malformée, réponse trop longue, et la règle §0.4 (aucun texte généré ne prête un
+sentiment à qui que ce soit). Ils vérifient AUSSI ce qui serait envoyé aux
+fournisseurs : aucun prompt venu du client, aucun identifiant, aucune adresse.
+
 > La logique vit dans `functions/tmdb/relais.ts` ; `functions/tmdb/index.ts`
 > ne fait plus que la brancher sur `Deno.serve`. C'est ce qui permet aux tests
 > d'éprouver la fonction sans ouvrir de port. La commande de déploiement ne
-> change pas : les modules importés par l'entrée sont embarqués.
+> change pas : les modules importés par l'entrée sont embarqués. `functions/ia`
+> suit exactement le même découpage, en quatre fichiers : `index.ts` (l'entrée),
+> `relais.ts` (la logique), `config.ts` (l'échelle et les budgets) et
+> `gabarits.ts` (les prompts et la validation).
 
 ## 6. Vérifier
 
@@ -243,3 +269,83 @@ répond `404`, c'est que `010` n'a pas été exécuté.
 
 L'app lit l'URL du projet et la clé publiable dans `app-01` (`DEFAULT_SYNC`).
 Les remplacer par celles du nouveau projet.
+
+## 8. Les limites de l'IA — le chiffre qu'il faut aller chercher soi-même
+
+**À faire une fois, après le déploiement de `ia`.** Tant que ce n'est pas fait,
+le relais fonctionne, mais il découvre la saturation au lieu de l'éviter.
+
+Le § 4.2 de SPEC-04 veut que le relais **n'appelle pas** un fournisseur dont le
+compteur dit qu'il est plein. Pour cela il lui faut deux nombres par étage :
+requêtes par minute, requêtes par jour.
+
+**Google ne les publie plus.** Relevé le 10/08/2026 : la page officielle
+*Gemini API — Rate limits* ne porte plus aucun tableau RPM / RPD / TPM, elle
+renvoie au tableau de bord d'AI Studio et précise que les limites « are not
+guaranteed ». Les deux étages Gemini partent donc avec `limite_minute` et
+`limite_jour` à `NULL`, ce qui veut dire **inconnue** et non *illimitée* : la
+réservation les laisse passer, et c'est le `429` du fournisseur qui les arrête,
+une fois par fenêtre.
+
+Pour fermer cet écart :
+
+1. Ouvrir <https://aistudio.google.com/rate-limit> avec le compte qui porte
+   `GEMINI_API_KEY`, et relever les limites du **Free Tier** pour les deux
+   modèles de l'échelle (colonnes « Requests per minute » et « Requests per
+   day »).
+2. Les poser en base, dans *SQL Editor* :
+
+```sql
+update public.ia_fournisseurs
+   set limite_minute = 15,      -- remplacer par le vrai chiffre relevé
+       limite_jour   = 1000,    -- idem
+       maj = now()
+ where nom = 'gemini-flash';
+
+update public.ia_fournisseurs
+   set limite_minute = 30,      -- idem
+       limite_jour   = 1000,    -- idem
+       maj = now()
+ where nom = 'gemini-flash-lite';
+```
+
+Aucun redéploiement : la fonction relit la table, avec une minute de cache.
+
+**OpenRouter, lui, publie ses chiffres** et ils sont déjà en base : 20 requêtes
+par minute, 50 par jour tant que le compte n'a pas acheté 10 $ de crédits
+cumulés — au-delà, 1 000 par jour, et le palier reste acquis même si le solde
+retombe. Le compteur est au niveau du **compte**, pas du modèle. Si des crédits
+sont achetés un jour :
+
+```sql
+update public.ia_fournisseurs set limite_jour = 1000, maj = now()
+ where nom = 'openrouter';
+```
+
+### Régler les budgets sur l'usage réel
+
+Au bout de quelques jours, le journal dit ce qui se consomme vraiment :
+
+```sql
+select jour, fournisseur, count(*) filter (where ok) as ok,
+       count(*) filter (where not ok) as echecs, round(avg(duree_ms)) as ms
+  from public.ia_journal
+ group by jour, fournisseur
+ order by jour desc, fournisseur;
+```
+
+Il ne contient ni prompt, ni réponse, ni identifiant de personne : quatre
+colonnes suffisent à répondre à « qu'est-ce qui se consomme, et est-ce que ça
+tient ? ». Les plafonds, eux, sont dans `functions/ia/config.ts`
+(`BUDGET_UTILISATEUR_JOUR`, `BUDGET_GLOBAL_JOUR`) — les changer demande un
+redéploiement de la fonction, contrairement à l'échelle.
+
+### Le ménage
+
+`ia_journal` et `ia_budget_jour` ne font que grossir, et la seconde porte des
+identifiants. La migration installe `public.ia_menage()`, qui garde soixante
+jours. À appeler de temps en temps, ou à greffer sur le planificateur de `005` :
+
+```sql
+select public.ia_menage();
+```
