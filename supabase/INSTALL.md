@@ -210,7 +210,7 @@ absence d'`Origin`, préflight, `/tv/123` accepté, `/account` et
 seule barrière devant la clé TMDB : ne pas livrer une modification de ce
 dossier sans les avoir joués.
 
-Les 37 tests du relais `ia` couvrent le même genre de barrières : origine
+Les 59 tests du relais `ia` couvrent le même genre de barrières : origine
 inconnue, absence de jeton, jeton refusé, tâche hors liste blanche, budget
 atteint, compteur plein, bascule sur `429`, tous les étages épuisés, réponse
 malformée, réponse trop longue, et la règle §0.4 (aucun texte généré ne prête un
@@ -235,9 +235,12 @@ comptes eux-mêmes : la saturation d'une fenêtre, le fait qu'elle n'en mure pas
 une autre, l'arrêt exact au plafond, les deux remboursements (compteur de
 fournisseur et budget), la cohérence entre la sentinelle et le plafond des
 limites inconnues, et le ménage à soixante jours. Chaque cas lève une exception
-nommée : `psql` s'arrête et dit lequel. Le fichier se termine par une remise à
-zéro — il est rejouable et ne laisse rien derrière lui. Il n'écrit que sur des
-fournisseurs préfixés `test-`, jamais sur des lignes réelles.
+nommée : `psql` s'arrête et dit lequel. **Le fichier tout entier est une transaction annulée** (`begin` … `rollback`) :
+tout s'exécute pour de vrai, les assertions mordent pour de vrai, et rien n'est
+jamais validé. C'est ce qui le rend sûr sur la base de production — et non une
+discipline de nommage, qui avait d'ailleurs échoué : la première version
+supprimait la ligne `@global`, c'est-à-dire le compteur du budget global du
+jour, et déclenchait une purge du journal.
 
 Il tourne aussi sur un PostgreSQL local vierge, ce qui évite de toucher au
 projet en ligne :
@@ -359,16 +362,17 @@ update public.ia_fournisseurs set limite_jour = 1000, maj = now()
 Au bout de quelques jours, le journal dit ce qui se consomme vraiment :
 
 ```sql
-select jour, fournisseur, count(*) filter (where ok) as ok,
-       count(*) filter (where not ok) as echecs, round(avg(duree_ms)) as ms
+select jour, fournisseur, statut, count(*) as n, round(avg(duree_ms)) as ms
   from public.ia_journal
- group by jour, fournisseur
- order by jour desc, fournisseur;
+ group by jour, fournisseur, statut
+ order by jour desc, fournisseur, statut;
 ```
 
-Il ne contient ni prompt, ni réponse, ni identifiant de personne : quatre
-colonnes suffisent à répondre à « qu'est-ce qui se consomme, et est-ce que ça
-tient ? ». Les plafonds, eux, sont dans `functions/ia/config.ts`
+Il ne contient ni prompt, ni réponse, ni identifiant de personne — un test fige
+la liste exacte des cinq champs écrits, pour qu'on ne puisse pas en ajouter un
+par distraction. `duree_ms` est la durée de l'ÉTAGE, pas de la requête : la
+moyenne par fournisseur ci-dessus est donc lisible telle quelle (elle ne l'était
+pas avant le 10/08 — elle cumulait les étages précédents). Les plafonds, eux, sont dans `functions/ia/config.ts`
 (`BUDGET_UTILISATEUR_JOUR`, `BUDGET_GLOBAL_JOUR`) — les changer demande un
 redéploiement de la fonction, contrairement à l'échelle.
 

@@ -78,6 +78,37 @@ function indisponible(cors: Record<string, string>) {
 // au-dessus. C'est la posture la plus fermée possible, et elle est la bonne :
 // ces tables ne contiennent que de la comptabilité, aucun écran n'en a besoin.
 // ---------------------------------------------------------------------------
+/* ---------------------------------------------------------------------------
+   UN DÉLAI SUR *TOUS* LES APPELS SORTANTS, PAS SEULEMENT SUR LES FOURNISSEURS.
+
+   R-1 (relecture du 10/08, second tour). `config.ts` promettait « borné à 24 s
+   dans le pire cas, trois étages compris ». Mesuré : une requête complète part
+   en SEIZE appels sortants séquentiels, et TREIZE n'avaient aucun délai —
+   l'authentification, la lecture de la table, les cinq RPC, les quatre écritures
+   de journal. Une base qui pend, et la fonction pendait avec elle, jusqu'au
+   plafond de la plateforme.
+
+   Deux délais, parce que ce ne sont pas les mêmes attentes : huit secondes pour
+   un fournisseur d'IA qui rédige, trois pour la base, qui doit répondre en
+   millisecondes ou pas du tout.
+--------------------------------------------------------------------------- */
+export const TIMEOUT_BASE_MS = 3000;
+
+function minuteur(ms: number): { signal?: AbortSignal; fini: () => void } {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return { signal: AbortSignal.timeout(ms), fini: () => {} };
+  }
+  if (typeof AbortController === "undefined") return { fini: () => {} };
+  const c = new AbortController();
+  const t = setTimeout(() => { try { c.abort(); } catch (_e) { /* déjà fini */ } }, ms);
+  return { signal: c.signal, fini: () => clearTimeout(t) };
+}
+
+async function avecDelai(f: (s?: AbortSignal) => Promise<Response>, ms: number): Promise<Response> {
+  const m = minuteur(ms);
+  try { return await f(m.signal); } finally { m.fini(); }
+}
+
 /* EXPORTÉE POUR ÊTRE ÉPROUVÉE, et c'est la relecture du 10/08 qui l'a rendue
    nécessaire. Le défaut du 204 ci-dessous n'est visible NULLE PART depuis
    `servir` : les trois appels concernés (`ia_saturer`, `ia_rendre_budget`,
@@ -85,7 +116,7 @@ function indisponible(cors: Record<string, string>) {
    ressemble trait pour trait à un succès. Un défaut qu'aucun test ne peut voir
    par l'extérieur se teste par l'intérieur, ou ne se teste pas. */
 export async function rpc(nom: string, args: Record<string, unknown>): Promise<unknown> {
-  const r = await fetch(URL_SB() + "/rest/v1/rpc/" + nom, {
+  const r = await avecDelai((signal) => fetch(URL_SB() + "/rest/v1/rpc/" + nom, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -93,7 +124,8 @@ export async function rpc(nom: string, args: Record<string, unknown>): Promise<u
       Authorization: "Bearer " + CLE_ADMIN(),
     },
     body: JSON.stringify(args),
-  });
+    signal,
+  }), TIMEOUT_BASE_MS);
   if (!r.ok) throw new Error("rpc " + nom + " : " + r.status);
   /* UNE FONCTION SQL QUI REND `void` FAIT RÉPONDRE 204 SANS CORPS, et
      `r.json()` lève alors sur une réponse parfaitement réussie. Relevé à la
@@ -114,26 +146,79 @@ export async function rpc(nom: string, args: Record<string, unknown>): Promise<u
 // changement de configuration se voit — assez court pour qu'on n'attende pas,
 // assez long pour que ça ne coûte rien.
 // ---------------------------------------------------------------------------
+/* La durée de vie du cache est une CONSTANTE EXPORTÉE, pas un nombre au milieu
+   d'une condition : c'est la seule façon qu'un test la fige. Mutation survivante
+   au 10/08 — la porter à 24 h ne faisait broncher personne. */
+export const CACHE_FOURNISSEURS_MS = 60000;
+
 let cacheFournisseurs: { quand: number; l: Fournisseur[] } | null = null;
 export function oublierFournisseurs() { cacheFournisseurs = null; }
 
+/* UNE LIGNE DE TABLE N'EST PAS UN `Fournisseur` PARCE QU'ON L'A DÉCLARÉ.
+   B-b et R-10 (relecture du 10/08, second tour). La version d'origine faisait
+   `d as Fournisseur[]` — une promesse au compilateur, aucune vérification à
+   l'exécution. Quatre façons de tomber, toutes jouées par le relecteur :
+     · `nom` absent, `null` ou numérique → `f.nom.indexOf(…)` lève, HORS du
+       `try` d'`appeler`, donc HTTP 500 brut ;
+     · `rang` absent → `undefined >= etage` est faux, l'étage DISPARAÎT en
+       silence, sans même une ligne de journal ;
+     · `rang` en texte ou négatif → l'échelle s'inverse sans un mot ;
+     · deux lignes du même `nom` → le même fournisseur est appelé deux ou trois
+       fois dans une requête, contre le « une seule tentative chacun » du §4.2,
+       et les compteurs sont tenus sur ce `nom`.
+   Une ligne mal formée est donc ÉCARTÉE, pas rafistolée : la table est éditée à
+   la main, et une ligne qu'on ne comprend pas ne doit pas décider d'un appel. */
+function fournisseurValide(x: unknown): Fournisseur | null {
+  if (!x || typeof x !== "object") return null;
+  const o = x as Record<string, unknown>;
+  const nom = typeof o.nom === "string" ? o.nom.trim() : "";
+  const modele = typeof o.modele === "string" ? o.modele.trim() : "";
+  const rang = Number(o.rang);
+  if (!nom || !modele || !isFinite(rang) || rang < 1) return null;
+  const limite = (v: unknown) => {
+    const n = Number(v);
+    return (v === null || v === undefined || !isFinite(n) || n < 0) ? null : Math.floor(n);
+  };
+  return {
+    nom, modele, rang,
+    limite_minute: limite(o.limite_minute),
+    limite_jour: limite(o.limite_jour),
+    actif: o.actif !== false,
+  };
+}
+
 export async function lireFournisseurs(): Promise<Fournisseur[]> {
-  const maintenant = Date.now();
-  if (cacheFournisseurs && maintenant - cacheFournisseurs.quand < 60000) return cacheFournisseurs.l;
+  if (cacheFournisseurs && Date.now() - cacheFournisseurs.quand < CACHE_FOURNISSEURS_MS) {
+    return cacheFournisseurs.l;
+  }
   let l: Fournisseur[] = [];
   try {
-    const r = await fetch(
-      URL_SB() + "/rest/v1/ia_fournisseurs?select=*&actif=is.true&order=rang.asc",
-      { headers: { apikey: CLE_ADMIN(), Authorization: "Bearer " + CLE_ADMIN() } },
-    );
+    const r = await avecDelai((signal) =>
+      fetch(
+        URL_SB() + "/rest/v1/ia_fournisseurs?select=*&actif=is.true&order=rang.asc",
+        { headers: { apikey: CLE_ADMIN(), Authorization: "Bearer " + CLE_ADMIN() }, signal },
+      ), TIMEOUT_BASE_MS);
     if (r.ok) {
       const d = await r.json();
-      if (Array.isArray(d)) l = d as Fournisseur[];
+      if (Array.isArray(d)) {
+        const vus: Record<string, true> = {};
+        for (const ligne of d) {
+          const f = fournisseurValide(ligne);
+          // Le premier `nom` gagne : la table est triée par rang, donc c'est
+          // l'étage le plus haut qui l'emporte sur son doublon.
+          if (f && f.actif && !Object.prototype.hasOwnProperty.call(vus, f.nom)) {
+            vus[f.nom] = true;
+            l.push(f);
+          }
+        }
+      }
     }
   } catch (_e) { /* base injoignable : on prend le repli, sans bruit */ }
   if (!l.length) l = FOURNISSEURS.filter((f) => f.actif);
   l = l.slice().sort((a, b) => a.rang - b.rang);
-  cacheFournisseurs = { quand: maintenant, l };
+  /* L'HORODATAGE SE PREND APRÈS LA LECTURE, pas avant : une lecture lente
+     vieillissait le cache de sa propre durée. */
+  cacheFournisseurs = { quand: Date.now(), l };
   return l;
 }
 
@@ -153,25 +238,23 @@ export async function lireFournisseurs(): Promise<Fournisseur[]> {
 // ---------------------------------------------------------------------------
 type Reponse = { ok: boolean; statut: number; brut: unknown; attente: number };
 
-/* Le délai maximal, et il s'arme TOUJOURS.
-   `AbortSignal.timeout` était appelé derrière un ternaire : absent du runtime,
-   la garantie des huit secondes disparaissait sans que rien ne le signale.
-   Relevé à la relecture. On retombe donc sur un `AbortController` armé à la
-   main, qui existe partout, et le seul cas sans délai est celui où même
-   `AbortController` manque — auquel cas on n'aurait de toute façon rien pu
-   faire. */
-function minuteurDe(): { signal?: AbortSignal; fini: () => void } {
-  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
-    return { signal: AbortSignal.timeout(TIMEOUT_MS), fini: () => {} };
-  }
-  if (typeof AbortController === "undefined") return { fini: () => {} };
-  const c = new AbortController();
-  const t = setTimeout(() => { try { c.abort(); } catch (_e) { /* déjà fini */ } }, TIMEOUT_MS);
-  return { signal: c.signal, fini: () => clearTimeout(t) };
+/* `Retry-After` a DEUX formes légales (RFC 7231) : un nombre de secondes, ou une
+   date HTTP. R-3 (relecture du 10/08, second tour) : on ne lisait que la
+   première, donc une date rendait `NaN`, `attente` retombait à 0, et on murait
+   la minute. Or la date est justement la forme employée pour un reset de quota
+   JOURNALIER — le seul cas pour lequel la branche « jour » a été écrite. Elle ne
+   pouvait donc jamais s'exécuter. */
+export function attenteDe(entete: string | null): number {
+  if (!entete) return 0;
+  const secondes = Number(entete.trim());
+  if (isFinite(secondes) && entete.trim() !== "") return Math.max(0, secondes);
+  const date = Date.parse(entete);
+  if (!isNaN(date)) return Math.max(0, Math.round((date - Date.now()) / 1000));
+  return 0;
 }
 
 async function appeler(f: Fournisseur, consigne: string, schema: Record<string, unknown>): Promise<Reponse> {
-  const m = minuteurDe();
+  const m = minuteur(TIMEOUT_MS);
   const gemini = f.nom.indexOf("gemini") === 0;
   const cle = Deno.env.get(gemini ? "GEMINI_API_KEY" : "OPENROUTER_API_KEY") || "";
   if (!cle) { m.fini(); return { ok: false, statut: 0, brut: null, attente: 0 }; }
@@ -223,8 +306,8 @@ async function appeler(f: Fournisseur, consigne: string, schema: Record<string, 
          c'est un quota journalier ; en dessous, c'est du rythme. Sans en-tête,
          on mure la minute — se tromper d'une minute coûte une minute, se
          tromper d'un jour coûte un jour. */
-      const ra = Number(r.headers.get("Retry-After") || "0");
-      return { ok: false, statut: r.status, brut: null, attente: isFinite(ra) ? ra : 0 };
+      return { ok: false, statut: r.status, brut: null,
+               attente: attenteDe(r.headers.get("Retry-After")) };
     }
     const d = await r.json();
     return { ok: true, statut: 200, brut: extraire(gemini, d), attente: 0 };
@@ -271,11 +354,22 @@ function extraire(gemini: boolean, d: unknown): unknown {
    ressemble trait pour trait à un dégradé qui fonctionne.
    Les codes hors HTTP : 0 clé absente · 1 réponse invalide · 2 quota local plein
    (aucun appel) · 3 budget refusé · 599 délai ou réseau. */
+/* R-5 (relecture du 10/08, second tour) — `duree_ms` EST LA DURÉE DE L'ÉTAGE,
+   plus celle de la requête entière. On passait `Date.now() - debut`, l'écoulé
+   depuis l'entrée dans `servir` : mesuré, trois étages à 300 ms rendaient 306,
+   609 et 911 ms. La requête d'exploitation d'INSTALL.md
+   (`avg(duree_ms) group by fournisseur`) surévaluait donc systématiquement les
+   étages du bas de l'échelle — c'est-à-dire le chiffre même sur lequel le §4.2
+   demande de régler les budgets.
+
+   LES CINQ CLÉS DU CORPS SONT ÉNUMÉRÉES ICI ET NULLE PART AILLEURS. Le §4.2 les
+   fixe : ni prompt, ni réponse, ni identifiant de personne. Un test vérifie la
+   liste exacte — sans lui, ajouter `uid` un jour de fatigue ne casserait rien. */
 async function journaliser(
   tache: string, fournisseur: string | null, ok: boolean, statut: number, duree: number,
 ) {
   try {
-    await fetch(URL_SB() + "/rest/v1/ia_journal", {
+    await avecDelai((signal) => fetch(URL_SB() + "/rest/v1/ia_journal", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -284,7 +378,8 @@ async function journaliser(
         Prefer: "return=minimal",
       },
       body: JSON.stringify({ tache, fournisseur, ok, statut, duree_ms: Math.round(duree) }),
-    });
+      signal,
+    }), TIMEOUT_BASE_MS);
   } catch (_e) { /* le journal n'a jamais le droit de casser l'appel */ }
 }
 
@@ -295,17 +390,38 @@ async function journaliser(
 // ---------------------------------------------------------------------------
 async function qui(jeton: string): Promise<string | null> {
   try {
-    const r = await fetch(URL_SB() + "/auth/v1/user", {
+    const r = await avecDelai((signal) => fetch(URL_SB() + "/auth/v1/user", {
       headers: { Authorization: "Bearer " + jeton, apikey: CLE_ADMIN() },
-    });
+      signal,
+    }), TIMEOUT_BASE_MS);
     if (!r.ok) return null;
     const d = await r.json();
     return (d && typeof d.id === "string") ? d.id : null;
   } catch (_e) { return null; }
 }
 
+/* ---------------------------------------------------------------------------
+   LE FILET DE DERNIER RECOURS, ET IL MANQUAIT.
+
+   B-a et B-b (relecture du 10/08, second tour). Le fichier explique en tête, sur
+   dix lignes, qu'une IA en panne doit être un écran NORMAL et jamais une erreur
+   brute (§4.4). Il manquait précisément la ligne qui le garantit : aucun
+   `try/catch` n'entourait `servir`, donc toute exception non prévue remontait
+   jusqu'à `Deno.serve` et sortait en HTTP 500 — sans en-tête CORS, donc doublée
+   d'une erreur CORS dans la console du navigateur.
+
+   Deux entrées banales y suffisaient, les deux trouvées à la relecture :
+     · un corps valant littéralement `null` — `req.json()` RÉUSSIT et rend
+       `null`, donc le `catch` ne se déclenchait pas, et la ligne suivante
+       déréférençait `null.tache` ;
+     · une ligne d'`ia_fournisseurs` sans `nom` exploitable — `f.nom.indexOf`
+       levait hors du `try` d'`appeler`.
+
+   Les deux causes sont corrigées à la source (plus bas). Ce filet est là pour la
+   TROISIÈME, celle qu'on n'a pas encore trouvée : un invariant censé être vrai
+   ne doit pas pouvoir transformer un écran normal en erreur rouge.
+--------------------------------------------------------------------------- */
 export async function servir(req: Request): Promise<Response> {
-  const debut = Date.now();
   const origine = req.headers.get("Origin");
   const site = req.headers.get("Sec-Fetch-Site");
 
@@ -318,6 +434,18 @@ export async function servir(req: Request): Promise<Response> {
     );
   }
   const cors = entetesCors(origine);
+  try {
+    return await servirAccepte(req, cors);
+  } catch (_e) {
+    // On ne dit RIEN de plus au client : ni le message, ni la pile. Le mode
+    // dégradé du §4.4 est indistinguable d'une IA simplement éteinte, et c'est
+    // volontaire.
+    return indisponible(cors);
+  }
+}
+
+async function servirAccepte(req: Request, cors: Record<string, string>): Promise<Response> {
+  const debut = Date.now();
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ erreur: "méthode" }, 405, cors);
 
@@ -330,7 +458,14 @@ export async function servir(req: Request): Promise<Response> {
 
   // --- La tâche. Liste blanche fermée : un `tache` inconnu part en 400. ---
   let corps: Record<string, unknown> = {};
-  try { corps = await req.json(); } catch (_e) { /* corps illisible = tâche absente */ }
+  /* `req.json()` RÉUSSIT sur le corps `null`, sur `1` et sur `"x"` : le `catch`
+     ne suffit pas, il faut vérifier ce qu'on a obtenu. B-a. */
+  try {
+    const brut = await req.json();
+    if (brut && typeof brut === "object" && !Array.isArray(brut)) {
+      corps = brut as Record<string, unknown>;
+    }
+  } catch (_e) { /* corps illisible = tâche absente */ }
   const tache = typeof corps.tache === "string" ? corps.tache : "";
   /* R4 (relecture du 10/08) — `TACHES[tache]` TROUVAIT LES MEMBRES HÉRITÉS.
      `constructor`, `toString`, `hasOwnProperty` et `valueOf` viennent
@@ -378,6 +513,10 @@ export async function servir(req: Request): Promise<Response> {
   };
 
   for (const f of echelle) {
+    /* L'HORLOGE REPART À CHAQUE ÉTAGE. Voir `journaliser` : `duree_ms` mesure
+       l'étage, pas la requête. */
+    const departEtage = Date.now();
+
     // ON N'APPELLE PAS UN FOURNISSEUR DONT LE COMPTEUR DIT QU'IL EST PLEIN.
     // C'est la phrase du §4.2, et c'est cette ligne-là. Quand les limites sont
     // inconnues (`null`, cas des deux étages Gemini au 10/08), la réservation
@@ -391,7 +530,7 @@ export async function servir(req: Request): Promise<Response> {
     if (!place) {
       // Le compteur a dit non : on le NOTE, sinon le journal ne saura pas
       // distinguer « étage sauté parce que plein » de « étage jamais atteint ».
-      await journaliser(tache, f.nom, false, 2, Date.now() - debut);
+      await journaliser(tache, f.nom, false, 2, Date.now() - departEtage);
       continue;
     }
 
@@ -399,7 +538,7 @@ export async function servir(req: Request): Promise<Response> {
 
     if (r.ok) {
       const propre = valider(tache, r.brut);
-      await journaliser(tache, f.nom, !!propre, propre ? 200 : 1, Date.now() - debut);
+      await journaliser(tache, f.nom, !!propre, propre ? 200 : 1, Date.now() - departEtage);
       // RÉPONSE MALFORMÉE : DÉGRADÉ, SANS RÉESSAI (§4.4). On ne descend pas
       // l'échelle non plus — le fournisseur a répondu, il a juste mal répondu,
       // et payer un second étage pour la même phrase serait payer deux fois.
@@ -408,7 +547,7 @@ export async function servir(req: Request): Promise<Response> {
       return indisponible(cors);
     }
 
-    await journaliser(tache, f.nom, false, r.statut, Date.now() - debut);
+    await journaliser(tache, f.nom, false, r.statut, Date.now() - departEtage);
 
     if (r.statut === 429) {
       /* Ce fournisseur est plein. On le marque saturé jusqu'à la fin de la

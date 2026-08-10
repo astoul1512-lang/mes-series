@@ -92,6 +92,17 @@ export const FOURNISSEURS: Fournisseur[] = [
 // le gabarit est construit ici, côté serveur. Sans ça, ce relais serait une
 // API de génération de texte gratuite ouverte à qui trouve son adresse.
 //
+// CES QUATRE ENTRÉES SONT DU CODE, PAS DES DONNÉES, contrairement à l'échelle
+// des fournisseurs — les changer demande un redéploiement. Le pavé d'en-tête de
+// ce fichier dit que « l'ordre, les limites et les étages de départ sont des
+// données » : c'est vrai de l'ordre et des limites (table `ia_fournisseurs`),
+// faux des étages de départ et des deux budgets. Relevé au second tour de
+// relecture ; on corrige la phrase plutôt que de déplacer la donnée, parce
+// qu'une tâche qui apparaît demande de toute façon du code.
+//
+// `etage_depart` est un RANG, comparé au `rang` de la table : renuméroter la
+// table (10, 20, 30) viderait l'échelle sans un mot. À savoir avant d'y toucher.
+//
 // `etage_depart` : le §4.2 le demande par tâche. On ne dépense pas le quota du
 // Flash pour une phrase de quinze mots — les tâches courtes et fréquentes
 // partent directement de l'étage 2. Le repli vers l'étage suivant reste piloté
@@ -129,9 +140,18 @@ export const TACHES: Record<string, Tache> = {
 export const BUDGET_UTILISATEUR_JOUR = 30;   // l'usage nominal est de 5 à 6
 export const BUDGET_GLOBAL_JOUR = 1000;
 
-// Une seule tentative par fournisseur, huit secondes chacune (§4.2). Le total
-// est donc borné à 24 s dans le pire cas, trois étages compris — au-delà, le
-// client a de toute façon abandonné.
+// Une seule tentative par fournisseur, huit secondes chacune (§4.2).
+//
+// « BORNÉ À 24 S », DISAIT CETTE PHRASE, ET ELLE ÉTAIT FAUSSE. Le second tour de
+// relecture a compté : une requête complète part en seize appels sortants
+// séquentiels, et treize n'avaient aucun délai — l'authentification, la lecture
+// de la table, les cinq RPC, les quatre écritures de journal. Une base qui pend,
+// et la fonction pendait avec elle, jusqu'au plafond de la plateforme.
+// Corrigé : `relais.ts` arme un délai sur TOUS ses appels, trois secondes pour
+// la base (`TIMEOUT_BASE_MS`), huit pour un fournisseur qui rédige. Le pire cas
+// est donc maintenant borné pour de bon, aux alentours de 3 × 8 s d'IA plus une
+// douzaine d'appels de base à 3 s — et un test refuse désormais qu'un seul appel
+// sortant parte sans minuteur.
 export const TIMEOUT_MS = 8000;
 
 // Les origines autorisées. MÊME LISTE que le relais TMDB, et c'est voulu : deux

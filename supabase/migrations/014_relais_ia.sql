@@ -72,6 +72,25 @@ create table if not exists public.ia_fournisseurs (
   maj            timestamptz not null default now()
 );
 
+/* UNE LIMITE RESTE SOUS LA SENTINELLE, ET CE N'EST PAS UNE COQUETTERIE.
+   R-b (relecture du 10/08, second tour) : `ia_saturer` marque un fournisseur
+   saturé en portant son compteur à `ia_plafond_inconnu()` (1 000 000). Une
+   limite configurée AU-DESSUS de ce nombre rendrait la sentinelle invisible —
+   c'est-à-dire B1 à l'identique, réarmé par un simple `update`. Le nombre est
+   déjà mille fois au-dessus de tout palier gratuit existant : personne n'a de
+   raison légitime de le franchir, et `ia_reserver_fenetre` sait de toute façon
+   se protéger seule (`least`). Deux verrous plutôt qu'un, sur le défaut qui a
+   déjà coûté une relecture.
+   `alter … add constraint if not exists` n'existe pas : d'où le bloc. */
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'ia_fournisseurs_limites_sous_plafond') then
+    alter table public.ia_fournisseurs add constraint ia_fournisseurs_limites_sous_plafond
+      check ((limite_minute is null or limite_minute < 1000000)
+         and (limite_jour   is null or limite_jour   < 1000000));
+  end if;
+end $$;
+
 insert into public.ia_fournisseurs (nom, rang, modele, limite_minute, limite_jour, actif)
 values
   ('gemini-flash',      1, 'gemini-3.6-flash',              null, null, true),
@@ -138,10 +157,14 @@ drop policy if exists ia_compteurs_lecture    on public.ia_compteurs;
 drop policy if exists ia_budget_lecture       on public.ia_budget_jour;
 drop policy if exists ia_journal_lecture      on public.ia_journal;
 
-revoke all on public.ia_fournisseurs from anon, authenticated;
-revoke all on public.ia_compteurs    from anon, authenticated;
-revoke all on public.ia_budget_jour  from anon, authenticated;
-revoke all on public.ia_journal      from anon, authenticated;
+/* `FROM PUBLIC` D'ABORD — voir le pavé de la section 12, où l'oubli de ce mot
+   a coûté le défaut le plus grave du lot. Les tables n'ont pas de droit `public`
+   par défaut, contrairement aux fonctions, mais on écrit la même formule partout
+   pour qu'il n'y ait qu'une seule habitude à prendre. */
+revoke all on public.ia_fournisseurs from public, anon, authenticated;
+revoke all on public.ia_compteurs    from public, anon, authenticated;
+revoke all on public.ia_budget_jour  from public, anon, authenticated;
+revoke all on public.ia_journal      from public, anon, authenticated;
 
 -- --- 5 bis. Le journal sait dire POURQUOI ------------------------------------
 --
@@ -222,8 +245,23 @@ as $function$
 declare
   ok      boolean;
   depart  timestamptz := public.ia_debut_fenetre(p_fenetre);
-  plafond int := coalesce(p_limite, public.ia_plafond_inconnu());
+  /* `least(…, plafond_inconnu)` : LA SENTINELLE DOIT TOUJOURS GAGNER.
+     R-b (relecture du 10/08, second tour). `coalesce` seul ne couvrait que les
+     limites NULL. Avec une limite CONNUE supérieure au plafond — un
+     `update ia_fournisseurs set limite_jour = 2000000`, geste que la migration
+     elle-même et INSTALL.md §8 invitent à faire — la sentinelle posée par
+     `ia_saturer` redevenait inférieure au plafond, donc invisible. C'est B1 mot
+     pour mot, réarmé par une ligne de configuration. Le `check` de la table
+     l'interdit déjà ; ce `least` le rend impossible même si le `check` saute. */
+  plafond int := least(coalesce(p_limite, public.ia_plafond_inconnu()),
+                       public.ia_plafond_inconnu());
 begin
+  /* R-f — UNE LIMITE À ZÉRO LAISSAIT PASSER UN APPEL PAR FENÊTRE. Le `where` du
+     `on conflict` ne garde que le chemin de conflit ; l'insertion d'une fenêtre
+     neuve, elle, était inconditionnelle. Poser `limite_minute = 0` pour éteindre
+     un étage sans toucher `actif` ne l'éteignait donc pas. */
+  if plafond <= 0 then return false; end if;
+
   insert into public.ia_compteurs (fournisseur, fenetre, debut, n)
   values (p_fournisseur, p_fenetre, depart, 1)
   on conflict (fournisseur, fenetre) do update
@@ -239,6 +277,20 @@ $function$;
 
 -- Rendre une unité. Sert deux fois : quand la seconde fenêtre refuse après que
 -- la première a accepté, et quand l'appel n'a jamais atteint le fournisseur.
+--
+-- DEUX GARDES, ET CHACUNE FERME UN DÉFAUT TROUVÉ À LA RELECTURE DU 10/08 :
+--
+-- R-a — ON NE REMBOURSE JAMAIS UNE SENTINELLE. Le relais appelle
+-- `ia_rendre_fournisseur` sur tout échec non-429. Deux requêtes concurrentes
+-- suffisaient : A prend un 429 et sature (n = 1 000 000), B prend un 503 et
+-- rembourse — n retombe à 999 999, sous le plafond, et le fournisseur saturé
+-- réaccepte. La garantie « un 429 par fenêtre » devenait « un par fenêtre, plus
+-- un par échec concurrent ». Sur une edge function, la concurrence est la norme.
+--
+-- R-e — ON NE REMBOURSE QUE LA FENÊTRE COURANTE. Sans regarder `debut`, une
+-- requête lente partie à la minute M et remboursée à M+2 effaçait la
+-- réservation de quelqu'un d'autre. Même chose au passage de minuit pour la
+-- fenêtre `jour`.
 create or replace function public.ia_rendre_fenetre(p_fournisseur text, p_fenetre text)
 returns void
 language sql
@@ -246,7 +298,10 @@ security definer
 set search_path to 'public'
 as $function$
   update public.ia_compteurs set n = greatest(0, n - 1)
-   where fournisseur = p_fournisseur and fenetre = p_fenetre;
+   where fournisseur = p_fournisseur
+     and fenetre     = p_fenetre
+     and debut       = public.ia_debut_fenetre(p_fenetre)
+     and n           < public.ia_plafond_inconnu();
 $function$;
 
 -- --- 8. Réserver une place chez un fournisseur -------------------------------
@@ -393,13 +448,58 @@ as $function$
   delete from public.ia_budget_jour where jour < ((now() at time zone 'utc')::date - 60);
 $function$;
 
-revoke all on function public.ia_plafond_inconnu()                          from anon, authenticated;
-revoke all on function public.ia_debut_fenetre(text)                        from anon, authenticated;
-revoke all on function public.ia_reserver_fenetre(text, text, int)          from anon, authenticated;
-revoke all on function public.ia_rendre_fenetre(text, text)                 from anon, authenticated;
-revoke all on function public.ia_reserver_fournisseur(text, int, int)       from anon, authenticated;
-revoke all on function public.ia_rendre_fournisseur(text)                   from anon, authenticated;
-revoke all on function public.ia_saturer(text, text)                        from anon, authenticated;
-revoke all on function public.ia_reserver_budget(uuid, int, int)            from anon, authenticated;
-revoke all on function public.ia_rendre_budget(uuid)                        from anon, authenticated;
-revoke all on function public.ia_menage()                                   from anon, authenticated;
+-- --- 12. QUI A LE DROIT D'APPELER CES FONCTIONS ------------------------------
+--
+-- BL-1 (relecture du 10/08, second tour) — CES DIX LIGNES NE RÉVOQUAIENT RIEN,
+-- ET C'ÉTAIT LE DÉFAUT LE PLUS GRAVE DU LOT.
+--
+-- PostgreSQL accorde `EXECUTE` à `PUBLIC` sur toute fonction, à sa création.
+-- `anon` et `authenticated` héritent de `PUBLIC`. Révoquer d'un rôle nommé ne
+-- retire pas la permission héritée : la version d'origine écrivait
+-- « from anon, authenticated », ce qui laissait la grant `PUBLIC` intacte.
+-- Vérifié : `has_function_privilege('anon', …, 'execute')` rendait `true` pour
+-- les dix fonctions. Et comme elles sont toutes `security definer`, elles
+-- passent AU-DESSUS du RLS des tables : la posture « personne n'entre » de la
+-- section 5 était décorative.
+--
+-- Ce que ça ouvrait, avec la clé publiable qui est dans le bundle de l'app :
+--   · trois appels à `ia_saturer` et l'IA de toute l'application est éteinte
+--     jusqu'à minuit UTC — en silence, puisque le relais rend
+--     `{indisponible:true}` en HTTP 200 et que le client ne montre rien ;
+--   · `ia_reserver_budget(uid, 1, 999999)` devient un oracle : sa valeur de
+--     retour dit si telle personne a consommé de l'IA aujourd'hui ;
+--   · `ia_menage()` purge le journal et les budgets à la demande d'un anonyme.
+--
+-- LA MIGRATION ÉTAIT LA SEULE DU DÉPÔT À AVOIR PERDU LE `public` : 007, 010, 011
+-- et 012 l'écrivent toutes. C'est une régression contre une convention établie,
+-- pas une subtilité qu'on découvre.
+--
+-- On garde `anon, authenticated` en plus de `public` : ils sont redondants tant
+-- que ces rôles n'ont pas de grant directe, ils ne coûtent rien, et ils disent
+-- l'intention à qui relit.
+revoke all on function public.ia_plafond_inconnu()                    from public, anon, authenticated;
+revoke all on function public.ia_debut_fenetre(text)                  from public, anon, authenticated;
+revoke all on function public.ia_reserver_fenetre(text, text, int)    from public, anon, authenticated;
+revoke all on function public.ia_rendre_fenetre(text, text)           from public, anon, authenticated;
+revoke all on function public.ia_reserver_fournisseur(text, int, int) from public, anon, authenticated;
+revoke all on function public.ia_rendre_fournisseur(text)             from public, anon, authenticated;
+revoke all on function public.ia_saturer(text, text)                  from public, anon, authenticated;
+revoke all on function public.ia_reserver_budget(uuid, int, int)      from public, anon, authenticated;
+revoke all on function public.ia_rendre_budget(uuid)                  from public, anon, authenticated;
+revoke all on function public.ia_menage()                             from public, anon, authenticated;
+
+-- --- 13. LA VERSION FANTÔME D'`ia_saturer` -----------------------------------
+--
+-- R-c (relecture du 10/08, second tour). `[B4]` a fait passer `ia_saturer` de
+-- `(text)` à `(text, text default 'minute')`. `create or replace function` ne
+-- sait pas changer une signature : sur une base où la version précédente de
+-- cette migration a déjà tourné, il en CRÉE UNE SECONDE et laisse la première.
+--
+-- La première est celle d'avant R1 — elle mure les DEUX fenêtres d'un coup — et
+-- elle reste appelable. Pire, `select public.ia_saturer('x')` devient ambigu :
+--   ERROR:  function public.ia_saturer(unknown) is not unique
+--
+-- Le relais envoie toujours ses deux paramètres, donc PostgREST résout bien ;
+-- mais un geste manuel casse, et une fonction d'avant-correctif qui traîne est
+-- exactement le genre de chose qu'on retrouve six mois plus tard sans comprendre.
+drop function if exists public.ia_saturer(text);
