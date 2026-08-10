@@ -825,6 +825,13 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
               jours sont un sous-ensemble étroit, mauvais point de départ pour
               découvrir quelque chose. */
            disc:{ type:'tout', genres:[],
+                  /* SPEC-04 §0.2 — L'HUMEUR DU MOMENT, ou `null` au repos.
+                     Une seule à la fois, et un second appui sur la même la
+                     retire : c'est la règle de désélection, et c'est elle qui
+                     garantit qu'on revient TOUJOURS à l'écran d'origine sans
+                     avoir à chercher une croix. Elle se CUMULE avec `type`
+                     (la famille), les deux filtres sont indépendants. */
+                  humeur:null,
                   /* Les plateformes cochées dans la feuille. Elles démarrent sur
                      les abonnements déclarés (`semerPlatesFiltres`) ; le drapeau
                      dit si la personne y a mis la main depuis. */

@@ -1052,18 +1052,32 @@ function propositionJourHtml(x){
   const bouts = [year(x.date), x.note ? '★ '+(Math.round(x.note*10)/10) : ''].filter(Boolean);
   const img = srcImage(x.bandeau,'w780') || srcImage(x.affiche,'w342');
   const id = Number(x.id), media = x.media === 'tv' ? 'tv' : 'movie';
+  /* SPEC-04 §2 — LE HERO CHANGE D'HABIT, PAS DE FORME. La vitrine est
+     conservée telle quelle (§0.1) : même image plein cadre, même titre, même
+     ligne de raison, mêmes deux boutons. Une humeur posée en change seulement
+     le libellé (« ✦ Pour frissonner ce soir ») et la couleur du bouton
+     principal. Retirer l'humeur rend exactement l'écran d'avant. */
+  const hum = (typeof humeurActive === 'function') ? humeurActive() : null;
+  const hdef = (hum && typeof humeurDef === 'function') ? humeurDef(hum) : null;
   return '<div class="d4jour">'+
     '<button class="d4voir" onclick="ouvrirTitre('+id+',\''+media+'\',\'discover\')" '+
       'aria-label="'+esc(x.nom)+'">'+
       (img ? '<img class="d4img" loading="lazy" src="'+img+'" alt="">' : '<div class="d4img"></div>')+
     '</button>'+
     '<div class="d4bas">'+
-      '<div class="d4tag">La proposition du jour</div>'+
+      '<div class="d4tag'+(hdef ? ' h4on' : '')+'">'+
+        (hdef ? '✦ '+esc(hdef.ceSoir) : 'La proposition du jour')+'</div>'+
       '<h2 class="d4nom">'+esc(x.nom)+'</h2>'+
       '<div class="d4meta">'+esc((media==='tv'?'Série':'Film')+(bouts.length?' · '+bouts.join(' · '):''))+'</div>'+
-      '<div class="d4pq">'+I.coeur+'<span>'+esc(x.pourquoi || 'À découvrir')+'</span></div>'+
+      /* Le cœur dit « ça vient de tes goûts ». En mode humeur c'est faux : le
+         titre vient de la recette de l'humeur, pas du profil. On met donc
+         l'étoile violette, qui dit « tu as demandé ça ce soir », et on ne fait
+         pas passer une recette pour une déduction personnelle. */
+      '<div class="d4pq'+(hdef ? ' h4pq' : '')+'">'+
+        (hdef ? '<span class="h4etoile" aria-hidden="true">✦</span>' : I.coeur)+
+        '<span>'+esc(x.pourquoi || 'À découvrir')+'</span></div>'+
       '<div class="d4act">'+
-        '<button class="btn"'+(occupe('serie:'+id)?' disabled':'')+
+        '<button class="btn'+(hdef ? ' h4btn' : '')+'"'+(occupe('serie:'+id)?' disabled':'')+
           ' onclick="ajouterProposition('+id+',\''+media+'\')">Ajouter à ma liste</button>'+
         '<button class="btn ghost" onclick="pasPourMoiProposition()">Pas pour moi</button>'+
       '</div>'+
@@ -1121,6 +1135,22 @@ function dateCourte(iso){
 }
 function estAVenir(iso){ return !!iso && iso > todayISO(); }
 
+/* SPEC-04 §0.3 — LE BADGE DE FAMILLE, et il n'existe qu'en « Tout ».
+   Dès qu'une famille est choisie, il répéterait la puce active sur chacune des
+   affiches de l'écran : une information qu'on a déjà lue en haut n'a pas à être
+   collée quarante fois. En « Tout », en revanche, c'est la seule chose qui
+   distingue une série d'un film dans un rail mêlé.
+   `estUnAnime` (app-11) est la MÊME règle que celle qui cadre la puce Animés —
+   japonais ET classé animation : deux étiquettes qui se contrediraient sur le
+   même titre seraient pires qu'une seule. */
+const BADGE_FAMILLE = { movie:'FILM', tv:'SÉRIE', anime:'ANIMÉ' };
+function badgeFamille(x){
+  if(((ui.disc && ui.disc.type) || 'tout') !== 'tout') return '';
+  const f = (typeof estUnAnime === 'function' && estUnAnime(x)) ? 'anime' : x.media;
+  const lib = BADGE_FAMILLE[f];
+  return lib ? '<span class="h4badge">'+lib+'</span>' : '';
+}
+
 function vignetteSugg(x, depuis){
   const item = x.media === 'tv' ? db.shows[x.id] : db.movies[x.id];
   /* Un titre à venir n'a ni note ni votes : afficher une étoile vide n'aurait
@@ -1129,12 +1159,19 @@ function vignetteSugg(x, depuis){
   const tete = aVenir ? '<span class="vgquand">'+esc(dateCourte(x.date))+'</span> '
              : x.note ? I.star+' '+(Math.round(x.note*10)/10)+' '
              : '';
+  /* SPEC-04 — LE BADGE REMPLACE LA MENTION SOUS L'AFFICHE, il ne s'y ajoute
+     pas. `.vgmed` disait déjà « Film » / « Série » sous la note ; garder les
+     deux ferait dire deux fois la même chose à dix centimètres d'écart, sur
+     chacune des cent affiches de l'écran. Hors « Tout », il n'y a pas de badge
+     et la mention reprend sa place — sauf qu'elle est alors redondante avec la
+     puce active, ce qui était déjà vrai avant ce lot et ne l'est pas devenu. */
+  const badge = badgeFamille(x);
   return '<button class="vgn" onclick="ouvrirTitre('+x.id+',\''+x.media+'\',\''+(depuis||'discover')+'\')">'+
-    '<div class="vgimg">'+posterEl(x.affiche,'w342','',x.nom)+
+    '<div class="vgimg">'+posterEl(x.affiche,'w342','',x.nom)+ badge +
       (item ? '<span class="vgdeja">'+I.check+'</span>' : '')+'</div>'+
     '<div class="vgnom">'+esc(x.nom)+'</div>'+
     '<div class="vgnote">'+tete+
-      '<span class="vgmed">'+(x.media==='tv'?'Série':'Film')+'</span></div>'+
+      (badge ? '' : '<span class="vgmed">'+(x.media==='tv'?'Série':'Film')+'</span>')+'</div>'+
   '</button>';
 }
 
@@ -1170,8 +1207,9 @@ function vitrineBody(){
      rattraper avec une seconde ligne. */
   rangees.forEach(r=>{
     html += '<div class="sectitle">'+esc(r.titre)+'</div>'+
-      '<div class="rangee" data-rail="rangee-'+esc(r.cle||r.titre)+'">'+
-        r.l.slice(0, RANGEE_APERCU).map(x=>vignetteSugg(x,'discover')).join('')+
+      '<div class="rangee'+(r.top ? ' h4top' : '')+'" data-rail="rangee-'+esc(r.cle||r.titre)+'">'+
+        r.l.slice(0, RANGEE_APERCU)
+          .map((x, i) => r.top ? vignetteTop(x, i) : vignetteSugg(x, 'discover')).join('')+
         finRangee(r)+'</div>';
   });
   return html + '<div style="height:6px"></div>';
@@ -1376,6 +1414,13 @@ const RANGEE_PAGES_MAX = 8;
    pouce ni remonter chercher un bouton. */
 function finRangee(r){
   if(!r.cle || !r.l.length) return '';
+  /* SPEC-04 §0.5 — LA TUILE NE PARAÎT QUE S'IL Y A VRAIMENT PLUS À VOIR, et
+     elle dit COMBIEN : « Tout voir · les 34 ». Elle s'affichait jusqu'ici sur
+     toutes les rangées, y compris celles dont la grille dépliée n'avait rien
+     de plus à montrer que le rail — c'était la promesse d'un ailleurs qui
+     n'existait pas. Le compte est celui de la rangée en mémoire, pas une
+     estimation : la grille sait aller chercher la suite au-delà. */
+  if(r.l.length <= RANGEE_APERCU) return '';
   /* Pas de classe `vgn` : ce n'est pas une vignette de titre, et tout ce qui
      parcourt `.rangee .vgn` (les tests de mise en page, notamment) y chercherait
      un nom et une note qu'elle n'a pas. */
@@ -1383,8 +1428,52 @@ function finRangee(r){
     '<div class="vgimg vgtoutbox">'+
       '<span class="vgtrond">'+I.caret+'</span>'+
       '<b>Tout voir</b>'+
-      '<i>et bien plus</i>'+
+      '<i>les '+r.l.length+'</i>'+
     '</div></button>';
+}
+
+/* SPEC-04 §1 rangée 2 — LA VIGNETTE DU TOP 10, et elle ne ressemble à aucune
+   autre : le chiffre est le sujet. Pas de nom sous l'affiche, pas de note —
+   ce sont des titres que la personne a déjà vus, elle les reconnaît à l'image ;
+   ce qu'elle vient lire ici, c'est le RANG. Le nom part dans `aria-label`,
+   parce qu'une affiche muette n'est lisible par personne d'autre que l'œil. */
+function vignetteTop(x, i){
+  return '<button class="h4rangc" onclick="ouvrirTitre('+Number(x.id)+',\''+escJs(x.media)+'\',\'discover\')" '+
+    'aria-label="'+esc((i+1)+'. '+x.nom)+'">'+
+    '<span class="h4rang" aria-hidden="true">'+(i+1)+'</span>'+
+    '<span class="h4aff">'+posterEl(x.affiche,'w342','',x.nom)+'</span>'+
+  '</button>';
+}
+
+/* SPEC-04 §0.2 — LES QUATRE HUMEURS, en puces « verre dépoli » sous les puces
+   de famille. Les deux rangées se CUMULENT : la famille cadre ce qu'on regarde,
+   l'humeur dit ce qu'on veut ressentir, et aucune des deux n'annule l'autre.
+   Un second appui sur l'humeur active la retire — c'est la seule sortie, et
+   elle est au même endroit que l'entrée. */
+function humeurChips(){
+  const on = (typeof humeurActive === 'function') ? humeurActive() : null;
+  if(typeof HUMEURS === 'undefined') return '';
+  return '<div class="chips h4chips">'+
+    HUMEURS.map(h =>
+      '<button class="chip h4chip'+(on === h.cle ? ' on' : '')+'" '+
+        'aria-pressed="'+(on === h.cle ? 'true' : 'false')+'" '+
+        'onclick="setHumeur(\''+escJs(h.cle)+'\')">'+h.emoji+' '+esc(h.label)+'</button>').join('')+
+  '</div>';
+}
+function setHumeur(cle){
+  const d = ui.disc;
+  if(!d) return;
+  const avant = d.humeur || null;
+  d.humeur = (avant === cle) ? null : cle;
+  /* L'écran change de composition : la position mémorisée désignerait le
+     milieu d'une liste qui n'existe plus. */
+  oublierDefil('discover');
+  if(view === 'discover') window.scrollTo(0, 0);
+  /* `render()` relance le calcul de la vitrine s'il le faut — et il ne le fait
+     PAS quand la case de cache existe déjà, ce qui est le cas de l'écran au
+     repos qu'on vient de quitter. Revenir au repos ne coûte donc rien. */
+  render();
+  if(!d.humeur) toast('Retour à la proposition du jour');
 }
 
 /* ---------------------------------------------------------------------------
@@ -1654,10 +1743,17 @@ function viewRangee(){
 /* Le nom de ce qu'on regarde, pour les messages : « dans les animés ». */
 function dansCettePuce(){
   const t = ui.disc.type;
-  if(t === 'tv')    return 'dans les séries';
-  if(t === 'movie') return 'dans les films';
-  if(t === 'anime') return 'dans les animés';
-  return 'pour l\'instant';
+  /* SPEC-04 — quand une humeur est posée, c'est ELLE qu'il faut nommer : dire
+     « rien à proposer dans les animés » à quelqu'un qui vient de demander à
+     frissonner lui cache la moitié de la raison, et surtout le geste qui
+     répare (retirer l'humeur, pas changer de famille). */
+  const h = (typeof humeurActive === 'function') ? humeurActive() : null;
+  const hdef = (h && typeof humeurDef === 'function') ? humeurDef(h) : null;
+  const ou = t === 'tv' ? 'dans les séries'
+           : t === 'movie' ? 'dans les films'
+           : t === 'anime' ? 'dans les animés' : '';
+  if(hdef) return (ou ? ou + ' ' : '') + 'avec cette humeur';
+  return ou || 'pour l\'instant';
 }
 
 function viewDiscover(){
@@ -1672,10 +1768,17 @@ function viewDiscover(){
      Ce qui disparaît avec elles : la ligne de résumé, qui ne résumait que des
      filtres, et le bouton qui les ouvrait.
      Découvrir devient un écran qu'on PARCOURT, pas qu'on interroge. */
+  /* SPEC-04 §0.3 — LES PUCES DE FAMILLE SONT CELLES QUI EXISTAIENT DÉJÀ. Rien
+     n'est créé ici : l'humeur vient s'ajouter EN DESSOUS, sur sa propre ligne,
+     et les deux se cumulent. La maquette pose les deux rangées sur le hero ;
+     elles restent ici dans l'en-tête, qui est déjà collant et déjà l'endroit
+     où l'on cherche un filtre dans cette app. Point de divergence assumé avec
+     la maquette, signalé à Adrien. */
   const sub = '<div class="chips types">'+
     DISC_TYPES.map(t=>
       '<button class="chip '+(ui.disc.type===t.id?'on':'')+'" onclick="setDiscType(\''+t.id+'\')">'+
-        t.label+'</button>').join('')+'</div>';
+        t.label+'</button>').join('')+'</div>'+
+    (vitrineVisible() ? humeurChips() : '');
   return header('Découvrir', {sub:sub}) + needKeyBanner() +
     '<div id="dres">'+(vitrineVisible() ? vitrineBody() : discBody())+'</div>' +
     '<div style="height:20px"></div>';
@@ -1727,6 +1830,12 @@ function discBody(){
    encore dans la bibliothèque, et son bouton « Ouvrir ma fiche » sert encore
    aux chemins qui y mènent (ajout depuis l'aperçu, lien partagé). */
 function ouvrirTitre(id, media, from){
+  /* SPEC-04 — l'anti-déjà-vu compte les jours où un titre est passé sous les
+     yeux SANS être ouvert. L'ouvrir remet son compteur à zéro : la rangée a
+     fait son travail, elle n'a pas à le reculer. C'est ici et nulle part
+     ailleurs, parce que c'est le seul passage obligé vers une fiche depuis
+     Découvrir. */
+  if(typeof noterOuverture === 'function') noterOuverture(media, id);
   const chezSoi = media === 'tv' ? db.shows[id] : db.movies[id];
   if(chezSoi) return go(media === 'tv' ? 'show' : 'movie',
                         { id:id, from: from || 'discover' }, 'enter');

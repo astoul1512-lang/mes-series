@@ -2121,3 +2121,50 @@ body.rphnette .rphrase{background:#15171e}
   /* Le bouton « Suivre » de la rangée : `.btn.mini` porte déjà la forme, on ne
      pose que le retrait latéral. */
   .btn.mini.abo6btn{flex:none;white-space:nowrap}
+
+  /* ===========================================================================
+     SPEC-04 LOT A — HUMEURS, BADGES DE FAMILLE ET TOP 10
+     Tous les noms sont préfixés `h4` : treize fichiers partagent la même
+     feuille, un nom nu déjà pris casserait un écran à distance (règle R1).
+     Le violet est la couleur de l'humeur, et plus tard celle de l'IA (lot C) —
+     une seule teinte pour « ce n'est pas le mode par défaut », comme les
+     maquettes 6 et 7 la posent.
+  =========================================================================== */
+  /* La seconde rangée de puces, sous celle des familles. Elle est « verre
+     dépoli » comme la maquette : translucide et floutée, pour se poser sur
+     l'image du hero le jour où les deux rangées passeront dessus, et pour se
+     distinguer tout de suite des puces de famille, qui sont pleines. */
+  .h4chips{padding-top:0}
+  .chip.h4chip{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.14);
+    -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+  .chip.h4chip.on{background:#a78bfa;border-color:#a78bfa;color:#160f2e;font-weight:800}
+  /* Le libellé du hero et son bouton principal, quand une humeur est posée.
+     Rien d'autre ne change dans la vitrine : c'est la promesse du §0.1. */
+  .d4tag.h4on{color:#c9b8ff}
+  .btn.h4btn{background:linear-gradient(135deg,#7c5cff,#a78bfa)}
+
+  /* Le badge de famille, en haut à gauche de l'affiche. Posé sur l'image, donc
+     sur une luminosité inconnue : fond sombre translucide et trait clair, la
+     même solution que `.iconbtn.du19x`. */
+  .h4badge{position:absolute;top:6px;left:6px;z-index:2;
+    font-size:9px;font-weight:800;letter-spacing:.04em;border-radius:999px;padding:2px 7px;
+    color:rgba(255,255,255,.88);background:rgba(5,6,10,.7);
+    border:1px solid rgba(255,255,255,.14);
+    -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+
+  /* Le Top 10. Le chiffre dépasse DERRIÈRE l'affiche : c'est ce qui le rend
+     lisible sans voler de place au rail. Le retrait négatif de l'affiche est
+     ce chevauchement ; sans lui, dix chiffres de cette taille prendraient la
+     largeur de deux écrans. */
+  .rangee.h4top{padding-left:10px;gap:6px}
+  .h4rangc{flex:0 0 auto;display:flex;align-items:flex-end;text-align:left;color:var(--text)}
+  .h4rang{font-size:92px;font-weight:900;line-height:.78;letter-spacing:-8px;
+    color:var(--bg);-webkit-text-stroke:3px #596079;margin-right:-14px;
+    flex:none;user-select:none}
+  .h4aff{position:relative;z-index:2;flex:none;display:block;border-radius:10px;overflow:hidden}
+  .h4aff .poster{width:104px;height:156px;display:block}
+  .h4rangc:active .h4aff{opacity:.8}
+  /* La ligne de raison du hero d'humeur : l'étoile violette remplace le cœur,
+     qui appartient au moteur de goût et mentirait ici. */
+  .d4pq.h4pq{color:#c9b8ff}
+  .h4etoile{flex:0 0 auto;font-size:13px;line-height:1}
