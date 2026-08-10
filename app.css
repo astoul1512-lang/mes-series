@@ -2168,3 +2168,26 @@ body.rphnette .rphrase{background:#15171e}
      qui appartient au moteur de goût et mentirait ici. */
   .d4pq.h4pq{color:#c9b8ff}
   .h4etoile{flex:0 0 auto;font-size:13px;line-height:1}
+
+  /* ---- R6 : les deux rangées de puces sur le hero (maquette 7) ----
+     Posées en surimpression sur l'affiche du jour, en verre dépoli. Le voile
+     du haut les rend lisibles quelle que soit la luminosité de l'image — on ne
+     la connaît pas à l'avance, et un ciel blanc mangerait des puces claires. */
+  .h4voile{position:absolute;top:0;left:0;right:0;height:150px;pointer-events:none;z-index:1;
+    background:linear-gradient(rgba(7,7,10,.86),rgba(7,7,10,.34) 62%,transparent)}
+  .h4surhero{position:absolute;top:10px;left:0;right:0;z-index:3;
+    display:flex;flex-direction:column;gap:6px}
+  .h4surhero .chips{padding-bottom:0}
+  /* Sur l'image, TOUTES les puces passent au verre dépoli — y compris celles de
+     famille, dont le fond plein (`--surface`) ferait une tache opaque. Les
+     états actifs, eux, gardent leur couleur : bleu pour la famille, violet pour
+     l'humeur, c'est ce qui les distingue au premier coup d'œil. */
+  .h4surhero .chip{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.18);
+    color:rgba(255,255,255,.88);
+    -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+  .h4surhero .chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  .h4surhero .h4chip.on{background:#a78bfa;border-color:#a78bfa;color:#160f2e}
+  /* La bande de repli : pas de hero sous les puces (amorçage, écran vide,
+     grille filtrée). Même contenu, habillage ordinaire. */
+  .h4bande{padding:10px 0 2px}
+  .h4bande .chips{padding-bottom:8px}

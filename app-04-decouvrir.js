@@ -895,8 +895,18 @@ function peindreDisc(){
   el.innerHTML = vitrineVisible() ? vitrineBody() : discBody();
 }
 
+/* R1 (relecture du 10/08) — RE-TOUCHER LA FAMILLE ACTIVE REVIENT À « TOUT ».
+   C'est écrit au §0.3 et c'est ce que fait la maquette (`setFam`). Avant, la
+   fonction sortait par la porte de service (`if(type === t) return`) : la
+   famille était le SEUL filtre de l'écran qu'on ne pouvait pas retirer par où
+   on l'avait posé — l'humeur, elle, se désélectionne. Une asymétrie qu'on ne
+   remarque pas en lisant le code et qui saute aux yeux au doigt.
+   « Tout » reste inerte au second appui : il n'y a rien au-dessus de lui. */
 function setDiscType(t){
-  if(ui.disc.type === t) return;
+  if(ui.disc.type === t){
+    if(t === 'tout') return;
+    t = 'tout';
+  }
   ui.disc.type = t;
   ui.disc.typeForce = false;      // E4 — choix explicite : plus rien à signaler
   render();
@@ -1064,6 +1074,11 @@ function propositionJourHtml(x){
       'aria-label="'+esc(x.nom)+'">'+
       (img ? '<img class="d4img" loading="lazy" src="'+img+'" alt="">' : '<div class="d4img"></div>')+
     '</button>'+
+    /* Le voile du haut : la luminosité de l'affiche du jour n'est pas connue à
+       l'avance, et des puces en verre dépoli sur un ciel blanc ne se lisent
+       pas. Même motif que la maquette (`.voilehaut`). */
+    '<div class="h4voile" aria-hidden="true"></div>'+
+    '<div class="h4surhero">'+chipsDecouvrir()+'</div>'+
     '<div class="d4bas">'+
       '<div class="d4tag'+(hdef ? ' h4on' : '')+'">'+
         (hdef ? '✦ '+esc(hdef.ceSoir) : 'La proposition du jour')+'</div>'+
@@ -1184,22 +1199,30 @@ function vitrineBody(){
      formulaire — un choix d'images, pas un questionnaire. */
   if(typeof besoinAmorcage === 'function' && besoinAmorcage()) return amorcageBody();
   const e = suggCourantes().etat;
+  /* R6 — les puces ne quittent JAMAIS l'écran. Chaque sortie de secours de
+     cette fonction emmène donc la bande avec elle : sans hero, elles n'ont plus
+     d'image sur quoi se poser, mais elles restent le seul moyen de changer de
+     famille ou de retirer une humeur — et c'est précisément dans un écran vide
+     qu'on en a besoin. */
   if(e === 'froid' || e === 'attente')
-    return '<div class="empty"><span class="spin"></span>'+
+    return bandeChips() + '<div class="empty"><span class="spin"></span>'+
       '<p style="margin-top:12px">On prépare tes suggestions…</p></div>';
   if(e === 'erreur')
-    return '<div class="empty">'+I.boussole+'<h3>Pas de connexion</h3>'+
+    return bandeChips() + '<div class="empty">'+I.boussole+'<h3>Pas de connexion</h3>'+
       '<p>Vérifie ta connexion, puis réessaie.</p>'+
       '<button class="btn ghost" onclick="chargerSuggestions(true)">Réessayer</button></div>';
 
   const rangees = rangeesSuggerees();
   const jour = propositionDuJour();
   if(!jour && !rangees.length)
-    return '<div class="empty">'+I.boussole+'<h3>Rien à proposer '+esc(dansCettePuce())+'</h3>'+
+    return bandeChips() + '<div class="empty">'+I.boussole+'<h3>Rien à proposer '+esc(dansCettePuce())+'</h3>'+
       '<p>Ajoute une série ou un film : les suggestions se règlent sur ce que tu regardes.</p>'+
       '<button class="btn ghost" onclick="go(\'search\')">Chercher un titre</button></div>';
 
-  let html = lienAjusterGouts() + propositionJourHtml(jour) + carteProfilPauvre();
+  /* Le hero porte les puces ; sans hero, la bande prend le relais au même
+     endroit de l'écran. */
+  let html = (jour ? '' : bandeChips()) +
+             lienAjusterGouts() + propositionJourHtml(jour) + carteProfilPauvre();
   /* UN SEUL NIVEAU DE TEXTE : le titre (§3.2). Pas de sous-titre, pas de
      pastille, pas de code couleur, aucun vocabulaire de moteur. Si une rangée
      ne sait pas s'expliquer dans son titre, c'est la rangée qui est mal
@@ -1460,6 +1483,29 @@ function humeurChips(){
         'onclick="setHumeur(\''+escJs(h.cle)+'\')">'+h.emoji+' '+esc(h.label)+'</button>').join('')+
   '</div>';
 }
+
+/* R6 (relecture du 10/08, arbitré par Adrien) — LES DEUX RANGÉES DE PUCES SONT
+   SUR LE HERO, comme la maquette qui fait foi.
+
+   Elles étaient dans l'en-tête collant. Ce qui a emporté la décision : la
+   maquette pose les deux rangées en verre dépoli PAR-DESSUS l'image, et
+   l'en-tête de la spec dit qu'elle fait foi.
+
+   CE QU'IL FALLAIT ÉVITER EN LES DÉPLAÇANT, et c'est le vrai risque du
+   changement : que les puces DISPARAISSENT. `peindreDisc` ne repeint que
+   `#dres` ; des puces laissées dans l'en-tête et un hero qui s'efface (dernier
+   « Pas pour moi » de la réserve, écran vide, grille d'amorçage) auraient donné
+   un écran sans aucun filtre, sans qu'un rendu complet vienne le réparer. Les
+   puces vivent donc TOUJOURS dans `#dres` : posées sur l'image quand il y a une
+   image, dans une bande ordinaire sinon. Un seul endroit, deux habillages. */
+function chipsDecouvrir(){
+  return '<div class="chips types">'+
+    DISC_TYPES.map(t=>
+      '<button class="chip '+(ui.disc.type===t.id?'on':'')+'" onclick="setDiscType(\''+t.id+'\')">'+
+        t.label+'</button>').join('')+'</div>' + humeurChips();
+}
+/* La bande de repli, quand il n'y a pas de hero sous les puces. */
+function bandeChips(){ return '<div class="h4bande">'+chipsDecouvrir()+'</div>'; }
 function setHumeur(cle){
   const d = ui.disc;
   if(!d) return;
@@ -1768,19 +1814,13 @@ function viewDiscover(){
      Ce qui disparaît avec elles : la ligne de résumé, qui ne résumait que des
      filtres, et le bouton qui les ouvrait.
      Découvrir devient un écran qu'on PARCOURT, pas qu'on interroge. */
-  /* SPEC-04 §0.3 — LES PUCES DE FAMILLE SONT CELLES QUI EXISTAIENT DÉJÀ. Rien
-     n'est créé ici : l'humeur vient s'ajouter EN DESSOUS, sur sa propre ligne,
-     et les deux se cumulent. La maquette pose les deux rangées sur le hero ;
-     elles restent ici dans l'en-tête, qui est déjà collant et déjà l'endroit
-     où l'on cherche un filtre dans cette app. Point de divergence assumé avec
-     la maquette, signalé à Adrien. */
-  const sub = '<div class="chips types">'+
-    DISC_TYPES.map(t=>
-      '<button class="chip '+(ui.disc.type===t.id?'on':'')+'" onclick="setDiscType(\''+t.id+'\')">'+
-        t.label+'</button>').join('')+'</div>'+
-    (vitrineVisible() ? humeurChips() : '');
-  return header('Découvrir', {sub:sub}) + needKeyBanner() +
-    '<div id="dres">'+(vitrineVisible() ? vitrineBody() : discBody())+'</div>' +
+  /* R6 — L'EN-TÊTE NE PORTE PLUS LES PUCES. Elles sont descendues dans `#dres`
+     (voir `chipsDecouvrir`), posées sur le hero comme la maquette le veut. Ce
+     qu'on perd : elles ne sont plus collantes au défilement. Ce qu'on gagne :
+     elles sont là où la maquette les met, et elles survivent aux repeints
+     partiels. C'est l'arbitrage d'Adrien du 10/08. */
+  return header('Découvrir') + needKeyBanner() +
+    '<div id="dres">'+(vitrineVisible() ? vitrineBody() : (bandeChips() + discBody()))+'</div>' +
     '<div style="height:20px"></div>';
 }
 

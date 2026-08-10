@@ -1332,29 +1332,54 @@ window.MODE_TEST = true;
       vrai(duel.tete && String(duel.tete.id) === '5', 'le vrai point de départ n\'est pas annoncé');
       const boite = document.createElement('div');
       boite.innerHTML = ecranDuelResultat();
-      vrai(boite.textContent.indexOf('Dans l\'esprit de') >= 0,
+      /* SPEC-04 — la rangée promise a changé de nom (§1 rangée 3). L'écran de
+         résultat annonçait encore « Dans l'esprit de X », une rangée qui
+         n'existe plus : la promesse portait sur un nom introuvable à l'écran
+         d'arrivée. Le test suit le renommage. */
+      vrai(boite.textContent.indexOf('Parce que tu as aimé') >= 0,
            'la promesse a disparu alors qu\'elle est vraie');
+      vrai(boite.textContent.indexOf('Dans l\'esprit de') < 0,
+           'l\'écran promet encore une rangée qui n\'existe plus');
+      vrai(boite.textContent.indexOf('remplace la rotation') < 0,
+           'depuis R5 l\'ancrage tourne : promettre la permanence serait faux dès demain');
     });
     fermerDuel();
   });
 
-  test('jouer une famille quand une autre alimente la rangée ne promet rien', ()=>{
-    baseVierge();
-    for(let i=1;i<=12;i++) db.movies[i] = film(i, ['Drame']);
-    for(let i=21;i<=32;i++) db.shows[i] = serie(i, [ep(1,HIER)], {'1x1':1});
-    /* Un podium de films déjà en place : la rangée part de LUI, quelle que soit
-       la famille qu'on vient de départager. */
-    db.podium.film = ['1']; db.podium.maj = 1;
-    db.classement.film['1'] = { s:1400, n:5 };
-    ouvrirDuel('serie');
-    horsLigne(()=>{
-      db.classement.serie['21'] = { s:1300, n:4 };
-      terminerDuel();
-      egal(db.podium.serie[0], '21', 'le podium des séries n\'a pas été projeté');
-      vrai(!duel.tete,
-           'on promet une rangée bâtie sur la série alors qu\'elle partira du film');
-    });
-    fermerDuel();
+  /* R5 (10/08) — LE DÉCLENCHEUR A CHANGÉ, PAS LE CONTRAT. Avant, la promesse
+     était fausse quand une AUTRE famille portait déjà un podium : `graineEsprit`
+     prenait le premier podium non vide dans l'ordre films-séries-animés. Depuis
+     l'arbitrage R5, l'ancrage tourne chaque jour parmi les titres aimés et le
+     podium réunis — la promesse est donc fausse simplement les jours où la
+     rotation ne tombe pas sur notre titre.
+     Le contrat, lui, n'a pas bougé d'un mot : ON NE PROMET QUE SI LA FONCTION
+     QUI ALIMENTE LA RANGÉE DÉSIGNE NOTRE TITRE. C'est ce que ce test vérifie,
+     dans les deux sens, sans dépendre du jour où on le lance. */
+  test('on ne promet la rangée que si elle part vraiment de notre titre', ()=>{
+    const vraie = window.graineEsprit;
+    try{
+      const jouer = ()=>{
+        baseVierge();
+        for(let i=21;i<=32;i++) db.shows[i] = serie(i, [ep(1,HIER)], {'1x1':1});
+        ouvrirDuel('serie');
+        let t = null;
+        horsLigne(()=>{
+          db.classement.serie['21'] = { s:1300, n:4 };
+          terminerDuel();
+          egal(db.podium.serie[0], '21', 'le podium des séries n\'a pas été projeté');
+          t = duel.tete;
+        });
+        fermerDuel();
+        return t;
+      };
+      window.graineEsprit = ()=> ({ media:'tv', id:'21', nom:'S21',
+                                    famille:'serie', signal:'podium' });
+      vrai(jouer(), 'la rangée part bien de notre titre et on ne promet rien');
+      window.graineEsprit = ()=> ({ media:'movie', id:'999', nom:'Autre',
+                                    famille:'film', signal:'aime' });
+      vrai(!jouer(),
+           'on promet une rangée bâtie sur la série alors qu\'elle partira d\'ailleurs');
+    } finally { window.graineEsprit = vraie; }
   });
 
   test('le score survit à la partie : rejouer ne repart pas de 1000', ()=>{
@@ -4403,7 +4428,7 @@ window.MODE_TEST = true;
        ferait reculer un titre dans le test suivant, qui échouerait alors pour
        une raison qui n'est pas la sienne. */
     try{ localStorage.removeItem(MEMO_CLE); }catch(e){}
-    memoRangees = null;
+    memoRangees = null; memoFige = null;
     oublierSuggestions();
     const c = suggCourantes();
     Object.assign(c, suggVide());
@@ -4694,12 +4719,48 @@ window.MODE_TEST = true;
     const l = dL(1, 3);
     noterAffichage(l);
     egal(reculerDejaVus(l).map(x=>x.id), [1,2,3], 'un seul jour a suffi à faire reculer un titre');
+    /* Trois jours au compteur À L'OUVERTURE DE L'ONGLET : c'est l'instantané du
+       jour qui décide (B1), donc on le reprend après avoir écrit. */
     memoLire().vus['movie:2'] = { j: jourVitrine(), n: DEJAVU_JOURS };
+    memoFige = null;
     egal(reculerDejaVus(l).map(x=>x.id), [1,3,2],
          'trois jours sous les yeux sans une ouverture, et le titre reste en tête');
     noterOuverture('movie', 2);
     egal(reculerDejaVus(l).map(x=>x.id), [1,2,3],
-         'ouvrir un titre doit remettre son compteur à zéro');
+         'ouvrir un titre doit remettre son compteur à zéro, tout de suite');
+  });
+
+  /* ===== B1 — LE DÉFAUT TROUVÉ PAR LA RELECTURE DU 10/08 =====
+     `noterAffichage` tourne à la fin de `rangeesSuggerees`, donc APRÈS que la
+     rangée a été composée. Un titre à deux jours consécutifs passait à trois
+     juste après le premier rendu de la journée, et le rendu SUIVANT — même
+     journée, même session — le faisait reculer. Reproduit à l'époque :
+     `1 2 3 … 12` puis `2 3 … 12 1`, sans que personne n'ait rien touché.
+     Le test d'origine ne pouvait pas le voir : il écrivait le compteur à la
+     main et n'appelait jamais `rangeesSuggerees` deux fois de suite. */
+  test('deux compositions consécutives rendent exactement le même ordre', ()=>{
+    const c = vitrineVierge('tout');
+    c.nouveautes = dL(1, 12);
+    /* Le titre 1 en est à DEUX jours consécutifs, hier : c'est lui qui basculera
+       à trois au premier rendu d'aujourd'hui. */
+    memoLire().vus['movie:1'] = { j: jourVitrine() - 1, n: 2 };
+    memoFige = null;
+    const ordre = () => rangeesSuggerees().find(x=>x.cle === 'nouv').l.map(x=>x.id);
+    const un = ordre(), deux = ordre(), trois = ordre();
+    egal(deux, un, 'le rail s\'est réorganisé entre deux rendus de la même session');
+    egal(trois, un, 'et il continue de bouger au troisième');
+    egal(un[0], 1, 'le titre a reculé le jour même, au lieu d\'attendre demain');
+    egal((memoLire().vus['movie:1'] || {}).n, 3,
+         'le compteur doit quand même avancer : le recul est pour demain, pas pour jamais');
+  });
+
+  test('le recul décidé à l\'entrée d\'onglet s\'applique dès le premier rendu du lendemain', ()=>{
+    const c = vitrineVierge('tout');
+    c.nouveautes = dL(1, 12);
+    memoLire().vus['movie:1'] = { j: jourVitrine(), n: DEJAVU_JOURS };
+    memoFige = null;                        // nouvelle session : on reprend l'instantané
+    egal(rangeesSuggerees().find(x=>x.cle === 'nouv').l[0].id, 2,
+         'trois jours au compteur et le titre est toujours en tête');
   });
 
   test('le mélange du jour est stable : le rail ne bouge pas sous le doigt', ()=>{
@@ -4709,6 +4770,94 @@ window.MODE_TEST = true;
     egal(a, b, 'deux rendus de la même journée rendent deux ordres différents');
     egal(a.slice().sort((x,y)=> x-y), dL(1, 12).map(x=>x.id),
          'le mélange a perdu ou dupliqué un titre');
+  });
+
+  /* ===== LES RÉSERVES DE LA RELECTURE DU 10/08 ===== */
+
+  test('R1 — re-toucher la famille active revient à « Tout »', ()=>{
+    vitrineVierge('tout');
+    const vraiRender = window.render, vraiCharger = window.chargerDecouverte;
+    try{
+      window.render = function(){}; window.chargerDecouverte = function(){};
+      setDiscType('anime');  egal(ui.disc.type, 'anime');
+      setDiscType('anime');  egal(ui.disc.type, 'tout',
+        'la famille était le seul filtre qu\'on ne pouvait pas retirer par où on l\'avait posé');
+      setDiscType('tout');   egal(ui.disc.type, 'tout', '« Tout » n\'a rien au-dessus de lui');
+    } finally { window.render = vraiRender; window.chargerDecouverte = vraiCharger; }
+  });
+
+  test('R2 — « Bientôt » a son plancher de 3, pas celui de 10', ()=>{
+    const c = vitrineVierge('tout');
+    c.avenir = dL(1, 3);
+    const r = rangeesSuggerees();
+    vrai(r.some(x => x.cle === 'avenir'),
+         'trois sorties annoncées valent mieux que rien : la maquette code un plancher de 3');
+    c.avenir = dL(1, 2);
+    memoFige = null;
+    vrai(!rangeesSuggerees().some(x => x.cle === 'avenir'), 'deux titres passent sous le plancher');
+    vrai(!rangeesSuggerees().some(x => x.cle === 'reste'),
+         'un titre pas encore sorti n\'a rien à faire dans « Aussi pour toi »');
+  });
+
+  test('R3 — une pépite montrée deux semaines sans ouverture part se reposer un mois', ()=>{
+    const c = vitrineVierge('tout');
+    c.pepites = dL(1, 12);
+    egal(rangeesSuggerees().find(x=>x.cle === 'pepites').l.length, 12);
+    /* Quinze jours plus tard, sans une seule ouverture. */
+    const m = memoLire();
+    m.pep['movie:1'] = { d: jourVitrine() - PEPITE_PATIENCE, r: 0 };
+    memoFige = null;
+    rangeesSuggerees();                       // c'est ce passage qui prononce la mise au repos
+    vrai(m.pep['movie:1'].r > jourVitrine(), 'la pépite n\'a pas été mise au repos');
+    memoFige = null;
+    const apres = rangeesSuggerees().find(x=>x.cle === 'pepites');
+    vrai(apres.l.every(x => x.id !== 1), 'la pépite au repos est encore dans la rangée');
+    /* Et l'ouvrir la fait revenir tout de suite. */
+    noterOuverture('movie', 1);
+    egal(rangeesSuggerees().find(x=>x.cle === 'pepites').l.length, 12,
+         'ouvrir une pépite au repos doit la ramener');
+  });
+
+  test('R5 — l\'ancrage tourne chaque jour, podium compris, sans priorité permanente', ()=>{
+    baseVierge();
+    [1,2,3].forEach(i=>{ db.movies[i] = film(i, ['Drame']); poserAvis('movie', i, 1); });
+    db.podium = { film:['2'], serie:[], anime:[], maj:1 };
+    const cadre = cadreSugg('movie');
+    /* Le vivier compte les trois titres : le podium n'en confisque plus la
+       place. Sur trois jours consécutifs, trois ancrages différents. */
+    const vus = {};
+    for(let d = 0; d < 3; d++){
+      const g = graineEsprit(cadre);
+      vrai(g, 'aucun ancrage alors qu\'il y a trois titres aimés');
+      vus[g.id] = (vus[g.id] || 0) + 1;
+      /* On avance d'un jour en décalant la liste : `jourVitrine` lit la date,
+         on simule donc la rotation en tournant le vivier à la main. */
+      db.movies[100 + d] = film(100 + d, ['Drame']); poserAvis('movie', 100 + d, 1);
+    }
+    vrai(Object.keys(vus).length >= 2,
+         'le même ancrage revient tous les jours : la rangée ne se renouvelle plus');
+  });
+
+  test('R5 — « ton préféré » n\'est dit que si c\'est vraiment le n°1 du podium', ()=>{
+    baseVierge();
+    db.movies[7] = film(7, ['Drame']); poserAvis('movie', 7, 1);
+    db.podium = { film:['7'], serie:[], anime:[], maj:1 };
+    egal(graineEsprit(cadreSugg('movie')).signal, 'podium');
+    db.podium = { film:['999'], serie:[], anime:[], maj:1 };   // le n°1 est ailleurs
+    egal(graineEsprit(cadreSugg('movie')).signal, 'aime',
+         'l\'app prétend connaître un préféré qu\'elle n\'a pas départagé');
+  });
+
+  test('R8 — la composition figée d\'une famille ne contamine pas les autres', ()=>{
+    vitrineVierge('tout');
+    const surTout = compoStable('acclames', dL(1, 12), 'semaine', null).map(x=>x.id);
+    ui.disc.type = 'anime';
+    const surAnime = compoStable('acclames', dL(50, 12), 'semaine', null).map(x=>x.id);
+    egal(surAnime, dL(50, 12).map(x=>x.id),
+         'la composition de « Tout » s\'est imposée à la puce Animés');
+    ui.disc.type = 'tout';
+    egal(compoStable('acclames', dL(1, 12), 'semaine', null).map(x=>x.id), surTout,
+         'et le détour par une autre famille a abîmé celle de départ');
   });
 
   test('la composition d\'une rangée tient toute sa période', ()=>{

@@ -1572,19 +1572,47 @@ function titresAimesSugg(cadre){
        dit rien de plus que « tu as aimé » ;
      · rien du tout → pas de rangée de cœur, et l'app le dit ailleurs.
    Jamais « adoré » sur un simple 👍 : c'est le travers dénoncé au §1.1. */
+/* R5 (relecture du 10/08, arbitré par Adrien) — LE PODIUM ENTRE DANS LE VIVIER,
+   IL NE LE CONFISQUE PLUS.
+
+   Version d'avant : le n°1 du podium gagnait toujours, et la rotation
+   quotidienne n'était que le repli du cas « pas de podium ». Conséquence, une
+   fois un duel joué : la rangée affichait le MÊME ancrage tous les jours, pour
+   toujours. Ça contredisait le rythme annoncé au §1 rangée 3 (« X tourne chaque
+   jour »), et surtout l'esprit anti-déjà-vu de tout ce lot — une rangée qui ne
+   change jamais est une rangée qu'on cesse de regarder.
+
+   Arbitrage d'Adrien, et c'est une troisième voie : le podium ne disparaît pas
+   du calcul, il rejoint les 👍 dans un seul vivier tournant. Il y revient plus
+   souvent qu'un titre isolé — un podium de dix titres pèse dix entrées — mais
+   il n'a plus de priorité permanente.
+
+   LE SIGNAL RESTE HONNÊTE, et c'est ce qui rendait le changement délicat : la
+   même graine nourrit la proposition du jour, qui a le droit de dire « Ton film
+   préféré : X ». On ne le dit donc QUE si le titre tiré est réellement le n°1
+   de son podium ; les autres jours, on ne dit pas plus que « tu as aimé ». Le
+   §1.1 ne se négocie pas parce qu'on a changé de rotation. */
 function graineEsprit(cadre){
   const fams = famillesDuCadre(cadre);
-  for(let i = 0; i < fams.length; i++){
-    const id = (((db.podium || {})[fams[i]]) || [])[0];
-    if(id == null) continue;
-    const t = moteurCoeur(fams[i]).find(x => String(x.id) === String(id));
-    if(t && cadre.medias.indexOf(t.media) >= 0)
-      return { media:t.media, id:String(t.id), nom:t.nom, famille:fams[i], signal:'podium' };
-  }
-  const aimes = titresAimesSugg(cadre);
-  if(!aimes.length) return null;
-  const t = aimes[jourVitrine() % aimes.length];
-  return { media:t.media, id:t.id, nom:t.nom, famille:t.famille, signal:'aime' };
+  const vivier = [], vus = {};
+  const pousser = (t, famille)=>{
+    if(!t || cadre.medias.indexOf(t.media) < 0) return;
+    const k = t.media + ':' + t.id;
+    if(vus[k]) return; vus[k] = 1;
+    vivier.push({ media:t.media, id:String(t.id), nom:t.nom, famille:famille });
+  };
+  /* Les 👍 d'abord — ils sont déjà classés par légitimité — puis ce que le
+     duel a départagé et que les pouces ne connaissent pas encore. */
+  titresAimesSugg(cadre).forEach(t => pousser(t, t.famille));
+  fams.forEach(f => (((db.podium || {})[f]) || []).forEach(id=>{
+    const t = moteurCoeur(f).find(x => String(x.id) === String(id));
+    pousser(t, f);
+  }));
+  if(!vivier.length) return null;
+  const t = vivier[jourVitrine() % vivier.length];
+  const premier = (((db.podium || {})[t.famille]) || [])[0];
+  return Object.assign({}, t,
+    { signal: (premier != null && String(premier) === String(t.id)) ? 'podium' : 'aime' });
 }
 
 /* §3.6 — UNE SEULE RANGÉE ACTEUR, jamais trois. Trois rangées quasi
@@ -1824,6 +1852,9 @@ function cercleDepuisBiblios(gens, cadre){
    (§0.6) — et les orphelins ne sont plus perdus, ils vont dans la rangée de
    repli. C'est le seul renversement de décision de ce lot ; il est explicite. */
 const RANGEE_MINI = 10;
+/* La seule exception, et elle vient de la maquette qui fait foi — voir le
+   commentaire au point d'appel, dans `rangeesSuggerees`. */
+const AVENIR_MINI = 3;
 /* Les rangées bâties sur une source FINIE ne peuvent pas s'élargir : le cercle
    lit des bibliothèques déjà entières, le croisement des favoris ne se recroise
    pas, « Bientôt » a été rangé par date d'un bloc. Elles passent quand même la
@@ -2219,6 +2250,13 @@ const MEMO_CLE = 'ms.rangees.v1';
 const MEMO_MAX = 600;
 const DEJAVU_JOURS = 3;
 const MEMO_PERIODES = { jour:1, semaine:7, mois:30 };
+/* §1 rangée 8 — l'anti-répétition PROPRE AUX PÉPITES : une pépite affichée
+   deux semaines sans être ouverte part se reposer un mois. C'est une règle
+   différente de l'anti-déjà-vu à trois jours, qui fait RECULER dans la rangée :
+   ici le titre en SORT. Une rangée dont le fond de catalogue dépasse les huit
+   cents titres peut se permettre d'en écarter ; une rangée personnelle, non. */
+const PEPITE_PATIENCE = 14;   // jours d'affichage sans ouverture
+const PEPITE_REPOS    = 30;   // jours de mise au repos
 let memoRangees = null;
 function memoLire(){
   if(memoRangees) return memoRangees;
@@ -2227,8 +2265,46 @@ function memoLire(){
   if(!o || typeof o !== 'object' || Array.isArray(o)) o = {};
   if(!o.compo || typeof o.compo !== 'object') o.compo = {};
   if(!o.vus   || typeof o.vus   !== 'object') o.vus   = {};
+  if(!o.pep   || typeof o.pep   !== 'object') o.pep   = {};
   memoRangees = o;
   return o;
+}
+
+/* ===========================================================================
+   B1 (relecture indépendante du 10/08) — LA DÉCISION SE PREND UNE FOIS PAR
+   JOUR, PAS À CHAQUE COMPOSITION.
+
+   LE DÉFAUT, ET IL ÉTAIT RÉEL. `noterAffichage` s'exécute à la FIN de
+   `rangeesSuggerees`, donc après que `reculerDejaVus` a déjà composé la
+   rangée. Un titre à deux jours consécutifs passait donc à trois APRÈS le
+   premier rendu de la journée — et le rendu suivant, dans la même session, le
+   faisait reculer. Reproduit sans réseau : la rangée sortait
+   `1 2 3 … 12` au premier appel et `2 3 … 12 1` au second, sans qu'on ait rien
+   touché. Or `render()` est rappelé constamment — un pouce, un toast, un
+   retour de fiche, une synchro — et `rangeeParCle` (donc « Tout voir »)
+   repasse aussi par là. C'était la violation frontale de l'invariant du §3.9 :
+   « une fois l'écran affiché, il ne bouge pas sous les doigts ».
+
+   LE CORRECTIF. On sépare LIRE et ÉCRIRE. La lecture se fait sur un instantané
+   pris au premier appel de la journée et qui ne bouge plus ; l'écriture
+   continue d'alimenter `localStorage` pour demain. Conséquence voulue : un
+   titre vu trois jours de suite recule le QUATRIÈME jour, pas au milieu du
+   troisième. C'est le prix de la stabilité, et c'est le bon prix.
+
+   Ce n'est pas un cas particulier de l'anti-déjà-vu : la mise au repos des
+   pépites passe par le même instantané, pour la même raison. Toute décision
+   qui change l'ordre ou le contenu d'un rail se prend ici, une fois.
+=========================================================================== */
+let memoFige = null;
+function memoDuJour(){
+  const j = jourVitrine();
+  if(memoFige && memoFige.jour === j) return memoFige;
+  const m = memoLire();
+  const dejaVu = {}, repos = {};
+  Object.keys(m.vus).forEach(k => { dejaVu[k] = m.vus[k].n || 0; });
+  Object.keys(m.pep).forEach(k => { if((m.pep[k].r || 0) > j) repos[k] = 1; });
+  memoFige = { jour:j, dejaVu:dejaVu, repos:repos };
+  return memoFige;
 }
 function memoEcrire(){
   const m = memoLire();
@@ -2237,6 +2313,14 @@ function memoEcrire(){
     cles.sort((a, b) => (m.vus[a].j || 0) - (m.vus[b].j || 0))
         .slice(0, cles.length - MEMO_MAX)
         .forEach(k => { delete m.vus[k]; });
+  /* Le journal des pépites se plafonne aussi, et on jette d'abord ce qui est
+     sorti de repos depuis longtemps : c'est l'entrée qui ne dit plus rien. */
+  const pcles = Object.keys(m.pep);
+  if(pcles.length > MEMO_MAX)
+    pcles.sort((a, b) => Math.max(m.pep[a].d || 0, m.pep[a].r || 0)
+                       - Math.max(m.pep[b].d || 0, m.pep[b].r || 0))
+         .slice(0, pcles.length - MEMO_MAX)
+         .forEach(k => { delete m.pep[k]; });
   try{ localStorage.setItem(MEMO_CLE, JSON.stringify(m)); }catch(e){}
 }
 /* Le numéro de la période courante. `jourVitrine` est déjà un numéro de jour
@@ -2263,8 +2347,15 @@ function melangeStable(l, graine){
    disparu de la source (ajouté à la bibliothèque, refusé) libère sa place ; ce
    que la source a de neuf s'ajoute en fin de liste plutôt qu'au milieu, pour
    que le début du rail reste celui d'hier. */
-function compoStable(cle, liste, periode, melange){
+/* R8 (relecture du 10/08) — LA CLÉ PORTE LA FAMILLE, et pas seulement le nom
+   de la rangée. `m.compo['acclames']` était partagé entre Tout, Films, Séries
+   et Animés : la composition figée d'une famille contaminait l'ordre des trois
+   autres pour toute la période, et on pouvait voir un rail d'animés ordonné
+   par ce qu'on avait vu la veille sur la puce Films. `cleSugg()` est déjà la
+   clé du cache de suggestions — c'est exactement le bon grain. */
+function compoStable(cle0, liste, periode, melange){
   if(!liste || !liste.length) return [];
+  const cle = cle0 + '@' + cleSugg();
   const m = memoLire();
   const p = periodeCourante(periode);
   const e = m.compo[cle];
@@ -2300,18 +2391,47 @@ function noterAffichage(l){
   if(bouge) memoEcrire();
 }
 /* Ouvrir un titre remet son compteur à zéro : la rangée a fait son travail. */
+/* Ouvrir un titre remet ses deux compteurs à zéro : la rangée a fait son
+   travail. L'instantané du jour est mis à jour LUI AUSSI, et c'est la seule
+   exception à B1 — mais elle est légitime : le §3.9 autorise l'écran à répondre
+   à une action directe, et ce changement-là ne peut que faire REMONTER un
+   titre, jamais le déplacer sous le doigt de quelqu'un qui n'a rien demandé. */
 function noterOuverture(media, id){
   const m = memoLire();
   const k = media + ':' + id;
-  if(!m.vus[k]) return;
-  delete m.vus[k];
+  const f = memoDuJour();
+  delete f.dejaVu[k]; delete f.repos[k];
+  if(!m.vus[k] && !m.pep[k]) return;
+  delete m.vus[k]; delete m.pep[k];
   memoEcrire();
 }
 function reculerDejaVus(l){
-  const m = memoLire();
-  const use = x => ((m.vus[x.media + ':' + x.id] || {}).n || 0) >= DEJAVU_JOURS;
+  const fige = memoDuJour().dejaVu;
+  const use = x => (fige[x.media + ':' + x.id] || 0) >= DEJAVU_JOURS;
   const devant = l.filter(x => !use(x)), derriere = l.filter(use);
   return derriere.length ? devant.concat(derriere) : l;
+}
+/* §1 rangée 8 — les pépites au repos sortent de la rangée. Lecture sur
+   l'instantané du jour (B1) ; l'écriture est dans `noterPepites`, appelée une
+   fois par jour au même moment que `noterAffichage`. */
+function filtrerPepites(l){
+  const repos = memoDuJour().repos;
+  return l.filter(x => !repos[x.media + ':' + x.id]);
+}
+function noterPepites(l){
+  const m = memoLire(), j = jourVitrine();
+  let bouge = false;
+  (l || []).forEach(x => {
+    const k = x.media + ':' + x.id;
+    const e = m.pep[k];
+    if(!e){ m.pep[k] = { d:j, r:0 }; bouge = true; return; }
+    if(e.r > j) return;                             // déjà au repos
+    if(!e.d){ e.d = j; bouge = true; return; }      // repos terminé : on repart
+    if(j - e.d < PEPITE_PATIENCE) return;
+    /* Deux semaines sous les yeux sans une ouverture : au repos pour un mois. */
+    e.r = j + PEPITE_REPOS; e.d = 0; bouge = true;
+  });
+  if(bouge) memoEcrire();
 }
 /* « À finir en un week-end » remonte en 2ᵉ position du vendredi 17 h au
    dimanche soir (§1 rangée 7). L'horloge est passée en argument pour que le
@@ -2687,9 +2807,62 @@ async function chargerSuggestions(force){
     /* « Bientôt » : on ne mélange pas les médias un pour un comme ailleurs —
        c'est la DATE qui range la rangée. Une affiche est exigée : un titre
        annoncé sans visuel n'est qu'une ligne de texte dans un carrousel. */
+    /* R7 (relecture du 10/08) — « BIENTÔT » RÉUNIT DEUX SOURCES, comme le §1
+       rangée 10 le demande depuis le début : ce qui sort (le vivier TMDB
+       ci-dessus) ET ce que la personne attend déjà (`bientotPerso`, app-10 —
+       ses films « à voir » et ceux dont la cloche est allumée, avec leur date
+       FRANÇAISE, qui n'est pas celle de la fiche d'origine).
+
+       CES TITRES-LÀ SONT DÉJÀ DANS LA BIBLIOTHÈQUE : ils ne passent donc pas
+       par `tamiser`, qui les retirerait tous — comme le Top 10, et pour la même
+       raison. Ce n'est pas une entorse : « Bientôt » ne répond pas à « que
+       découvrir ? » mais à « qu'est-ce qui arrive ? », et la réponse la plus
+       utile est précisément celle qu'on attend soi-même. La vignette portera sa
+       coche « déjà chez toi », ce qui rend la différence lisible sans un mot.
+
+       ON LIT `bientotPerso`, ON NE LE DÉCLENCHE PAS — et c'est une décision, pas
+       une paresse. `filmsBientot()` planifie `chargerBientotPerso`, qui demande
+       la date française PUIS les plateformes de CHAQUE film suivi : une à deux
+       requêtes par film. Sur une liste « à voir » de cinquante titres, c'est
+       cinquante à cent requêtes ajoutées à l'ouverture de Découvrir — pour une
+       demi-rangée. Le dépôt a déjà retiré un sondage de dix-neuf requêtes pour
+       exactement ce motif (`sonderPlates`), et le §6 demande de consigner le
+       budget, pas de le faire exploser en silence.
+       On se sert donc de ce qui est DÉJÀ chargé : « À suivre » le remplit, et
+       Découvrir en profite sans rien payer. Tant que la personne n'a pas ouvert
+       « À suivre », « Bientôt » est ce qu'elle était avant ce lot — la moitié
+       TMDB, qui suffit. À signaler à Adrien : c'est la seule moitié de R7 que
+       je livre, et c'est délibéré. */
+    const persoAvenir = [];
+    /* Ce bloc ne parle que de FILMS : sur les puces Séries et Animés, il n'a
+       rien à dire et ne doit pas s'inviter. */
+    if(cadre.medias.indexOf('movie') >= 0) try{
+      const dedans = {};
+      const dejaCharges = (typeof bientotPerso === 'object' && bientotPerso &&
+                           Array.isArray(bientotPerso.films)) ? bientotPerso.films : [];
+      dejaCharges.forEach(f=>{
+        const m = db.movies[f.id];
+        /* Le cache d'app-10 peut dater d'avant un « vu » : on revérifie ici
+           plutôt que de faire confiance à sa clé. Un film déjà vu n'arrive
+           plus, il est arrivé. */
+        if(!m || m.seen || !m.poster || !f.dfr || dedans[f.id]) return;
+        dedans[f.id] = 1;
+        persoAvenir.push({ id:Number(f.id), media:'movie', nom:f.titre || m.title,
+                           affiche:m.poster, bandeau:m.backdrop || null, date:f.dfr,
+                           note:m.note || null, votes:0, genre_ids:[], langue:null });
+      });
+    }catch(e){ /* une source muette vaut mieux qu'une rangée en panne */ }
+
+    const decouvertes = tamiser([].concat(...parKind('avenir').map(r => r.l || [])),
+                                vus, cadre, false)
+      .filter(x => x.affiche && x.date);
+    /* Les deux sources fondues puis rangées par DATE — c'est la règle de cette
+       rangée, et elle vaut pour les deux moitiés : mélanger deux blocs
+       chronologiques sans les refondre ferait sauter la chronologie au milieu. */
+    const dejaLa = {};
+    persoAvenir.forEach(x => { dejaLa[x.media + ':' + x.id] = 1; });
     const avenir = trierParDate(
-      tamiser([].concat(...parKind('avenir').map(r => r.l || [])), vus, cadre, false)
-        .filter(x => x.affiche && x.date)
+      persoAvenir.concat(decouvertes.filter(x => !dejaLa[x.media + ':' + x.id]))
     ).slice(0, SUGG_AVENIR_MAX);
 
     /* §3.3 — LA PROPOSITION DU JOUR. Un seul titre, plein cadre, avec sa raison
@@ -2853,13 +3026,27 @@ function rangeesSuggerees(){
        la fin de sa période, l'ordre se remélange plus souvent. */
     RANGEES_EDITO.forEach(def =>
       poser(def.cle, def.titre,
-            compoStable(def.cle, s[def.cle] || [], def.periode, def.melange)));
+            compoStable(def.cle,
+              /* §1 rangée 8 — les pépites au repos sortent avant tout le reste :
+                 les filtrer APRÈS la composition figée les remplacerait par des
+                 trous, alors qu'il faut qu'elles cèdent leur place. */
+              def.cle === 'pepites' ? filtrerPepites(s.pepites || []) : (s[def.cle] || []),
+              def.periode, def.melange)));
     if(s.incont)  poser('incont', s.incont.titre, s.incont.l);
     if(s.plates)  poser('plates', s.plates.titre, s.plates.l);
     /* « Bientôt » vient après les nouveautés : on lit le présent avant
        l'avenir. Elle ne verse pas ses restes dans « Aussi pour toi » — un
        titre pas encore sorti n'est pas une proposition pour ce soir. */
-    poser('avenir', 'Bientôt', s.avenir, { sansRepli:true });
+    /* R2 (relecture du 10/08) — « BIENTÔT » A SON PROPRE PLANCHER, ET C'EST
+       LA MAQUETTE QUI LE DIT. Elle code `rangee("Bientôt", …, 3)`, et l'en-tête
+       de la spec dit que la maquette FAIT FOI. Le texte du §0.5 (« dix ou
+       rien ») et la maquette se contredisent donc sur cette rangée-là, et la
+       maquette a raison sur le fond : une rangée de dates n'est pas une rangée
+       de découvertes. Trois sorties annoncées, c'est trois informations vraies
+       et datées ; les cacher parce qu'il n'y en a pas dix reviendrait à taire
+       une sortie que la personne attend. `sansRepli` reste : un titre pas
+       encore sorti n'a rien à faire dans « Aussi pour toi ». */
+    poser('avenir', 'Bientôt', s.avenir, { sansRepli:true, mini:AVENIR_MINI });
   }
 
   /* ===== LA RÈGLE DES 10 (§0.5) =====
@@ -2869,7 +3056,7 @@ function rangeesSuggerees(){
      tombe. */
   const orphelins = [], montres = {};
   brut.forEach(r=>{
-    if(r.l.length < RANGEE_MINI){
+    if(r.l.length < (r.mini || RANGEE_MINI)){
       if(!r.sansRepli) orphelins.push.apply(orphelins, r.l);
       return;
     }
@@ -2900,6 +3087,11 @@ function rangeesSuggerees(){
      c'est ce que le rail montre. Écrit au plus une fois par jour et par titre. */
   noterAffichage([].concat.apply([],
     out.filter(r => !r.top).map(r => r.l.slice(0, RANGEE_APERCU))));
+  /* Les pépites tiennent leur propre compte : deux semaines d'affichage sans
+     ouverture, et elles partent un mois. Écrit ici, LU sur l'instantané du
+     jour — c'est la séparation que B1 impose. */
+  const pep = out.find(r => r.cle === 'pepites');
+  if(pep) noterPepites(pep.l.slice(0, RANGEE_APERCU));
   return out;
 }
 
@@ -4494,10 +4686,20 @@ function ecranDuelResultat(){
         '<button class="djq" onclick="ouvrirApercuDuel(\''+x.media+'\','+x.id+')">'+
           affDuel({ affiche:x.affiche, nom:x.nom }, 'djqaff')+
           '<span class="djqnom">'+esc(x.nom)+'</span></button>').join('')+'</div>';
+    /* SPEC-04 + R5 — DEUX CORRECTIONS DANS UNE SEULE PHRASE, et la seconde
+       n'était dans aucun rapport.
+       1. La rangée promise s'appelle désormais « Parce que tu as aimé X »
+          (§1 rangée 3). On promettait une rangée dont le nom n'existe plus.
+       2. Elle ne « remplace la rotation au hasard » plus vraiment : depuis
+          l'arbitrage R5, l'ancrage TOURNE chaque jour parmi les titres aimés et
+          le podium. Promettre la permanence serait donc faux dès demain. On
+          promet ce qui est vrai — que ça change tout de suite — et rien de plus.
+          C'est la même règle que le §1.1 : l'app ne prétend jamais en savoir,
+          ni en tenir, plus qu'elle n'en sait. */
     html += '<div class="wrap" style="padding-top:10px"><div class="card dnote">'+
-      '<b>'+esc(tete.nom)+'</b> devient ton point de départ. La rangée '+
-      '« Dans l\'esprit de '+esc(tete.nom)+' » remplace la rotation au hasard, '+
-      'dès maintenant.</div></div>';
+      '<b>'+esc(tete.nom)+'</b> devient ton point de départ. Découvrir s\'ouvre '+
+      'sur la rangée « Parce que tu as aimé '+esc(tete.nom)+' », dès maintenant.'+
+      '</div></div>';
   }
   /* R1 · point 12 — « Continuer → » n'ouvre l'écran suivant que s'il a quelque
      chose à demander. Tout est déjà qualifié : le bouton dit « Terminer » et
