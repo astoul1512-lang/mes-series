@@ -74,8 +74,63 @@ let sorties = { salle: null, cine: null, stream: null,
    deux dates ciné, et c'est à l'appelant de choisir celle qui l'intéresse. */
 const datesFR = {};                  // id → { cine:[...], stream:[...] }
 
+/* SPEC-04 lot C — R7, BORNE N° 1 : CE CACHE EST DÉSORMAIS PERSISTÉ 24 H.
+
+   Il était en mémoire seule. C'est ce qui rendait `bientotPerso` cher : il
+   mourait avec l'onglet, et la première ouverture du lendemain repayait une
+   requête par film suivi. La décision d'Adrien du 10/08 dit « une fois par jour
+   au maximum, résultats en cache 24 h » — la seule façon de tenir cette phrase
+   est de faire survivre le cache à la fermeture de l'app.
+
+   PAR FILM, ET C'EST TOUT LE POINT. La décision le dit noir sur blanc : « la
+   bonne forme est un cache par film persisté 24 h, la liste étant recalculée
+   librement — seuls les ids inconnus coûtent une requête ». `chargerBientotPerso`
+   s'invalide, lui, sur la LISTE entière des films suivis : ajouter un film
+   relançait tout le paquet. Il continue de le faire, et ce n'est plus grave :
+   les autres films sont déjà là, seul le nouveau coûte.
+
+   Une date de sortie ne change pas d'heure en heure — c'est l'argument exact
+   d'Adrien, et il est juste. 24 h est même prudent.
+
+   Ce qui n'est PAS persisté : rien d'autre. `premiere` voyage avec le reste
+   parce qu'elle vient de la même réponse et qu'elle sert au même écran. */
+const DATESFR_CLE = 'ms.datesfr.v1';
+const DATESFR_TTL = 24 * 3600000;
+const DATESFR_MAX = 400;             // au-delà, on repart d'un cache neuf
+let datesFRLues = false;
+
+function lireDatesFR(){
+  if(datesFRLues) return;
+  datesFRLues = true;
+  let o = null;
+  try{ o = JSON.parse(localStorage.getItem(DATESFR_CLE) || 'null'); }catch(e){ o = null; }
+  if(!o || typeof o !== 'object' || Array.isArray(o)) return;
+  const limite = Date.now() - DATESFR_TTL;
+  Object.keys(o).forEach(id=>{
+    const e = o[id];
+    if(!e || typeof e !== 'object' || !(e.q > limite)) return;
+    if(!Array.isArray(e.cine) || !Array.isArray(e.stream)) return;
+    datesFR[id] = e;
+  });
+}
+
+function ecrireDatesFR(){
+  try{
+    const ids = Object.keys(datesFR);
+    /* Le cache ne doit pas grossir indéfiniment : au-delà du plafond on garde
+       les plus récemment demandés, qui sont ceux qui servent. */
+    const garde = ids.length > DATESFR_MAX
+      ? ids.sort((a, b)=> (datesFR[b].q || 0) - (datesFR[a].q || 0)).slice(0, DATESFR_MAX)
+      : ids;
+    const o = {};
+    garde.forEach(id=>{ o[id] = datesFR[id]; });
+    localStorage.setItem(DATESFR_CLE, JSON.stringify(o));
+  }catch(e){ /* stockage plein : le cache mémoire suffit pour la session */ }
+}
+
 async function dateFRDe(id){
-  if(datesFR[id]) return datesFR[id];
+  lireDatesFR();
+  if(datesFR[id] && datesFR[id].q > Date.now() - DATESFR_TTL) return datesFR[id];
   const rep = await tmdb('/movie/' + id + '/release_dates');
   const fr = ((rep.results || []).find(r => r.iso_3166_1 === 'FR') || {}).release_dates || [];
   const prendre = types => fr.filter(d => types.includes(d.type) && d.release_date)
@@ -85,8 +140,10 @@ async function dateFRDe(id){
   const toutes = (rep.results || [])
     .flatMap(r => (r.release_dates || []).map(d => (d.release_date || '').slice(0, 10)))
     .filter(Boolean).sort();
-  return (datesFR[id] = { cine: prendre(SORTIES_TYPES.cine), stream: prendre(SORTIES_TYPES.stream),
-                          premiere: toutes[0] || null });
+  datesFR[id] = { cine: prendre(SORTIES_TYPES.cine), stream: prendre(SORTIES_TYPES.stream),
+                  premiere: toutes[0] || null, q: Date.now() };
+  ecrireDatesFR();
+  return datesFR[id];
 }
 
 /* La première date du genre dans [de, a], ou null. */
@@ -290,8 +347,26 @@ function filmsSuivisIds(){
   return Object.keys(ids).map(Number);
 }
 
-async function chargerBientotPerso(){
+/* SPEC-04 lot C — R7, BORNE N° 3 : LE PAQUET EST PLAFONNÉ. Une liste « à voir »
+   de deux cents films ne justifie pas deux cents requêtes le premier jour. On
+   prend les premiers, et on le DIT ici plutôt que de le taire : au-delà de ce
+   plafond, « Bientôt » est incomplet, et c'est un compromis assumé, pas un bug.
+   Les films suivis les plus récemment ajoutés sont les plus attendus : c'est le
+   critère de tri. */
+const BIENTOT_MAX_FILMS = 60;
+
+/* Le paquet réellement interrogé. UN SEUL endroit le calcule : `filmsBientot`
+   et `chargerBientotPerso` en tirent la même clé de cache, sans quoi elles ne
+   tomberaient jamais d'accord et le chargement repartirait sans fin. */
+function filmsSuivisBornes(){
   const ids = filmsSuivisIds();
+  if(ids.length <= BIENTOT_MAX_FILMS) return ids;
+  const quand = id => { const m = db.movies[id]; return (m && (m.addedAt || m.watchedAt)) || 0; };
+  return ids.slice().sort((a, b)=> quand(b) - quand(a)).slice(0, BIENTOT_MAX_FILMS);
+}
+
+async function chargerBientotPerso(){
+  const ids = filmsSuivisBornes();
   const cle = ids.slice().sort((a, b) => a - b).join(',');
   if(bientotPerso.attente || (bientotPerso.films && bientotPerso.cle === cle)) return;
   bientotPerso.attente = true;
@@ -337,7 +412,7 @@ async function chargerBientotPerso(){
    désormais à ses épisodes dans un calendrier unique, il lui faut la matière
    brute. Le chargement se déclenche tout seul au premier appel. */
 function filmsBientot(){
-  const ids = filmsSuivisIds();
+  const ids = filmsSuivisBornes();
   if(!ids.length) return [];
   const cle = ids.slice().sort((a, b) => a - b).join(',');
   if(!bientotPerso.films || bientotPerso.cle !== cle) setTimeout(chargerBientotPerso, 0);

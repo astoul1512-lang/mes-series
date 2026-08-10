@@ -87,6 +87,14 @@ function migrerGouts(){
      indéfiniment. Ce n'est pas un avis : ça ne dit rien du goût, seulement que
      la bibliothèque se trompe sur ce titre. */
   if(!Array.isArray(g.pasVus)) g.pasVus = [];
+  /* SPEC-04 lot C — les deux interrupteurs de l'IA, ÉTEINTS PAR DÉFAUT (§4.5 :
+     c'est un opt-in, pas un opt-out). Deux drapeaux et pas un seul : le §6 de
+     SPEC-05 tranche que l'IA de la Recherche s'éteint séparément de celle de
+     Découvrir. Un objet plutôt que deux booléens à plat, pour que le sous-bloc
+     de synchro `ia` n'ait qu'une clé à porter. */
+  if(!g.ia || typeof g.ia !== 'object' || Array.isArray(g.ia)) g.ia = {};
+  if(typeof g.ia.decouvrir !== 'boolean') g.ia.decouvrir = false;
+  if(typeof g.ia.recherche !== 'boolean') g.ia.recherche = false;
   /* POINT 2 (02/08) — LES TITRES RÉPONDUS 🤷, sous la forme « media:id ».
      C'est une VRAIE réponse — « je l'ai vu, il ne m'a rien fait, ne me le
      redemande pas » — et non l'absence d'avis, qui existait déjà.
@@ -2014,6 +2022,26 @@ function requeteHumeur(media, cadre, cle, variante){
        très exactement la rangée qu'on décrit. Le nombre de saisons et
        d'épisodes, lui, n'est filtrable NULLE PART dans `/discover`. */
     else p.with_type = '2';
+  }
+  /* SPEC-04 lot C §2 (a) — L'AFFINAGE DE LA RECETTE SELON LE PROFIL, et il se
+     fait ICI, localement, sans une requête. Le §2 confie cet affinage à l'IA ;
+     le relais du lot B, lui, ne rend pour `profil_humeur` qu'une PHRASE, pas
+     des critères `/discover`. Deviner des mots-clés TMDB dans du texte libre
+     serait précisément l'à-peu-près que le §0.4 interdit ailleurs. On garde
+     donc le sens de la règle — « Frissonner pour CET utilisateur, ce n'est pas
+     le même Frissonner que pour un autre » — avec la matière qu'on a déjà sous
+     la main : ses 👍 et ses 👎. Une seule inflexion, la seule qui soit
+     mesurable et que le §2 nomme en toutes lettres : la tension contre le gore.
+     Voir `recetteAffineeHumeur` (app-14) pour la règle, et le rapport de lot
+     pour la question posée à Adrien. */
+  if(typeof recetteAffineeHumeur === 'function'){
+    const fin = recetteAffineeHumeur(cle);
+    /* 10292 = « gore » chez TMDB. La recette films du frisson l'écarte déjà ;
+       ce qu'on ajoute ici, c'est de l'écarter AUSSI côté séries et animés, pour
+       un profil qui a dit deux fois qu'il n'en voulait pas. */
+    if(fin.sansGore){
+      p.without_keywords = p.without_keywords ? p.without_keywords + ',10292' : '10292';
+    }
   }
   Object.assign(p, filtreMesPlates());
   return { media:media, p:p };

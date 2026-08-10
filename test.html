@@ -82,6 +82,7 @@ window.MODE_TEST = true;
 <script src="./app-11-gouts.js"></script>
 <script src="./app-12-recherche.js"></script>
 <script src="./app-13-inscription.js"></script>
+<script src="./app-14-ia.js"></script>
 <script src="./app-08-reglages.js"></script>
 
 <script>
@@ -6863,6 +6864,311 @@ window.MODE_TEST = true;
       window.etagesRech = vraiEtages; window.chargerGenres = vraiGenres;
       window.tmdb = vraiTmdb; window.peindreRech = vraiePeinture; view = vue;
     }
+  });
+
+
+  /* ==================== SPEC-04 lot C — les branchements IA ====================
+
+     Ce que ces cas doivent EMPÊCHER, et pas seulement constater :
+
+       · qu'une IA éteinte parle quand même (le §4.5 promet l'app d'avant : zéro
+         requête, zéro texte généré) ;
+       · qu'un texte du relais s'affiche sans repasser la validation de sortie
+         du §0.4 côté client — le serveur la fait déjà, ce qui n'excuse rien ;
+       · qu'un pitch écrit pour un titre s'affiche sur un autre après rotation
+         de la proposition du jour ;
+       · qu'un échec déclenche une rafale (la règle « une tentative ») ;
+       · que R7 redevienne cher : le cache des dates doit survivre à l'onglet.
+
+     Le cache vit en localStorage : chaque cas le remet à zéro lui-même, sinon
+     l'ordre de la page changerait leurs résultats. */
+  groupe('SPEC-04 lot C — les branchements IA');
+
+  function iaVierge(){
+    baseVierge();
+    db.gouts.ia = { decouvrir:false, recherche:false };
+    try{ localStorage.removeItem(IA_CLE); localStorage.removeItem(DATESFR_CLE);
+         localStorage.removeItem(IA_BIENTOT_CLE); }catch(e){}
+  }
+  const TITRE_JOUR = { id:1399, media:'tv', nom:'Severance', note:8.7, pourquoi:'Parce que tu as aimé Dark' };
+
+  test('C1 — l\'interrupteur est ÉTEINT à la livraison, sur les deux écrans', ()=>{
+    baseVierge();
+    delete db.gouts.ia;
+    migrerGouts();
+    egal(db.gouts.ia, { decouvrir:false, recherche:false }, 'le défaut a bougé');
+    vrai(!iaActive('decouvrir') && !iaActive('recherche'), 'une IA est allumée par défaut');
+    vrai(!iaActive('nimporte'), 'un nom inconnu allume quelque chose');
+  });
+
+  test('C1b — le sous-bloc « ia » existe dans la découpe de synchro', ()=>{
+    vrai(Array.isArray(GOUT_BLOCS.ia) && GOUT_BLOCS.ia.indexOf('ia') >= 0,
+         'sans lui, allumer l\'IA daterait TOUS les goûts et écraserait l\'autre appareil');
+  });
+
+  test('C2 — IA éteinte : le hero garde sa ligne au cœur, même avec un cache plein', ()=>{
+    iaVierge();
+    localStorage.setItem(IA_CLE, JSON.stringify({ jour: todayISO(),
+      pitch:{ cle:'tv:1399', texte:'Une horlogerie de bureau, glaçante et drôle.' },
+      titres:{ acclames:'Les mieux notés' }, humeurs:{}, rech:{pourquoi:{}} }));
+    egal(pitchIAduJour(TITRE_JOUR), null, 'un texte est sorti alors que l\'IA est éteinte');
+    egal(intituleIA('acclames', 'Acclamés par la critique'), 'Acclamés par la critique',
+         'un intitulé a été réécrit alors que l\'IA est éteinte');
+    egal(pitchOuRaison(TITRE_JOUR, null), 'Parce que tu as aimé Dark',
+         'la ligne au cœur a été remplacée');
+  });
+
+  test('C3 — IA allumée : le pitch du jour remplace la ligne de raison', ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    localStorage.setItem(IA_CLE, JSON.stringify({ jour: todayISO(),
+      pitch:{ cle:'tv:1399', texte:'Une horlogerie de bureau, glaçante et drôle.' },
+      titres:null, humeurs:{}, rech:{pourquoi:{}} }));
+    egal(pitchOuRaison(TITRE_JOUR, null), 'Une horlogerie de bureau, glaçante et drôle.');
+  });
+
+  test('C4 — le pitch d\'hier ne s\'affiche pas aujourd\'hui', ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    localStorage.setItem(IA_CLE, JSON.stringify({ jour: HIER,
+      pitch:{ cle:'tv:1399', texte:'Le pitch de la veille.' },
+      titres:{ acclames:'Hier' }, humeurs:{}, rech:{pourquoi:{}} }));
+    egal(pitchIAduJour(TITRE_JOUR), null, 'un pitch périmé est passé');
+    egal(intituleIA('acclames', 'Acclamés par la critique'), 'Acclamés par la critique');
+  });
+
+  test('C5 — un pitch écrit pour un autre titre ne se recycle pas', ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    localStorage.setItem(IA_CLE, JSON.stringify({ jour: todayISO(),
+      pitch:{ cle:'movie:27205', texte:'Un braquage dans les rêves.' },
+      titres:null, humeurs:{}, rech:{pourquoi:{}} }));
+    egal(pitchIAduJour(TITRE_JOUR), null,
+         'le pitch d\'Inception s\'est affiché sous Severance');
+  });
+
+  test('C6 — la validation de sortie mord côté client : longueur et §0.4', ()=>{
+    egal(texteIAAcceptable('x'.repeat(220), 220).length, 220, 'la limite exacte doit passer');
+    egal(texteIAAcceptable('x'.repeat(221), 220), null, 'un caractère de trop est passé');
+    egal(texteIAAcceptable('   ', 220), null, 'du vide est passé');
+    egal(texteIAAcceptable('Une   phrase\n espacée.', 220), 'Une phrase espacée.');
+    egal(texteIAAcceptable('Dans la veine de Dark, que tu as adoré.', 220), null,
+         '« que tu as adoré » est passé — c\'est l\'émotion par procuration du §0.4');
+    egal(texteIAAcceptable('Proche de ton coup de cœur.', 220), null, '« ton coup de cœur » est passé');
+    egal(texteIAAcceptable('Ta série préférée revient.', 220), null, '« ta préférée » est passé');
+    vrai(texteIAAcceptable('Dans la veine de Dark. Une saison, une histoire complète.', 220),
+         'une phrase factuelle a été refusée à tort');
+  });
+
+  test('C7 — un pitch interdit stocké malgré tout ne s\'affiche pas', ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    localStorage.setItem(IA_CLE, JSON.stringify({ jour: todayISO(),
+      pitch:{ cle:'tv:1399', texte:'Dans la veine de Dark, que tu as adoré.' },
+      titres:null, humeurs:{}, rech:{pourquoi:{}} }));
+    egal(pitchIAduJour(TITRE_JOUR), null, 'la seconde barrière n\'a pas tenu');
+  });
+
+  test('C8 — éteindre efface le cache de CET écran, pas de l\'autre', ()=>{
+    iaVierge();
+    db.gouts.ia = { decouvrir:true, recherche:true };
+    localStorage.setItem(IA_CLE, JSON.stringify({ jour: todayISO(),
+      pitch:{ cle:'tv:1399', texte:'Un texte.' }, titres:null, humeurs:{ frisson:{jusqua:9e15,cle:'tv:1',texte:'x'} },
+      rech:{ pourquoi:{ 'a':{ quand:1, texte:'y' } } } }));
+    sansEcran(()=> basculerIA('decouvrir'));
+    const o = JSON.parse(localStorage.getItem(IA_CLE));
+    egal(o.jour, '', 'le lot de Découvrir a survécu à l\'extinction');
+    egal(o.pitch, null);
+    egal(Object.keys(o.humeurs).length, 0, 'les humeurs ont survécu');
+    egal(Object.keys(o.rech.pourquoi).length, 1, 'le cache de la Recherche a été effacé par erreur');
+    vrai(!iaActive('decouvrir') && iaActive('recherche'), 'les deux interrupteurs sont liés');
+  });
+
+  test('C9 — l\'échéance des humeurs est le prochain 6 h, pas 24 h glissantes', ()=>{
+    const t = prochain6hIA();
+    vrai(t > Date.now(), 'une échéance déjà passée');
+    vrai(t - Date.now() <= 30 * 3600000, 'plus de 30 h : ce n\'est plus « jusqu\'à 6 h »');
+    egal(new Date(t).getHours(), 6, 'l\'échéance ne tombe pas à 6 h');
+  });
+
+  test('C10 — un pitch d\'humeur expiré ne s\'affiche plus', ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    localStorage.setItem(IA_CLE, JSON.stringify({ jour: todayISO(), pitch:null, titres:null,
+      humeurs:{ frisson:{ jusqua: Date.now() - 1, cle:'tv:1399', texte:'De la tension, jamais de sang.' } },
+      rech:{pourquoi:{}} }));
+    egal(pitchIAHumeur('frisson', TITRE_JOUR), null, 'un pitch d\'humeur périmé est passé');
+    localStorage.setItem(IA_CLE, JSON.stringify({ jour: todayISO(), pitch:null, titres:null,
+      humeurs:{ frisson:{ jusqua: Date.now() + 60000, cle:'tv:1399', texte:'De la tension, jamais de sang.' } },
+      rech:{pourquoi:{}} }));
+    egal(pitchIAHumeur('frisson', TITRE_JOUR), 'De la tension, jamais de sang.');
+    egal(pitchOuRaison(TITRE_JOUR, 'frisson'), 'De la tension, jamais de sang.');
+  });
+
+  test('C11 — un intitulé réécrit ne s\'applique qu\'aux rangées éditoriales', ()=>{
+    vrai(IA_RANGEES_LIBELLES.indexOf('acclames') >= 0, 'les rangées éditoriales ont disparu de la liste');
+    ['top10','esprit','favoris','genre','plates','incont'].forEach(c=>{
+      vrai(IA_RANGEES_LIBELLES.indexOf(c) < 0,
+           'la rangée « '+c+' » porte une donnée dans son titre : la faire réécrire la perdrait');
+    });
+  });
+
+  testAsync('C12 — sans compte connecté, appelIA ne touche pas au réseau', async ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    db.auth = null;
+    let appels = 0;
+    const vrai_ = window.sbFetch;
+    window.sbFetch = async ()=>{ appels++; return { texte:'x' }; };
+    try{
+      egal(await appelIA('pitch_jour', { titre:'X' }), null);
+      egal(appels, 0, 'une requête est partie sans compte : le relais l\'aurait refusée en 401');
+    }finally{ window.sbFetch = vrai_; }
+  });
+
+  testAsync('C13 — {indisponible:true} n\'est pas réessayé', async ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
+    let appels = 0;
+    const vrai_ = window.sbFetch;
+    window.sbFetch = async ()=>{ appels++; return { indisponible:true }; };
+    try{
+      egal(await appelIA('pitch_jour', { titre:'X' }), null);
+      egal(appels, 1, 'une rafale : le §4.4 interdit le réessai côté client');
+    }finally{ window.sbFetch = vrai_; }
+  });
+
+  testAsync('C14 — une erreur de contrat ne remonte jamais dans l\'écran', async ()=>{
+    iaVierge();
+    db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
+    const vrai_ = window.sbFetch;
+    const vraiWarn = console.warn;
+    window.sbFetch = async ()=>{ const e = new Error('tâche inconnue'); e.status = 400; throw e; };
+    console.warn = ()=>{};
+    try{
+      egal(await appelIA('inventee', {}), null, 'un throw est sorti d\'appelIA');
+    }finally{ window.sbFetch = vrai_; console.warn = vraiWarn; }
+  });
+
+  testAsync('C15 — IA éteinte : le lot du jour ne part pas', async ()=>{
+    iaVierge();
+    db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
+    let appels = 0;
+    const vrai_ = window.sbFetch;
+    window.sbFetch = async ()=>{ appels++; return { texte:'x' }; };
+    try{
+      apresRenduDecouvrirIA();
+      await new Promise(r=> setTimeout(r, 30));
+      egal(appels, 0, 'l\'écran a parlé au relais alors que l\'interrupteur est éteint');
+    }finally{ window.sbFetch = vrai_; }
+  });
+
+  test('C16 — ce qui part au fournisseur ne contient ni pseudo ni identifiant', ()=>{
+    iaVierge();
+    db.pseudo = 'adrien'; db.auth = { token:'jeton', uid:'11111111-2222-3333' };
+    db.shows[1399] = serie(1399, [ep(1,HIER)], {}, { name:'Severance', genres:['Drame','Mystère'] });
+    db.avis.tv['1399'] = { v:1, quand:2 };
+    const aimes = titresAimesIA(8), genres = genresAimesIA(5);
+    egal(aimes, ['Severance']);
+    egal(genres, ['Drame','Mystère']);
+    const tout = JSON.stringify({ aimes:aimes, genres:genres });
+    vrai(tout.indexOf('adrien') < 0 && tout.indexOf('jeton') < 0 && tout.indexOf('1111') < 0,
+         'une donnée d\'identité s\'est glissée dans ce qui part');
+  });
+
+  test('C17 — l\'affinage d\'humeur demande DEUX signaux, pas un', ()=>{
+    iaVierge();
+    /* Un profil qui aime la tension et n'aime pas l'horreur : le gore s'écarte. */
+    db.shows[1] = serie(1, [ep(1,HIER)], {}, { name:'Thriller', genres:['Thriller'] });
+    db.movies[2] = { id:2, title:'Gore', genres:['Horreur'], seen:true, addedAt:1 };
+    db.avis.tv['1'] = { v:1, quand:1 };
+    db.avis.movie['2'] = { v:-1, quand:1 };
+    egal(recetteAffineeHumeur('frisson').sansGore, true);
+    /* Le même profil sans le 👎 sur l'horreur : un seul signal ne suffit pas
+       si l'horreur est aimée. */
+    db.avis.movie['2'] = { v:1, quand:1 };
+    egal(recetteAffineeHumeur('frisson').sansGore, false,
+         'on a écarté le gore chez quelqu\'un qui aime l\'horreur');
+    /* Et un profil muet ne déclenche rien. */
+    db.avis = { tv:{}, movie:{} };
+    egal(recetteAffineeHumeur('frisson').sansGore, false);
+    egal(recetteAffineeHumeur('rire').sansGore, false, 'l\'affinage déborde sur une autre humeur');
+  });
+
+  test('C18 — l\'affinage passe bien dans la requête TMDB de l\'humeur', ()=>{
+    iaVierge();
+    db.shows[1] = serie(1, [ep(1,HIER)], {}, { name:'Thriller', genres:['Thriller'] });
+    db.movies[2] = { id:2, title:'Gore', genres:['Horreur'], seen:true, addedAt:1 };
+    db.avis.tv['1'] = { v:1, quand:1 };
+    db.avis.movie['2'] = { v:-1, quand:1 };
+    const r = requeteHumeur('tv', { medias:['tv'], origine:'sansAnime' }, 'frisson', 'principale');
+    vrai(String(r.p.without_keywords || '').indexOf('10292') >= 0,
+         'le gore n\'a pas été écarté côté séries');
+    db.avis = { tv:{}, movie:{} };
+    const r2 = requeteHumeur('tv', { medias:['tv'], origine:'sansAnime' }, 'frisson', 'principale');
+    egal(r2.p.without_keywords, undefined, 'un profil muet a quand même déclenché l\'affinage');
+  });
+
+  test('C19 — R7 : le cache des dates françaises survit à la fermeture', ()=>{
+    iaVierge();
+    Object.keys(datesFR).forEach(k=> delete datesFR[k]);
+    datesFR['550'] = { cine:['2026-09-01'], stream:[], premiere:'2026-09-01', q:Date.now() };
+    ecrireDatesFR();
+    Object.keys(datesFR).forEach(k=> delete datesFR[k]);
+    datesFRLues = false;
+    lireDatesFR();
+    egal((datesFR['550'] || {}).cine, ['2026-09-01'], 'le cache n\'a pas été relu : R7 repaye tout chaque jour');
+  });
+
+  test('C20 — un cache de dates de plus de 24 h est ignoré', ()=>{
+    iaVierge();
+    Object.keys(datesFR).forEach(k=> delete datesFR[k]);
+    const vieux = {}; vieux['550'] = { cine:['2020-01-01'], stream:[], premiere:null,
+                                        q: Date.now() - 25 * 3600000 };
+    localStorage.setItem(DATESFR_CLE, JSON.stringify(vieux));
+    datesFRLues = false;
+    lireDatesFR();
+    egal(datesFR['550'], undefined, 'une date vieille de plus d\'un jour a été reprise');
+  });
+
+  test('C21 — R7 : le paquet est plafonné, et les deux fonctions partagent la clé', ()=>{
+    iaVierge();
+    for(let i = 1; i <= 80; i++) db.movies[i] = { id:i, title:'F'+i, seen:false, addedAt:i };
+    egal(filmsSuivisBornes().length, BIENTOT_MAX_FILMS, 'le plafond ne mord pas');
+    /* Les plus récemment ajoutés d'abord : le film 80 est dedans, le film 1 non. */
+    vrai(filmsSuivisBornes().indexOf(80) >= 0, 'le film le plus récent est hors du paquet');
+    vrai(filmsSuivisBornes().indexOf(1) < 0, 'le plus ancien est passé devant le plus récent');
+    const a = codeDe(filmsBientot), b = codeDe(chargerBientotPerso);
+    vrai(a.indexOf('filmsSuivisBornes') >= 0 && b.indexOf('filmsSuivisBornes') >= 0,
+         'les deux ne calculent plus la même clé : le chargement repartirait sans fin');
+  });
+
+  test('C22 — R7 : l\'amorçage de « Bientôt » ne se fait qu\'une fois par jour', ()=>{
+    iaVierge();
+    for(let i = 1; i <= 3; i++) db.movies[i] = { id:i, title:'F'+i, seen:false, addedAt:i };
+    let lances = 0;
+    const vraiCharge = window.chargerBientotPerso;
+    window.chargerBientotPerso = async ()=>{ lances++; };
+    try{
+      amorcerBientotDuJour();
+      amorcerBientotDuJour();
+      egal(localStorage.getItem(IA_BIENTOT_CLE), todayISO(), 'le jour n\'a pas été marqué');
+      amorcerBientotDuJour();
+      /* Le lancement est différé : ce qu'on vérifie ici, c'est que le marqueur
+         ferme la porte dès le premier appel — le compte réel est asynchrone. */
+      vrai(lances === 0, 'le chargement n\'est plus différé : il bloquerait le rendu');
+    }finally{ window.chargerBientotPerso = vraiCharge; }
+  });
+
+  test('C23 — la vitrine prend ses rendez-vous APRÈS avoir été construite', ()=>{
+    const c = codeDe(vitrineBody);
+    const iRangees = c.indexOf('rangees.forEach');
+    const iRdv = c.indexOf('apresRenduVitrine');
+    vrai(iRangees >= 0 && iRdv > iRangees,
+         'le lot IA se déclenche avant que l\'écran soit construit — le §4.3 l\'interdit');
+    vrai(codeDe(propositionJourHtml).indexOf('appelIA') < 0,
+         'le hero appelle le relais pendant son rendu : c\'est une attente déguisée');
   });
 
   /* ==================== Bilan ====================

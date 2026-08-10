@@ -90,7 +90,7 @@ const FICHIERS = [
   'app-01-noyau.js','app-02-outils.js','app-03-vues.js','app-04-decouvrir.js',
   'app-05-plateformes.js','app-06-serie.js','app-07-partage.js',
   'app-08-reglages.js','app-09-notifications.js','app-10-sorties.js','app-11-gouts.js',
-  'app-12-recherche.js','app-13-inscription.js'
+  'app-12-recherche.js','app-13-inscription.js','app-14-ia.js'
 ];
 
 /* ---------------------------------------------------------------------------
@@ -201,7 +201,12 @@ const ETAT_PARTAGE = {
      leur raison d'être. */
   db:   ['app-01-noyau.js','app-03-vues.js','app-04-decouvrir.js','app-06-serie.js',
          'app-07-partage.js','app-08-reglages.js','app-09-notifications.js',
-         'app-11-gouts.js','app-12-recherche.js','app-13-inscription.js'],
+         'app-11-gouts.js','app-12-recherche.js','app-13-inscription.js',
+         /* SPEC-04 lot C : `app-14-ia.js` n'écrit qu'UNE chose dans la base —
+            `db.gouts.ia`, les deux interrupteurs, depuis `basculerIA`. Tout le
+            reste de son état (les textes générés) vit en localStorage, hors
+            synchro, comme le §4.3 l'exige. */
+         'app-14-ia.js'],
   ui:   ['app-02-outils.js','app-03-vues.js','app-04-decouvrir.js','app-05-plateformes.js',
          'app-06-serie.js','app-07-partage.js','app-10-sorties.js','app-11-gouts.js',
          'app-12-recherche.js'],
