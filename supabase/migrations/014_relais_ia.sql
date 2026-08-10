@@ -1,7 +1,7 @@
 -- =============================================================================
 -- 014 — Le relais IA (SPEC-04 §4.2, lot B — 10/08/2026).
 --
--- Quatre tables, quatre fonctions, et une seule idée : ON COMPTE AVANT
+-- Quatre tables, dix fonctions, et une seule idée : ON COMPTE AVANT
 -- D'APPELER. Le §4.2 le dit en une phrase — « le relais N'APPELLE PAS un
 -- fournisseur dont le compteur local dit qu'il est plein ; on ne découvre pas
 -- le 429, on l'évite ». Tout ce fichier sert à rendre cette phrase vraie.
@@ -48,11 +48,12 @@
 -- limites « are not guaranteed ». Les seuls chiffres qui circulent viennent de
 -- forums. On ne fige pas un compteur de production sur un forum.
 --
--- Tant que ces deux lignes valent NULL, la réservation passe toujours pour les
--- étages Gemini et c'est le 429 qui les arrête, une fois par fenêtre. Le
+-- Tant que ces deux lignes valent NULL, la réservation passe pour les étages
+-- Gemini jusqu'au plafond de `ia_plafond_inconnu()`, et c'est le 429 qui les
+-- arrête — une fois par fenêtre, pour de bon depuis le correctif B1 (§6). Le
 -- mécanisme est complet, il attend juste ses chiffres.
 --
--- POUR LES POSER, une fois lus dans AI Studio (voir INSTALL.md §7) :
+-- POUR LES POSER, une fois lus dans AI Studio (voir INSTALL.md §8) :
 --   update public.ia_fournisseurs
 --      set limite_minute = 15, limite_jour = 1000   -- vos vrais chiffres
 --    where nom = 'gemini-flash';
@@ -142,25 +143,76 @@ revoke all on public.ia_compteurs    from anon, authenticated;
 revoke all on public.ia_budget_jour  from anon, authenticated;
 revoke all on public.ia_journal      from anon, authenticated;
 
--- --- 6. Réserver une place chez un fournisseur ------------------------------
+-- --- 5 bis. Le journal sait dire POURQUOI ------------------------------------
 --
--- Rend `true` si la place est prise, `false` si le fournisseur est plein. LE
--- TEST ET L'INCRÉMENT SONT LA MÊME INSTRUCTION : c'est ce qui empêche deux
--- requêtes simultanées de passer toutes les deux sur la dernière place.
+-- R2 (relecture du 10/08) — LE JOURNAL NE SAVAIT PAS DIAGNOSTIQUER. Il ne
+-- portait qu'un booléen, et une seule ligne était écrite par requête : un 429
+-- sur l'étage 1 suivi d'un succès sur l'étage 2 ne laissait qu'une trace,
+-- « flash-lite, ok ». Le 429 était invisible, et « échec » ne distinguait pas un
+-- quota plein, un délai dépassé, un schéma refusé et une clé absente.
 --
--- La remise à zéro de fenêtre est portée par le `on conflict` : si `debut` est
--- sorti de la fenêtre, on réécrit `debut` et on repart à 1. Sinon on
--- incrémente, mais SEULEMENT si la limite le permet — et quand la limite est
--- NULL (inconnue), la condition est vraie et on laisse passer.
+-- Pour régler les budgets — le but que le §4.2 assigne au journal — c'était
+-- suffisant. Pour le contrôle de bout en bout, qui est le SEUL moyen d'éprouver
+-- les deux zones que personne n'a pu tester (l'API Gemini et la sortie
+-- structurée d'OpenRouter), c'était aveugle : un échec silencieux y ressemble
+-- trait pour trait à un mode dégradé qui fonctionne.
 --
--- `security definer` : la fonction est appelée avec la clé de service, qui a
--- déjà tous les droits ; le marqueur sert à ce qu'elle continue de fonctionner
--- si un jour on l'appelle autrement. `search_path` figé, comme partout ailleurs
--- dans ce dépôt.
-create or replace function public.ia_reserver_fournisseur(
-  p_fournisseur   text,
-  p_limite_minute int,
-  p_limite_jour   int
+-- On ajoute donc une colonne, et le relais écrit désormais UNE LIGNE PAR ÉTAGE
+-- TENTÉ. `alter … if not exists` : la table existe peut-être déjà.
+alter table public.ia_journal add column if not exists statut int;
+
+comment on column public.ia_journal.statut is
+  'Le code HTTP du fournisseur, ou : 0 clé absente · 1 réponse invalide · '
+  '2 quota local plein (pas d''appel) · 3 budget refusé · 599 délai/réseau.';
+
+-- --- 6. Le plafond d'une limite inconnue -------------------------------------
+--
+-- B1 (relecture du 10/08) — LE FILET NE RETENAIT RIEN, ET C'EST LE DÉFAUT LE
+-- PLUS COÛTEUX DU LOT.
+--
+-- La version d'origine testait `where p_limite is null or … or n < p_limite`.
+-- Quand la limite est inconnue, le premier terme est vrai et la condition
+-- court-circuite AVANT de regarder le compteur : la sentinelle posée par
+-- `ia_saturer` n'était jamais lue. Reproduit sur PostgreSQL 16.13 — après
+-- saturation, `n` valait 1 000 000 et la réservation rendait quand même `true`,
+-- deux fois de suite.
+--
+-- Conséquence réelle : sur les deux étages Gemini — ceux qu'on appelle en
+-- PREMIER — le 429 n'était pas redécouvert « une fois par fenêtre » mais À
+-- CHAQUE REQUÊTE. Chaque appel payait deux allers-retours refusés avant
+-- d'atteindre OpenRouter, et Google voyait une clé qui insiste sur un quota
+-- qu'il venait de refuser.
+--
+-- LE CORRECTIF : on ne court-circuite plus, on compare toujours le compteur à
+-- quelque chose. Une limite inconnue devient un plafond très haut — assez pour
+-- ne jamais gêner un usage normal, assez bas pour que la sentinelle le dépasse.
+-- Les deux nombres sortent de la même fonction : écrits à deux endroits, ils
+-- auraient fini par diverger, et le filet serait retombé sans bruit.
+create or replace function public.ia_plafond_inconnu()
+returns int language sql immutable as $function$ select 1000000 $function$;
+
+-- Le début de la fenêtre courante, TOUJOURS en UTC.
+--
+-- Broutille relevée par la relecture, et elle méritait d'être fermée :
+-- `ia_budget_jour.jour` était calculé en UTC pendant que `ia_compteurs.debut`
+-- suivait le fuseau de la session. Identique sur Supabase, qui tourne en UTC —
+-- divergent partout ailleurs, et divergent EN SILENCE. Une seule référence.
+create or replace function public.ia_debut_fenetre(p_fenetre text)
+returns timestamptz language sql stable as $function$
+  select case when p_fenetre = 'jour'
+              then date_trunc('day',    now() at time zone 'utc') at time zone 'utc'
+              else date_trunc('minute', now() at time zone 'utc') at time zone 'utc'
+         end
+$function$;
+
+-- --- 7. Réserver et rendre, une fenêtre à la fois ----------------------------
+--
+-- Le test et l'incrément sont la MÊME instruction : c'est ce qui empêche deux
+-- requêtes simultanées de passer toutes les deux sur la dernière place. Éprouvé
+-- sous contention réelle — douze sessions concurrentes, limite à dix, dix
+-- acceptées.
+create or replace function public.ia_reserver_fenetre(
+  p_fournisseur text, p_fenetre text, p_limite int
 )
 returns boolean
 language plpgsql
@@ -168,84 +220,120 @@ security definer
 set search_path to 'public'
 as $function$
 declare
-  ok_minute boolean;
-  ok_jour   boolean;
+  ok      boolean;
+  depart  timestamptz := public.ia_debut_fenetre(p_fenetre);
+  plafond int := coalesce(p_limite, public.ia_plafond_inconnu());
 begin
-  -- La fenêtre « jour » d'abord : c'est la plus contraignante des deux, et un
-  -- jour plein rend inutile tout test de minute.
   insert into public.ia_compteurs (fournisseur, fenetre, debut, n)
-  values (p_fournisseur, 'jour', date_trunc('day', now()), 1)
+  values (p_fournisseur, p_fenetre, depart, 1)
   on conflict (fournisseur, fenetre) do update
-     set n     = case when public.ia_compteurs.debut < date_trunc('day', now())
+     set n     = case when public.ia_compteurs.debut < depart
                       then 1 else public.ia_compteurs.n + 1 end,
-         debut = greatest(public.ia_compteurs.debut, date_trunc('day', now()))
-   where p_limite_jour is null
-      or public.ia_compteurs.debut < date_trunc('day', now())
-      or public.ia_compteurs.n < p_limite_jour
-  returning true into ok_jour;
-
-  if ok_jour is not true then
-    return false;
-  end if;
-
-  insert into public.ia_compteurs (fournisseur, fenetre, debut, n)
-  values (p_fournisseur, 'minute', date_trunc('minute', now()), 1)
-  on conflict (fournisseur, fenetre) do update
-     set n     = case when public.ia_compteurs.debut < date_trunc('minute', now())
-                      then 1 else public.ia_compteurs.n + 1 end,
-         debut = greatest(public.ia_compteurs.debut, date_trunc('minute', now()))
-   where p_limite_minute is null
-      or public.ia_compteurs.debut < date_trunc('minute', now())
-      or public.ia_compteurs.n < p_limite_minute
-  returning true into ok_minute;
-
-  -- LA MINUTE REFUSE APRÈS QUE LE JOUR A ACCEPTÉ : on a donc consommé une unité
-  -- de jour pour un appel qui n'aura pas lieu. On la rend. Sans cette ligne, un
-  -- fournisseur bridé à la minute mangerait son quota journalier en refus.
-  if ok_minute is not true then
-    update public.ia_compteurs
-       set n = greatest(0, n - 1)
-     where fournisseur = p_fournisseur and fenetre = 'jour';
-    return false;
-  end if;
-
-  return true;
+         debut = greatest(public.ia_compteurs.debut, depart)
+   where public.ia_compteurs.debut < depart
+      or public.ia_compteurs.n < plafond
+  returning true into ok;
+  return coalesce(ok, false);
 end;
 $function$;
 
--- --- 7. Marquer un fournisseur saturé ---------------------------------------
---
--- Appelée sur un 429. Le fournisseur a dit non : on le croit, et on ne le
--- rappelle plus jusqu'à la fin de sa fenêtre. C'est le filet quand la limite
--- est inconnue — c'est-à-dire, aujourd'hui, sur les deux étages Gemini.
---
--- On pose un compteur volontairement énorme : la borne exacte n'a pas besoin
--- d'être connue pour que « plein » soit vrai jusqu'au prochain tour d'horloge.
-create or replace function public.ia_saturer(p_fournisseur text)
+-- Rendre une unité. Sert deux fois : quand la seconde fenêtre refuse après que
+-- la première a accepté, et quand l'appel n'a jamais atteint le fournisseur.
+create or replace function public.ia_rendre_fenetre(p_fournisseur text, p_fenetre text)
 returns void
 language sql
 security definer
 set search_path to 'public'
 as $function$
-  insert into public.ia_compteurs (fournisseur, fenetre, debut, n)
-  values (p_fournisseur, 'minute', date_trunc('minute', now()), 1000000),
-         (p_fournisseur, 'jour',   date_trunc('day',    now()), 1000000)
-  on conflict (fournisseur, fenetre) do update
-     set n = 1000000, debut = excluded.debut;
+  update public.ia_compteurs set n = greatest(0, n - 1)
+   where fournisseur = p_fournisseur and fenetre = p_fenetre;
 $function$;
 
--- --- 8. Réserver une unité de budget ----------------------------------------
+-- --- 8. Réserver une place chez un fournisseur -------------------------------
 --
--- Les deux plafonds du §4.2 en une seule instruction chacun : celui de la
--- personne, puis le global. Même atomicité, même raison.
+-- Le jour d'abord — c'est la fenêtre la plus contraignante, et un jour plein
+-- rend inutile tout test de minute.
 --
--- SI LE GLOBAL REFUSE, ON REND L'UNITÉ INDIVIDUELLE. Sans ça, un plafond global
--- atteint consommerait le budget de tout le monde en refus, et le lendemain
--- personne n'aurait rien alors que personne n'a rien obtenu.
+-- SI LA MINUTE REFUSE APRÈS QUE LE JOUR A ACCEPTÉ, on rend l'unité de jour.
+-- Sans cette ligne, un fournisseur bridé à la minute mangerait son quota
+-- journalier en refus.
+create or replace function public.ia_reserver_fournisseur(
+  p_fournisseur text, p_limite_minute int, p_limite_jour int
+)
+returns boolean
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+begin
+  if not public.ia_reserver_fenetre(p_fournisseur, 'jour', p_limite_jour) then
+    return false;
+  end if;
+  if not public.ia_reserver_fenetre(p_fournisseur, 'minute', p_limite_minute) then
+    perform public.ia_rendre_fenetre(p_fournisseur, 'jour');
+    return false;
+  end if;
+  return true;
+end;
+$function$;
+
+-- L'appel n'a jamais eu lieu (clé absente, délai dépassé, 5xx) : on rend les
+-- deux unités.
+--
+-- BROUTILLE RELEVÉE PAR LA RELECTURE, et elle comptait : un étage qui bat de
+-- l'aile mangeait son quota en refus. Sur les cinquante requêtes quotidiennes
+-- d'OpenRouter, quelques 5xx suffisaient à fermer la journée sans qu'une seule
+-- phrase ait été écrite. Un 429, lui, n'est PAS rendu : le fournisseur a bien vu
+-- la requête, et c'est lui qui l'a comptée.
+create or replace function public.ia_rendre_fournisseur(p_fournisseur text)
+returns void
+language sql
+security definer
+set search_path to 'public'
+as $function$
+  select public.ia_rendre_fenetre(p_fournisseur, 'jour');
+  select public.ia_rendre_fenetre(p_fournisseur, 'minute');
+$function$;
+
+-- --- 9. Marquer un fournisseur saturé ----------------------------------------
+--
+-- Appelée sur un 429. Le fournisseur a dit non : on le croit, et on ne le
+-- rappelle plus jusqu'à la fin de la fenêtre CONCERNÉE.
+--
+-- R1 (relecture du 10/08) — LA FENÊTRE EST UN PARAMÈTRE, et ce n'était pas un
+-- détail. La version d'origine murait les DEUX fenêtres d'un coup : un 429 de
+-- rythme — le cas courant, celui qu'on récolte en envoyant deux requêtes dans la
+-- même seconde — condamnait le fournisseur jusqu'à minuit UTC. Sur OpenRouter
+-- (20 à la minute, 50 au jour), une rafale coûtait tout le quota restant de la
+-- journée. Prouvé par la relecture : la fenêtre minute repassée, la réservation
+-- refusait toujours.
+--
+-- Le relais choisit désormais la fenêtre sur `Retry-After` quand le fournisseur
+-- le donne — plus de deux minutes d'attente, c'est un quota journalier ; en
+-- dessous, c'est du rythme. Sans en-tête, on mure la minute : se tromper d'une
+-- minute coûte une minute, se tromper d'un jour coûte un jour.
+create or replace function public.ia_saturer(p_fournisseur text, p_fenetre text default 'minute')
+returns boolean
+language sql
+security definer
+set search_path to 'public'
+as $function$
+  insert into public.ia_compteurs (fournisseur, fenetre, debut, n)
+  values (p_fournisseur, p_fenetre, public.ia_debut_fenetre(p_fenetre),
+          public.ia_plafond_inconnu())
+  on conflict (fournisseur, fenetre) do update
+     set n = public.ia_plafond_inconnu(), debut = excluded.debut
+  returning true;
+$function$;
+
+-- --- 10. Réserver une unité de budget ----------------------------------------
+--
+-- Les deux plafonds du §4.2, chacun en une seule instruction. Si le global
+-- refuse, on rend l'unité individuelle : sans ça, un plafond global atteint
+-- consommerait le budget de tout le monde en refus, et le lendemain personne
+-- n'aurait rien alors que personne n'a rien obtenu.
 create or replace function public.ia_reserver_budget(
-  p_uid            uuid,
-  p_max_utilisateur int,
-  p_max_global      int
+  p_uid uuid, p_max_utilisateur int, p_max_global int
 )
 returns boolean
 language plpgsql
@@ -253,51 +341,48 @@ security definer
 set search_path to 'public'
 as $function$
 declare
-  ok_perso  boolean;
-  ok_global boolean;
-  aujourd   date := (now() at time zone 'utc')::date;
+  ok      boolean;
+  aujourd date := (now() at time zone 'utc')::date;
 begin
   insert into public.ia_budget_jour (uid, jour, n)
   values (p_uid, aujourd, 1)
   on conflict (uid, jour) do update
      set n = public.ia_budget_jour.n + 1
    where public.ia_budget_jour.n < p_max_utilisateur
-  returning true into ok_perso;
+  returning true into ok;
+  if ok is not true then return false; end if;
 
-  if ok_perso is not true then
-    return false;
-  end if;
-
-  insert into public.ia_compteurs (fournisseur, fenetre, debut, n)
-  values ('@global', 'jour', date_trunc('day', now()), 1)
-  on conflict (fournisseur, fenetre) do update
-     set n     = case when public.ia_compteurs.debut < date_trunc('day', now())
-                      then 1 else public.ia_compteurs.n + 1 end,
-         debut = greatest(public.ia_compteurs.debut, date_trunc('day', now()))
-   where public.ia_compteurs.debut < date_trunc('day', now())
-      or public.ia_compteurs.n < p_max_global
-  returning true into ok_global;
-
-  if ok_global is not true then
+  if not public.ia_reserver_fenetre('@global', 'jour', p_max_global) then
     update public.ia_budget_jour set n = greatest(0, n - 1)
      where uid = p_uid and jour = aujourd;
     return false;
   end if;
-
   return true;
 end;
 $function$;
 
--- --- 9. Le ménage -----------------------------------------------------------
+-- R3 (relecture du 10/08) — LE BUDGET SE REND QUAND RIEN N'ABOUTIT.
 --
--- Ces deux tables ne font que grossir, et l'une porte des identifiants. On
--- garde soixante jours : de quoi régler les budgets sur deux mois d'usage réel,
--- ce que le §4.2 demande, et pas une ligne de plus.
+-- Il était réservé avant la boucle et jamais rendu : une journée où toute la
+-- chaîne est en panne consommait les trente unités de chaque personne pour zéro
+-- texte. Le lendemain, un utilisateur pouvait se retrouver à court sans avoir
+-- jamais rien reçu. Le relais appelle donc ceci quand aucun étage n'a abouti.
+create or replace function public.ia_rendre_budget(p_uid uuid)
+returns void
+language sql
+security definer
+set search_path to 'public'
+as $function$
+  update public.ia_budget_jour set n = greatest(0, n - 1)
+   where uid = p_uid and jour = (now() at time zone 'utc')::date;
+  select public.ia_rendre_fenetre('@global', 'jour');
+$function$;
+
+-- --- 11. Le ménage -----------------------------------------------------------
 --
--- Pas de `cron` ici : `005` a déjà un planificateur, et lui ajouter une tâche
--- pour deux `delete` par mois serait cher payé. La fonction est là, appelable à
--- la main ou depuis n'importe quel tour du planificateur existant le jour où
--- ça deviendra utile.
+-- Ces deux tables ne font que grossir, et l'une porte des identifiants. On garde
+-- soixante jours : de quoi régler les budgets sur deux mois d'usage réel, ce que
+-- le §4.2 demande, et pas une ligne de plus.
 create or replace function public.ia_menage()
 returns void
 language sql
@@ -308,7 +393,13 @@ as $function$
   delete from public.ia_budget_jour where jour < ((now() at time zone 'utc')::date - 60);
 $function$;
 
-revoke all on function public.ia_reserver_fournisseur(text, int, int) from anon, authenticated;
-revoke all on function public.ia_saturer(text)                        from anon, authenticated;
-revoke all on function public.ia_reserver_budget(uuid, int, int)      from anon, authenticated;
-revoke all on function public.ia_menage()                             from anon, authenticated;
+revoke all on function public.ia_plafond_inconnu()                          from anon, authenticated;
+revoke all on function public.ia_debut_fenetre(text)                        from anon, authenticated;
+revoke all on function public.ia_reserver_fenetre(text, text, int)          from anon, authenticated;
+revoke all on function public.ia_rendre_fenetre(text, text)                 from anon, authenticated;
+revoke all on function public.ia_reserver_fournisseur(text, int, int)       from anon, authenticated;
+revoke all on function public.ia_rendre_fournisseur(text)                   from anon, authenticated;
+revoke all on function public.ia_saturer(text, text)                        from anon, authenticated;
+revoke all on function public.ia_reserver_budget(uuid, int, int)            from anon, authenticated;
+revoke all on function public.ia_rendre_budget(uuid)                        from anon, authenticated;
+revoke all on function public.ia_menage()                                   from anon, authenticated;

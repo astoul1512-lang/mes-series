@@ -28,7 +28,7 @@ function assertEquals(a: unknown, b: unknown, msg = ""): void {
   }
 }
 
-import { servir, oublierFournisseurs } from "./relais.ts";
+import { rpc, servir, oublierFournisseurs } from "./relais.ts";
 import { construire, valider, INTERDIT_EMOTION, CONSIGNE_COMMUNE } from "./gabarits.ts";
 import { TACHES } from "./config.ts";
 
@@ -52,8 +52,16 @@ type Plan = {
   budgetCasse?: boolean;            // la base ne répond pas du tout
   fournisseurs?: unknown[] | null;  // ce que rend la table (null → repli fichier)
   place?: Record<string, boolean>;  // par fournisseur : reste-t-il de la place ?
-  reponses?: Record<string, { statut: number; texte?: string }>;
+  // `retry` : la valeur de l'en-tête `Retry-After`, en secondes, sur un refus.
+  reponses?: Record<string, { statut: number; texte?: string; retry?: string }>;
+  /* Les fonctions SQL qui rendent `void` font répondre 204 SANS CORPS à
+     PostgREST. Le faux monde savait seulement rendre du JSON, donc il ne
+     pouvait pas reproduire le défaut relevé le 10/08. Il le sait maintenant. */
+  rpcVide?: boolean;
 };
+
+// Les RPC dont la fonction SQL rend `void` — celles qui répondent 204.
+const RPC_VOID = ["ia_saturer", "ia_rendre_budget", "ia_rendre_fournisseur"];
 
 function faireSemblant(plan: Plan) {
   const vrai = globalThis.fetch;
@@ -63,10 +71,12 @@ function faireSemblant(plan: Plan) {
     let corps: unknown = null;
     try { corps = init && init.body ? JSON.parse(String(init.body)) : null; } catch (_e) { /* vide */ }
     vues.push({ url: u, corps });
-    const rendre = (o: unknown, statut = 200) =>
+    const rendre = (o: unknown, statut = 200, entetes: Record<string, string> = {}) =>
       Promise.resolve(new Response(JSON.stringify(o), {
-        status: statut, headers: { "Content-Type": "application/json" },
+        status: statut, headers: { "Content-Type": "application/json", ...entetes },
       }));
+    // Ce que PostgREST renvoie vraiment pour une fonction `void` : rien du tout.
+    const vide = () => Promise.resolve(new Response(null, { status: 204 }));
 
     if (u.indexOf("/auth/v1/user") >= 0) {
       const uid = plan.uid === undefined ? "u-1" : plan.uid;
@@ -81,7 +91,9 @@ function faireSemblant(plan: Plan) {
       const p = plan.place || {};
       return rendre(p[nom] === undefined ? true : p[nom]);
     }
-    if (u.indexOf("/rpc/ia_saturer") >= 0) return rendre(null);
+    if (RPC_VOID.some((n) => u.indexOf("/rpc/" + n) >= 0)) {
+      return plan.rpcVide ? vide() : rendre(null);
+    }
     if (u.indexOf("/ia_journal") >= 0) return rendre(null, 201);
     if (u.indexOf("/ia_fournisseurs") >= 0) {
       return plan.fournisseurs === null
@@ -92,16 +104,24 @@ function faireSemblant(plan: Plan) {
     const cle = u.indexOf("openrouter") >= 0 ? "openrouter"
       : u.indexOf("flash-lite") >= 0 ? "gemini-flash-lite" : "gemini-flash";
     const r = (plan.reponses || {})[cle] || { statut: 200, texte: '{"texte":"Une phrase honnête."}' };
-    if (r.statut !== 200) return rendre({ erreur: r.statut }, r.statut);
+    if (r.statut !== 200) {
+      return rendre({ erreur: r.statut }, r.statut, r.retry ? { "Retry-After": r.retry } : {});
+    }
     return u.indexOf("openrouter") >= 0
       ? rendre({ choices: [{ message: { content: r.texte } }] })
       : rendre({ candidates: [{ content: { parts: [{ text: r.texte }] } }] });
   }) as typeof fetch;
+  const appels = (nom: string) =>
+    vues.filter((v) => v.url.indexOf(nom) >= 0).map((v) => v.corps as Record<string, unknown>);
   return {
     vues,
     // Les URL des fournisseurs seulement : c'est l'échelle réellement parcourue.
     etages: () => vues.map((v) => v.url).filter((u) =>
       u.indexOf("generativelanguage") >= 0 || u.indexOf("openrouter.ai") >= 0),
+    // Les CORPS envoyés à une RPC ou au journal : ce que l'appel DEMANDE, et
+    // pas seulement le fait qu'il soit parti.
+    appels,
+    journal: () => appels("/ia_journal"),
     rendre: () => { globalThis.fetch = vrai; oublierFournisseurs(); },
   };
 }
@@ -427,4 +447,235 @@ Deno.test("la validation suit la longueur maximale de CHAQUE tâche", () => {
 Deno.test("une liste d'intitulés tombe entière si un seul élément est mauvais", () => {
   assertEquals(valider("intitules_rangees", { textes: ["Nouveautés", "Ton préféré"] }), null);
   assert(valider("intitules_rangees", { textes: ["Nouveautés", "Acclamés"] }));
+});
+
+/* ===========================================================================
+   CE QUE LA RELECTURE DU 10/08 A TROUVÉ
+
+   Les cas ci-dessous n'existaient pas quand le lot a été livré, et chacun
+   correspond à un défaut réel que les vingt-cinq premiers tests laissaient
+   passer. Ils sont groupés ici, avec leur numéro de rapport, pour qu'on puisse
+   les relire ensemble : c'est la liste de ce qu'on croyait tenu et qui ne
+   l'était pas.
+=========================================================================== */
+
+/* ------------------------------- R4 ------------------------------------- */
+
+Deno.test("R4 — les membres hérités d'Object ne sont pas des tâches", async () => {
+  // `TACHES[tache]` trouvait `constructor` et ses voisins sur `Object.prototype`.
+  // Ils repartaient en 200 `{indisponible:true}` : sans conséquence, mais une
+  // liste blanche qui reconnaît quatre noms qu'elle ne contient pas n'est plus
+  // une liste blanche.
+  for (const nom of ["constructor", "toString", "hasOwnProperty", "valueOf", "isPrototypeOf"]) {
+    const f = faireSemblant({});
+    try {
+      const r = await servir(requete({ tache: nom, params: { titre: "Severance" } }));
+      assertEquals(r.status, 400, "`" + nom + "` a passé la liste blanche");
+      assertEquals(f.etages().length, 0);
+      assertEquals(f.appels("/rpc/ia_reserver_budget").length, 0,
+        "`" + nom + "` a consommé du budget");
+    } finally { f.rendre(); }
+  }
+});
+
+/* ------------------------------- R3 ------------------------------------- */
+
+Deno.test("R3 — le budget est rendu quand aucun étage n'aboutit", async () => {
+  const f = faireSemblant({
+    fournisseurs: null,
+    reponses: {
+      "gemini-flash": { statut: 500 },
+      "gemini-flash-lite": { statut: 500 },
+      "openrouter": { statut: 500 },
+    },
+  });
+  try {
+    const r = await servir(requete(PITCH));
+    assertEquals(JSON.stringify(await r.json()), '{"indisponible":true}');
+    assertEquals(f.appels("/rpc/ia_rendre_budget").length, 1,
+      "une journée entièrement en panne mangeait le budget de tout le monde");
+    assertEquals(f.appels("/rpc/ia_rendre_budget")[0].p_uid, "u-1");
+  } finally { f.rendre(); }
+});
+
+Deno.test("R3 — une réponse malformée rend aussi le budget", async () => {
+  const f = faireSemblant({
+    fournisseurs: null,
+    reponses: { "gemini-flash": { statut: 200, texte: "pas du JSON" } },
+  });
+  try {
+    await servir(requete(PITCH));
+    assertEquals(f.appels("/rpc/ia_rendre_budget").length, 1,
+      "on a payé une unité de budget pour une phrase jamais rendue");
+  } finally { f.rendre(); }
+});
+
+Deno.test("R3 — un texte rendu, lui, se paie : le budget n'est pas rendu", async () => {
+  const f = faireSemblant({ fournisseurs: null });
+  try {
+    const r = await servir(requete(PITCH));
+    assertEquals(JSON.stringify(await r.json()), '{"texte":"Une phrase honnête."}');
+    assertEquals(f.appels("/rpc/ia_rendre_budget").length, 0,
+      "le budget est rendu même quand l'appel a réussi : il ne compte plus rien");
+  } finally { f.rendre(); }
+});
+
+/* ------- LE REMBOURSEMENT DU COMPTEUR : 5xx oui, 429 non ---------------- */
+
+Deno.test("un 5xx rend la réservation du fournisseur ; un 429 ne la rend pas", async () => {
+  // La différence est tout le sujet : un 5xx veut dire « il n'a rien vu passer »,
+  // un 429 veut dire « il l'a vue et il l'a refusée ». Rembourser un 429
+  // reviendrait à ne jamais consommer le quota des refus, donc à retenter.
+  const f = faireSemblant({
+    fournisseurs: null,
+    reponses: {
+      "gemini-flash": { statut: 503 },
+      "gemini-flash-lite": { statut: 429 },
+    },
+  });
+  try {
+    await servir(requete(PITCH));
+    const rendus = f.appels("/rpc/ia_rendre_fournisseur").map((c) => c.p_fournisseur);
+    assert(rendus.indexOf("gemini-flash") >= 0, "un 5xx a consommé du quota pour rien");
+    assert(rendus.indexOf("gemini-flash-lite") < 0, "un 429 a été remboursé");
+    assertEquals(f.appels("/rpc/ia_saturer").length, 1, "le 429 n'a pas été retenu");
+  } finally { f.rendre(); }
+});
+
+Deno.test("une clé absente rend aussi la réservation", async () => {
+  const vraieCle = Deno.env.get("GEMINI_API_KEY");
+  Deno.env.set("GEMINI_API_KEY", "");
+  const f = faireSemblant({ fournisseurs: null });
+  try {
+    await servir(requete(PITCH));
+    const rendus = f.appels("/rpc/ia_rendre_fournisseur").map((c) => c.p_fournisseur);
+    // Les deux étages Gemini partagent la clé : les deux sont sautés, et aucun
+    // des deux ne doit avoir coûté une unité.
+    assert(rendus.indexOf("gemini-flash") >= 0);
+    assert(rendus.indexOf("gemini-flash-lite") >= 0);
+    assertEquals(f.etages().length, 1, "on a appelé un fournisseur sans clé");
+  } finally { f.rendre(); Deno.env.set("GEMINI_API_KEY", vraieCle || "cle-gemini"); }
+});
+
+/* ------------------- R1 : `Retry-After` CHOISIT LA FENÊTRE --------------- */
+
+Deno.test("R1 — `Retry-After` long mure le jour, court mure la minute", async () => {
+  const cas: { retry?: string; attendu: string }[] = [
+    { retry: "300", attendu: "jour" },     // un quota journalier
+    { retry: "30", attendu: "minute" },    // un simple coup de frein
+    { retry: undefined, attendu: "minute" }, // rien de dit : on mure le moins
+    { retry: "n'importe quoi", attendu: "minute" }, // en-tête illisible : idem
+  ];
+  for (const c of cas) {
+    const f = faireSemblant({
+      fournisseurs: null,
+      reponses: { "gemini-flash": { statut: 429, retry: c.retry } },
+    });
+    try {
+      await servir(requete(PITCH));
+      const s = f.appels("/rpc/ia_saturer");
+      assertEquals(s.length, 1, "Retry-After « " + c.retry + " » : le 429 n'a pas été retenu");
+      assertEquals(s[0].p_fournisseur, "gemini-flash");
+      assertEquals(s[0].p_fenetre, c.attendu,
+        "Retry-After « " + c.retry + " » : mauvaise fenêtre murée");
+    } finally { f.rendre(); }
+  }
+});
+
+/* ------------------------------- R2 ------------------------------------- */
+
+Deno.test("R2 — une ligne de journal par étage tenté, avec son statut", async () => {
+  // Avant : une seule ligne par requête. Un 429 sur l'étage 1 suivi d'un succès
+  // sur l'étage 2 ne laissait que « flash-lite, ok », et le 429 n'existait pas.
+  const f = faireSemblant({
+    fournisseurs: null,
+    place: { "gemini-flash": false },                 // compteur plein, aucun appel
+    reponses: { "gemini-flash-lite": { statut: 429 } }, // refus du fournisseur
+    // openrouter répond bien.
+  });
+  try {
+    const r = await servir(requete(PITCH));
+    assertEquals(JSON.stringify(await r.json()), '{"texte":"Une phrase honnête."}');
+    const j = f.journal();
+    assertEquals(j.length, 3, "le journal ne raconte pas les trois étages");
+    assertEquals(j[0].fournisseur, "gemini-flash");
+    assertEquals(j[0].ok, false);
+    assertEquals(j[0].statut, 2, "un étage sauté sur compteur plein doit se voir");
+    assertEquals(j[1].fournisseur, "gemini-flash-lite");
+    assertEquals(j[1].statut, 429, "le 429 n'est plus lisible dans le journal");
+    assertEquals(j[2].fournisseur, "openrouter");
+    assertEquals(j[2].ok, true);
+    assertEquals(j[2].statut, 200);
+  } finally { f.rendre(); }
+});
+
+Deno.test("R2 — le journal distingue les quatre façons d'échouer", async () => {
+  // Budget refusé : aucun fournisseur, statut 3.
+  let f = faireSemblant({ budget: false });
+  try {
+    await servir(requete(PITCH));
+    const j = f.journal();
+    assertEquals(j.length, 1);
+    assertEquals(j[0].fournisseur, null);
+    assertEquals(j[0].statut, 3);
+  } finally { f.rendre(); }
+
+  // Réponse invalide : statut 1, et non « échec » tout court.
+  f = faireSemblant({
+    fournisseurs: null,
+    reponses: { "gemini-flash": { statut: 200, texte: '{"texte":"Un film que tu as adoré."}' } },
+  });
+  try {
+    await servir(requete(PITCH));
+    assertEquals(f.journal()[0].statut, 1, "un schéma refusé se confond avec une panne");
+  } finally { f.rendre(); }
+
+  // Clé absente : statut 0.
+  const vraieCle = Deno.env.get("OPENROUTER_API_KEY");
+  Deno.env.set("OPENROUTER_API_KEY", "");
+  f = faireSemblant({
+    fournisseurs: [
+      { nom: "openrouter", rang: 1, modele: "m:free", limite_minute: 20, limite_jour: 50, actif: true },
+    ],
+  });
+  try {
+    await servir(requete(PITCH));
+    assertEquals(f.journal()[0].statut, 0, "une clé absente se confond avec une panne réseau");
+  } finally { f.rendre(); Deno.env.set("OPENROUTER_API_KEY", vraieCle || "cle-openrouter"); }
+});
+
+/* --------------------- LA RPC QUI RÉUSSIT EN 204 ------------------------ */
+
+Deno.test("une fonction SQL `void` répond 204 sans corps : c'est un succès", async () => {
+  // `r.json()` levait sur une réponse parfaitement réussie. Les trois appelants
+  // concernés sont sous `try/catch`, donc la fausse erreur était invisible de
+  // l'extérieur — d'où un test qui appelle `rpc` directement.
+  const f = faireSemblant({ rpcVide: true });
+  try {
+    assertEquals(await rpc("ia_saturer", { p_fournisseur: "x", p_fenetre: "minute" }), null);
+    assertEquals(await rpc("ia_rendre_budget", { p_uid: "u-1" }), null);
+    assertEquals(await rpc("ia_rendre_fournisseur", { p_fournisseur: "x" }), null);
+  } finally { f.rendre(); }
+});
+
+Deno.test("une vraie erreur de base, elle, lève toujours", async () => {
+  const f = faireSemblant({ budgetCasse: true });
+  try {
+    let leve = false;
+    try { await rpc("ia_reserver_budget", { p_uid: "u-1" }); } catch (_e) { leve = true; }
+    assert(leve, "une base en erreur passe désormais pour un succès : pire que le défaut");
+  } finally { f.rendre(); }
+});
+
+Deno.test("tout le parcours tient quand les RPC `void` répondent 204", async () => {
+  const f = faireSemblant({
+    rpcVide: true,
+    fournisseurs: null,
+    reponses: { "gemini-flash": { statut: 429, retry: "300" } },
+  });
+  try {
+    const r = await servir(requete(PITCH));
+    assertEquals(JSON.stringify(await r.json()), '{"texte":"Une phrase honnête."}');
+    assertEquals(f.appels("/rpc/ia_saturer")[0].p_fenetre, "jour");
+  } finally { f.rendre(); }
 });

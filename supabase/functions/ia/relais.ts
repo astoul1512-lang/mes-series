@@ -78,7 +78,13 @@ function indisponible(cors: Record<string, string>) {
 // au-dessus. C'est la posture la plus fermée possible, et elle est la bonne :
 // ces tables ne contiennent que de la comptabilité, aucun écran n'en a besoin.
 // ---------------------------------------------------------------------------
-async function rpc(nom: string, args: Record<string, unknown>): Promise<unknown> {
+/* EXPORTÉE POUR ÊTRE ÉPROUVÉE, et c'est la relecture du 10/08 qui l'a rendue
+   nécessaire. Le défaut du 204 ci-dessous n'est visible NULLE PART depuis
+   `servir` : les trois appels concernés (`ia_saturer`, `ia_rendre_budget`,
+   `ia_rendre_fournisseur`) sont tous sous `try/catch`, donc une fausse erreur y
+   ressemble trait pour trait à un succès. Un défaut qu'aucun test ne peut voir
+   par l'extérieur se teste par l'intérieur, ou ne se teste pas. */
+export async function rpc(nom: string, args: Record<string, unknown>): Promise<unknown> {
   const r = await fetch(URL_SB() + "/rest/v1/rpc/" + nom, {
     method: "POST",
     headers: {
@@ -89,7 +95,14 @@ async function rpc(nom: string, args: Record<string, unknown>): Promise<unknown>
     body: JSON.stringify(args),
   });
   if (!r.ok) throw new Error("rpc " + nom + " : " + r.status);
-  return await r.json();
+  /* UNE FONCTION SQL QUI REND `void` FAIT RÉPONDRE 204 SANS CORPS, et
+     `r.json()` lève alors sur une réponse parfaitement réussie. Relevé à la
+     relecture du 10/08 : l'appel avait bien eu lieu, mais il PARAISSAIT échouer,
+     et le `catch` de l'appelant avalait la fausse erreur. Un appel qui réussit
+     ne doit pas ressembler à un appel qui rate. */
+  const texte = await r.text();
+  if (!texte) return null;
+  try { return JSON.parse(texte); } catch (_e) { return null; }
 }
 
 // ---------------------------------------------------------------------------
@@ -138,13 +151,30 @@ export async function lireFournisseurs(): Promise<Fournisseur[]> {
 // fenêtre) de « ce fournisseur a hoqueté » (5xx, on passe au suivant sans rien
 // conclure).
 // ---------------------------------------------------------------------------
-type Reponse = { ok: boolean; statut: number; brut: unknown };
+type Reponse = { ok: boolean; statut: number; brut: unknown; attente: number };
+
+/* Le délai maximal, et il s'arme TOUJOURS.
+   `AbortSignal.timeout` était appelé derrière un ternaire : absent du runtime,
+   la garantie des huit secondes disparaissait sans que rien ne le signale.
+   Relevé à la relecture. On retombe donc sur un `AbortController` armé à la
+   main, qui existe partout, et le seul cas sans délai est celui où même
+   `AbortController` manque — auquel cas on n'aurait de toute façon rien pu
+   faire. */
+function minuteurDe(): { signal?: AbortSignal; fini: () => void } {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return { signal: AbortSignal.timeout(TIMEOUT_MS), fini: () => {} };
+  }
+  if (typeof AbortController === "undefined") return { fini: () => {} };
+  const c = new AbortController();
+  const t = setTimeout(() => { try { c.abort(); } catch (_e) { /* déjà fini */ } }, TIMEOUT_MS);
+  return { signal: c.signal, fini: () => clearTimeout(t) };
+}
 
 async function appeler(f: Fournisseur, consigne: string, schema: Record<string, unknown>): Promise<Reponse> {
-  const minuteur = AbortSignal.timeout ? AbortSignal.timeout(TIMEOUT_MS) : undefined;
+  const m = minuteurDe();
   const gemini = f.nom.indexOf("gemini") === 0;
   const cle = Deno.env.get(gemini ? "GEMINI_API_KEY" : "OPENROUTER_API_KEY") || "";
-  if (!cle) return { ok: false, statut: 0, brut: null };
+  if (!cle) { m.fini(); return { ok: false, statut: 0, brut: null, attente: 0 }; }
 
   let url: string, entetes: Record<string, string>, corps: unknown;
   if (gemini) {
@@ -184,16 +214,25 @@ async function appeler(f: Fournisseur, consigne: string, schema: Record<string, 
 
   try {
     const r = await fetch(url, {
-      method: "POST", headers: entetes, body: JSON.stringify(corps), signal: minuteur,
+      method: "POST", headers: entetes, body: JSON.stringify(corps), signal: m.signal,
     });
-    if (!r.ok) return { ok: false, statut: r.status, brut: null };
+    if (!r.ok) {
+      /* `Retry-After` DÉCIDE DE LA FENÊTRE À MURER, et c'est le seul signal
+         honnête dont on dispose : un 429 ne dit pas de lui-même s'il vient du
+         rythme ou du quota du jour. Plus de deux minutes d'attente demandée,
+         c'est un quota journalier ; en dessous, c'est du rythme. Sans en-tête,
+         on mure la minute — se tromper d'une minute coûte une minute, se
+         tromper d'un jour coûte un jour. */
+      const ra = Number(r.headers.get("Retry-After") || "0");
+      return { ok: false, statut: r.status, brut: null, attente: isFinite(ra) ? ra : 0 };
+    }
     const d = await r.json();
-    return { ok: true, statut: 200, brut: extraire(gemini, d) };
+    return { ok: true, statut: 200, brut: extraire(gemini, d), attente: 0 };
   } catch (_e) {
     // Délai dépassé ou réseau coupé : traité comme une panne du fournisseur,
     // pas comme une saturation. On passe au suivant.
-    return { ok: false, statut: 599, brut: null };
-  }
+    return { ok: false, statut: 599, brut: null, attente: 0 };
+  } finally { m.fini(); }
 }
 
 // Le JSON utile, quel que soit l'emballage. Un fournisseur qui rend du texte
@@ -221,7 +260,20 @@ function extraire(gemini: boolean, d: unknown): unknown {
 // Il n'est jamais bloquant : un journal qui tombe ne doit pas emporter la
 // réponse qu'il journalise.
 // ---------------------------------------------------------------------------
-async function journaliser(tache: string, fournisseur: string | null, ok: boolean, duree: number) {
+/* R2 (relecture du 10/08) — UNE LIGNE PAR ÉTAGE TENTÉ, ET UN STATUT.
+   Avant : une seule ligne par requête, et un booléen. Un 429 sur l'étage 1
+   suivi d'un succès sur l'étage 2 ne laissait qu'une trace, « flash-lite, ok » —
+   le 429 était invisible. Et « échec » ne distinguait pas un quota plein, un
+   délai dépassé, un schéma refusé et une clé absente.
+   Pour régler les budgets, ça suffisait. Pour le contrôle de bout en bout — le
+   SEUL moyen d'éprouver ce que personne n'a pu tester, l'API Gemini et la
+   sortie structurée d'OpenRouter — c'était aveugle : un échec silencieux y
+   ressemble trait pour trait à un dégradé qui fonctionne.
+   Les codes hors HTTP : 0 clé absente · 1 réponse invalide · 2 quota local plein
+   (aucun appel) · 3 budget refusé · 599 délai ou réseau. */
+async function journaliser(
+  tache: string, fournisseur: string | null, ok: boolean, statut: number, duree: number,
+) {
   try {
     await fetch(URL_SB() + "/rest/v1/ia_journal", {
       method: "POST",
@@ -231,7 +283,7 @@ async function journaliser(tache: string, fournisseur: string | null, ok: boolea
         Authorization: "Bearer " + CLE_ADMIN(),
         Prefer: "return=minimal",
       },
-      body: JSON.stringify({ tache, fournisseur, ok, duree_ms: Math.round(duree) }),
+      body: JSON.stringify({ tache, fournisseur, ok, statut, duree_ms: Math.round(duree) }),
     });
   } catch (_e) { /* le journal n'a jamais le droit de casser l'appel */ }
 }
@@ -280,7 +332,15 @@ export async function servir(req: Request): Promise<Response> {
   let corps: Record<string, unknown> = {};
   try { corps = await req.json(); } catch (_e) { /* corps illisible = tâche absente */ }
   const tache = typeof corps.tache === "string" ? corps.tache : "";
-  if (!TACHES[tache]) return json({ erreur: "tâche inconnue" }, 400, cors);
+  /* R4 (relecture du 10/08) — `TACHES[tache]` TROUVAIT LES MEMBRES HÉRITÉS.
+     `constructor`, `toString`, `hasOwnProperty` et `valueOf` viennent
+     d'`Object.prototype` : ils passaient le garde et repartaient en 200
+     `{indisponible:true}` au lieu du 400 que le §6 exige. Sans conséquence —
+     aucun fournisseur appelé, aucun budget consommé — mais une liste blanche
+     qui laisse passer quatre noms n'est plus tout à fait fermée. */
+  if (!Object.prototype.hasOwnProperty.call(TACHES, tache)) {
+    return json({ erreur: "tâche inconnue" }, 400, cors);
+  }
 
   const gabarit = construire(tache, corps.params);
   // Des paramètres inexploitables ne sont pas une erreur du client : ils
@@ -300,13 +360,22 @@ export async function servir(req: Request): Promise<Response> {
     budgetOk = false;
   }
   if (!budgetOk) {
-    await journaliser(tache, null, false, Date.now() - debut);
+    await journaliser(tache, null, false, 3, Date.now() - debut);
     return indisponible(cors);
   }
 
   // --- L'échelle, à partir de l'étage de départ de la tâche (§4.2). ---
   const etage = TACHES[tache].etage_depart;
   const echelle = (await lireFournisseurs()).filter((f) => f.rang >= etage);
+
+  /* R3 (relecture du 10/08) — LE BUDGET SE REND QUAND RIEN N'ABOUTIT. Il était
+     réservé avant la boucle et jamais rendu : une journée où toute la chaîne
+     est en panne consommait les trente unités de chaque personne pour zéro
+     texte, et le lendemain quelqu'un pouvait se retrouver à court sans avoir
+     jamais rien reçu. */
+  const rendreBudget = async () => {
+    try { await rpc("ia_rendre_budget", { p_uid: uid }); } catch (_e) { /* tant pis */ }
+  };
 
   for (const f of echelle) {
     // ON N'APPELLE PAS UN FOURNISSEUR DONT LE COMPTEUR DIT QU'IL EST PLEIN.
@@ -319,28 +388,50 @@ export async function servir(req: Request): Promise<Response> {
         p_fournisseur: f.nom, p_limite_minute: f.limite_minute, p_limite_jour: f.limite_jour,
       }) === true;
     } catch (_e) { place = false; }
-    if (!place) continue;
+    if (!place) {
+      // Le compteur a dit non : on le NOTE, sinon le journal ne saura pas
+      // distinguer « étage sauté parce que plein » de « étage jamais atteint ».
+      await journaliser(tache, f.nom, false, 2, Date.now() - debut);
+      continue;
+    }
 
     const r = await appeler(f, gabarit.consigne, gabarit.schema);
 
     if (r.ok) {
       const propre = valider(tache, r.brut);
-      await journaliser(tache, f.nom, !!propre, Date.now() - debut);
+      await journaliser(tache, f.nom, !!propre, propre ? 200 : 1, Date.now() - debut);
       // RÉPONSE MALFORMÉE : DÉGRADÉ, SANS RÉESSAI (§4.4). On ne descend pas
       // l'échelle non plus — le fournisseur a répondu, il a juste mal répondu,
       // et payer un second étage pour la même phrase serait payer deux fois.
-      return propre ? json(propre, 200, cors) : indisponible(cors);
+      if (propre) return json(propre, 200, cors);
+      await rendreBudget();
+      return indisponible(cors);
     }
 
-    // 429 : ce fournisseur est plein pour de bon. On le marque saturé jusqu'à
-    // la fin de sa fenêtre, pour ne pas le rappeler à chaque requête d'ici là.
+    await journaliser(tache, f.nom, false, r.statut, Date.now() - debut);
+
     if (r.statut === 429) {
-      try { await rpc("ia_saturer", { p_fournisseur: f.nom }); } catch (_e) { /* tant pis */ }
+      /* Ce fournisseur est plein. On le marque saturé jusqu'à la fin de la
+         fenêtre CONCERNÉE — la minute par défaut, le jour si `Retry-After`
+         demande plus de deux minutes. Murer les deux d'un coup, comme le
+         faisait la version d'origine, condamnait un fournisseur jusqu'à minuit
+         pour un simple 429 de rythme.
+         On ne rend PAS la réservation : le fournisseur a bien vu la requête. */
+      const fenetre = r.attente > 120 ? "jour" : "minute";
+      try {
+        await rpc("ia_saturer", { p_fournisseur: f.nom, p_fenetre: fenetre });
+      } catch (_e) { /* tant pis */ }
+    } else {
+      /* 5xx, délai dépassé, clé absente : l'appel n'a jamais abouti chez le
+         fournisseur, donc il n'a rien à nous coûter. Sans ce remboursement, un
+         étage qui bat de l'aile mangeait son quota en refus — sur les cinquante
+         requêtes quotidiennes d'OpenRouter, quelques 5xx suffisaient à fermer
+         la journée sans qu'une phrase ait été écrite. */
+      try { await rpc("ia_rendre_fournisseur", { p_fournisseur: f.nom }); } catch (_e) { /* tant pis */ }
     }
-    // 5xx, timeout, clé absente : on passe simplement au suivant.
   }
 
   // Tous épuisés. `{indisponible:true}`, HTTP 200, et le client ne montre rien.
-  await journaliser(tache, null, false, Date.now() - debut);
+  await rendreBudget();
   return indisponible(cors);
 }

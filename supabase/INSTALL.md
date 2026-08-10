@@ -210,12 +210,44 @@ absence d'`Origin`, préflight, `/tv/123` accepté, `/account` et
 seule barrière devant la clé TMDB : ne pas livrer une modification de ce
 dossier sans les avoir joués.
 
-Les 25 tests du relais `ia` couvrent le même genre de barrières : origine
+Les 37 tests du relais `ia` couvrent le même genre de barrières : origine
 inconnue, absence de jeton, jeton refusé, tâche hors liste blanche, budget
 atteint, compteur plein, bascule sur `429`, tous les étages épuisés, réponse
 malformée, réponse trop longue, et la règle §0.4 (aucun texte généré ne prête un
 sentiment à qui que ce soit). Ils vérifient AUSSI ce qui serait envoyé aux
 fournisseurs : aucun prompt venu du client, aucun identifiant, aucune adresse.
+
+### Et les tests SQL — ceux-là, rien d'autre ne les remplace
+
+```
+psql "<url du projet>" -f supabase/tests/014_relais_ia.test.sql
+```
+
+Les tests Deno remplacent `fetch` par un menteur : ils savent dire qu'un appel
+EST PARTI, jamais ce qu'il FAIT une fois arrivé. La première version du lot B
+est passée verte sur ce point précis, avec une fonction `ia_saturer` qui n'avait
+strictement aucun effet sur un fournisseur aux limites inconnues — c'est-à-dire
+sur les deux étages qu'on appelle en premier, et c'était le seul filet prévu à
+cet endroit.
+
+`014_relais_ia.test.sql` exécute le vrai SQL sur un vrai moteur et éprouve les
+comptes eux-mêmes : la saturation d'une fenêtre, le fait qu'elle n'en mure pas
+une autre, l'arrêt exact au plafond, les deux remboursements (compteur de
+fournisseur et budget), la cohérence entre la sentinelle et le plafond des
+limites inconnues, et le ménage à soixante jours. Chaque cas lève une exception
+nommée : `psql` s'arrête et dit lequel. Le fichier se termine par une remise à
+zéro — il est rejouable et ne laisse rien derrière lui. Il n'écrit que sur des
+fournisseurs préfixés `test-`, jamais sur des lignes réelles.
+
+Il tourne aussi sur un PostgreSQL local vierge, ce qui évite de toucher au
+projet en ligne :
+
+```
+createdb essai
+psql -d essai -c 'create role anon; create role authenticated;'
+psql -d essai -f supabase/migrations/014_relais_ia.sql
+psql -d essai -f supabase/tests/014_relais_ia.test.sql
+```
 
 > La logique vit dans `functions/tmdb/relais.ts` ; `functions/tmdb/index.ts`
 > ne fait plus que la brancher sur `Deno.serve`. C'est ce qui permet aux tests

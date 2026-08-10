@@ -40,10 +40,19 @@ export type Fournisseur = {
 // `null`. Le mécanisme du §4.2 est écrit en entier et il fonctionne — il
 // n'a simplement pas encore de chiffre à appliquer sur ces deux étages-là.
 // D'ici qu'Adrien lise ses vraies limites dans AI Studio et les pose en base
-// (une ligne de SQL, voir INSTALL.md §7), c'est le 429 qui fait le travail :
+// (une ligne de SQL, voir INSTALL.md §8), c'est le 429 qui fait le travail :
 // un fournisseur qui refuse est marqué saturé jusqu'à la fin de sa fenêtre et
 // n'est plus rappelé. On DÉCOUVRE donc le 429 sur ces deux étages au lieu de
 // l'éviter, une fois par fenêtre, ce que le §4.2 voulait précisément éviter.
+//
+// CETTE PHRASE A ÉTÉ FAUSSE PENDANT UN COMMIT, et il faut le dire ici parce que
+// c'est ici qu'elle était écrite. La première version de la migration
+// court-circuitait le test quand la limite valait NULL : la sentinelle posée
+// par `ia_saturer` n'était jamais lue, et le 429 était redécouvert à CHAQUE
+// requête, pas une fois par fenêtre. Trouvé par la relecture du 10/08 en
+// jouant le SQL sur un vrai PostgreSQL, corrigé (migration 014, §6 et §7), et
+// désormais tenu par `supabase/tests/014_relais_ia.test.sql` — un test SQL, pas
+// un test qui vérifie qu'on appelle.
 // C'est le moins mauvais des trois choix possibles :
 //   · inventer un chiffre → on se croit protégé et on ne l'est pas ;
 //   · refuser de livrer → le lot C attend une page web ;
