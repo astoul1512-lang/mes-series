@@ -67,6 +67,22 @@ export type Fournisseur = {
 //
 // LES IDENTIFIANTS DE MODÈLES sont ceux du catalogue au 10/08/2026. Ils
 // bougent : c'est encore une raison pour que la table l'emporte sur ce fichier.
+//
+// C2 (contrôle de bout en bout du 10/08) — LE PREMIER MODÈLE OPENROUTER CHOISI
+// NE SAVAIT PAS FAIRE DE SORTIE STRUCTURÉE, ET L'ÉTAGE 3 REFUSAIT DONC TOUTES
+// LES REQUÊTES. Appel réel : HTTP 400, « model features structured outputs not
+// support ». Le catalogue le disait d'avance — `supported_parameters` de
+// `inclusionai/ling-3.0-tiny:free` ne contient ni `structured_outputs` ni
+// `response_format`. Il n'avait pas été lu.
+//
+// RÈGLE QUI EN SORT, et elle vaut pour tout modèle qu'on posera ici un jour :
+// avant de choisir un modèle OpenRouter, lire son `supported_parameters` —
+//     curl -s https://openrouter.ai/api/v1/models | \
+//       jq '.data[] | select(.id=="<modele>") | .supported_parameters'
+// — et vérifier qu'il contient `structured_outputs`. Un modèle qui ne l'a pas
+// ne dégrade pas : il REFUSE, et l'étage est mort en silence.
+// `nvidia/nemotron-nano-9b-v2:free` a été essayé pour de vrai le 10/08 : 200,
+// JSON valide, champ `texte` présent.
 // ---------------------------------------------------------------------------
 export const FOURNISSEURS: Fournisseur[] = [
   // Étage 1 — la qualité. Le Flash courant du catalogue Gemini.
@@ -75,8 +91,9 @@ export const FOURNISSEURS: Fournisseur[] = [
   // Étage 2 — le volume. Même clé, limites plus hautes, réponses plus courtes.
   { nom: "gemini-flash-lite", rang: 2, modele: "gemini-3.5-flash-lite",
     limite_minute: null, limite_jour: null, actif: true },
-  // Étage 3 — le secours, chez quelqu'un d'autre. Un modèle du palier gratuit.
-  { nom: "openrouter", rang: 3, modele: "inclusionai/ling-3.0-tiny:free",
+  /* Étage 3 — le secours, chez quelqu'un d'autre. Un modèle du palier gratuit
+     QUI DÉCLARE `structured_outputs`, et ce mot compte : voir le pavé ci-dessous. */
+  { nom: "openrouter", rang: 3, modele: "nvidia/nemotron-nano-9b-v2:free",
     limite_minute: 20, limite_jour: 50, actif: true },
 ];
 
@@ -153,6 +170,32 @@ export const BUDGET_GLOBAL_JOUR = 1000;
 // douzaine d'appels de base à 3 s — et un test refuse désormais qu'un seul appel
 // sortant parte sans minuteur.
 export const TIMEOUT_MS = 8000;
+
+// ---------------------------------------------------------------------------
+// LE PLAFOND DE JETONS DE SORTIE — 2 000, ET CE N'EST PAS DU CONFORT
+//
+// C1 (contrôle de bout en bout du 10/08). Il valait 400, et l'étage 1 ne rendait
+// JAMAIS un texte utilisable. Sur cette génération de modèles, `maxOutputTokens`
+// est le plafond COMMUN aux jetons de réflexion et à la réponse. Appel réel :
+//
+//     finishReason        : MAX_TOKENS
+//     thoughtsTokenCount  : 383      ← la réflexion
+//     candidatesTokenCount: 2        ← ce qui restait pour écrire
+//     texte reçu          : {"texte
+//
+// Sept caractères. `JSON.parse` échoue, la réponse est jugée invalide, le client
+// reçoit `{indisponible:true}` — et comme une réponse malformée ne fait pas
+// descendre l'échelle (§4.4, à raison), `pitch_jour` et `profil_humeur` étaient
+// indisponibles À 100 %, tous les jours, sans jamais atteindre l'étage 2 qui
+// marche pourtant.
+//
+// 549 jetons de réflexion pour une consigne de 47 : 400 n'était pas « un peu
+// juste », c'était hors sujet d'un facteur cinq.
+//
+// ET NON, ON N'ÉTEINT PAS LA RÉFLEXION : `thinkingConfig: {thinkingBudget: 0}`
+// a été essayé sur la vraie API, il rend HTTP 400 `INVALID_ARGUMENT`. Ce modèle
+// refuse. La seule voie est de laisser la place.
+export const MAX_JETONS_SORTIE = 2000;
 
 // Les origines autorisées. MÊME LISTE que le relais TMDB, et c'est voulu : deux
 // listes qui décrivent la même chose divergent le jour où l'une est mise à jour

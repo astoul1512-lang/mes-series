@@ -30,7 +30,10 @@ function assertEquals(a: unknown, b: unknown, msg = ""): void {
 
 import { rpc, servir, oublierFournisseurs, attenteDe, CACHE_FOURNISSEURS_MS } from "./relais.ts";
 import { construire, valider, INTERDIT_EMOTION, CONSIGNE_COMMUNE } from "./gabarits.ts";
-import { BUDGET_GLOBAL_JOUR, BUDGET_UTILISATEUR_JOUR, ORIGINES, TIMEOUT_MS } from "./config.ts";
+import {
+  BUDGET_GLOBAL_JOUR, BUDGET_UTILISATEUR_JOUR, FOURNISSEURS, MAX_JETONS_SORTIE,
+  ORIGINES, TIMEOUT_MS,
+} from "./config.ts";
 
 Deno.env.set("SUPABASE_URL", "https://projet.supabase.co");
 Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "cle-de-service");
@@ -53,7 +56,9 @@ type Plan = {
   fournisseurs?: unknown[] | null;  // ce que rend la table (null → repli fichier)
   place?: Record<string, boolean>;  // par fournisseur : reste-t-il de la place ?
   // `retry` : la valeur de l'en-tête `Retry-After`, en secondes, sur un refus.
-  reponses?: Record<string, { statut: number; texte?: string; retry?: string }>;
+  // `coupee` : le fournisseur rend 200 mais n'a pas fini (`MAX_TOKENS` /
+  // `length`). C'est C1 — voir la section du troisième tour, plus bas.
+  reponses?: Record<string, { statut: number; texte?: string; retry?: string; coupee?: boolean }>;
   // Millisecondes d'attente simulée sur chaque appel de fournisseur : sert à
   // vérifier que `duree_ms` mesure l'étage et non la requête entière (R-5).
   lenteur?: number;
@@ -122,8 +127,10 @@ function faireSemblant(plan: Plan) {
         .then(attendre);
     }
     return (u.indexOf("openrouter") >= 0
-      ? rendre({ choices: [{ message: { content: r.texte } }] })
-      : rendre({ candidates: [{ content: { parts: [{ text: r.texte }] } }] })).then(attendre);
+      ? rendre({ choices: [{ message: { content: r.texte },
+                             finish_reason: r.coupee ? "length" : "stop" }] })
+      : rendre({ candidates: [{ content: { parts: [{ text: r.texte }] },
+                                finishReason: r.coupee ? "MAX_TOKENS" : "STOP" }] })).then(attendre);
   }) as typeof fetch;
   const appels = (nom: string) =>
     vues.filter((v) => v.url.indexOf(nom) >= 0).map((v) => v.corps as Record<string, unknown>);
@@ -1125,4 +1132,137 @@ Deno.test("M33 — chaque fournisseur réserve avec SES limites, dans le bon sen
       '{"p_fournisseur":"openrouter","p_limite_minute":20,"p_limite_jour":50}',
       "les limites d'OpenRouter ne partent pas dans le bon sens");
   } finally { f.rendre(); }
+});
+
+/* ===========================================================================
+   LE CONTRÔLE DE BOUT EN BOUT DU 10/08 — ce que le faux monde ne pouvait pas dire
+
+   Troisième tour de relecture, et le premier à avoir appelé les vrais
+   fournisseurs. Les 59 tests d'alors étaient bons sur tout ce qu'ils
+   couvraient, et ils ne pouvaient rien dire de ces deux-là :
+
+     · l'étage 1 rendait `{"texte` — sept caractères — parce que
+       `maxOutputTokens: 400` était le plafond COMMUN aux jetons de réflexion et
+       à la réponse, et que le modèle en consommait 383 à réfléchir ;
+     · l'étage 3 refusait TOUTES les requêtes, parce que le modèle OpenRouter
+       choisi ne déclarait pas `structured_outputs`.
+
+   Deux tâches sur quatre — `pitch_jour` et `profil_humeur`, celles du lot
+   quotidien — étaient donc indisponibles à 100 %, tous les jours, en silence.
+
+   > **Un test qui remplace le monde extérieur n'éprouve pas le monde extérieur.**
+   > Un faux fournisseur répond toujours ce qu'on lui demande de répondre. Ce
+   > qu'on peut tester ici, c'est ce que le relais FAIT d'une réponse tronquée —
+   > et c'est ce que ces cas-ci verrouillent.
+=========================================================================== */
+
+Deno.test("C1 — une réponse tronquée fait DESCENDRE l'échelle, elle ne dégrade pas", async () => {
+  /* C'est le cœur de C1. Une réponse malformée ne fait pas descendre l'échelle,
+     et c'est le bon choix (§4.4) : le fournisseur a répondu, il a mal répondu.
+     Mais un fournisseur COUPÉ AU PLAFOND n'a pas mal répondu — il n'a pas fini.
+     Sans cette distinction, un étage 1 qui tronque systématiquement condamne
+     toutes les tâches qui en partent, sans jamais essayer l'étage 2 qui marche. */
+  const f = faireSemblant({
+    fournisseurs: null,
+    reponses: { "gemini-flash": { statut: 200, texte: '{"texte', coupee: true } },
+  });
+  try {
+    const r = await servir(requete(PITCH));
+    assertEquals(JSON.stringify(await r.json()), '{"texte":"Une phrase honnête."}',
+      "une réponse tronquée n'a pas fait descendre l'échelle");
+    const e = f.etages();
+    assertEquals(e.length, 2, "l'échelle n'a pas été descendue d'un cran exactement");
+    assert(e[1].indexOf("flash-lite") >= 0);
+    const j = f.journal();
+    assertEquals(j[0].statut, 4, "une troncature doit se lire dans le journal (statut 4)");
+    assertEquals(j[1].statut, 200);
+  } finally { f.rendre(); }
+});
+
+Deno.test("C1 — une troncature ne se rembourse pas : le fournisseur a bien travaillé", async () => {
+  // Un 5xx se rembourse (l'appel n'a pas abouti), un 429 non (le fournisseur a
+  // vu la requête). Une troncature est du second genre : des jetons ont été
+  // consommés pour de vrai.
+  const f = faireSemblant({
+    fournisseurs: null,
+    reponses: { "gemini-flash": { statut: 200, texte: '{"tex', coupee: true } },
+  });
+  try {
+    await servir(requete(PITCH));
+    const rendus = f.appels("/rpc/ia_rendre_fournisseur").map((c) => c.p_fournisseur);
+    assert(rendus.indexOf("gemini-flash") < 0, "une troncature a été remboursée");
+    assertEquals(f.appels("/rpc/ia_saturer").length, 0, "une troncature n'est pas une saturation");
+  } finally { f.rendre(); }
+});
+
+Deno.test("C1 — le plafond de jetons laisse la place à la réflexion", () => {
+  /* Mesuré sur la vraie API : 549 jetons de réflexion pour une consigne de 47.
+     400 n'était pas « un peu juste », c'était hors sujet d'un facteur cinq. Et
+     `thinkingConfig: {thinkingBudget: 0}` rend HTTP 400 sur ce modèle : on ne
+     peut pas éteindre la réflexion, seulement lui laisser la place. */
+  assert(MAX_JETONS_SORTIE >= 1500,
+    "MAX_JETONS_SORTIE = " + MAX_JETONS_SORTIE + " : la réflexion mangera la réponse");
+});
+
+Deno.test("C1 — tronqué partout : dégradé propre, budget rendu, rien de saturé", async () => {
+  const f = faireSemblant({
+    fournisseurs: null,
+    reponses: {
+      "gemini-flash": { statut: 200, texte: "{", coupee: true },
+      "gemini-flash-lite": { statut: 200, texte: "{", coupee: true },
+      "openrouter": { statut: 200, texte: "{", coupee: true },
+    },
+  });
+  try {
+    const r = await servir(requete(PITCH));
+    assertEquals(JSON.stringify(await r.json()), '{"indisponible":true}');
+    assertEquals(f.etages().length, 3, "les trois étages doivent être tentés");
+    assertEquals(f.appels("/rpc/ia_rendre_budget").length, 1, "aucun texte rendu : le budget se rend");
+    assertEquals(f.journal().map((l) => l.statut).join(","), "4,4,4");
+  } finally { f.rendre(); }
+});
+
+Deno.test("C2 — un 400 « sortie structurée non supportée » n'est pas un 429", async () => {
+  /* Le modèle OpenRouter d'origine refusait toutes les requêtes en 400. Si on
+     confondait ce refus avec une saturation, on marquerait l'étage saturé pour
+     la fenêtre — c'est-à-dire qu'on masquerait une erreur de configuration
+     permanente derrière un mécanisme de quota temporaire. */
+  const f = faireSemblant({
+    fournisseurs: null,
+    reponses: {
+      "gemini-flash": { statut: 500 }, "gemini-flash-lite": { statut: 500 },
+      "openrouter": { statut: 400 },
+    },
+  });
+  try {
+    const r = await servir(requete(PITCH));
+    assertEquals(JSON.stringify(await r.json()), '{"indisponible":true}');
+    assertEquals(f.appels("/rpc/ia_saturer").length, 0, "un 400 a été pris pour une saturation");
+    assertEquals(f.journal()[2].statut, 400, "le journal doit porter le 400 tel quel");
+    // Un 400 n'a rien produit : la réservation se rend.
+    assert(f.appels("/rpc/ia_rendre_fournisseur").map((c) => c.p_fournisseur).indexOf("openrouter") >= 0);
+  } finally { f.rendre(); }
+});
+
+Deno.test("C2 — le modèle OpenRouter est celui qui sait faire de la sortie structurée", () => {
+  /* Ce test ne peut pas appeler le catalogue — il tournerait hors ligne. Ce
+     qu'il fige, c'est la DÉCISION : `inclusionai/ling-3.0-tiny:free` a été
+     essayé pour de vrai et refuse (`model features structured outputs not
+     support`, HTTP 400) ; `nvidia/nemotron-nano-9b-v2:free` a été essayé et
+     répond. Si quelqu'un change ce modèle un jour, ce cas tombe et pose la
+     question qui n'avait pas été posée : as-tu lu `supported_parameters` ? */
+  const or_ = FOURNISSEURS.find((x) => x.nom === "openrouter")!;
+  assertEquals(or_.modele, "nvidia/nemotron-nano-9b-v2:free",
+    "modèle OpenRouter changé : vérifier `structured_outputs` dans /api/v1/models avant");
+  assert(!/ling-3\.0-tiny/.test(or_.modele), "le modèle sans sortie structurée est revenu");
+});
+
+Deno.test("R-γ — une liste de sortie trop longue est refusée", () => {
+  // Chaque texte était borné à 60 caractères, la liste ne l'était pas : un
+  // fournisseur bavard pouvait faire traverser des milliers d'entrées.
+  const douze = Array.from({ length: 12 }, (_, i) => "Rangée " + i);
+  assert(valider("intitules_rangees", { textes: douze }), "douze intitulés doivent passer");
+  assertEquals(valider("intitules_rangees", { textes: douze.concat("Une de trop") }), null,
+    "treize intitulés passent : le nombre d'éléments n'est pas borné");
+  assertEquals(valider("intitules_rangees", { textes: Array(5000).fill("x") }), null);
 });

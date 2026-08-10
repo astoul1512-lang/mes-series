@@ -149,9 +149,15 @@ const SCHEMA_TEXTE = {
   properties: { texte: { type: "string" } },
   required: ["texte"],
 };
+/* `maxItems` : R-γ (relecture du 10/08, troisième tour). Le schéma bornait la
+   forme de chaque élément, jamais le NOMBRE d'éléments — un fournisseur bavard
+   pouvait rendre des milliers d'entrées. Le §4.1 demande « longueurs max » ;
+   `maxtitres` existait déjà et ne servait qu'à l'ENTRÉE. Le plafond est celui de
+   la tâche la plus large (12), et `valider` recoupe ensuite par tâche : le
+   schéma est envoyé au fournisseur, la validation est ce qui protège. */
 const SCHEMA_LISTE = {
   type: "object",
-  properties: { textes: { type: "array", items: { type: "string" } } },
+  properties: { textes: { type: "array", items: { type: "string" }, maxItems: 12 } },
   required: ["textes"],
 };
 
@@ -277,6 +283,10 @@ export function valider(tache: string, brut: unknown): { texte?: string; textes?
 
   if (tache === "intitules_rangees") {
     if (!Array.isArray(o.textes)) return null;
+    /* R-γ — LE NOMBRE D'ÉLÉMENTS EST BORNÉ, comme leur longueur. Sans cette
+       ligne, un fournisseur qui rend mille intitulés les faisait tous traverser
+       la validation et partir chez le client. */
+    if (o.textes.length > t.maxtitres) return null;
     const l: string[] = [];
     for (const x of o.textes) {
       const v = propre(x);

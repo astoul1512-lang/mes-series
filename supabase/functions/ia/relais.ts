@@ -23,8 +23,8 @@
 //     sur ses textes d'origine, sans un mot (§4.4).
 
 import {
-  BUDGET_GLOBAL_JOUR, BUDGET_UTILISATEUR_JOUR, FOURNISSEURS, ORIGINES,
-  TACHES, TIMEOUT_MS, type Fournisseur,
+  BUDGET_GLOBAL_JOUR, BUDGET_UTILISATEUR_JOUR, FOURNISSEURS, MAX_JETONS_SORTIE,
+  ORIGINES, TACHES, TIMEOUT_MS, type Fournisseur,
 } from "./config.ts";
 import { construire, valider } from "./gabarits.ts";
 
@@ -104,7 +104,15 @@ function minuteur(ms: number): { signal?: AbortSignal; fini: () => void } {
   return { signal: c.signal, fini: () => clearTimeout(t) };
 }
 
-async function avecDelai(f: (s?: AbortSignal) => Promise<Response>, ms: number): Promise<Response> {
+/* R-δ (relecture du 10/08, troisième tour) — LE MINUTEUR DOIT COUVRIR LA LECTURE
+   DU CORPS, PAS SEULEMENT L'EN-TÊTE.
+   La version d'origine rendait la `Response` et désarmait dans son `finally` :
+   le `await r.text()` de l'appelant se faisait donc HORS minuteur. Sur Deno,
+   `AbortSignal.timeout` court tout seul et l'oubli est inoffensif ; sur le repli
+   `AbortController`, la lecture d'un corps qui n'arrive jamais était sans
+   limite. Un repli qui ne replie qu'à moitié est un piège pour plus tard.
+   D'où la forme générique : l'appelant fait TOUT son travail dans le rappel. */
+async function avecDelai<T>(f: (s?: AbortSignal) => Promise<T>, ms: number): Promise<T> {
   const m = minuteur(ms);
   try { return await f(m.signal); } finally { m.fini(); }
 }
@@ -116,25 +124,29 @@ async function avecDelai(f: (s?: AbortSignal) => Promise<Response>, ms: number):
    ressemble trait pour trait à un succès. Un défaut qu'aucun test ne peut voir
    par l'extérieur se teste par l'intérieur, ou ne se teste pas. */
 export async function rpc(nom: string, args: Record<string, unknown>): Promise<unknown> {
-  const r = await avecDelai((signal) => fetch(URL_SB() + "/rest/v1/rpc/" + nom, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      apikey: CLE_ADMIN(),
-      Authorization: "Bearer " + CLE_ADMIN(),
-    },
-    body: JSON.stringify(args),
-    signal,
-  }), TIMEOUT_BASE_MS);
-  if (!r.ok) throw new Error("rpc " + nom + " : " + r.status);
-  /* UNE FONCTION SQL QUI REND `void` FAIT RÉPONDRE 204 SANS CORPS, et
-     `r.json()` lève alors sur une réponse parfaitement réussie. Relevé à la
-     relecture du 10/08 : l'appel avait bien eu lieu, mais il PARAISSAIT échouer,
-     et le `catch` de l'appelant avalait la fausse erreur. Un appel qui réussit
-     ne doit pas ressembler à un appel qui rate. */
-  const texte = await r.text();
-  if (!texte) return null;
-  try { return JSON.parse(texte); } catch (_e) { return null; }
+  return await avecDelai(async (signal) => {
+    const r = await fetch(URL_SB() + "/rest/v1/rpc/" + nom, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: CLE_ADMIN(),
+        Authorization: "Bearer " + CLE_ADMIN(),
+      },
+      body: JSON.stringify(args),
+      signal,
+    });
+    if (!r.ok) throw new Error("rpc " + nom + " : " + r.status);
+    /* UNE FONCTION SQL QUI REND `void` FAIT RÉPONDRE 204 SANS CORPS, et
+       `r.json()` lève alors sur une réponse parfaitement réussie. Relevé à la
+       relecture du 10/08 : l'appel avait bien eu lieu, mais il PARAISSAIT
+       échouer, et le `catch` de l'appelant avalait la fausse erreur. Un appel
+       qui réussit ne doit pas ressembler à un appel qui rate.
+       ÉPROUVÉ EN PRODUCTION au troisième tour : `ia_rendre_fournisseur` répond
+       bien 204 sans corps à travers PostgREST. */
+    const texte = await r.text();
+    if (!texte) return null;
+    try { return JSON.parse(texte); } catch (_e) { return null; }
+  }, TIMEOUT_BASE_MS);
 }
 
 // ---------------------------------------------------------------------------
@@ -193,13 +205,14 @@ export async function lireFournisseurs(): Promise<Fournisseur[]> {
   }
   let l: Fournisseur[] = [];
   try {
-    const r = await avecDelai((signal) =>
-      fetch(
+    const d = await avecDelai(async (signal) => {
+      const r = await fetch(
         URL_SB() + "/rest/v1/ia_fournisseurs?select=*&actif=is.true&order=rang.asc",
         { headers: { apikey: CLE_ADMIN(), Authorization: "Bearer " + CLE_ADMIN() }, signal },
-      ), TIMEOUT_BASE_MS);
-    if (r.ok) {
-      const d = await r.json();
+      );
+      return r.ok ? await r.json() : null;
+    }, TIMEOUT_BASE_MS);
+    {
       if (Array.isArray(d)) {
         const vus: Record<string, true> = {};
         for (const ligne of d) {
@@ -270,7 +283,7 @@ async function appeler(f: Fournisseur, consigne: string, schema: Record<string, 
         responseMimeType: "application/json",
         responseSchema: schema,
         temperature: 0.7,
-        maxOutputTokens: 400,
+        maxOutputTokens: MAX_JETONS_SORTIE,
       },
     };
   } else {
@@ -287,7 +300,7 @@ async function appeler(f: Fournisseur, consigne: string, schema: Record<string, 
       model: f.modele,
       messages: [{ role: "user", content: consigne }],
       temperature: 0.7,
-      max_tokens: 400,
+      max_tokens: MAX_JETONS_SORTIE,
       response_format: {
         type: "json_schema",
         json_schema: { name: "sortie", strict: true, schema: { ...schema, additionalProperties: false } },
@@ -310,12 +323,40 @@ async function appeler(f: Fournisseur, consigne: string, schema: Record<string, 
                attente: attenteDe(r.headers.get("Retry-After")) };
     }
     const d = await r.json();
+    /* STATUT 4 — LE FOURNISSEUR N'A PAS FINI. Traité comme un échec d'étage, donc
+       on descend l'échelle. Voir `tronquee` ci-dessus : c'est C1. */
+    if (tronquee(gemini, d)) return { ok: false, statut: 4, brut: null, attente: 0 };
     return { ok: true, statut: 200, brut: extraire(gemini, d), attente: 0 };
   } catch (_e) {
     // Délai dépassé ou réseau coupé : traité comme une panne du fournisseur,
     // pas comme une saturation. On passe au suivant.
     return { ok: false, statut: 599, brut: null, attente: 0 };
   } finally { m.fini(); }
+}
+
+/* ---------------------------------------------------------------------------
+   TRONQUÉE N'EST PAS INVALIDE, ET LA DIFFÉRENCE COÛTE DEUX TÂCHES SUR QUATRE.
+
+   C1 (contrôle de bout en bout du 10/08). Une réponse coupée au plafond de
+   jetons arrive en HTTP 200 avec un JSON incomplet. L'ancienne lecture la
+   traitait comme « le fournisseur a mal répondu » — donc dégradé silencieux,
+   SANS descendre l'échelle, ce qui est le bon choix pour une vraie mauvaise
+   réponse. Mais un fournisseur qui n'a pas FINI n'a pas mal répondu : il n'a pas
+   répondu. Le distinguer, c'est ce qui permet de passer à l'étage suivant au
+   lieu de rendre `{indisponible:true}` à tout le monde tous les jours.
+
+   Les deux dialectes le disent, chacun à sa façon : `finishReason` chez Gemini
+   (`STOP` = fini, `MAX_TOKENS` = coupé), `finish_reason` chez OpenRouter
+   (`stop` = fini, `length` = coupé).
+--------------------------------------------------------------------------- */
+function tronquee(gemini: boolean, d: unknown): boolean {
+  const o = d as Record<string, any>;
+  const raison = gemini
+    ? o?.candidates?.[0]?.finishReason
+    : o?.choices?.[0]?.finish_reason;
+  if (typeof raison !== "string") return false;   // absent : on ne suppose rien
+  const r = raison.toUpperCase();
+  return r === "MAX_TOKENS" || r === "LENGTH";
 }
 
 // Le JSON utile, quel que soit l'emballage. Un fournisseur qui rend du texte
@@ -353,7 +394,8 @@ function extraire(gemini: boolean, d: unknown): unknown {
    sortie structurée d'OpenRouter — c'était aveugle : un échec silencieux y
    ressemble trait pour trait à un dégradé qui fonctionne.
    Les codes hors HTTP : 0 clé absente · 1 réponse invalide · 2 quota local plein
-   (aucun appel) · 3 budget refusé · 599 délai ou réseau. */
+   (aucun appel) · 3 budget refusé · 4 réponse TRONQUÉE (le fournisseur n'a pas
+   fini — C1) · 599 délai ou réseau. */
 /* R-5 (relecture du 10/08, second tour) — `duree_ms` EST LA DURÉE DE L'ÉTAGE,
    plus celle de la requête entière. On passait `Date.now() - debut`, l'écoulé
    depuis l'entrée dans `servir` : mesuré, trois étages à 300 ms rendaient 306,
@@ -369,7 +411,7 @@ async function journaliser(
   tache: string, fournisseur: string | null, ok: boolean, statut: number, duree: number,
 ) {
   try {
-    await avecDelai((signal) => fetch(URL_SB() + "/rest/v1/ia_journal", {
+    await avecDelai((signal) => fetch(URL_SB() + "/rest/v1/ia_journal", {  // corps ignoré
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -390,12 +432,13 @@ async function journaliser(
 // ---------------------------------------------------------------------------
 async function qui(jeton: string): Promise<string | null> {
   try {
-    const r = await avecDelai((signal) => fetch(URL_SB() + "/auth/v1/user", {
-      headers: { Authorization: "Bearer " + jeton, apikey: CLE_ADMIN() },
-      signal,
-    }), TIMEOUT_BASE_MS);
-    if (!r.ok) return null;
-    const d = await r.json();
+    const d = await avecDelai(async (signal) => {
+      const r = await fetch(URL_SB() + "/auth/v1/user", {
+        headers: { Authorization: "Bearer " + jeton, apikey: CLE_ADMIN() },
+        signal,
+      });
+      return r.ok ? await r.json() : null;
+    }, TIMEOUT_BASE_MS);
     return (d && typeof d.id === "string") ? d.id : null;
   } catch (_e) { return null; }
 }
@@ -560,12 +603,15 @@ async function servirAccepte(req: Request, cors: Record<string, string>): Promis
       try {
         await rpc("ia_saturer", { p_fournisseur: f.nom, p_fenetre: fenetre });
       } catch (_e) { /* tant pis */ }
-    } else {
+    } else if (r.statut !== 4) {
       /* 5xx, délai dépassé, clé absente : l'appel n'a jamais abouti chez le
          fournisseur, donc il n'a rien à nous coûter. Sans ce remboursement, un
          étage qui bat de l'aile mangeait son quota en refus — sur les cinquante
          requêtes quotidiennes d'OpenRouter, quelques 5xx suffisaient à fermer
-         la journée sans qu'une phrase ait été écrite. */
+         la journée sans qu'une phrase ait été écrite.
+         LE STATUT 4 EST EXCLU : une réponse tronquée a bel et bien consommé des
+         jetons chez le fournisseur, exactement comme un 429 a consommé une
+         requête. On ne se rembourse pas un travail qui a eu lieu. */
       try { await rpc("ia_rendre_fournisseur", { p_fournisseur: f.nom }); } catch (_e) { /* tant pis */ }
     }
   }

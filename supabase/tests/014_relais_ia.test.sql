@@ -386,9 +386,13 @@ begin
     raise exception 'RLS : % policy(ies) ouvrent une porte', n;
   end if;
 
-  -- Les dix fonctions sont bien `security definer` avec un `search_path` figé.
-  -- Mutation visée : passage en `security invoker` + `reset search_path`, qui
-  -- passait sans qu'un seul cas bronche.
+  /* Les fonctions qui TOUCHENT UNE TABLE sont `security definer`, avec un
+     `search_path` figé. Mutation visée : passage en `security invoker` +
+     `reset search_path`, qui passait sans qu'un seul cas bronche.
+     `ia_plafond_inconnu` et `ia_debut_fenetre` sont exclues ICI, et seulement
+     ici : elles ne lisent aucune table, donc `security invoker` est le bon choix
+     pour elles. Leur `search_path`, en revanche, est exigé juste en dessous —
+     c'est R-ζ, et l'exception n'y survit pas. */
   select count(*) into n
     from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
    where ns.nspname = 'public' and p.proname like 'ia\_%'
@@ -398,6 +402,67 @@ begin
        or not exists (select 1 from unnest(p.proconfig) x where x like 'search\_path=%'));
   if n <> 0 then
     raise exception 'sécurité : % fonction(s) sans `security definer` ou sans `search_path` figé', n;
+  end if;
+
+  /* R-ζ (troisième tour) — PLUS D'EXCEPTION SUR LE `search_path`.
+     `ia_plafond_inconnu` et `ia_debut_fenetre` en étaient dispensées ci-dessus,
+     et le linter de sécurité Supabase les signalait. Un trou volontaire dans un
+     filet finit par servir de porte : les DIX fonctions le figent maintenant.
+     (Ces deux-là restent `security invoker`, à raison — elles ne touchent
+     aucune table.) */
+  select count(*) into n
+    from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
+   where ns.nspname = 'public' and p.proname like 'ia\_%'
+     and (p.proconfig is null
+       or not exists (select 1 from unnest(p.proconfig) x where x like 'search\_path=%'));
+  if n <> 0 then
+    raise exception 'R-ζ : % fonction(s) ia_* sans `search_path` figé', n;
+  end if;
+
+  /* R-β (troisième tour) — ON VÉRIFIAIT QU'`anon` NE PEUT PAS, JAMAIS QUE LA CLÉ
+     DE SERVICE PEUT ENCORE.
+     Le filet manquait du côté où il coûte le plus cher : un `revoke` trop large
+     ferme l'IA à 100 %, en silence, exactement comme BL-1 l'ouvrait. Mesuré au
+     troisième tour : sur un PostgreSQL nu — la recette locale d'INSTALL.md, qui
+     ne créait même pas le rôle — `service_role` n'avait AUCUN droit sur les dix
+     fonctions. Sur Supabase, les *default privileges* sauvaient la mise ; c'est
+     un hasard heureux, pas une garantie. INSTALL.md crée désormais le rôle, et
+     ce cas exige la permission. */
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    select count(*) into n
+      from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
+     where ns.nspname = 'public' and p.proname like 'ia\_%'
+       and not has_function_privilege('service_role', p.oid, 'execute');
+    if n <> 0 then
+      raise exception 'R-β : % fonction(s) ne sont plus appelables par service_role — le relais est muet', n;
+    end if;
+  else
+    raise notice 'R-β non vérifié : le rôle `service_role` n''existe pas sur cette base.';
+  end if;
+
+  -- R-α — UNE LIMITE DE BUDGET À ZÉRO COUPE VRAIMENT L'IA.
+  -- La garde de R-f avait été posée sur `ia_reserver_fenetre` et pas sur
+  -- `ia_reserver_budget`, qui a la même forme : mesuré, 1 requête sur 3 passait.
+  delete from public.ia_budget_jour where uid = UID_TEST;
+  n := 0;
+  for i in 1..5 loop
+    if public.ia_reserver_budget(UID_TEST, 0, 1000000) then n := n + 1; end if;
+  end loop;
+  if n <> 0 then
+    raise exception 'R-α : un budget personnel à 0 laisse passer % requête(s)', n;
+  end if;
+  for i in 1..3 loop
+    if public.ia_reserver_budget(UID_TEST, -5, 1000000) then
+      raise exception 'R-α : un budget personnel négatif laisse passer une requête';
+    end if;
+  end loop;
+
+  -- C2 — LE MODÈLE OPENROUTER EST CELUI QUI SAIT FAIRE DE LA SORTIE STRUCTURÉE.
+  -- Le premier choisi ne le savait pas, et l'étage 3 refusait tout (HTTP 400).
+  -- La migration porte un `update` de réparation ; ce cas vérifie qu'il a mordu.
+  if exists (select 1 from public.ia_fournisseurs
+              where nom = 'openrouter' and modele = 'inclusionai/ling-3.0-tiny:free') then
+    raise exception 'C2 : le modèle OpenRouter sans `structured_outputs` est encore en base';
   end if;
 
   -- R-c — LA VERSION FANTÔME D'`ia_saturer` NE DOIT PLUS EXISTER.

@@ -98,6 +98,19 @@ values
   ('openrouter',        3, 'inclusionai/ling-3.0-tiny:free',  20,   50, true)
 on conflict (nom) do nothing;
 
+/* C2 (contrôle de bout en bout du 10/08) — RÉPARATION DU MODÈLE OPENROUTER.
+   `inclusionai/ling-3.0-tiny:free` ne déclare pas `structured_outputs` : appel
+   réel, HTTP 400, « model features structured outputs not support ». L'étage 3
+   refusait donc TOUTES les requêtes, en silence.
+   L'`insert … on conflict do nothing` ci-dessus ne corrige pas une base où la
+   migration a déjà tourné — et elle a déjà tourné sur le projet. D'où cet
+   `update` ciblé : il ne touche QUE la ligne encore porteuse du modèle fautif,
+   donc il ne défait aucun choix fait à la main depuis. */
+update public.ia_fournisseurs
+   set modele = 'nvidia/nemotron-nano-9b-v2:free', maj = now()
+ where nom = 'openrouter'
+   and modele = 'inclusionai/ling-3.0-tiny:free';
+
 -- --- 2. Les compteurs -------------------------------------------------------
 --
 -- Une ligne par (fournisseur, fenêtre). `debut` porte le début de la fenêtre
@@ -211,8 +224,15 @@ comment on column public.ia_journal.statut is
 -- ne jamais gêner un usage normal, assez bas pour que la sentinelle le dépasse.
 -- Les deux nombres sortent de la même fonction : écrits à deux endroits, ils
 -- auraient fini par diverger, et le filet serait retombé sans bruit.
+/* `set search_path` MÊME ICI. R-ζ (troisième tour) : ces deux fonctions étaient
+   les seules sans `search_path` figé, le linter de sécurité Supabase les
+   signalait, et — plus gênant — le fichier de tests les EXCLUAIT nommément de
+   son assertion de sécurité. Un trou volontaire dans un filet finit toujours par
+   servir de porte. Deux lignes, et l'exception disparaît des deux côtés. */
 create or replace function public.ia_plafond_inconnu()
-returns int language sql immutable as $function$ select 1000000 $function$;
+returns int language sql immutable
+set search_path to 'public'
+as $function$ select 1000000 $function$;
 
 -- Le début de la fenêtre courante, TOUJOURS en UTC.
 --
@@ -221,7 +241,9 @@ returns int language sql immutable as $function$ select 1000000 $function$;
 -- suivait le fuseau de la session. Identique sur Supabase, qui tourne en UTC —
 -- divergent partout ailleurs, et divergent EN SILENCE. Une seule référence.
 create or replace function public.ia_debut_fenetre(p_fenetre text)
-returns timestamptz language sql stable as $function$
+returns timestamptz language sql stable
+set search_path to 'public'
+as $function$
   select case when p_fenetre = 'jour'
               then date_trunc('day',    now() at time zone 'utc') at time zone 'utc'
               else date_trunc('minute', now() at time zone 'utc') at time zone 'utc'
@@ -399,6 +421,17 @@ declare
   ok      boolean;
   aujourd date := (now() at time zone 'utc')::date;
 begin
+  /* R-α (relecture du 10/08, troisième tour) — LA GARDE DE R-f MANQUAIT ICI.
+     Elle avait été posée sur `ia_reserver_fenetre` et pas sur son voisin, qui a
+     exactement la même forme : le `where` du `on conflict` ne garde que le
+     chemin de conflit, et l'insertion d'une ligne neuve reste inconditionnelle.
+     Mesuré : avec `p_max_utilisateur = 0`, UNE REQUÊTE SUR TROIS passait. Poser
+     `BUDGET_UTILISATEUR_JOUR = 0` pour couper l'IA en urgence ne la coupait donc
+     pas. Le chemin global, lui, était déjà correct : il passe par
+     `ia_reserver_fenetre`. Corriger un défaut à un endroit et pas chez son
+     jumeau, c'est le motif qui revient à chaque tour de relecture. */
+  if p_max_utilisateur <= 0 then return false; end if;
+
   insert into public.ia_budget_jour (uid, jour, n)
   values (p_uid, aujourd, 1)
   on conflict (uid, jour) do update
@@ -487,6 +520,65 @@ revoke all on function public.ia_saturer(text, text)                  from publi
 revoke all on function public.ia_reserver_budget(uuid, int, int)      from public, anon, authenticated;
 revoke all on function public.ia_rendre_budget(uuid)                  from public, anon, authenticated;
 revoke all on function public.ia_menage()                             from public, anon, authenticated;
+
+-- --- 13 bis. ET LA CLÉ DE SERVICE, ELLE, DOIT POUVOIR ------------------------
+--
+-- R-β (relecture du 10/08, troisième tour). On avait écrit tous les `revoke` et
+-- aucun `grant` : la permission du relais tenait uniquement aux *default
+-- privileges* de Supabase, qui posent une grant explicite à `service_role` que
+-- le `revoke … from public` n'emporte pas. Ça marche — c'est vérifié en ligne —
+-- mais c'est un hasard heureux, pas une intention écrite.
+--
+-- Mesuré sur un PostgreSQL nu, celui de la recette locale d'INSTALL.md :
+-- `service_role` n'avait AUCUN droit sur les dix fonctions. La migration y
+-- installait donc un relais muet, et le fichier de tests ne le disait pas — il
+-- ne vérifiait que le côté « anon ne peut pas ».
+--
+-- Un `revoke` trop large ferme l'IA à 100 %, en silence, exactement comme BL-1
+-- l'ouvrait. Les deux moitiés du contrat s'écrivent maintenant, et se testent.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    grant execute on function
+      public.ia_plafond_inconnu(), public.ia_debut_fenetre(text),
+      public.ia_reserver_fenetre(text, text, int), public.ia_rendre_fenetre(text, text),
+      public.ia_reserver_fournisseur(text, int, int), public.ia_rendre_fournisseur(text),
+      public.ia_saturer(text, text), public.ia_reserver_budget(uuid, int, int),
+      public.ia_rendre_budget(uuid), public.ia_menage()
+      to service_role;
+    grant select, insert, update, delete on
+      public.ia_fournisseurs, public.ia_compteurs, public.ia_budget_jour, public.ia_journal
+      to service_role;
+  else
+    raise notice '`service_role` absent : normal hors Supabase. Le créer pour jouer les tests.';
+  end if;
+end $$;
+
+-- --- 14. LE MÉNAGE SE PLANIFIE, SINON IL N'A PAS LIEU ------------------------
+--
+-- R-ε (relecture du 10/08, troisième tour). `ia_menage()` existait, était
+-- correcte, testée… et appelée par personne. INSTALL.md disait « à appeler de
+-- temps en temps », ce qui veut dire jamais. Et depuis R2, `ia_journal` grossit
+-- d'UNE LIGNE PAR ÉTAGE TENTÉ — jusqu'à trois par requête.
+--
+-- Le planificateur existe déjà dans ce projet (migration 005, tâche `notifier`).
+-- Une ligne suffit. `unschedule` d'abord : rejouer ce fichier ne doit pas
+-- empiler les tâches, exactement comme 005 le fait.
+--
+-- Le bloc est protégé : `pg_cron` n'existe pas sur un PostgreSQL local, et cette
+-- migration doit rester rejouable sur une base nue — c'est là que tournent les
+-- tests.
+do $$
+begin
+  if exists (select 1 from pg_extension where extname = 'pg_cron') then
+    perform cron.unschedule('ia_menage')
+      where exists (select 1 from cron.job where jobname = 'ia_menage');
+    -- Tous les jours à 4 h UTC, quand personne ne regarde un écran.
+    perform cron.schedule('ia_menage', '0 4 * * *', 'select public.ia_menage()');
+  else
+    raise notice 'pg_cron absent : le ménage n''est pas planifié (normal en local).';
+  end if;
+end $$;
 
 -- --- 13. LA VERSION FANTÔME D'`ia_saturer` -----------------------------------
 --

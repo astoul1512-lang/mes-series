@@ -210,7 +210,7 @@ absence d'`Origin`, préflight, `/tv/123` accepté, `/account` et
 seule barrière devant la clé TMDB : ne pas livrer une modification de ce
 dossier sans les avoir joués.
 
-Les 59 tests du relais `ia` couvrent le même genre de barrières : origine
+Les 66 tests du relais `ia` couvrent le même genre de barrières : origine
 inconnue, absence de jeton, jeton refusé, tâche hors liste blanche, budget
 atteint, compteur plein, bascule sur `429`, tous les étages épuisés, réponse
 malformée, réponse trop longue, et la règle §0.4 (aucun texte généré ne prête un
@@ -247,10 +247,18 @@ projet en ligne :
 
 ```
 createdb essai
-psql -d essai -c 'create role anon; create role authenticated;'
+psql -d essai -c 'create role anon; create role authenticated; create role service_role;'
 psql -d essai -f supabase/migrations/014_relais_ia.sql
 psql -d essai -f supabase/tests/014_relais_ia.test.sql
 ```
+
+> **`service_role` fait partie de la recette, et ce n'est pas un détail.** La
+> migration révoque tout de `public` ; sans grant explicite, la clé de service
+> n'a plus aucun droit et le relais est **muet**. Sur Supabase les *default
+> privileges* le sauvaient, mais c'était un hasard, pas une intention : depuis le
+> 10/08 la migration pose le grant elle-même, et le fichier de tests exige les
+> deux moitiés — `anon` ne peut pas, `service_role` peut encore. Sans le rôle, ce
+> second cas est simplement sauté (avec un `NOTICE`).
 
 > La logique vit dans `functions/tmdb/relais.ts` ; `functions/tmdb/index.ts`
 > ne fait plus que la brancher sur `Deno.serve`. C'est ce qui permet aux tests
@@ -345,6 +353,30 @@ update public.ia_fournisseurs
 ```
 
 Aucun redéploiement : la fonction relit la table, avec une minute de cache.
+
+### Avant de changer le modèle OpenRouter — lire son catalogue
+
+Le premier modèle choisi ne déclarait pas `structured_outputs`, et l'étage 3
+refusait donc **toutes** les requêtes en HTTP 400, silencieusement. Le catalogue
+le disait d'avance ; il n'avait pas été lu. Avant de poser un modèle ici :
+
+```
+curl -s https://openrouter.ai/api/v1/models \
+  | jq '.data[] | select(.id=="<le modèle>") | .supported_parameters'
+```
+
+`structured_outputs` doit y figurer. Un modèle qui ne l'a pas **ne dégrade pas,
+il refuse** — et l'étage est mort sans un mot dans l'interface. Le changement se
+fait en une ligne, sans redéploiement :
+
+```sql
+update public.ia_fournisseurs
+   set modele = 'nvidia/nemotron-nano-9b-v2:free', maj = now()
+ where nom = 'openrouter';
+```
+
+(À reporter aussi dans `config.ts`, qui sert de repli quand la table est
+injoignable — sinon le repli réintroduit la panne.)
 
 **OpenRouter, lui, publie ses chiffres** et ils sont déjà en base : 20 requêtes
 par minute, 50 par jour tant que le compte n'a pas acheté 10 $ de crédits
