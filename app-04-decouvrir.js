@@ -1262,7 +1262,7 @@ function vitrineBody(){
        de tuile « Tout voir », et ses deux titres ne vont jamais dans « Aussi
        pour toi ». C'est la SEULE ligne que SPEC-06 ajoute à ce fichier — le
        §8 en fait un critère d'acceptation vérifiable au diff. */
-    if(iR === 1 && typeof bandeauDuelJour === 'function') html += bandeauDuelJour();
+    if(iR === 1) html += bandeauApresPremiereRangee();
     /* SPEC-04 lot C — l'intitulé peut avoir été réécrit par le lot quotidien.
        `intituleIA` rend le titre d'origine dès que l'IA est éteinte, que le lot
        n'est pas là, ou que la rangée n'en fait pas partie : la ligne ci-dessous
@@ -1280,6 +1280,11 @@ function vitrineBody(){
      pris ici, et ils n'ont rien à voir l'un avec l'autre : le lot IA (textes,
      soumis à l'interrupteur) et la moitié personnelle de « Bientôt » (dates
      françaises, R7 — du calendrier, aucun modèle). */
+  /* SPEC-06 §1.3 — « après la première rangée rendue, quelle qu'elle soit ».
+     Avec une seule rangée à l'écran, `iR === 1` n'arrivait jamais et le bandeau
+     disparaissait — sans effet aujourd'hui (treize rangées au démarrage), mais
+     l'ancrage doit dire ce qu'il promet. Relevé en relecture. */
+  if(rangees.length === 1) html += bandeauApresPremiereRangee();
   apresRenduVitrine();
   return html + '<div style="height:6px"></div>';
 }
@@ -1288,6 +1293,13 @@ function vitrineBody(){
    `vitrineBody` reste lisible et que le test de non-régression ait un seul
    nom à surveiller. Toute la prudence est chez les appelées : elles vérifient
    leur propre cache et ne font rien deux fois. */
+/* Le seul point d'entrée du bandeau de SPEC-06 dans ce fichier. Il rend '' dès
+   que `app-16-duel-plus.js` n'est pas là, ou que l'une des quatre conditions du
+   §1.4 mord. */
+function bandeauApresPremiereRangee(){
+  return (typeof bandeauDuelJour === 'function') ? bandeauDuelJour() : '';
+}
+
 function apresRenduVitrine(){
   if(typeof apresRenduDecouvrirIA === 'function') apresRenduDecouvrirIA();
   if(typeof amorcerBientotDuJour === 'function') amorcerBientotDuJour();

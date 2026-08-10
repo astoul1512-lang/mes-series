@@ -568,8 +568,16 @@ function titresEcartes(){
     const media = String(c).slice(0, i), id = String(c).slice(i + 1);
     if(media !== 'tv' && media !== 'movie') return;
     const o = media === 'tv' ? db.shows[id] : db.movies[id];
+    /* CORRECTION DE RELECTURE — UNE GRAINE RÉCUSÉE N'EST PAS DANS LA
+       BIBLIOTHÈQUE, par construction : c'est un titre qu'on a dit avoir aimé
+       SANS l'ajouter. Elle s'affichait donc « Titre écarté du duel », sans nom
+       ni affiche — impossible de savoir ce qu'on reprend, alors que le §6.2
+       promet précisément qu'« on peut le reprendre ». `grainesSuspendues` porte
+       le nom : on le lit. */
+    const gr = ((db.gouts && db.gouts.grainesSuspendues) || [])
+      .find(x => x && x.media === media && String(x.id) === String(id));
     out.push({ media:media, id:id, pasVu:true,
-               nom:(o && (o.name || o.title)) || 'Titre écarté du duel',
+               nom:(o && (o.name || o.title)) || (gr && gr.nom) || 'Titre écarté du duel',
                affiche:(o && o.poster) || null, quand:0 });
   });
   return out.sort((a,b)=>b.quand-a.quand);
@@ -2058,7 +2066,16 @@ function requeteHumeur(media, cadre, cle, variante){
      mesurable et que le §2 nomme en toutes lettres : la tension contre le gore.
      Voir `recetteAffineeHumeur` (app-14) pour la règle, et le rapport de lot
      pour la question posée à Adrien. */
-  if(typeof recetteAffineeHumeur === 'function'){
+  /* CORRECTION DE RELECTURE (10/08) — L'AFFINAGE EST SOUS L'INTERRUPTEUR.
+     Il s'appliquait interrupteur ÉTEINT : « Frissonner » ajoutait alors
+     `without_keywords=10292` et le rendu différait du lot A, alors que le §4.5
+     promet que l'app éteinte est EXACTEMENT l'app d'avant. Le §2 range
+     d'ailleurs cet affinage dans « Avec IA (couche optionnelle) ».
+     La décision d'Adrien du 10/08 autorise à le calculer LOCALEMENT plutôt que
+     par une requête ; elle ne dit pas qu'il déborde du périmètre de
+     l'interrupteur. Il reste donc gratuit, et il reste optionnel. */
+  if(typeof recetteAffineeHumeur === 'function' &&
+     typeof iaActive === 'function' && iaActive('decouvrir')){
     const fin = recetteAffineeHumeur(cle);
     /* 10292 = « gore » chez TMDB. La recette films du frisson l'écarte déjà ;
        ce qu'on ajoute ici, c'est de l'écarter AUSSI côté séries et animés, pour
@@ -4138,7 +4155,13 @@ function terminerDuel(){
      répondre puis revenir en arrière ne consomme pas la journée. */
   if(duel.mode === 'jour' && typeof marquerDuelJourJoue === 'function') marquerDuelJourJoue();
   apresAvis();                      // enregistre, et périme la vitrine
-  chargerSuggDuel(duel.tete);
+  /* D-1 (relecture du 10/08) — LE DUEL DU JOUR NE DEMANDE RIEN À TMDB.
+     `chargerSuggDuel` va chercher des recommandations : c'est ce que l'écran de
+     résultat de SESSION affiche sous le podium. L'écran léger du duel du jour,
+     lui, ne les montre pas — la requête partait donc pour une réponse que
+     personne ne lisait, et le §8 de SPEC-06 exige « zéro requête réseau
+     attribuable au bandeau (onglet réseau vide à l'affichage ET AU JEU) ». */
+  if(duel.mode !== 'jour') chargerSuggDuel(duel.tete);
   render();
 }
 
@@ -4755,7 +4778,11 @@ function ecranDuelResultat(){
   let html = '<div class="dres">'+
     '<div class="dfete">🏆</div>'+
     '<div class="drtitre">Ton podium</div>'+
-    '<div class="drsous">D\'après tes '+duel.faits+' duel'+(duel.faits>1?'s':'')+'</div>';
+    '<div class="drsous">D\'après tes '+duel.faits+' duel'+(duel.faits>1?'s':'')+'</div>'+
+    /* SPEC-06 §4.3 — la jauge est demandée à TROIS endroits : la carte du
+       profil, le résultat du duel du jour, et ICI, « l'écran de résultat de
+       session existant ». Ce troisième manquait — relevé en relecture. */
+    ((typeof jaugeDuelHtml === 'function') ? jaugeDuelHtml(duel.famille) : '');
   /* Le n°1 au milieu et plus haut : un podium se lit d'un coup d'œil, pas en
      lisant les médailles une par une. */
   const ordre = trois.length >= 3 ? [trois[1], trois[0], trois[2]]

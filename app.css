@@ -2434,17 +2434,35 @@ body.rphnette .rphrase{background:#15171e}
      les deux lueurs sur `.app` en `background` simple, recalées plus discrètes.
      À noter en commentaire daté le jour où c'est fait, pas avant : le repli
      n'est pas gratuit, il rend le fond solidaire du défilement. */
-  html{
+  /* P-3 (relecture du 10/08) — LA JUSTIFICATION ÉTAIT FAUSSE, ET LE FOND
+     DÉFILAIT.
+
+     Le commentaire disait « `html` ne défile pas sous l'app — c'est `.app` qui
+     défile dedans ». Vérification faite : `.app` n'a AUCUN `overflow` (voir sa
+     règle en tête de fichier, `max-width:720px;min-height:100vh`). C'est le
+     document qui défile, et la boîte de `html` fait la hauteur du document :
+     les deux lueurs, ancrées à 0 % et 100 % de CETTE boîte, s'éloignaient donc
+     au premier écran et ne revenaient plus. Le §2.1 demande un fond AMBIANT,
+     c'est-à-dire constant.
+
+     Elles sont posées sur un pseudo-élément FIXE, qui ne défile par
+     construction. Pas de `background-attachment:fixed` — c'est lui qui est
+     buggué sur iOS, et c'est ce que la première version cherchait à éviter ;
+     `position:fixed` sur un pseudo-élément n'a pas ce défaut. Un seul paint,
+     aucune animation, `pointer-events:none` pour qu'il ne prenne aucun clic, et
+     `z-index:-1` pour qu'il reste sous tout le contenu. */
+  html{ background:var(--bg); }
+  body{ background:transparent; }
+  body::before{
+    content:'';
+    position:fixed;
+    inset:0;
+    z-index:-1;
+    pointer-events:none;
     background:
       radial-gradient(50% 42% at 0% 0%,   #141b33 0%, rgba(20,27,51,0) 100%),
-      radial-gradient(52% 40% at 100% 100%, #1a1030 0%, rgba(26,16,48,0) 100%),
-      var(--bg);
-    background-repeat:no-repeat;
+      radial-gradient(52% 40% at 100% 100%, #1a1030 0%, rgba(26,16,48,0) 100%);
   }
-  /* `body` porte déjà `background:var(--bg)` dans le socle, ce qui masquerait
-     les deux lueurs : on le rend transparent. La couleur de secours reste sur
-     `html`, donc rien n'est jamais blanc. */
-  body{background:transparent}
 
   /* Le verre EXISTE DÉJÀ sur ces deux-là (`backdrop-filter:blur(18px)`), il
      était simplement invisible sous un fond à 94 % d'opacité. On baisse le
@@ -2481,24 +2499,48 @@ body.rphnette .rphrase{background:#15171e}
   /* Liseré et ombre NEUTRE sur toutes les jaquettes. Le rayon monte de 2 à 3 px
      là où il était sous 12 — c'est de la matière, pas de la géométrie : la
      boîte, elle, ne bouge pas d'un pixel. */
+  /* P-2 (relecture du 10/08) — LE REPLI DU §3 ÉTAIT INOPÉRANT, ET LE
+     COMMENTAIRE QUI L'EXPLIQUAIT SE TROMPAIT DE SÉLECTEUR.
+
+     Il disait « retirer `body .vgn .poster` et `body .filmrow .poster` de la
+     liste ». Mais la liste COMMENÇAIT par `body .poster`, qui porte déjà
+     l'ombre sur toutes les jaquettes, rails compris : les deux sélecteurs
+     nommés étaient redondants, et les retirer n'aurait retiré aucune ombre. Un
+     repli borné et réversible sur le papier, sans effet dans les faits.
+
+     La liste est donc coupée en deux, pour de bon : le LISERÉ pour tout le
+     monde, l'OMBRE seulement pour ce qui ne défile pas en rail. Le repli du §3,
+     si la mesure iPhone le demande, tient maintenant en une ligne — retirer le
+     second bloc — et il retirera réellement quelque chose. */
   body .poster,
-  body .vgn .poster,
-  body .gcard .poster,
-  body .filmrow .poster,
   body .pcard .wrapimg,
   body .dmaff{
     border:1px solid rgba(255,255,255,.09);
     border-radius:12px;
+  }
+  /* `.pcard .wrapimg` CONTIENT une `.poster` : les deux liserés se seraient
+     imbriqués, et en `border-box` l'affiche interne aurait perdu 2 px de large.
+     Le §0.4 interdit de toucher aux largeurs. C'est l'enveloppe qui garde le
+     trait. Relevé en relecture. */
+  body .pcard .wrapimg .poster{ border:0; border-radius:0 }
+  /* Ni dans un avatar rond, ni sur un placeholder sans image : le liseré est
+     fait pour border une AFFICHE. Relevé en relecture. */
+  body .pf12rond .poster{ border:0; border-radius:50% }
+  body .poster.ph{ border-color:rgba(255,255,255,.05) }
+  /* ↓ LE BLOC DU REPLI. Les rails (`.vgn`, `.filmrow`) en sont ABSENTS : c'est
+     là que se joue la fluidité, et l'ombre y est le seul coût mesurable. */
+  body .dhead .poster,
+  body .srow .poster,
+  body .gcard .poster,
+  body .pcard .wrapimg,
+  body .dmaff{
     box-shadow:0 10px 28px rgba(0,0,0,.45);
   }
-  /* MESURE À FAIRE, ET LE REPLI EST DÉJÀ ÉCRIT (§3). Les ombres portées sur des
-     dizaines d'affiches d'un rail sont le seul risque de fluidité de ce lot ; à
-     mesurer sur iPhone, défilement d'une vitrine chargée, avant/après. Si le
-     rail perd en fluidité, le repli consiste à retirer `body .vgn .poster` et
-     `body .filmrow .poster` de la liste ci-dessus (les rails) et à leur laisser
-     le liseré seul — les écrans peu peuplés (`.dhead`, `.dcartes`, `.rcarte`,
-     `.pcard`) gardant l'ombre. Ne pas inventer un autre repli : celui-ci est
-     borné et réversible. */
+  /* MESURE À FAIRE — elle ne peut pas se faire depuis le bac à sable : iPhone,
+     défilement d'une vitrine chargée, avant/après. Les rails n'ont DÉJÀ plus
+     d'ombre (voir ci-dessus) ; si la mesure montre qu'il en reste trop, le
+     repli est de supprimer le second bloc en entier, et il retirera alors
+     réellement toutes les ombres d'affiche. Ne pas inventer un autre repli. */
 
   /* Le halo COLORÉ est réservé aux écrans à affiche unique ou double — la fiche
      et le duel. En rangée, extraire la couleur dominante coûterait un canvas
@@ -2535,8 +2577,23 @@ body.rphnette .rphrase{background:#15171e}
     color:var(--text);letter-spacing:-.25px;margin:26px 16px 12px;
   }
   /* Les grands titres : le hero de Découvrir et le titre de fiche. */
+  /* P-1 (relecture du 10/08) — LA BORNE DES PETITS ÉCRANS ÉTAIT DÉFAITE.
+     `body .d4nom` a une spécificité de (0,1,1) ; la règle responsive de SPEC-04
+     `@media (max-width:359px){ .d4nom{font-size:23px} }` n'en a que (0,1,0) —
+     une media query n'ajoute AUCUNE spécificité, c'est le piège classique.
+     Sur un écran de 359 px ou moins, le titre du hero passait donc de 23 à
+     31 px : +8 px là où le §2.3 en autorise 2 à 4, et sur l'écran le plus
+     étroit. La borne est rejouée ci-dessous, à la même spécificité que la
+     surcharge — un +2 px assumé, cohérent avec le reste du lot. */
   body .d4nom{font-size:31px;letter-spacing:-.03em}
-  body .dhead h2{font-size:26px;letter-spacing:-.01em}
+  /* P-4 — `.dmeta h2` valait 19 px ; 26 faisait +7, et `.dmeta` n'a ni clamp ni
+     ellipse : un titre long gagnait une ligne et poussait tout ce qui suit.
+     23 px, soit +4, la borne haute du §2.3. */
+  body .dhead h2{font-size:23px;letter-spacing:-.01em}
+  @media (max-width:359px){
+    body .d4nom{font-size:25px}
+    body .dhead h2{font-size:21px}
+  }
 
 /* ---------- Lot C — §2.4 : l'accent bijou et les micro-détails ---------- */
 
@@ -2546,7 +2603,24 @@ body.rphnette .rphrase{background:#15171e}
   body .btn{background-image:var(--px-grad);box-shadow:var(--px-lueur);
     transition:transform .2s,box-shadow .25s,background-color .25s}
   body .btn.ghost{background-image:none;box-shadow:none}
+  /* Le bouton principal du hero d'HUMEUR est violet (SPEC-04 §2) : une lueur
+     bleue dessous jurait, et le dégradé bleu écrasait sa couleur. Il garde la
+     sienne, dans la même matière. Relevé en relecture. */
+  body .btn.h4btn{background-image:linear-gradient(135deg,#8b6cff,#a78bfa);
+    box-shadow:0 6px 22px rgba(139,108,255,.38)}
   body .chip.on{background-image:var(--px-grad);box-shadow:var(--px-lueur)}
+  /* `.fam.on`, que le §2.4 nomme, N'EXISTE PAS dans le dépôt : les puces de
+     famille sont `.chip.on`, traitées ci-dessus. Les puces d'HUMEUR, elles,
+     sont `.chip.h4chip.on` (0,3,0) et leur `background` en raccourci écrasait
+     le `background-image` de la règle du dessus (0,2,1) : elles ne recevaient
+     donc AUCUNE matière, et rien ne le disait. Elles gardent leur violet — il
+     porte un sens — dans la même matière que le reste. Relevé en relecture. */
+  body .chip.h4chip.on{background-image:linear-gradient(135deg,#b79bff,#a78bfa);
+    box-shadow:0 6px 20px rgba(167,139,250,.34)}
+  /* Sur le hero, la puce active garde son aplat (le verre dépoli du voisinage
+     ne supporte pas un dégradé) : on ne lui en pose pas, et on le dit plutôt
+     que de laisser croire à un oubli. */
+  body .h4surhero .chip.on{background-image:none;box-shadow:none}
   body .rbadge{background-image:var(--px-grad)}
   body .pcard .pbar>i{background-image:var(--px-grad)}
   /* La jauge de stabilité de SPEC-06 et la barre de progression du duel : deux

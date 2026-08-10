@@ -1043,7 +1043,67 @@ function collisionsCss(src){
     souci += soucis.length;
   }
 
-  /* --- 14. SPEC-04/05 — LA LISTE BLANCHE DU RELAIS N'A NI TROU NI SURPLUS ---
+  /* --- 14. SPEC-04 §0.4 — LA COPIE CLIENT EST-ELLE ENCORE LA COPIE ? ---
+
+     `app-14-ia.js` recopie mot pour mot les trois motifs de la règle §0.4
+     depuis `functions/ia/gabarits.ts`, et le commentaire qui l'assume promet
+     qu'« un test le fera remarquer » si le serveur bouge. Ce test n'existait
+     pas — c'était la seule promesse fausse du lot C, relevée en relecture.
+
+     Il ne pouvait pas vivre dans `test.html`, qui ne charge pas de TypeScript ;
+     il vit donc ici, où le lanceur lit déjà des fichiers sur le disque. La
+     duplication reste voulue (deux barrières qui partagent leur source n'en
+     font qu'une) — ce contrôle ne la supprime pas, il la rend surveillée. */
+  {
+    const fs = require('fs'), chemin = require('path');
+    const racine = chemin.join(__dirname, '..');
+    const soucis = [];
+    const js = fs.readFileSync(chemin.join(racine, 'app-14-ia.js'), 'utf8');
+    const ts = fs.readFileSync(chemin.join(racine, 'supabase/functions/ia/gabarits.ts'), 'utf8');
+    /* On compare les LITTÉRAUX, pas les expressions régulières construites :
+       c'est la source qui doit rester identique, et c'est elle qu'on recopie. */
+    const lit = (src, nom)=>{
+      const m = new RegExp('const\\s+' + nom + '\\s*=\\s*([\\s\\S]*?);').exec(src);
+      return m ? m[1].replace(/\s+/g, '') : null;
+    };
+    [['IA_AFFECT','AFFECT'], ['IA_POSSESSIF','POSSESSIF']].forEach(([cli, srv])=>{
+      const a2 = lit(js, cli), b2 = lit(ts, srv);
+      if(!a2 || !b2) soucis.push(cli + ' / ' + srv + ' : introuvable d\'un des deux côtés');
+      else if(a2 !== b2)
+        soucis.push(cli + ' ne correspond plus à ' + srv + ' de gabarits.ts — la barrière client '
+                    + 'a divergé de la barrière serveur (SPEC-04 §0.4)');
+    });
+    /* Et les quatre motifs assemblés, dans le même ordre. On isole le tableau
+       passé à `new RegExp`, on retire les commentaires (les deux fichiers n'en
+       portent pas les mêmes) et les espaces, puis on compare. */
+    const assemble = src=>{
+      const i = src.indexOf('new RegExp(');
+      if(i < 0) return null;
+      const j = src.indexOf('].join(', i);
+      if(j < 0) return null;
+      return src.slice(i, j)
+        .replace(/\/\/[^\n]*/g, ' ')
+        .replace(/\/\*[\s\S]*?\*\//g, ' ')
+        .replace(/\s+/g, '')
+        /* Les deux seules différences LÉGITIMES : le préfixe `IA_` des noms
+           côté client (le fichier vit dans la portée globale de l'app, où un
+           `AFFECT` nu entrerait en collision), et la virgule finale. Tout le
+           reste doit être identique caractère pour caractère. */
+        .replace(/\bIA_/g, '')
+        .replace(/,$/, '');
+    };
+    const mj = assemble(js), mt = assemble(ts);
+    if(!mj || !mt) soucis.push('les motifs assemblés de la §0.4 sont introuvables d\'un des deux côtés');
+    else if(mj !== mt)
+      soucis.push('les motifs assemblés de la §0.4 ont divergé entre le client et le serveur');
+    console.log('§0.4 recopiée → ' + (soucis.length
+      ? soucis.length + ' divergence(s)'
+      : 'client et serveur disent la même chose, motif pour motif'));
+    soucis.forEach(d => console.log('   ! ' + d));
+    souci += soucis.length;
+  }
+
+  /* --- 15. SPEC-04/05 — LA LISTE BLANCHE DU RELAIS N'A NI TROU NI SURPLUS ---
 
      Décision d'Adrien du 10/08/2026, prise en retirant `profil_humeur` : la
      liste blanche fermée de `functions/ia/config.ts` doit correspondre
@@ -1093,7 +1153,7 @@ function collisionsCss(src){
     souci += soucis.length;
   }
 
-  /* --- 15. SPEC-07 — LA COUCHE DE PEINTURE RESTE UNE COUCHE DE PEINTURE ---
+  /* --- 16. SPEC-07 — LA COUCHE DE PEINTURE RESTE UNE COUCHE DE PEINTURE ---
 
      Le §0.3 et le §1.2 de SPEC-07 sont des contraintes de DIFF, pas de
      comportement : « app.css est le seul fichier touché », « les jetons :root
@@ -1159,6 +1219,54 @@ function collisionsCss(src){
           soucis.push('backdrop-filter ajouté par SPEC-07 sur « ' + sel +
                       ' » : le §3 ne l\'admet que sur le toast');
       }
+    }
+    /* P-1 (relecture du 10/08) — CE CONTRÔLE ÉTAIT AVEUGLE AUX SURCHARGES DE
+       MISE EN PAGE, c'est-à-dire précisément là où étaient les régressions.
+
+       `body .d4nom{font-size:31px}` (0,1,1) défaisait
+       `@media (max-width:359px){ .d4nom{font-size:23px} }` (0,1,0) : une media
+       query n'ajoute AUCUNE spécificité. Le piège est mécanique, donc il se
+       vérifie mécaniquement : toute taille de police posée par la section
+       SPEC-07 sur un sélecteur dont le socle borne la taille en petit écran
+       doit être rejouée dans une media query de la section. */
+    if(iPremium >= 0){
+      /* Commentaires blanchis des DEUX côtés : ceux de cette section CITENT
+         `.vgn` et `.filmrow` pour expliquer le repli, et les lire ferait
+         accuser le code de ce que son commentaire raconte. */
+      const sansCom = t => t.replace(/\/\*[\s\S]*?\*\//g, ' ');
+      const socle = sansCom(css.slice(0, iPremium));
+      const bloc = sansCom(css.slice(iPremium));
+      const bornes = new Set();
+      const reMedia = /@media[^{]*max-width[^{]*\{([\s\S]*?)\n\s*\}/g;
+      let m2;
+      while((m2 = reMedia.exec(socle))){
+        (m2[1].match(/\.[A-Za-z_-][A-Za-z0-9_-]*(?=[^{}]*\{[^{}]*font-size)/g) || [])
+          .forEach(c => bornes.add(c));
+      }
+      const dansMedia = bloc.slice(bloc.search(/@media/) < 0 ? bloc.length : bloc.search(/@media/));
+      /* Pas d'ancre sur le `}` précédent : elle serait CONSOMMÉE par la règle
+         d'avant, et une règle sur deux passerait au travers. `[^{}@]` ne peut
+         pas franchir une accolade, ce qui suffit à borner le sélecteur. */
+      const reRegle = /(body\s[^{}@]*?)\{([^{}]*)\}/g;
+      let m3;
+      while((m3 = reRegle.exec(bloc))){
+        if(!/font-size/.test(m3[2])) continue;
+        (m3[1].match(/\.[A-Za-z_-][A-Za-z0-9_-]*/g) || []).forEach(c=>{
+          if(!bornes.has(c)) return;
+          if(dansMedia.indexOf(c) < 0)
+            soucis.push(c + ' : SPEC-07 en change la taille sans rejouer la borne des petits '
+                        + 'écrans — une media query n\'ajoute aucune spécificité (§1.5)');
+        });
+      }
+      /* §3 — le repli doit pouvoir retirer quelque chose. Une ombre posée sur
+         les rails par un sélecteur plus large que ceux qu'on dit retirer rend
+         le repli décoratif : c'est le défaut P-2. */
+      const ombres = bloc.match(/(^|\})\s*([^{}@]+?)\{[^{}]*box-shadow[^{}]*\}/g) || [];
+      ombres.forEach(r=>{
+        if(/\.vgn|\.filmrow/.test(r))
+          soucis.push('une ombre est posée sur un rail (.vgn / .filmrow) : le repli du §3 '
+                      + 'ne pourrait plus rien retirer');
+      });
     }
     console.log('premium       → ' + (soucis.length
       ? soucis.length + ' écart(s)'

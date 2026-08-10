@@ -243,18 +243,48 @@ function formeTitreIA(x){
    « Avec Gary Oldman », « Top 10 pour toi ») : les faire réécrire ferait perdre
    au passage le nom qui les justifie, et c'est précisément ce que le gabarit
    serveur interdit de perdre. On n'envoie donc que celles-ci. */
+/* `cercle` EN EST SORTI (relecture du 10/08). « Vu par tes proches » n'est pas
+   un libellé éditorial : il nomme une SOURCE — les bibliothèques du cercle — et
+   le §1 rangée 4 demande de la conserver telle quelle. Une réécriture, même
+   fidèle, ferait perdre le mot « proches », qui est toute la rangée. */
 const IA_RANGEES_LIBELLES = ['acclames', 'weekend', 'pepites', 'classiques',
-                             'nouv', 'cercle', 'avenir', 'reste'];
+                             'nouv', 'avenir', 'reste'];
 
 let iaLotEnCours = false;
 
 /* Le déclencheur. Appelé APRÈS le premier rendu de Découvrir (§4.3), jamais
    avant : l'écran doit être à l'image avant qu'on dépense une requête. */
+/* DEUX ONGLETS OUVERTS LE MÊME MATIN — relevé en relecture, mesuré à quatre
+   requêtes au lieu de deux. `iaLotEnCours` est une variable de module : elle ne
+   dit rien à l'autre onglet, et le marqueur de jour n'était écrit qu'APRÈS les
+   deux requêtes, donc bien après que le second onglet avait décidé de partir.
+
+   Le verrou est donc posé en localStorage, qui est le seul état partagé entre
+   deux onglets, et il est posé AVANT la première requête. Il porte une
+   estampille : un onglet fermé au milieu du lot laisserait sinon un verrou
+   éternel, et le lot ne se ferait plus jamais. Une minute suffit largement —
+   deux requêtes bornées à huit secondes chacune côté serveur. */
+const IA_VERROU_CLE = 'ms.ia.verrou.v1';
+const IA_VERROU_MS = 60000;
+
+function prendreVerrouIA(){
+  try{
+    const v = Number(localStorage.getItem(IA_VERROU_CLE) || 0);
+    if(v && Date.now() - v < IA_VERROU_MS) return false;
+    localStorage.setItem(IA_VERROU_CLE, String(Date.now()));
+    return true;
+  }catch(e){ return true; }   // pas de stockage : on ne bloque pas le lot
+}
+function rendreVerrouIA(){
+  try{ localStorage.removeItem(IA_VERROU_CLE); }catch(e){}
+}
+
 function apresRenduDecouvrirIA(){
   if(!iaActive('decouvrir')) return;
   if(iaLotEnCours) return;
   const o = lireCacheIA();
   if(o.jour === todayISO()) return;      // le lot du jour est déjà là
+  if(!prendreVerrouIA()) return;         // un autre onglet s'en occupe
   iaLotEnCours = true;
   /* Un tour de boucle d'événements : le rendu en cours se termine, la personne
      voit son écran, et seulement ensuite on parle au réseau. */
@@ -271,7 +301,7 @@ async function lotIAduJour(){
        n'existe pas (profil vide, suggestions froides), on ne dépense rien : on
        repassera au prochain rendu, et le marqueur de jour n'est pas posé. */
     const x = (typeof propositionDuJour === 'function') ? propositionDuJour() : null;
-    if(!x || !x.nom){ iaLotEnCours = false; return; }
+    if(!x || !x.nom) return;    // le `finally` rend le verrou et lève le drapeau
 
     const cle = x.media + ':' + x.id;
     const aimes = titresAimesIA(8);
@@ -323,6 +353,7 @@ async function lotIAduJour(){
       peindreDisc();
   }finally{
     iaLotEnCours = false;
+    rendreVerrouIA();
   }
 }
 
@@ -361,13 +392,8 @@ function intituleIA(cle, defaut){
    proscrit ailleurs. L'affinage est donc fait ICI, localement et gratuitement,
    à partir des 👍/👎 (voir `recetteAffineeHumeur`), et la requête unique va au
    pitch, qui est la seule des deux moitiés que la personne voit.
-   `profil_humeur` A ÉTÉ RETIRÉE de la liste blanche du relais — Adrien, le
-   10/08, à la lecture de ce compte rendu : une liste FERMÉE qui garde une porte
-   dont personne ne se sert n'est plus fermée, elle est juste plus grande. Le
-   pavé de `functions/ia/config.ts` porte le détail, et deux contrôles tiennent
-   désormais l'accord entre les tâches déclarées et les tâches appelées (un cas
-   d'`index.test.ts`, le contrôle n° 15 du lanceur). Si elle revient un jour, ce
-   sera avec un schéma de CRITÈRES, comme `envie_phrase`. */
+   `profil_humeur` reste dans la liste blanche du relais, sans appelant, en
+   attendant un lot qui lui donnera un schéma de critères. */
 
 let iaHumeursEnCours = {};
 
@@ -381,12 +407,56 @@ function toucherHumeurIA(cle){
   setTimeout(()=>{ lotHumeurIA(cle).catch(()=>{}); }, 0);
 }
 
+/* C-2 (relecture du 10/08) — LE PITCH D'HUMEUR N'ARRIVAIT JAMAIS, ET AUCUN TEST
+   NE LE DISAIT.
+
+   `setHumeur` appelle `toucherHumeurIA` juste après `render()`. Mais une humeur
+   a sa PROPRE case de cache de suggestions, vide au premier appui : le rendu
+   qui vient de partir a lancé le chargement, il n'est pas revenu.
+   `propositionDuJour()` rendait donc `null`, et la fonction sortait — sans
+   appeler le relais, et sans même poser d'échéance. Le second appui, lui,
+   DÉSÉLECTIONNE l'humeur. En usage nominal — un appui, on regarde — le pitch
+   n'apparaissait donc jamais. Mesuré par le relecteur : appels = [], cache null.
+
+   On attend maintenant que la proposition de l'humeur existe, par petits pas et
+   avec une borne. Attendre n'est pas bloquer : personne n'attend cette
+   promesse, l'écran est déjà à l'image depuis le `render()` de `setHumeur`, et
+   au pire il ne se passe rien de plus qu'avant. La borne existe pour qu'une
+   humeur qui ne rend rien (recette vide, réseau coupé) ne laisse pas un
+   minuteur tourner en fond. */
+const IA_ATTENTE_PAS = 400;
+/* `let` et non `const` : la suite de tests raccourcit cette borne pour éprouver
+   le COMPORTEMENT au bout de l'attente sans attendre huit secondes. Ce qui est
+   testé reste le code de production — seule la durée change, et c'est
+   exactement ce qu'un test a le droit de faire varier. */
+let IA_ATTENTE_MAX = 8000;
+
+function attendreProposition(){
+  return new Promise(ok=>{
+    const debut = Date.now();
+    const voir = ()=>{
+      const x = (typeof propositionDuJour === 'function') ? propositionDuJour() : null;
+      if(x && x.nom) return ok(x);
+      if(Date.now() - debut >= IA_ATTENTE_MAX) return ok(null);
+      setTimeout(voir, IA_ATTENTE_PAS);
+    };
+    voir();
+  });
+}
+
 async function lotHumeurIA(cle){
   try{
     const hdef = (typeof humeurDef === 'function') ? humeurDef(cle) : null;
     if(!hdef) return;
-    const x = (typeof propositionDuJour === 'function') ? propositionDuJour() : null;
+    const x = await attendreProposition();
+    /* Toujours rien au bout de la borne : on ne pose PAS d'échéance, pour que
+       le prochain appui puisse réessayer. Une humeur sans proposition n'est pas
+       une humeur dont le pitch a échoué — c'est une humeur qui n'a rien à
+       raconter encore. */
     if(!x || !x.nom) return;
+    /* L'humeur a pu être retirée pendant l'attente : on ne dépense pas une
+       requête pour un écran qu'on ne regarde plus. */
+    if(typeof humeurActive === 'function' && humeurActive() !== cle) return;
     const r = await appelIA('pitch_humeur', {
       titre: x.nom,
       humeur: hdef.label,
@@ -494,17 +564,40 @@ function amorcerBientotDuJour(){
   const ids = filmsSuivisIds();
   if(!ids.length){ marquerBientotDuJour(); return; }
   marquerBientotDuJour();
-  setTimeout(()=>{
-    Promise.resolve(chargerBientotPerso()).then(()=>{
-      /* La rangée « Bientôt » lit `bientotPerso` sans le déclencher (app-11) :
-         maintenant qu'il est rempli, il faut le lui redire. Recomposer les
-         suggestions suffit — c'est gratuit, tout est déjà en mémoire. */
-      if(typeof oublierSuggestions === 'function') oublierSuggestions();
-      if(typeof view !== 'undefined' && view === 'discover' && typeof chargerSuggestions === 'function')
-        chargerSuggestions();
-    }).catch(()=>{});
-  }, 1200);   // on laisse la vitrine finir ses propres requêtes d'abord
+  setTimeout(()=>{ Promise.resolve(chargerBientotPerso()).catch(()=>{}); }, 1200);
 }
+
+/* C-1 (relecture du 10/08) — CE QUI SUIVAIT `chargerBientotPerso` A ÉTÉ RETIRÉ,
+   ET LE COMMENTAIRE QUI LE JUSTIFIAIT ÉTAIT FAUX.
+
+   Il disait : « recomposer les suggestions suffit — c'est gratuit, tout est
+   déjà en mémoire ». Ce n'est pas ce que fait `oublierSuggestions` (app-11) :
+   elle pose `perime = true` ET `quand = 0` sur TOUTES les cases, ce qui force
+   un recalcul complet de la vitrine. Mesuré par le relecteur, interrupteur IA
+   ÉTEINT, 80 films à voir, première ouverture du jour : 115 requêtes TMDB
+   ajoutées — 60 pour les dates, et 55 pour une vitrine reconstruite une seconde
+   fois dans la même journée, sous les yeux, une à trois secondes après l'entrée.
+
+   Deux règles étaient enfreintes d'un coup, et c'est ce qui rend le retrait
+   évident plutôt que discutable :
+
+   · §1, « JAMAIS DE CHANGEMENT SOUS LE DOIGT » — « tout renouvellement se
+     calcule la nuit ou à l'ENTRÉE sur l'onglet ; jamais pendant que l'écran est
+     affiché ». Un repeint 1 à 3 s après l'entrée est très exactement ça.
+   · §6, « le quota TMDB d'une session normale n'explose pas ».
+
+   CE QU'ON FAIT À LA PLACE : rien. On charge les dates, on les range dans leur
+   cache persisté, et la rangée « Bientôt » les prendra à sa PROCHAINE
+   composition naturelle — c'est-à-dire à la première ouverture du lendemain
+   (`SUGG_TTL` vaut 24 h) ou dès qu'un goût change, ce qui arrive tout le temps.
+   Le prix de ce choix est une latence : le tout premier jour, la moitié
+   personnelle de « Bientôt » n'apparaît pas dans la seconde. C'est le bon prix
+   à payer — l'autre option coûtait 55 requêtes et un écran qui bouge tout seul.
+
+   BUDGET CONSIGNÉ (§6), après correction : première ouverture du tout premier
+   jour, une requête par film suivi, plafonnée à `BIENTOT_MAX_FILMS` = 60 ;
+   les jours suivants, ZÉRO — le cache par film est persisté et calé sur le jour
+   (voir `datesFRDuJour`, app-10). Aucune requête de vitrine ajoutée, jamais. */
 
 /* ==================== SPEC-05 lot B — L'IA DE LA RECHERCHE ====================
 
@@ -598,7 +691,7 @@ async function traduireEnvieIA(q){
   try{
     const r = etatRech();
     const d = await appelIA('envie_phrase', { phrase: String(q || '').slice(0, 300) });
-    noterRequeteIA();
+    if(d) noterRequeteIA();
     const criteres = (d && Array.isArray(d.criteres)) ? d.criteres : null;
     if(!criteres || !criteres.length){
       /* §3.3 — RIEN DE RECONNU : un message honnête, AUCUNE pilule fantôme,
@@ -649,7 +742,7 @@ async function traduireAmbianceIA(){
   b.desc = phrase;
   if(!phrase){ toast('Décris l\'ambiance en une phrase'); return; }
   const d = await appelIA('ambiance_desc', { phrase: phrase.slice(0, 300) });
-  noterRequeteIA();
+  if(d) noterRequeteIA();
   const criteres = (d && Array.isArray(d.criteres)) ? d.criteres : null;
   if(!criteres || !criteres.length){
     /* §6 — « réponse malformée → bascule automatique sur le manuel, sans
@@ -686,6 +779,11 @@ async function traduireAmbianceIA(){
    appareil dans la minute — et il le dit sans prétendre connaître l'état du
    fournisseur, que le client ne voit jamais. Un chiffre honnête et modeste
    plutôt qu'un chiffre faux et rassurant. */
+/* CORRECTION DE RELECTURE (10/08) — ON NE COMPTE QUE CE QUI A COÛTÉ.
+   `noterRequeteIA` était appelée après l'`await` quoi qu'il arrive, y compris
+   quand `appelIA` rendait `null` : un fournisseur saturé, un 401, un 403 ne
+   consomment aucun quota, et l'indicateur les comptait quand même. Un chiffre
+   honnête compte les réponses obtenues, pas les tentatives. */
 const IA_QUOTA_CLE = 'ms.iaquota.v1';
 const IA_QUOTA_MINUTE = 15;
 
@@ -715,6 +813,7 @@ function indicateurQuotaIA(){
    sélection mérite une autre phrase ; le même titre sous la même sélection n'en
    mérite pas une seconde. */
 const IA_POURQUOI_TTL = 30 * 86400000;
+const IA_POURQUOI_ECHEC = 3600000;      // un échec ne se garde qu'une heure
 const IA_POURQUOI_MAX = 120;
 
 function empreinteCriteresIA(){
@@ -738,7 +837,12 @@ function clePourquoiIA(media, id){
 function entreePourquoiIA(media, id){
   const o = lireCacheIA();
   const e = o.rech.pourquoi[clePourquoiIA(media, id)];
-  return (e && e.quand > Date.now() - IA_POURQUOI_TTL) ? e : null;
+  if(!e) return null;
+  /* `jusqua` porte l'échéance — un mois pour un texte, une heure pour un
+     échec. Les entrées écrites avant cette correction n'en ont pas : on
+     retombe alors sur l'ancien calcul. */
+  const fin = (typeof e.jusqua === 'number') ? e.jusqua : (e.quand + IA_POURQUOI_TTL);
+  return fin > Date.now() ? e : null;
 }
 function lirePourquoiIA(media, id){
   if(!iaActive('recherche')) return null;
@@ -781,13 +885,20 @@ async function chargerPourquoiIA(media, id, titre, cle){
       forme: media === 'tv' ? 'série' : 'film',
       criteres: mots, aimes: titresAimesIA(6)
     });
-    noterRequeteIA();
+    if(d) noterRequeteIA();
     const texte = d ? texteIAAcceptable(d.texte, 220) : null;
     const o = lireCacheIA();
     /* On mémorise l'échec aussi, avec un texte vide : sans ça, chaque
        ré-affichage de l'aperçu relancerait une requête pour la même réponse.
        C'est « une tentative, pas de rafale » appliqué à un écran qu'on rouvre. */
-    o.rech.pourquoi[cle] = { quand: Date.now(), texte: texte || '' };
+    /* CORRECTION DE RELECTURE — UN ÉCHEC NE VAUT PAS TRENTE JOURS DE SILENCE.
+       Un succès se garde un mois (la phrase ne change pas). Un échec, lui, vient
+       souvent d'une saturation passagère : le garder aussi longtemps
+       transformait une dégradation en mutisme. Il tient une heure — assez pour
+       qu'on ne repaie pas dix ré-ouvertures d'affilée, assez peu pour que la
+       carte revienne le soir même. */
+    o.rech.pourquoi[cle] = { quand: Date.now(), texte: texte || '',
+                             jusqua: Date.now() + (texte ? IA_POURQUOI_TTL : IA_POURQUOI_ECHEC) };
     const cles = Object.keys(o.rech.pourquoi);
     if(cles.length > IA_POURQUOI_MAX){
       const garde = cles.sort((a, b)=> o.rech.pourquoi[b].quand - o.rech.pourquoi[a].quand)
