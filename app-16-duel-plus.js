@@ -141,7 +141,11 @@ function carteDuelProfil(){
     jaugeDuelHtml(fam)+
     (pantheon ? pantheonHtml(pantheon) : '')+
     '<div class="dpact">'+
-      '<button class="btn" onclick="ouvrirDuel(\''+fam+'\')">'+
+      /* Le bouton défend le podium AFFICHÉ, pas un autre. `familleDuelProfil`
+         et `famillePantheon` peuvent différer — l'une cherche où il reste à
+         jouer, l'autre où l'on a le plus joué — et « Défendre mon podium »
+         ouvrait alors une famille dont on ne montrait rien. */
+      '<button class="btn" onclick="ouvrirDuel(\''+(pantheon || fam)+'\')">'+
         (pantheon ? 'Défendre mon podium' : 'Jouer')+'</button>'+
       (pantheon ? '<button class="btn ghost" onclick="partagerPodium(\''+pantheon+'\')">'+
                   '↗ Partager</button>' : '')+
@@ -177,10 +181,26 @@ function pantheonHtml(fam){
    rien à zéro. C'est la SEULE pastille de la barre du bas — le §4.4 en réclame
    l'exclusivité, et si une autre spec en ajoute une, l'arbitrage se fait avant
    fusion. Aucune n'existe à ce jour, la question ne se pose pas encore. */
+/* CORRECTION DE RELECTURE (10/08) — LA PASTILLE ÉTAIT RECALCULÉE À CHAQUE
+   RENDU, et le commentaire juste au-dessus affirmait le contraire.
+
+   `renderNav()` tourne à chaque `render()`, et ce compte parcourt la
+   bibliothèque une fois par famille jouable — jusqu'à six passes complètes par
+   rendu. Le §4.4 dit « recalculée aux mêmes moments que le bloc Duel, JAMAIS en
+   continu », et le moyen existait déjà dans le dépôt : `signatureGouts()`, qui
+   ne bouge que quand un goût bouge. On mémorise donc sur elle.
+
+   Le podium entre dans cette signature (voir `signatureGouts`, app-11), et
+   `nouveauxADepartager` le lit : un duel joué invalide bien le mémo. */
+let pastilleDuelMemo = { sig:null, n:0 };
+
 function compteDuelPastille(){
+  const sig = (typeof signatureGouts === 'function') ? signatureGouts() : null;
+  if(sig !== null && pastilleDuelMemo.sig === sig) return pastilleDuelMemo.n;
   const jouables = (typeof famillesDuel === 'function') ? famillesDuel() : [];
   let n = 0;
   jouables.forEach(f=>{ n += nouveauxADepartager(f.cle); });
+  pastilleDuelMemo = { sig:sig, n:n };
   return n;
 }
 
@@ -239,7 +259,12 @@ function composerDuelJour(){
   if(paquet.length < DUEL_MINI) return null;
   const pod = ((db.podium || {})[fam] || []).map(String);
   const neufs = paquet.filter(t => duelsJoues(fam, t.id) === 0);
-  const tetes = paquet.filter(t => pod.indexOf(String(t.id)) >= 0);
+  /* Dans l'ORDRE DU PODIUM, pas dans celui du paquet : le §2.2 dit « neuf
+     contre TÊTE de podium », et filtrer le paquet rendait un titre quelconque
+     parmi les dix. L'éclair, lui, prenait déjà `pod[0]`. */
+  const parId = {};
+  paquet.forEach(t=>{ parId[String(t.id)] = t; });
+  const tetes = pod.map(x => parId[x]).filter(Boolean);
   let a = null, b = null;
   if(neufs.length && tetes.length){
     a = neufs[Math.floor(Math.random() * neufs.length)];
@@ -249,8 +274,6 @@ function composerDuelJour(){
     /* Deux voisins de classement : on prend un rang au hasard et son voisin
        immédiat, ce qui est la forme la plus serrée de `DUEL_VOISINS`. */
     const rangs = classementTrie(fam).map(String);
-    const parId = {};
-    paquet.forEach(t=>{ parId[String(t.id)] = t; });
     const dispo = rangs.map(id => parId[id]).filter(Boolean);
     if(dispo.length >= 2){
       const i = Math.floor(Math.random() * (dispo.length - 1));
@@ -336,9 +359,18 @@ function ecranResultatDuelJour(){
     jaugeDuelHtml(fam)+
     '<div class="dcta">'+
       '<button class="btn" onclick="ouvrirDuel(\''+fam+'\')">Enchaîner '+DUEL_TAILLE+' duels</button>'+
-      '<button class="btn ghost" onclick="fermerDuel()">Retour à Découvrir</button>'+
+      /* `fermerDuel()` seul ne touche pas `view` : après `go('gouts', …)`, on
+         restait sur Mes goûts et le libellé mentait. Relevé en relecture. */
+      '<button class="btn ghost" onclick="retourDecouvrirDuel()">Retour à Découvrir</button>'+
     '</div>'+
   '</div>';
+}
+
+/* Le bouton du §2.4 dit « Retour à Découvrir » : il faut donc y retourner. */
+function retourDecouvrirDuel(){
+  oublierDuel();
+  if(typeof go === 'function') go('discover');
+  else render();
 }
 
 /* ==================== §3 — LE DUEL ÉCLAIR ====================
@@ -374,6 +406,9 @@ function noterEclairPose(cle){
    règle plutôt qu'un drapeau qu'on oublierait de poser. */
 function proposerDuelEclair(media, id, nom){
   if(eclairFaitCetteSession) return;
+  /* Une session de duel en cours utilise l'objet `duel` : l'éclair le
+     réquisitionne le temps d'un vote, il ne doit pas s'inviter au milieu. */
+  if(typeof duel === 'object' && duel && duel.actif) return;
   if(typeof besoinAmorcage === 'function' && besoinAmorcage()) return;
   const cle = media + ':' + String(id);
   if(eclairsPoses().indexOf(cle) >= 0) return;
@@ -413,20 +448,40 @@ function ouvrirFeuilleEclair(media, id, nom, fam, adv){
 /* Le vote passe par le chemin EXISTANT — Elo, `ecrireClassement`, `saveDB` —
    et pas par une écriture directe. « Je ne sais pas » n'écrit rien : c'est le
    bouton qui ferme la feuille, et rien d'autre. */
+/* CORRECTION DE RELECTURE (10/08) — L'ÉCLAIR PASSE PAR `appliquerVote`, COMME
+   TOUTES LES AUTRES PORTES.
+
+   La première version recalculait l'Elo sur place : un `K = … : 32` en dur
+   réapparaissait — la constante que le dépôt avait justement fini par ne plus
+   dupliquer — et surtout la règle du §1.7 ne s'appliquait pas. Cette règle dit
+   qu'un titre non noté qui bat un titre 👍 passe à 👍, et elle vit dans
+   `appliquerVote`. Deux portes vers le même moteur ne se comportaient donc pas
+   pareil, ce que le §0.3 interdit en toutes lettres : « le moteur existant est
+   réutilisé tel quel, rien n'est réécrit ».
+
+   On pose donc une session de taille un, exactement comme le duel du jour, et
+   on laisse `appliquerVote` faire son travail. Le drapeau « silencieux » lui
+   dit de ne pas enchaîner ni redessiner — l'éclair n'a pas d'écran à lui. */
+function titreEclair(fam, media, id){
+  const parId = (typeof titresParIdDuel === 'function') ? titresParIdDuel(fam) : {};
+  return parId[String(id)] ||
+         { media:media, id:String(id), nom:'', famille:fam, genres:[], affiche:null };
+}
+
 function voterEclair(media, id, fam, advId, gagne){
   closeSheet();
-  const sA = scoreClassement(fam, id), sB = scoreClassement(fam, advId);
-  const K = (typeof DUEL_K === 'number') ? DUEL_K : 32;
-  const attendu = 1 / (1 + Math.pow(10, ((gagne ? sB : sA) - (gagne ? sA : sB)) / 400));
-  const gain = K * (1 - attendu);
-  if(gagne){
-    ecrireClassement(fam, id, sA + gain, duelsJoues(fam, id) + 1);
-    ecrireClassement(fam, advId, sB - gain, duelsJoues(fam, advId) + 1);
-  }else{
-    ecrireClassement(fam, advId, sB + gain, duelsJoues(fam, advId) + 1);
-    ecrireClassement(fam, id, sA - gain, duelsJoues(fam, id) + 1);
-  }
+  const x = titreEclair(fam, media, id);
+  const adv = titreEclair(fam, media === 'tv' ? 'tv' : 'movie', advId);
+  const paire = gagne ? [x, adv] : [adv, x];
+  oublierDuel();
+  const scores = {};
+  paire.forEach(t=>{ scores[cleDuel(t)] = scoreClassement(fam, t.id); });
+  duel = Object.assign({}, DUEL_VIDE,
+    { actif:true, famille:fam, paquet:paire.slice(), scores:scores, joues:{},
+      faits:0, ecran:'jeu', vus:paire.slice(), mode:'eclair', paire:paire });
+  appliquerVote(0, true);            // silencieux : ni enchaînement, ni rendu
   if(typeof projeterPodium === 'function') projeterPodium(fam);
+  oublierDuel();
   saveDB();
   toast('C\'est noté');
   render();

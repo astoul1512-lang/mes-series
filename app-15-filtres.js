@@ -90,7 +90,11 @@ function basculerAmbiance(id){
      La retirer ne remet PAS l'ancienne famille — on ne devine pas d'où on
      vient, et changer de famille sous le doigt serait la pire des surprises. */
   if(r.ambiance && a.regles && a.regles.fam) r.fam = a.regles.fam;
-  if(r.ambiance && a.regles && a.regles.tri) poserTriRech(a.regles.tri, true);
+  /* RÉSERVE DE RELECTURE — activer une ambiance n'écrase PLUS durablement le
+     tri mémorisé. `poserTriRech` écrit en localStorage, et `ambianceRegles(null)`
+     met `tri:'note'` par défaut : une ambiance créée sans y penser remettait
+     donc le tri de tout le monde à « note », pour toujours. Le §7 promet que
+     « le dernier choix est mémorisé » — le dernier choix de la PERSONNE. */
   relancerRech();
   if(r.ambiance) toast(a.emoji + ' ' + a.nom);
 }
@@ -101,7 +105,11 @@ function basculerAmbiance(id){
 function rangeeAmbiancesRech(){
   const r = etatRech();
   const l = ambiancesEnregistrees();
-  if(!l.length && !r.touche && !selectionActiveRech()) return blocAmorceAmbianceRech();
+  /* CORRECTION DE RELECTURE — sans aucune ambiance enregistrée, dès qu'un filtre
+     était posé la rangée tombait sur un « ＋ » seul : exactement le « ＋
+     orphelin » que le commentaire disait vouloir éviter. Tant qu'il n'y a rien
+     à ranger, c'est l'invitation nommée qui reste. */
+  if(!l.length) return blocAmorceAmbianceRech();
   return '<div class="ambr" data-rail="amb-perso">'+
     l.map(a=>
       '<button class="preset'+(r.ambiance === a.id ? ' on' : '')+'" '+
@@ -301,7 +309,6 @@ function validerAmbiance(){
   const r = etatRech();
   r.ambiance = a.id;
   r.fam = a.regles.fam || r.fam;
-  poserTriRech(a.regles.tri, true);
   relancerRech();
   toast(a.emoji + ' « ' + nom + ' » enregistrée et activée');
 }
@@ -483,6 +490,27 @@ function optFiltreRech(lab, action, on){
   return '<button class="fopt'+(on ? ' on' : '')+'" onclick="'+action+'">'+esc(lab)+'</button>';
 }
 
+/* RA-1 (relecture du 10/08) — LA FEUILLE SE REDESSINE ELLE-MÊME, ET C'EST TOUT.
+
+   Chaque option appelait `poserMotRech`, dont la queue ouvrait une AUTRE feuille
+   par-dessus : au premier clic sur un genre, l'accordéon disparaissait et le
+   titre devenait « Genre ou ambiance ». La feuille du §4 était inutilisable
+   au-delà d'un clic — le défaut le plus visible de tout le lot, et aucun cas ne
+   le voyait parce qu'aucun ne cliquait deux fois.
+
+   La queue de `poserMotRech` a été retirée (voir app-12) ; il reste à faire ici
+   ce que la feuille doit faire elle-même : se repeindre pour montrer le nouvel
+   état des options et le résumé de section. `sectionFiltreOuverte` n'est pas
+   touchée, donc la section ouverte le reste — c'est ce que le §4 demande. */
+function poserFiltreRech(cle, val){
+  poserMotRech(cle, val);
+  peindreFiltresRech();
+}
+function poserTuileFiltreRech(id){
+  poserAmbianceRech(id);
+  peindreFiltresRech();
+}
+
 function optionsSectionFiltre(id){
   const r = etatRech(), fam = r.fam;
   const poses = c => listeRech(c).map(String);
@@ -497,7 +525,7 @@ function optionsSectionFiltre(id){
     if(tuiles.length){
       h += '<div class="fsstitre">'+(familleRech().anime ? 'Sous-genres animés' : 'Les ambiances')+'</div>'+
         '<div class="fopts">'+ tuiles.map(t=>
-          optFiltreRech(t.t || t.mot, 'poserAmbianceRech(\''+escJs(t.id)+'\')', r.amb === t.id)
+          optFiltreRech(t.t || t.mot, 'poserTuileFiltreRech(\''+escJs(t.id)+'\')', r.amb === t.id)
         ).join('')+'</div>';
     }
     const g = (typeof genresRech === 'function') ? genresRech() : [];
@@ -506,7 +534,7 @@ function optionsSectionFiltre(id){
         /* On affiche le libellé français, on POSE le nom TMDB — le point 16
            d'app-12 dit pourquoi, et cette feuille ne déroge pas. */
         '<div class="fopts">'+ g.map(x=>
-          optFiltreRech(libelleGenre(x.nom), 'poserMotRech(\'genre\',\''+escJs(x.nom)+'\')',
+          optFiltreRech(libelleGenre(x.nom), 'poserFiltreRech(\'genre\',\''+escJs(x.nom)+'\')',
                         poses('genre').indexOf(String(x.nom)) >= 0)
         ).join('')+'</div>';
     }
@@ -516,7 +544,7 @@ function optionsSectionFiltre(id){
     if(fam === 'tout' && typeof RECH_ANIMES !== 'undefined'){
       h += '<div class="fsstitre">Sous-genres animés (s\'appliquent aux animés)</div>'+
         '<div class="fopts">'+ RECH_ANIMES.map(a=>
-          optFiltreRech(a.mot, 'poserAmbianceRech(\''+escJs(a.id)+'\')', r.amb === a.id)
+          optFiltreRech(a.mot, 'poserTuileFiltreRech(\''+escJs(a.id)+'\')', r.amb === a.id)
         ).join('')+'</div>';
     }
     return h;
@@ -524,12 +552,12 @@ function optionsSectionFiltre(id){
 
   if(id === 'epoque')
     return '<div class="fopts">'+ RECH_EPOQUES.map(e=>
-      optFiltreRech(e.mot, 'poserMotRech(\'epoque\',\''+escJs(e.id)+'\')',
+      optFiltreRech(e.mot, 'poserFiltreRech(\'epoque\',\''+escJs(e.id)+'\')',
                     poses('epoque').indexOf(e.id) >= 0)).join('')+'</div>';
 
   if(id === 'duree')
     return '<div class="fopts">'+ dureesRech().map(d=>
-      optFiltreRech(d.mot, 'poserMotRech(\'duree\',\''+escJs(d.id)+'\')',
+      optFiltreRech(d.mot, 'poserFiltreRech(\'duree\',\''+escJs(d.id)+'\')',
                     poses('duree').indexOf(d.id) >= 0)).join('')+'</div>';
 
   if(id === 'origine'){
@@ -537,7 +565,7 @@ function optionsSectionFiltre(id){
        dans `originesRech`, qui la porte déjà. On l'appelle, on ne la refait pas. */
     const l = (typeof originesRech === 'function') ? originesRech() : [];
     return '<div class="fopts">'+ l.map(o=>
-      optFiltreRech(o.mot, 'poserMotRech(\'origine\',\''+escJs(o.id)+'\')',
+      optFiltreRech(o.mot, 'poserFiltreRech(\'origine\',\''+escJs(o.id)+'\')',
                     poses('origine').indexOf(o.id) >= 0)).join('')+'</div>';
   }
 
@@ -547,9 +575,9 @@ function optionsSectionFiltre(id){
       return '<div class="tiny muted" style="padding:4px 2px 8px">'+
         'Déclare tes abonnements dans Réglages pour filtrer par plateforme.</div>';
     h = '<div class="fopts">'+
-      optFiltreRech('mes plateformes', 'poserMotRech(\'plate\',\'mes\')',
+      optFiltreRech('mes plateformes', 'poserFiltreRech(\'plate\',\'mes\')',
                     poses('plate').indexOf('mes') >= 0);
-    h += mes.map(p=> optFiltreRech(p.nom, 'poserMotRech(\'plate\',\''+escJs(String(p.id))+'\')',
+    h += mes.map(p=> optFiltreRech(p.nom, 'poserFiltreRech(\'plate\',\''+escJs(String(p.id))+'\')',
                                    poses('plate').indexOf(String(p.id)) >= 0)).join('');
     return h + '</div>';
   }
@@ -557,23 +585,23 @@ function optionsSectionFiltre(id){
   if(id === 'note')
     return '<div class="fopts">'+ RECH_NOTES.map(n=>
       optFiltreRech(n.mot+' · '+String(n.v).replace('.', ',')+'+',
-                    'poserMotRech(\'note\',\''+escJs(n.id)+'\')', r.note === n.id)).join('')+'</div>';
+                    'poserFiltreRech(\'note\',\''+escJs(n.id)+'\')', r.note === n.id)).join('')+'</div>';
 
   if(id === 'statut')
     return '<div class="fopts">'+ RECH_STATUTS.map(s=>
-      optFiltreRech(s.mot, 'poserMotRech(\'statut\',\''+escJs(s.id)+'\')',
+      optFiltreRech(s.mot, 'poserFiltreRech(\'statut\',\''+escJs(s.id)+'\')',
                     r.statut === s.id)).join('')+'</div>';
 
   if(id === 'divers'){
     h = '<div class="fopts">'+
-      optFiltreRech('que je n\'ai pas vu', 'poserMotRech(\'pasvu\',\'non\')', r.pasvu === 'non')+
-      optFiltreRech('sans gore', 'poserMotRech(\'gore\',\'non\')', r.gore === 'non')+
+      optFiltreRech('que je n\'ai pas vu', 'poserFiltreRech(\'pasvu\',\'non\')', r.pasvu === 'non')+
+      optFiltreRech('sans gore', 'poserFiltreRech(\'gore\',\'non\')', r.gore === 'non')+
     '</div>';
     const proches = prochesRech();
     if(proches.length){
       h += '<div class="fsstitre">Avec un proche</div><div class="fopts">'+
         proches.map(p=> optFiltreRech('avec '+p.pseudo,
-          'poserMotRech(\'avec\',\''+escJs(String(p.id))+'\')',
+          'poserFiltreRech(\'avec\',\''+escJs(String(p.id))+'\')',
           String(r.avec) === String(p.id))).join('')+'</div>';
     }
     return h;
@@ -599,11 +627,28 @@ function filtresVersAmbianceRech(){
    le mieux noté ; en tri « mes goûts », c'est celui qui te ressemble le plus.
    Une seule règle : la carte n'existe que s'il y a une sélection. Sans
    sélection, « le meilleur » ne veut rien dire. */
+/* RA-5 (relecture du 10/08) — EN TRI « NOTE », LA CARTE MONTRAIT UN TITRE
+   QUELCONQUE. Elle lisait `r.res[matchI]`, et `r.res` sort de
+   `espacerGenresRech(melangerRech(fournee))` : il est MÉLANGÉ. Le §5 dit « en
+   tri note, la carte affiche le mieux noté ».
+
+   La grille, elle, ne bouge pas : son ordre est celui d'arrivée, qui est « le
+   comportement d'aujourd'hui » du §9. Ce n'est pas une incohérence — la grille
+   répond à « qu'est-ce qu'il y a ? », la carte à « lequel d'abord ? ». */
+function classementMatchRech(){
+  const r = etatRech();
+  if(triRech() === 'gouts') return r.res;    // déjà trié par score
+  const note = x => Number(x.vote_average) || 0;
+  return r.res.map((x, i)=> ({ x:x, i:i }))
+    .sort((a, b)=> (note(b.x) - note(a.x)) || (a.i - b.i))
+    .map(o => o.x);
+}
 function titreMatchRech(){
   const r = etatRech();
   if(!selectionActiveRech() || !r.res.length) return null;
-  const i = ((r.matchI || 0) % r.res.length + r.res.length) % r.res.length;
-  return r.res[i] || null;
+  const l = classementMatchRech();
+  const i = ((r.matchI || 0) % l.length + l.length) % l.length;
+  return l[i] || null;
 }
 
 /* Les raisons de la carte. En duo, LES DEUX CÔTÉS (§6 de la spec : « en mode
@@ -707,12 +752,33 @@ function barreTriRech(){
    TRIE, NE FILTRE JAMAIS : la liste rendue a exactement la même longueur que
    celle reçue. C'est la règle que l'ancien tri respectait déjà, et c'est un cas
    de test. */
+/* RA-4 (relecture du 10/08) — LE TRI N'ÉTAIT PAS RÉVERSIBLE, ET LE COMMENTAIRE
+   JUSTE AU-DESSUS PRÉTENDAIT LE CONTRAIRE.
+
+   `basculerTriRech` MUTE `r.res`. Au retour vers « note », cette fonction
+   rendait `l` tel quel — donc la grille restait dans l'ordre des goûts, et
+   seules les raisons disparaissaient. La bascule était à sens unique, et le
+   pavé du point 13 promettait « RÉVERSIBLE » trois lignes plus haut. C'est le
+   défaut le plus gênant du lot : la justification écrite était fausse dans le
+   code même qui la portait.
+
+   La cause est qu'aucun ordre d'arrivée n'était mémorisé. Il l'est maintenant :
+   chaque titre porte son rang d'arrivée (`__rang`, posé par `chargerGrilleRech`
+   au moment du `concat`), et « note » le restitue. Cet ordre-là est celui qui
+   porte la pertinence TMDB et l'anti-monotonie d'`espacerGenresRech` — c'est
+   très exactement « le comportement d'aujourd'hui » que le §9 exige par défaut. */
 function ordonnerParGoutRech(l){
-  if(triRech() !== 'gouts' || !Array.isArray(l) || l.length < 2) return l;
+  if(!Array.isArray(l) || l.length < 2) return l;
+  const rang = x => (typeof x.__rang === 'number') ? x.__rang : 0;
+  if(triRech() !== 'gouts'){
+    /* Retour à « note » : on RESTITUE l'ordre d'arrivée. Sans `__rang` — une
+       liste posée à la main, un cas de test — on ne touche à rien. */
+    if(!l.some(x => typeof x.__rang === 'number')) return l;
+    return l.slice().sort((a, b)=> rang(a) - rang(b));
+  }
   const score = {};
   l.forEach(x=>{ score[x.__media+':'+x.id] = scoreGoutRech(x); });
-  /* Tri STABLE : à score égal, l'ordre d'arrivée est conservé — c'est lui qui
-     porte la pertinence TMDB et l'anti-monotonie d'`espacerGenresRech`. */
+  /* Tri STABLE : à score égal, l'ordre d'arrivée est conservé. */
   return l.map((x, i)=> ({ x:x, i:i }))
     .sort((a, b)=> (score[b.x.__media+':'+b.x.id] - score[a.x.__media+':'+a.x.id]) || (a.i - b.i))
     .map(o => o.x);
@@ -865,9 +931,14 @@ function raisonCoteRech(x, media, qui){
 
 /* ==================== LES PROCHES, POUR LE MODE DUO ==================== */
 
-/* Le cercle EXISTANT — les abonnements du partage — et rien d'autre. On ne
-   propose que les proches dont la bibliothèque est déjà en mémoire : proposer
-   un nom qui ne donnerait aucun résultat serait une promesse en l'air. */
+/* Le cercle EXISTANT — les abonnements du partage — et rien d'autre.
+
+   CORRECTION DE COMMENTAIRE (relecture du 10/08) : la version précédente
+   affirmait « on ne propose que les proches dont la bibliothèque est déjà en
+   mémoire ». C'était faux, cette fonction ne filtre rien. Et le filtre serait
+   d'ailleurs le mauvais choix : `amorcerDuoRech` va CHERCHER la bibliothèque
+   manquante en arrière-plan, donc un proche encore inconnu finit par répondre.
+   Ce qu'on garde : la liste des suivis, plafonnée. */
 function prochesRech(){
   const l = ((typeof partage === 'object' && partage && partage.suivis) || [])
     .filter(p => p && p.id && p.pseudo);

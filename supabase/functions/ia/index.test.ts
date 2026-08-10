@@ -1406,7 +1406,7 @@ Deno.test("SPEC-05 — les nouvelles tâches n'échappent pas au jeton ni à l'o
    test qui bouge avec ce qu'il éprouve. Ajouter une tâche fera donc tomber ce
    cas — c'est voulu, on l'ajoutera ici le jour où elle sera branchée.
 
-   Le pendant côté front est le contrôle n° 14 de `tests/lance-tests.js` : il
+   Le pendant côté front est le contrôle n° 15 de `tests/lance-tests.js` : il
    relit les `appelIA('…')` des fichiers d'écran et les recoupe avec cette
    liste. Les deux ensemble ferment la boucle ; l'un sans l'autre ne dit rien. */
 Deno.test("la liste blanche compte SIX tâches, exactement celles qui ont un appelant", () => {
