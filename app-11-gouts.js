@@ -2039,7 +2039,16 @@ function requeteHumeur(media, cadre, cle, variante){
      mesurable et que le §2 nomme en toutes lettres : la tension contre le gore.
      Voir `recetteAffineeHumeur` (app-14) pour la règle, et le rapport de lot
      pour la question posée à Adrien. */
-  if(typeof recetteAffineeHumeur === 'function'){
+  /* CORRECTION DE RELECTURE (10/08) — L'AFFINAGE EST SOUS L'INTERRUPTEUR.
+     Il s'appliquait interrupteur ÉTEINT : « Frissonner » ajoutait alors
+     `without_keywords=10292` et le rendu différait du lot A, alors que le §4.5
+     promet que l'app éteinte est EXACTEMENT l'app d'avant. Le §2 range
+     d'ailleurs cet affinage dans « Avec IA (couche optionnelle) ».
+     La décision d'Adrien du 10/08 autorise à le calculer LOCALEMENT plutôt que
+     par une requête ; elle ne dit pas qu'il déborde du périmètre de
+     l'interrupteur. Il reste donc gratuit, et il reste optionnel. */
+  if(typeof recetteAffineeHumeur === 'function' &&
+     typeof iaActive === 'function' && iaActive('decouvrir')){
     const fin = recetteAffineeHumeur(cle);
     /* 10292 = « gore » chez TMDB. La recette films du frisson l'écarte déjà ;
        ce qu'on ajoute ici, c'est de l'écarter AUSSI côté séries et animés, pour

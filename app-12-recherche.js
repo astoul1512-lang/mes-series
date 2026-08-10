@@ -835,10 +835,6 @@ function retirerIngredientRech(cle){
 }
 function poserMotRech(cle, val){
   const r = etatRech();
-  /* Point 19, règles 3 et 4 : venu de la liste, on y retourne — que l'on ait
-     choisi une valeur ou répondu « Peu importe ». Le drapeau est relevé AVANT
-     `closeSheet`, qui le remet à zéro en jouant la fermeture. */
-  const versListe = rechAjout;
   /* POINT 6 — sur un critère multiple, poser un mot le BASCULE : on coche et on
      décoche, comme les genres de Découvrir. « Peu importe » (val nulle) vide le
      critère entier, c'est ce que le mot veut dire. */
@@ -870,6 +866,34 @@ function poserMotRech(cle, val){
      position de lecture — la mécanique existe, il fallait cesser de passer par
      la fermeture. */
   relancerRech();
+}
+
+/* ===== RA-1 / RA-2 (relecture du 10/08) — POSER UN MOT N'OUVRE PLUS D'ÉCRAN =====
+
+   `poserMotRech` finissait par décider où aller :
+
+       if(versListe) ouvrirAjoutRech(…);
+       else if(estMultiRech(cle)) ouvrirMotRech(cle);
+       else ouvrirCritereSuivantRech(cle);
+
+   C'était juste tant qu'elle n'avait qu'un appelant — la feuille « une question
+   à la fois ». Le lot A lui en a donné trois de plus, et la queue a fait des
+   dégâts à chacun :
+
+   · la feuille ⚙ Filtres était DÉTRUITE au premier clic — un genre coché
+     ouvrait « Genre ou ambiance » par-dessus, l'accordéon disparaissait ;
+   · le ✕ d'une pilule ouvrait la question SUIVANTE (retirer « drame » ouvrait
+     « De quand ? ») ;
+   · et au lot B, une envie comprise à trois critères empilait trois feuilles.
+
+   Trois symptômes, une cause : une fonction d'ÉTAT décidait de la NAVIGATION.
+   La navigation revient donc à ceux qui la veulent. `repondreMotRech` est
+   l'ancienne fonction, queue comprise, et c'est elle que la feuille « une
+   question à la fois » appelle. Tous les autres appellent `poserMotRech`, qui
+   ne fait plus que poser et relancer. */
+function repondreMotRech(cle, val){
+  const versListe = rechAjout;
+  poserMotRech(cle, val);
   if(versListe) ouvrirAjoutRech(versListe === 2);
   else if(estMultiRech(cle)) ouvrirMotRech(cle);      // on peut en cocher un second
   else ouvrirCritereSuivantRech(cle);                 // un plancher, un binaire : on avance
@@ -1468,11 +1492,24 @@ function joursApresRech(iso, n){
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0,10);
 }
+/* RA-3 (relecture du 10/08) — LES FORMATS ÉPISODES N'ATTEIGNAIENT JAMAIS TMDB.
+
+   La première ligne disait `if(media !== 'movie') return [ {} ];`, écrite quand
+   la durée ne parlait que des films. Le lot A a ajouté `RECH_DUREES_EP`
+   (ep25 / ep50) : la table est définie, la feuille les propose, la pilule
+   s'affiche, l'ambiance les enregistre — et la requête ne les portait pas.
+   Un critère qu'on voit, qu'on coche, et qui ne filtre rien : le compteur ne
+   bougeait pas non plus, ce qui était le seul indice à l'écran.
+
+   `with_runtime` sur `/discover/tv` désigne la durée d'un ÉPISODE — c'est
+   mesuré et consigné en tête de `RECH_DUREES_EP` : 1 152 séries à 25 min,
+   2 377 à 50. La mécanique d'intervalles ci-dessous vaut donc pour les deux
+   médias ; seule la TABLE change, comme le §1 le demande. */
 function variantesDureeRech(media){
-  if(media !== 'movie') return [ {} ];
   const ids = critereRech('duree');
   if(!ids.length) return [ {} ];
-  const bornes = ids.map(id => RECH_DUREES.find(x => x.id === id)).filter(x => x).map(d => {
+  const table = media === 'movie' ? RECH_DUREES : RECH_DUREES_EP;
+  const bornes = ids.map(id => table.find(x => x.id === id)).filter(x => x).map(d => {
     const g = Number(d.p['with_runtime.gte'] != null ? d.p['with_runtime.gte'] : 0);
     const t = Number(d.p['with_runtime.lte'] != null ? d.p['with_runtime.lte'] : 9999);
     return { de: pad5Rech(g), a: pad5Rech(t), gte:g, lte:t };
@@ -1977,6 +2014,13 @@ async function chargerGrilleRech(suite){
        SPEC-04 — jamais de changement sous le doigt. Basculer le contrôle de
        tri, en revanche, RÉORDONNE tout : c'est un geste explicite, et il a
        le droit de bouger l'écran (`basculerTriRech`). */
+    /* RA-4 — L'ORDRE D'ARRIVÉE EST ESTAMPILLÉ AVANT TOUT TRI. C'est lui qui
+       porte la pertinence TMDB et l'anti-monotonie ; sans lui, revenir à
+       « note » ne savait plus quoi restituer, et la bascule était à sens
+       unique. Le rang continue la numérotation d'une fournée à l'autre. */
+    const depart = suite ? r.res.length : 0;
+    fournee.forEach((x, i)=>{ x.__rang = depart + i; });
+
     if(typeof ordonnerParGoutRech === 'function') fournee = ordonnerParGoutRech(fournee);
 
     r.res = suite ? r.res.concat(fournee) : fournee;
@@ -2209,7 +2253,7 @@ function champRech(){
   const r = etatRech();
   return '<div class="qbar">'+I.search+
     '<input type="search" id="q" enterkeyhint="search" autocomplete="off" autocorrect="off" '+
-      'placeholder="Un titre, une personne…" value="'+esc(r.q)+'" oninput="saisieRech(this.value)" '+
+      'placeholder="Un titre, une personne, une envie…" value="'+esc(r.q)+'" oninput="saisieRech(this.value)" '+
       'onkeydown="if(event.key===\'Enter\'){this.blur();lancerTitre()}">'+
     '<button class="qclear'+(r.q?'':' masque')+'" onclick="saisieRech(\'\')" '+
       'aria-label="Effacer">'+I.close+'</button></div>';
@@ -2544,12 +2588,18 @@ function ouvrirCritereAvantRech(cle){
 }
 /* « Peu importe → » : on note que la question a été vue et laissée libre, puis
    on AVANCE. C'est la correction du cul-de-sac. */
+/* RA-2 — RETIRER NE NAVIGUE PLUS. Le ✕ d'une pilule appelle ceci : il retire le
+   mot, et c'est tout. La variante ci-dessous, elle, appartient à la feuille
+   « une question à la fois », où « Peu importe → » veut dire « passe à la
+   suivante » — et là, c'est le bouton qui le promet. */
 function peuImporteRech(cle){
-  const r = etatRech();
   const surAmbiance = motsPhraseRech().some(m => m.cle === cle && m.amb);
   if(surAmbiance) retirerIngredientRech(cle);
   else if(aMotRech(cle)) poserMotRech(cle, null);
   if(rechLibres.indexOf(cle) < 0) rechLibres.push(cle);
+}
+function peuImporteSuivantRech(cle){
+  peuImporteRech(cle);
   ouvrirCritereSuivantRech(cle);
 }
 
@@ -2572,12 +2622,12 @@ function ouvrirMotRech(cle, depuisListe){
         '<div class="choix">'+l.map(g=>
           /* POINT 16 — on affiche le libellé français ; c'est toujours le NOM
              TMDB qui est posé dans la phrase et expédié, jamais la traduction. */
-          bouton(libelleGenre(g.nom), 'poserMotRech(\'genre\',\''+escJs(g.nom)+'\')',
+          bouton(libelleGenre(g.nom), 'repondreMotRech(\'genre\',\''+escJs(g.nom)+'\')',
                  listeRech('genre').indexOf(g.nom) >= 0)).join('')+'</div>';
   }
   else if(cle === 'origine')
     choix = '<div class="choix">'+originesRech().map(o=>
-      bouton(o.mot, 'poserMotRech(\'origine\',\''+escJs(o.id)+'\')',
+      bouton(o.mot, 'repondreMotRech(\'origine\',\''+escJs(o.id)+'\')',
              listeRech('origine').indexOf(o.id) >= 0)).join('')+'</div>'+
       (familleRech().anime
         ? '<div class="small muted" style="margin-top:10px">'+
@@ -2585,21 +2635,39 @@ function ouvrirMotRech(cle, depuisListe){
         : '');
   else if(cle === 'pasvu')
     choix = '<div class="choix">'+
-      bouton("que je n'ai pas vu", 'poserMotRech(\'pasvu\',\'non\')', r.pasvu === 'non')+'</div>'+
+      bouton("que je n'ai pas vu", 'repondreMotRech(\'pasvu\',\'non\')', r.pasvu === 'non')+'</div>'+
       '<div class="small muted" style="margin-top:10px">'+
       'Ce retrait se fait chez nous : TMDB ne connaît pas ta bibliothèque.</div>';
   else if(cle === 'epoque')
     choix = '<div class="choix">'+RECH_EPOQUES.map(e=>
-      bouton(e.mot, 'poserMotRech(\'epoque\',\''+escJs(e.id)+'\')',
+      bouton(e.mot, 'repondreMotRech(\'epoque\',\''+escJs(e.id)+'\')',
              listeRech('epoque').indexOf(e.id) >= 0)).join('')+'</div>';
   else if(cle === 'duree')
     choix = '<div class="choix">'+RECH_DUREES.map(d=>
-      bouton(d.mot, 'poserMotRech(\'duree\',\''+escJs(d.id)+'\')',
+      bouton(d.mot, 'repondreMotRech(\'duree\',\''+escJs(d.id)+'\')',
              listeRech('duree').indexOf(d.id) >= 0)).join('')+'</div>'+
       '<div class="small muted" style="margin-top:10px">La durée ne vaut que pour les films.</div>';
+  else if(cle === 'statut')
+    /* RÉSERVE DE RELECTURE — ces trois-là entraient dans `RECH_MOTS` sans avoir
+       de branche ici : le 🎲 les listait, les ouvrait, et rendait une feuille
+       avec un titre, zéro option et un seul « Peu importe → ». Un critère
+       listé doit être répondable. */
+    choix = '<div class="choix">'+RECH_STATUTS.map(x=>
+      bouton(x.mot, 'repondreMotRech(\'statut\',\''+escJs(x.id)+'\')', r.statut === x.id)).join('')+'</div>';
+  else if(cle === 'gore')
+    choix = '<div class="choix">'+
+      bouton('sans gore', 'repondreMotRech(\'gore\',\'non\')', r.gore === 'non')+'</div>';
+  else if(cle === 'avec'){
+    const proches = (typeof prochesRech === 'function') ? prochesRech() : [];
+    choix = proches.length
+      ? '<div class="choix">'+proches.map(x=>
+          bouton('avec '+x.pseudo, 'repondreMotRech(\'avec\',\''+escJs(String(x.id))+'\')',
+                 String(r.avec) === String(x.id))).join('')+'</div>'
+      : '<p class="rcompte">Personne dans ton cercle pour l\'instant.</p>';
+  }
   else if(cle === 'note')
     choix = '<div class="choix">'+RECH_NOTES.map(n=>
-      bouton(n.mot, 'poserMotRech(\'note\',\''+escJs(n.id)+'\')', r.note === n.id)).join('')+'</div>';
+      bouton(n.mot, 'repondreMotRech(\'note\',\''+escJs(n.id)+'\')', r.note === n.id)).join('')+'</div>';
   else if(cle === 'plate'){
     const mes = (typeof mesPlates === 'function') ? mesPlates() : [];
     if(!mes.length)
@@ -2608,9 +2676,9 @@ function ouvrirMotRech(cle, depuisListe){
         'Les déclarer</button></div>';
     else
       choix = '<div class="choix">'+
-        bouton('sur mes plateformes', 'poserMotRech(\'plate\',\'mes\')',
+        bouton('sur mes plateformes', 'repondreMotRech(\'plate\',\'mes\')',
                listeRech('plate').map(String).indexOf('mes') >= 0)+
-        mes.map(p => bouton('sur '+p.nom, 'poserMotRech(\'plate\',\''+escJs(String(p.id))+'\')',
+        mes.map(p => bouton('sur '+p.nom, 'repondreMotRech(\'plate\',\''+escJs(String(p.id))+'\')',
                             listeRech('plate').map(String).indexOf(String(p.id)) >= 0)).join('')+'</div>';
   }
   /* LA SORTIE. « Peu importe → » AVANCE : c'est ce qui ferme le cul-de-sac.
@@ -2618,7 +2686,7 @@ function ouvrirMotRech(cle, depuisListe){
      ce qui rend la recette corrigible. Le tout est traité par `peuImporteRech`,
      à un seul endroit. */
   choix += '<div class="choix" style="margin-top:14px">'+
-    '<button class="ch raz" onclick="peuImporteRech(\''+escJs(cle)+'\')">Peu importe →</button>'+
+    '<button class="ch raz" onclick="peuImporteSuivantRech(\''+escJs(cle)+'\')">Peu importe →</button>'+
     /* Venu de la LISTE (le jeu), on peut y retourner sans rien répondre. Ce
        chemin n'existe plus depuis la phrase : là-bas, il n'y a plus de liste. */
     (depuisListe ? '<button class="ch raz" onclick="ouvrirAjoutRech('+
@@ -2802,8 +2870,8 @@ function grilleRech(){
   /* L'état vide ne s'affiche que s'il ne reste VRAIMENT rien à servir : une
      page improductive ne veut pas dire un catalogue vide. Défaut 2.4. */
   if(!r.res.length && r.charge && !resteRech())
-    return '<div class="empty">'+I.boussole+'<h3>Rien avec cette phrase</h3>'+
-      '<p>Retire un mot — le compteur remontera tout de suite.</p>'+
+    return '<div class="empty">'+I.boussole+'<h3>Rien avec tout ça</h3>'+
+      '<p>Retire une pilule, ou l\'ambiance — le compteur remontera tout de suite.</p>'+
       '<button class="btn ghost" onclick="viderRech()">Repartir de zéro</button></div>';
   /* B3 — le bandeau, au-dessus de la grille conservée. */
   let h = r.err ? bandeauErrRech() : '';

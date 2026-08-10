@@ -1033,6 +1033,66 @@ function collisionsCss(src){
     souci += soucis.length;
   }
 
+  /* --- 14. SPEC-04 §0.4 — LA COPIE CLIENT EST-ELLE ENCORE LA COPIE ? ---
+
+     `app-14-ia.js` recopie mot pour mot les trois motifs de la règle §0.4
+     depuis `functions/ia/gabarits.ts`, et le commentaire qui l'assume promet
+     qu'« un test le fera remarquer » si le serveur bouge. Ce test n'existait
+     pas — c'était la seule promesse fausse du lot C, relevée en relecture.
+
+     Il ne pouvait pas vivre dans `test.html`, qui ne charge pas de TypeScript ;
+     il vit donc ici, où le lanceur lit déjà des fichiers sur le disque. La
+     duplication reste voulue (deux barrières qui partagent leur source n'en
+     font qu'une) — ce contrôle ne la supprime pas, il la rend surveillée. */
+  {
+    const fs = require('fs'), chemin = require('path');
+    const racine = chemin.join(__dirname, '..');
+    const soucis = [];
+    const js = fs.readFileSync(chemin.join(racine, 'app-14-ia.js'), 'utf8');
+    const ts = fs.readFileSync(chemin.join(racine, 'supabase/functions/ia/gabarits.ts'), 'utf8');
+    /* On compare les LITTÉRAUX, pas les expressions régulières construites :
+       c'est la source qui doit rester identique, et c'est elle qu'on recopie. */
+    const lit = (src, nom)=>{
+      const m = new RegExp('const\\s+' + nom + '\\s*=\\s*([\\s\\S]*?);').exec(src);
+      return m ? m[1].replace(/\s+/g, '') : null;
+    };
+    [['IA_AFFECT','AFFECT'], ['IA_POSSESSIF','POSSESSIF']].forEach(([cli, srv])=>{
+      const a2 = lit(js, cli), b2 = lit(ts, srv);
+      if(!a2 || !b2) soucis.push(cli + ' / ' + srv + ' : introuvable d\'un des deux côtés');
+      else if(a2 !== b2)
+        soucis.push(cli + ' ne correspond plus à ' + srv + ' de gabarits.ts — la barrière client '
+                    + 'a divergé de la barrière serveur (SPEC-04 §0.4)');
+    });
+    /* Et les quatre motifs assemblés, dans le même ordre. On isole le tableau
+       passé à `new RegExp`, on retire les commentaires (les deux fichiers n'en
+       portent pas les mêmes) et les espaces, puis on compare. */
+    const assemble = src=>{
+      const i = src.indexOf('new RegExp(');
+      if(i < 0) return null;
+      const j = src.indexOf('].join(', i);
+      if(j < 0) return null;
+      return src.slice(i, j)
+        .replace(/\/\/[^\n]*/g, ' ')
+        .replace(/\/\*[\s\S]*?\*\//g, ' ')
+        .replace(/\s+/g, '')
+        /* Les deux seules différences LÉGITIMES : le préfixe `IA_` des noms
+           côté client (le fichier vit dans la portée globale de l'app, où un
+           `AFFECT` nu entrerait en collision), et la virgule finale. Tout le
+           reste doit être identique caractère pour caractère. */
+        .replace(/\bIA_/g, '')
+        .replace(/,$/, '');
+    };
+    const mj = assemble(js), mt = assemble(ts);
+    if(!mj || !mt) soucis.push('les motifs assemblés de la §0.4 sont introuvables d\'un des deux côtés');
+    else if(mj !== mt)
+      soucis.push('les motifs assemblés de la §0.4 ont divergé entre le client et le serveur');
+    console.log('§0.4 recopiée → ' + (soucis.length
+      ? soucis.length + ' divergence(s)'
+      : 'client et serveur disent la même chose, motif pour motif'));
+    soucis.forEach(d => console.log('   ! ' + d));
+    souci += soucis.length;
+  }
+
   await nav.close();
   console.log(souci ? '\nÉCHEC — ' + souci + ' problème(s)' : '\nTout est vert.');
   process.exit(souci ? 1 : 0);

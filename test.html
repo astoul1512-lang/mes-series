@@ -2825,16 +2825,19 @@ window.MODE_TEST = true;
     const nom = "L'\\ 'x' onclick='alert(1)";
     genresTMDB.movie = [{ id:99, nom:nom }];
     ouvrirMotRech('genre');
-    const bouton = document.getElementById('sheetin').querySelector('[onclick*="poserMotRech"]');
+    /* La feuille « une question à la fois » appelle `repondreMotRech` depuis la
+       relecture du 10/08 — c'est `poserMotRech` PLUS la navigation, qui a été
+       sortie de la fonction d'état. L'échappement éprouvé ici est le même. */
+    const bouton = document.getElementById('sheetin').querySelector('[onclick*="repondreMotRech"]');
     vrai(bouton, 'aucun choix de genre rendu');
     /* LE SEUL TEST QUI VAILLE : on déclenche vraiment le gestionnaire et on
        regarde ce qui arrive de l'autre côté. Un échappement qui fuit se voit
        là, jamais à la lecture. `poserMotRech` est remplacée le temps du clic —
        la vraie partirait sur le réseau. */
     const recu = [];
-    const vraiePose = window.poserMotRech;
-    window.poserMotRech = function(c, v){ recu.push([c, v]); };
-    try{ bouton.click(); } finally { window.poserMotRech = vraiePose; }
+    const vraiePose = window.repondreMotRech;
+    window.repondreMotRech = function(c, v){ recu.push([c, v]); };
+    try{ bouton.click(); } finally { window.repondreMotRech = vraiePose; }
     egal(recu, [['genre', nom]], 'le nom n\'est pas revenu intact : l\'échappement fuit');
     closeSheet();
     genresTMDB.movie = null;
@@ -3308,7 +3311,9 @@ window.MODE_TEST = true;
        renseigne rien, donc on retombait indéfiniment sur le même écran. */
     const vraiRelancer = window.relancerRech;
     window.relancerRech = function(){};
-    try{ peuImporteRech(file[0].cle); } finally { window.relancerRech = vraiRelancer; }
+    /* Le bouton de la feuille appelle `peuImporteSuivantRech` : « Peu importe »
+       ne navigue plus tout seul, c'est le bouton qui le promet (RA-2). */
+    try{ peuImporteSuivantRech(file[0].cle); } finally { window.relancerRech = vraiRelancer; }
     const f2 = document.getElementById('sheetin');
     vrai(f2.textContent.indexOf(file[1].titre) >= 0,
          '« Peu importe » rouvre la même question : le cul-de-sac est revenu');
@@ -7087,6 +7092,7 @@ window.MODE_TEST = true;
 
   test('C17 — l\'affinage d\'humeur demande DEUX signaux, pas un', ()=>{
     iaVierge();
+    db.gouts.ia.decouvrir = true;
     /* Un profil qui aime la tension et n'aime pas l'horreur : le gore s'écarte. */
     db.shows[1] = serie(1, [ep(1,HIER)], {}, { name:'Thriller', genres:['Thriller'] });
     db.movies[2] = { id:2, title:'Gore', genres:['Horreur'], seen:true, addedAt:1 };
@@ -7106,6 +7112,7 @@ window.MODE_TEST = true;
 
   test('C18 — l\'affinage passe bien dans la requête TMDB de l\'humeur', ()=>{
     iaVierge();
+    db.gouts.ia.decouvrir = true;
     db.shows[1] = serie(1, [ep(1,HIER)], {}, { name:'Thriller', genres:['Thriller'] });
     db.movies[2] = { id:2, title:'Gore', genres:['Horreur'], seen:true, addedAt:1 };
     db.avis.tv['1'] = { v:1, quand:1 };
@@ -7118,10 +7125,25 @@ window.MODE_TEST = true;
     egal(r2.p.without_keywords, undefined, 'un profil muet a quand même déclenché l\'affinage');
   });
 
+  test('C18b — interrupteur ÉTEINT : la recette est EXACTEMENT celle du lot A', ()=>{
+    /* Relecture du 10/08 : l'affinage s'appliquait interrupteur éteint, donc le
+       rendu différait du lot A — ce que le §4.5 interdit en toutes lettres. */
+    iaVierge();
+    db.gouts.ia.decouvrir = false;
+    db.shows[1] = serie(1, [ep(1,HIER)], {}, { name:'Thriller', genres:['Thriller'] });
+    db.movies[2] = { id:2, title:'Gore', genres:['Horreur'], seen:true, addedAt:1 };
+    db.avis.tv['1'] = { v:1, quand:1 };
+    db.avis.movie['2'] = { v:-1, quand:1 };
+    const r = requeteHumeur('tv', { medias:['tv'], origine:'sansAnime' }, 'frisson', 'principale');
+    egal(r.p.without_keywords, undefined,
+         'l\'IA éteinte, la recette est affinée quand même : l\'app n\'est plus celle d\'avant');
+  });
+
   test('C19 — R7 : le cache des dates françaises survit à la fermeture', ()=>{
     iaVierge();
     Object.keys(datesFR).forEach(k=> delete datesFR[k]);
-    datesFR['550'] = { cine:['2026-09-01'], stream:[], premiere:'2026-09-01', q:Date.now() };
+    datesFR['550'] = { cine:['2026-09-01'], stream:[], premiere:'2026-09-01',
+                       q:Date.now(), j:todayISO() };
     ecrireDatesFR();
     Object.keys(datesFR).forEach(k=> delete datesFR[k]);
     datesFRLues = false;
@@ -7180,6 +7202,195 @@ window.MODE_TEST = true;
   });
 
 
+  /* ===== Les invariants que la relecture du 10/08 a trouvés absents =====
+
+     Trois familles de défauts sont passées à travers 23 cas, et ce n'est pas un
+     hasard : les 23 regardaient tous des LECTURES de cache. Aucun ne comptait ce
+     qu'une journée coûte, aucun ne suivait un geste jusqu'à la requête. Les cas
+     ci-dessous comblent exactement ces trous — ce sont eux qui auraient dû
+     tomber en rouge avant la livraison. */
+
+  testAsync('C24 — une journée IA allumée coûte EXACTEMENT deux requêtes', async ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
+    const taches = [];
+    const vrai_ = window.sbFetch, vraiProp = window.propositionDuJour,
+          vraiRang = window.rangeesSuggerees, vraiPeindre = window.peindreDisc;
+    window.sbFetch = async (chemin, opt)=>{
+      taches.push(JSON.parse(opt.body).tache);
+      return { texte:'Une phrase honnête et factuelle.', textes:['Les mieux notés'] };
+    };
+    window.propositionDuJour = ()=> ({ id:1399, media:'tv', nom:'Severance', note:8.7 });
+    window.rangeesSuggerees = ()=> [{ cle:'acclames', titre:'Acclamés par la critique' }];
+    window.peindreDisc = function(){};
+    try{
+      apresRenduDecouvrirIA();
+      await new Promise(r=> setTimeout(r, 60));
+      egal(taches.sort(), ['intitules_rangees','pitch_jour'],
+           'le lot du jour ne coûte pas exactement les deux requêtes annoncées');
+      /* Et le second rendu du même jour ne coûte RIEN. C'est la moitié de la
+         promesse du §4.3, et elle n'était vérifiée nulle part. */
+      taches.length = 0;
+      apresRenduDecouvrirIA();
+      apresRenduDecouvrirIA();
+      await new Promise(r=> setTimeout(r, 60));
+      egal(taches, [], 'le lot repart à chaque rendu de la journée');
+    }finally{
+      window.sbFetch = vrai_; window.propositionDuJour = vraiProp;
+      window.rangeesSuggerees = vraiRang; window.peindreDisc = vraiPeindre;
+      try{ localStorage.removeItem(IA_VERROU_CLE); }catch(e){}
+    }
+  });
+
+  testAsync('C25 — deux onglets le même matin ne font pas quatre requêtes', async ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
+    /* Le verrou vit en localStorage : c'est le SEUL état que deux onglets
+       partagent. Le simuler, c'est le prendre puis demander le lot. */
+    vrai(prendreVerrouIA(), 'le verrou ne se prend pas');
+    let appels = 0;
+    const vrai_ = window.sbFetch;
+    window.sbFetch = async ()=>{ appels++; return { texte:'x' }; };
+    try{
+      apresRenduDecouvrirIA();          // le « second onglet »
+      await new Promise(r=> setTimeout(r, 40));
+      egal(appels, 0, 'le second onglet a redemandé le lot : 4 requêtes au lieu de 2');
+      /* Et un verrou abandonné ne bloque pas éternellement. */
+      localStorage.setItem(IA_VERROU_CLE, String(Date.now() - 2 * 60000));
+      vrai(prendreVerrouIA(), 'un onglet fermé au milieu du lot bloque le lot pour toujours');
+    }finally{ window.sbFetch = vrai_; rendreVerrouIA(); }
+  });
+
+  testAsync('C26 — le pitch d\'humeur ARRIVE, même si la proposition tarde', async ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
+    ui.disc = ui.disc || {}; ui.disc.humeur = 'frisson';
+    /* Le cas exact du défaut : au premier appui, la case de cache de l'humeur
+       est vide et `propositionDuJour()` rend `null`. Avant correction, la
+       fonction sortait sans rien faire et le pitch n'apparaissait JAMAIS. */
+    let pret = null;
+    const vraiProp = window.propositionDuJour, vrai_ = window.sbFetch,
+          vraiHum = window.humeurActive, vraiPeindre = window.peindreDisc;
+    window.propositionDuJour = ()=> pret;
+    window.humeurActive = ()=> 'frisson';
+    window.peindreDisc = function(){};
+    let appels = 0;
+    window.sbFetch = async ()=>{ appels++; return { texte:'De la tension, jamais de sang.' }; };
+    try{
+      const p = lotHumeurIA('frisson');
+      await new Promise(r=> setTimeout(r, 30));
+      egal(appels, 0, 'la requête est partie avant que l\'humeur ait une proposition');
+      pret = { id:1399, media:'tv', nom:'Severance', note:8 };   // la recette arrive
+      await p;
+      egal(appels, 1, 'le pitch d\'humeur n\'est jamais demandé — le §2 promet 1 requête');
+      egal(pitchIAHumeur('frisson', pret), 'De la tension, jamais de sang.');
+    }finally{
+      window.propositionDuJour = vraiProp; window.sbFetch = vrai_;
+      window.humeurActive = vraiHum; window.peindreDisc = vraiPeindre;
+      if(ui.disc) ui.disc.humeur = null;
+    }
+  });
+
+  testAsync('C27 — une humeur sans proposition ne pose PAS d\'échéance', async ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
+    const vraiProp = window.propositionDuJour, vrai_ = window.sbFetch;
+    const vraiMax = IA_ATTENTE_MAX;   // raccourcie plus bas, restaurée en `finally`
+    window.propositionDuJour = ()=> null;
+    window.sbFetch = async ()=>({ texte:'x' });
+    try{
+      /* La borne est raccourcie pour le test : ce qu'on éprouve est le
+         COMPORTEMENT au bout de la borne, pas la durée de la borne. */
+      IA_ATTENTE_MAX = 10;
+      await lotHumeurIA('frisson');
+      const o = lireCacheIA();
+      egal(o.humeurs.frisson, undefined,
+           'une échéance a été posée sans texte : le prochain appui ne réessaiera jamais');
+    }finally{
+      window.propositionDuJour = vraiProp; window.sbFetch = vrai_;
+      IA_ATTENTE_MAX = vraiMax;
+    }
+  });
+
+  test('C28 — R7 ne recompose plus la vitrine : zéro requête TMDB ajoutée', ()=>{
+    /* Le défaut mesuré en relecture valait 115 requêtes, interrupteur ÉTEINT.
+       Sa cause était une ligne : `oublierSuggestions()`, qui pose `quand = 0`
+       sur toutes les cases et force une vitrine complète. Ce cas lit la forme
+       parce que c'est la forme qui coûtait. */
+    const c = codeDe(amorcerBientotDuJour);
+    vrai(c.indexOf('oublierSuggestions') < 0,
+         'R7 périme encore tout le cache : 55 requêtes de vitrine, et un écran qui bouge tout seul');
+    vrai(c.indexOf('chargerSuggestions') < 0,
+         'R7 relance encore une composition de vitrine');
+    vrai(c.indexOf('chargerBientotPerso') >= 0, 'R7 ne charge plus rien du tout');
+  });
+
+  test('C29 — le cache des dates est calé sur le JOUR, pas sur 24 h glissantes', ()=>{
+    iaVierge();
+    Object.keys(datesFR).forEach(k=> delete datesFR[k]);
+    /* Écrit il y a 25 h mais MARQUÉ AUJOURD'HUI : c'est le cas de celui qui
+       ouvre l'app à la même heure chaque jour. Avec un TTL glissant, il
+       repayait ses soixante requêtes ; avec un cache calé sur le jour, non. */
+    const o = {}; o['550'] = { cine:['2026-09-01'], stream:[], premiere:null,
+                               q: Date.now() - 25 * 3600000, j: todayISO() };
+    localStorage.setItem(DATESFR_CLE, JSON.stringify(o));
+    datesFRLues = false; lireDatesFR();
+    egal((datesFR['550'] || {}).cine, ['2026-09-01'],
+         'une entrée du jour a été jetée : les 60 requêtes repartent presque tous les jours');
+    /* Et celle d'hier ne survit pas. */
+    Object.keys(datesFR).forEach(k=> delete datesFR[k]);
+    const o2 = {}; o2['550'] = { cine:['2020-01-01'], stream:[], premiere:null,
+                                 q: Date.now(), j: HIER };
+    localStorage.setItem(DATESFR_CLE, JSON.stringify(o2));
+    datesFRLues = false; lireDatesFR();
+    egal(datesFR['550'], undefined, 'une date d\'hier est resservie aujourd\'hui');
+  });
+
+  test('C30 — le cache des dates n\'est sérialisé qu\'UNE fois par chargement', ()=>{
+    vrai(codeDe(dateFRDe).indexOf('ecrireDatesFR') < 0,
+         'le blob est resérialisé après chaque film : jusqu\'à 60 fois d\'affilée');
+    vrai(codeDe(chargerBientotPerso).indexOf('ecrireDatesFR') >= 0,
+         'le cache des dates n\'est plus jamais écrit');
+  });
+
+  testAsync('C31 — des intitulés en nombre différent sont refusés en bloc', async ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
+    const vrai_ = window.sbFetch, vraiProp = window.propositionDuJour,
+          vraiRang = window.rangeesSuggerees, vraiPeindre = window.peindreDisc;
+    window.propositionDuJour = ()=> ({ id:1399, media:'tv', nom:'Severance', note:8 });
+    window.rangeesSuggerees = ()=> [{ cle:'acclames', titre:'Acclamés' },
+                                    { cle:'nouv', titre:'Nouveautés' }];
+    window.peindreDisc = function(){};
+    /* Un fournisseur qui rend UN texte pour DEUX titres : sans le garde, la
+       rangée « Nouveautés » prendrait le nom d'« Acclamés ». C'est le seul
+       rempart contre une rangée renommée avec le titre d'une autre, et il
+       n'était éprouvé nulle part. */
+    window.sbFetch = async (chemin, opt)=>{
+      const t = JSON.parse(opt.body).tache;
+      return t === 'pitch_jour' ? { texte:'Une phrase.' } : { textes:['Un seul'] };
+    };
+    try{
+      await lotIAduJour();
+      egal(intituleIA('acclames', 'Acclamés'), 'Acclamés',
+           'un décalage de nombre a renommé une rangée avec le titre d\'une autre');
+      egal(intituleIA('nouv', 'Nouveautés'), 'Nouveautés');
+    }finally{
+      window.sbFetch = vrai_; window.propositionDuJour = vraiProp;
+      window.rangeesSuggerees = vraiRang; window.peindreDisc = vraiPeindre;
+    }
+  });
+
+  test('C32 — « Vu par tes proches » ne part pas à la réécriture', ()=>{
+    egal(IA_RANGEES_LIBELLES.indexOf('cercle'), -1,
+         'la rangée du cercle est réécrite : elle nomme une SOURCE, pas une intention');
+  });
+
   /* ============ SPEC-05 lot A — la Recherche nouvelle génération ============
 
      Ce que ces cas empêchent :
@@ -7230,7 +7441,7 @@ window.MODE_TEST = true;
     ['genre','epoque','duree','origine','plate','note'].forEach(c=>{
       vrai(parSection[c] && parSection[c].length > 0, 'la section « '+c+' » est vide ou absente');
     });
-    vrai(/poserMotRech\('pasvu','non'\)/.test(parSection.divers || ''),
+    vrai(/poserFiltreRech\('pasvu','non'\)/.test(parSection.divers || ''),
          '« que je n\'ai pas vu » a disparu de la feuille');
     /* Et chaque VALEUR des tables mesurées est proposée, pas seulement la
        section : c'est là que se cachait le risque de perte. */
@@ -7529,6 +7740,161 @@ window.MODE_TEST = true;
     egal(critereRech('genre'), ['Drame']);
     egal(critereUnRech('note'), '8');
     egal(paramsSocleRech('tv').with_status, '3|4');
+  });
+
+
+  /* ===== Ce que la relecture du 10/08 a trouvé absent, côté Recherche =====
+
+     Le défaut le plus visible du lot — la feuille détruite au premier clic —
+     est passé à travers vingt cas, parce qu'aucun ne cliquait DEUX fois. Les
+     cas ci-dessous suivent des gestes, pas des états. */
+  groupe('SPEC-05 lot A — corrections de relecture');
+
+  test('RA21 — la feuille Filtres survit à un clic, et à dix', ()=>{
+    const r = rechNG('film');
+    genresTMDB.movie = [{id:18,nom:'Drame'},{id:35,nom:'Comédie'}];
+    const vues = [];
+    const vraiOpen = window.openSheet, vraiRelance = window.relancerRech;
+    window.openSheet = (html, nom)=>{ vues.push(nom); };
+    window.relancerRech = function(){};
+    try{
+      ouvrirFiltresRech();
+      poserFiltreRech('genre', 'Drame');
+      poserFiltreRech('note', 'exc');
+      poserFiltreRech('epoque', '1990s');
+      /* AUCUNE autre feuille ne doit s'être ouverte : ni « Genre ou ambiance »,
+         ni « Déjà vu ou pas ? ». Que la nôtre, redessinée sur place. */
+      egal(vues.filter(n => n !== 'filtres-rech'), [],
+           'un clic dans la feuille Filtres ouvre une autre feuille par-dessus');
+      vrai(vues.length >= 4, 'la feuille ne se redessine pas après un clic');
+      /* Et la section ouverte le reste. */
+      egal(sectionFiltreOuverte, premiereSectionFiltre(),
+           'la section ouverte s\'est refermée sous le doigt');
+    }finally{ window.openSheet = vraiOpen; window.relancerRech = vraiRelance; }
+  });
+
+  test('RA22 — retirer une pilule n\'ouvre RIEN', ()=>{
+    const r = rechNG('film');
+    genresTMDB.movie = [{id:18,nom:'Drame'}];
+    r.genre = ['Drame']; r.note = 'exc';
+    const vues = [];
+    const vraiOpen = window.openSheet, vraiRelance = window.relancerRech;
+    window.openSheet = (html, nom)=>{ vues.push(nom); };
+    window.relancerRech = function(){};
+    try{
+      peuImporteRech('genre');
+      peuImporteRech('note');
+      egal(vues, [], 'le ✕ d\'une pilule ouvre la question suivante');
+      egal(listeRech('genre'), [], 'la pilule ne s\'est pas retirée');
+      egal(r.note, null);
+    }finally{ window.openSheet = vraiOpen; window.relancerRech = vraiRelance; }
+  });
+
+  test('RA23 — poser un mot ne décide plus d\'un écran', ()=>{
+    /* La cause des trois symptômes tenait dans la queue de `poserMotRech` :
+       une fonction d'ÉTAT qui décidait de la NAVIGATION. */
+    const c = codeDe(poserMotRech);
+    ['ouvrirMotRech','ouvrirCritereSuivantRech','ouvrirAjoutRech','openSheet'].forEach(f=>
+      vrai(c.indexOf(f) < 0, 'poserMotRech ouvre encore « '+f+' » : le défaut peut revenir'));
+    /* Et la navigation existe toujours, là où on la veut. */
+    vrai(codeDe(repondreMotRech).indexOf('ouvrirCritereSuivantRech') >= 0,
+         'la feuille « une question à la fois » ne sait plus avancer');
+  });
+
+  test('RA24 — ep25 / ep50 atteignent VRAIMENT TMDB', ()=>{
+    const r = rechNG('serie');
+    r.duree = ['ep50'];
+    const v = variantesDureeRech('tv');
+    egal(v.length, 1, 'aucune variante de durée produite sur les séries');
+    egal(v[0]['with_runtime.lte'], '50',
+         'le format épisode ne part pas à TMDB : la pilule ne filtre rien');
+    egal(v[0]['with_runtime.gte'], '1',
+         'sans plancher, TMDB fait entrer les fiches sans durée renseignée');
+    /* Et les films gardent leur table à eux. */
+    r.fam = 'film'; r.duree = ['court'];
+    egal(variantesDureeRech('movie')[0]['with_runtime.lte'], '90');
+    /* Un identifiant d'une table qui n'est pas celle du média ne produit rien
+       plutôt qu'une borne absurde. */
+    r.duree = ['ep25'];
+    egal(variantesDureeRech('movie'), [{}]);
+  });
+
+  test('RA25 — le tri est RÉVERSIBLE, et pas seulement dans son commentaire', ()=>{
+    const r = rechNG('film');
+    genresTMDB.movie = [{id:18,nom:'Drame'},{id:35,nom:'Comédie'}];
+    db.movies[1] = { id:1, title:'A', genres:['Drame'], seen:true, addedAt:1 };
+    /* L'ordre d'ARRIVÉE : c'est lui qui porte la pertinence TMDB. */
+    r.res = [ { id:9, __media:'movie', title:'Z', genre_ids:[35], vote_average:6, __rang:0 },
+              { id:8, __media:'movie', title:'Y', genre_ids:[18], vote_average:6, __rang:1 },
+              { id:7, __media:'movie', title:'X', genre_ids:[],   vote_average:9, __rang:2 } ];
+    poserTriRech('note', true);
+    sansEcran(()=> basculerTriRech('gouts'));
+    egal(r.res.map(x=>x.id)[0], 8, 'le tri par goûts n\'a pas mordu');
+    /* LE RETOUR — c'est ce qui ne marchait pas : la grille restait dans l'ordre
+       des goûts, seules les raisons disparaissaient. */
+    sansEcran(()=> basculerTriRech('note'));
+    egal(r.res.map(x=>x.id), [9,8,7],
+         'revenir à « note » ne restitue pas l\'ordre d\'arrivée : la bascule est à sens unique');
+    /* Et l'aller-retour est idempotent. */
+    sansEcran(()=> basculerTriRech('gouts'));
+    sansEcran(()=> basculerTriRech('note'));
+    egal(r.res.map(x=>x.id), [9,8,7]);
+  });
+
+  test('RA26 — l\'ordre d\'arrivée est estampillé à l\'arrivée', ()=>{
+    const c = codeDe(chargerGrilleRech);
+    vrai(c.indexOf('__rang') >= 0,
+         'rien ne mémorise l\'ordre d\'arrivée : « note » n\'a plus rien à restituer');
+    vrai(c.indexOf('const depart = suite ? r.res.length : 0') >= 0,
+         'la numérotation ne continue pas d\'une fournée à l\'autre');
+  });
+
+  test('RA27 — en tri « note », la carte montre le mieux noté', ()=>{
+    const r = rechNG('film');
+    /* Volontairement dans le désordre : c'est ce que rend
+       `espacerGenresRech(melangerRech(…))`. */
+    r.res = [ { id:9, __media:'movie', title:'Z', vote_average:6.1, __rang:0 },
+              { id:7, __media:'movie', title:'X', vote_average:8.9, __rang:1 },
+              { id:8, __media:'movie', title:'Y', vote_average:7.4, __rang:2 } ];
+    r.charge = true; r.genre = ['Drame'];
+    poserTriRech('note', true);
+    egal(titreMatchRech().id, 7, 'la carte montre un titre quelconque au lieu du mieux noté');
+    sansEcran(()=> matchSuivantRech());
+    egal(titreMatchRech().id, 8, '« Suivant → » ne descend pas le classement');
+    /* Et la GRILLE, elle, ne bouge pas : son ordre est celui d\'aujourd\'hui. */
+    egal(r.res.map(x=>x.id), [9,7,8],
+         'la carte a réordonné la grille — le §9 promet le comportement d\'aujourd\'hui');
+  });
+
+  test('RA28 — les trois critères neufs sont répondables depuis le jeu', ()=>{
+    const r = rechNG('serie');
+    partage.suivis = [{ id:'u1', pseudo:'Sarah' }];
+    const vues = [];
+    const vraiOpen = window.openSheet;
+    window.openSheet = (html)=>{ vues.push(html); };
+    try{
+      ['statut','gore','avec'].forEach(c=>{ vues.length = 0; ouvrirMotRech(c);
+        vrai(/repondreMotRech\(/.test(vues[0] || ''),
+             'le critère « '+c+' » ouvre une feuille sans une seule option'); });
+    }finally{ window.openSheet = vraiOpen; partage.suivis = []; }
+  });
+
+  test('RA29 — activer une ambiance n\'écrase pas le tri mémorisé', ()=>{
+    const r = rechNG('tout');
+    poserTriRech('gouts', true);
+    sansEcran(()=> enregistrerAmbiance({ id:'a1', emoji:'🌙', nom:'S',
+      regles: ambianceRegles({ genre:['Drame'] }), creeLe:1 }));
+    const vraiRelance = window.relancerRech; window.relancerRech = function(){};
+    try{ sansEcran(()=> basculerAmbiance('a1')); }finally{ window.relancerRech = vraiRelance; }
+    egal(triRech(), 'gouts',
+         'une ambiance a remis le tri à « note » pour toujours : le §7 promet le dernier choix');
+  });
+
+  test('RA30 — les deux textes que le lot devait changer', ()=>{
+    const c = codeDe(champRech) + codeDe(grilleRech);
+    vrai(/une envie/.test(c), 'la barre ne dit pas qu\'on peut y écrire une envie (§0.1)');
+    vrai(/Retire une pilule/.test(c),
+         'l\'écran vide parle encore de « retirer un mot » : il n\'y a plus de phrase (§5)');
   });
 
   /* ==================== Bilan ====================
