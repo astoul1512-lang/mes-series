@@ -207,9 +207,13 @@ const ETAT_PARTAGE = {
             reste de son état (les textes générés) vit en localStorage, hors
             synchro, comme le §4.3 l'exige. */
          'app-14-ia.js','app-15-filtres.js','app-16-duel-plus.js'],
+  /* RETOUR-02 point 2 (11/08/2026) : `app-16-duel-plus.js` y écrit UNE chose,
+     `ui.duelFam` — la famille choisie dans la carte duel du profil. Le RETOUR
+     exige que ce choix soit un « état d'écran local, pas `db` » : c'est très
+     exactement ce que `ui` est, et c'est la seule raison de cette ligne. */
   ui:   ['app-02-outils.js','app-03-vues.js','app-04-decouvrir.js','app-05-plateformes.js',
          'app-06-serie.js','app-07-partage.js','app-10-sorties.js','app-11-gouts.js',
-         'app-12-recherche.js','app-15-filtres.js'],
+         'app-12-recherche.js','app-15-filtres.js','app-16-duel-plus.js'],
   /* La navigation. `app-08-reglages.js` y écrit parce qu'il pose lui-même la
      destination après une déconnexion. */
   view:   ['app-02-outils.js','app-03-vues.js','app-08-reglages.js'],
@@ -1279,6 +1283,112 @@ function collisionsCss(src){
           soucis.push('une ombre est posée sur un rail (.vgn / .filmrow) : le repli du §3 '
                       + 'ne pourrait plus rien retirer');
       });
+
+      /* ===== RETOUR-02 POINTS 5 ET 7 — LA RÈGLE DES FONDS TRANSLUCIDES DEVIENT
+         UN CONTRÔLE (ajouté le 11/08/2026, sur relevé de relecture).
+
+         Le lot 02 a énoncé une convention en toutes lettres dans `app.css` et
+         l'a appliquée à la main. La relecture a relevé ce qui manquait : AUCUN
+         contrôle ne la tenait. « Le prochain bouton fantôme rejouera le défaut
+         en silence » — c'est exactement le scénario qui a produit le point 7,
+         et une convention que rien ne surveille se défait toute seule, un lot
+         à la fois. C'était le seul endroit du lot où une dizaine de lignes
+         transformaient un usage en garantie.
+
+         LE DÉFAUT, MÉCANIQUEMENT : la surcouche premium pose des
+         `background-image` sur `.btn` et `.chip` ; une règle du socle qui pose
+         un `background` translucide EN RACCOURCI sur le même élément ne se bat
+         pas contre elle — elle perd la couche image, qui est peinte par-dessus.
+         `.cl1rejouer` (0,1,0) contre `body .btn` (0,1,1) donnait un texte bleu
+         sur un aplat bleu : ratio 1,11, strictement illisible.
+
+         LA RÈGLE, ET DONC LE CONTRÔLE. Une règle du socle qui pose un fond
+         TRANSLUCIDE sur un `.btn` ou un `.chip` doit, AU CHOIX :
+           · PESER PLUS LOURD que la règle premium qui la vise — c'est la
+             moitié opérante, parce que le raccourci `background:` remet
+             lui-même `background-image` à `none`, et qu'il gagne alors la
+             couche image en même temps que la couleur ;
+           · ou ÉTEINDRE explicitement `background-image`, quand relever la
+             spécificité n'est pas possible.
+         Les seuils viennent des règles premium elles-mêmes : `body .btn` et
+         `body .chip` pèsent (0,1,1) — deux classes suffisent ; `body .chip.on`
+         pèse (0,2,1) — il en faut trois pour un sélecteur qui porte `.on`.
+
+         CE QU'IL NE COUVRE PAS, et il faut le dire : les fonds OPAQUES (ils
+         cachent le dégradé de toute façon) et les `.rond`, qu'aucune règle
+         premium ne peint. Un cas légitime se déclare en relevant sa
+         spécificité ou en ajoutant `background-image:none` — c'est-à-dire en
+         faisant exactement la correction attendue. */
+      /* LES CLASSES « FANTÔMES », lues dans le HTML que l'app ÉMET.
+
+         C'est ce qui manquait à une première version de ce contrôle, et le
+         défaut d'origine le montre : le sélecteur fautif s'appelait
+         `.cl1rejouer` — il ne nommait NI `.btn` NI `.chip`. Lire le CSS seul
+         ne pouvait donc rien voir. Ce qui fait la collision, c'est l'ÉLÉMENT :
+         `class="btn cl1rejouer"`, écrit dans `app-11-gouts.js`. On croise donc
+         les deux sources, comme le relecteur l'a fait à la main. */
+      const fantomes = new Map();          // classe → 'btn' | 'chip' | 'rond'
+      const racineJs = chemin.join(__dirname, '..');
+      FICHIERS.filter(f => /\.js$/.test(f)).forEach(f=>{
+        const src = fs.readFileSync(chemin.join(racineJs, f), 'utf8');
+        (src.match(/class="[^"]*"/g) || []).forEach(a=>{
+          const noms = a.slice(7, -1).split(/[\s'"+]+/).filter(Boolean)
+            .filter(n => /^[A-Za-z_-][A-Za-z0-9_-]*$/.test(n));
+          const socleClasse = noms.find(n => n === 'btn' || n === 'chip' || n === 'rond');
+          if(!socleClasse) return;
+          noms.forEach(n=>{
+            if(n === socleClasse || n === 'on' || n === 'ghost') return;
+            if(!fantomes.has(n)) fantomes.set(n, socleClasse);
+          });
+        });
+      });
+
+      const traduit = { 'transparent': true };
+      const estTranslucide = v=>{
+        const t = String(v).trim();
+        if(/rgba\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*,\s*(0|0?\.\d+)\s*\)/.test(t)) return true;
+        /* #rrggbbaa : les deux derniers chiffres sont l'alpha. */
+        const h = t.match(/^#[0-9a-f]{6}([0-9a-f]{2})$/i);
+        if(h && parseInt(h[1], 16) < 255) return true;
+        if(/color-mix\([^)]*transparent[^)]*\)/i.test(t)) return true;
+        return !!traduit[t.toLowerCase()];
+      };
+      /* Pas d'ancre sur le `}` précédent : elle serait CONSOMMÉE par la règle
+         d'avant, et une règle sur deux passerait au travers — c'est le piège
+         que le contrôle des tailles de police, vingt lignes plus haut, s'est
+         déjà pris. `lastIndex` reprend juste après l'accolade fermante, et
+         `[^{}@]` ne peut pas la franchir : ça suffit à borner le sélecteur. */
+      const reFond = /([^{}@]+?)\{([^{}]*)\}/g;
+      let m4;
+      while((m4 = reFond.exec(socle))){
+        const sel = m4[1].trim(), corps = m4[2];
+        const dedans = (sel.match(/\.[A-Za-z_-][A-Za-z0-9_-]*/g) || [])
+          .map(c => c.slice(1));
+        /* Le sélecteur nomme `.btn`/`.chip`, OU il vise une classe que le HTML
+           pose sur un élément qui les porte. `.rond` est hors sujet : la
+           surcouche ne lui pose aucun `background-image`, seulement un
+           `transform` au toucher. */
+        const vise = dedans.some(c => c === 'btn' || c === 'chip')
+          ? true
+          : dedans.some(c => fantomes.get(c) === 'btn' || fantomes.get(c) === 'chip');
+        if(!vise) continue;
+        /* Le raccourci `background:` seul, pas `background-color` ni
+           `background-image` — c'est le raccourci qui remet l'image à `none`
+           et se fait recouvrir. */
+        const f = corps.match(/(^|;)\s*background\s*:\s*([^;}]+)/);
+        if(!f) continue;
+        if(!estTranslucide(f[2])) continue;
+        const classes = dedans.length;
+        const eteint = /background-image\s*:\s*none/.test(corps);
+        /* `body .chip.on` pèse (0,2,1) ; `body .btn` et `body .chip`, (0,1,1). */
+        const surChip = dedans.some(c => c === 'chip' || fantomes.get(c) === 'chip');
+        const seuil = (surChip && dedans.indexOf('on') >= 0) ? 3 : 2;
+        if(classes >= seuil || eteint) continue;
+        soucis.push(sel.split(/\s+/).slice(-2).join(' ') +
+          ' : fond translucide sur un .btn/.chip trop léger (' + classes + ' classe(s), ' +
+          seuil + ' attendues) et sans `background-image:none` — la surcouche premium ' +
+          'peindra son dégradé par-dessus (RETOUR-02 point 7)');
+      }
     }
     console.log('premium       → ' + (soucis.length
       ? soucis.length + ' écart(s)'

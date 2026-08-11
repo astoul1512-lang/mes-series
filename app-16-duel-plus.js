@@ -71,8 +71,24 @@ function stabiliteDuel(famille){
   return Math.min(JAUGE_PLAFOND, Math.round(100 * somme / (JAUGE_TOP * JAUGE_DUELS)));
 }
 
-function jaugeDuelHtml(famille){
+/* RETOUR-02 POINT 1 (11/08/2026) — DEUX HABILLAGES, UNE SEULE JAUGE.
+
+   `compact` rend la forme de la variante C : la barre et son pourcentage en
+   bout, sans la phrase. La phrase longue (« Ton classement {famille} est stable
+   à N % ») reste sur les écrans de RÉSULTAT, où elle a la place et où elle
+   raconte ce qui vient de se passer ; dans la carte du profil elle occupait une
+   ligne entière pour dire ce qu'un « 48 % » dit en trois caractères.
+
+   POURQUOI UNE OPTION ET PAS UNE SECONDE FONCTION : parce que le §4.3 dit que
+   la jauge est la MÊME sur les trois écrans, et qu'un test le vérifie en
+   relisant les appelants. Deux fonctions, c'est deux formules qui divergent un
+   jour — et une jauge qui ne dit pas la même chose selon l'écran est pire
+   qu'une jauge absente. Le calcul (`stabiliteDuel`) reste unique et intact. */
+function jaugeDuelHtml(famille, compact){
   const n = stabiliteDuel(famille);
+  if(compact)
+    return '<div class="dcjauge"><div class="djb"><i style="width:'+n+'%"></i></div>'+
+      '<span>'+n+' %</span></div>';
   return '<div class="djauge"><div class="djb"><i style="width:'+n+'%"></i></div>'+
     '<span>Ton classement '+esc(libelleFamilleDuel(famille))+' est stable à '+n+' %</span></div>';
 }
@@ -81,9 +97,59 @@ function libelleFamilleDuel(f){
   return (typeof LIB_FAMILLE === 'object' && LIB_FAMILLE && LIB_FAMILLE[f]) || 'titres';
 }
 
-/* La famille dont on parle sur le profil : celle qui a le plus de nouveaux
-   titres à départager, à défaut celle qui a le plus gros classement. On ne
-   demande jamais à la personne de choisir une famille pour voir sa carte. */
+/* ===========================================================================
+   RETOUR-02 POINTS 1, 2 ET 3 (11/08/2026) — LA CARTE DUEL, VARIANTE C
+
+   CE QUI N'ALLAIT PAS, ET C'ÉTAIT TROIS CHOSES À LA FOIS :
+
+     1. LA CARTE ÉTAIT TROP GROSSE. Grand podium à marches (132 px pour l'or),
+        titre en accroche, jauge, deux boutons : plus de 300 px avant la
+        bibliothèque, sur l'écran qu'on ouvre pour voir SA bibliothèque.
+     2. LA FAMILLE ÉTAIT IMPOSÉE. `famillePantheon` prenait la plus jouée —
+        donc toujours les animés chez Adrien — et rien ne permettait d'en
+        changer. On ne montrait qu'un tiers du travail accompli.
+     3. LE LIBELLÉ MENTAIT. La jauge parlait de `familleDuelProfil` (« où
+        reste-t-il à jouer ») et le podium de `famillePantheon` (« où a-t-on le
+        plus joué »). Deux fonctions, deux réponses, un seul écran : « Ton
+        classement films est stable à 48 % » au-dessus d'un podium d'animés.
+
+   CE QUE FAIT LA VARIANTE C — le n°1 mis en scène, sans hauteur :
+     · les trois affiches du podium EN ÉVENTAIL (le n°1 devant, liseré doré,
+       les 2 et 3 derrière, inclinés) — l'émotion du podium en un cinquième de
+       la place ;
+     · une phrase de règne : « {n°1} règne sur tes {famille} » ;
+     · la jauge, avec son pourcentage discret en bout ;
+     · le bouton « Jouer » à droite, séparé des puces ;
+     · les puces famille SOUS la jauge, dans l'ordre imposé Films · Animés ·
+       Séries.
+
+   UNE SEULE SOURCE DE VÉRITÉ, ET C'EST LA CORRECTION DU POINT 3 : la famille
+   affichée est celle que disent les puces (`familleDuelChoisie`), et TOUT en
+   découle — le podium, la phrase, la jauge, le libellé et la famille de la
+   session « Jouer ». `familleDuelProfil` et `famillePantheon` ne servent plus
+   qu'à choisir le DÉFAUT, une fois, quand personne n'a encore choisi.
+
+   PLUS AUCUN TOTAL EN ACCROCHE (point 1). Le titre disait « 370 nouveaux
+   titres à départager ». `nouveauxADepartager` reste — c'est elle qui nourrit
+   la pastille de la barre du bas (§4.4) — mais son chiffre ne s'affiche plus
+   ici, ni ailleurs dans le profil.
+
+   OÙ EST PASSÉ « ↗ PARTAGER ». L'éventail EST le bouton de partage : on touche
+   son podium, on le partage. La variante C ne prévoit pas de second bouton, et
+   `partagerPodium` n'avait qu'un seul appelant — le faire disparaître aurait
+   rendu orpheline toute la chaîne de la carte de partage (§4.5), où le grand
+   podium à marches continue de briller. C'est le seul point de ce lot qui
+   n'est pas littéralement dans la maquette : à confirmer par Adrien.
+=========================================================================== */
+
+/* L'ordre des puces est IMPOSÉ par le point 1, et il n'est pas celui de
+   `DUEL_FAMILLES` (film, serie, anime). On le déclare donc ici, en clair,
+   plutôt que de compter sur un ordre voisin qui bougerait sans prévenir. */
+const DUEL_C_ORDRE = ['film', 'anime', 'serie'];
+
+/* La famille dont on parle sur le profil, PAR DÉFAUT : celle qui a le plus de
+   nouveaux titres à départager, à défaut celle qui a le plus gros classement.
+   Elle ne décide plus de ce qui est affiché — elle propose un premier choix. */
 function familleDuelProfil(){
   const jouables = (typeof famillesDuel === 'function') ? famillesDuel() : [];
   if(!jouables.length) return null;
@@ -96,8 +162,8 @@ function familleDuelProfil(){
 }
 
 /* La famille du PANTHÉON : la plus jouée, c'est-à-dire celle dont le podium
-   repose sur le plus de duels. Ce n'est pas forcément celle de la carte, et
-   c'est voulu — la carte invite à jouer, le panthéon montre ce qui est acquis. */
+   repose sur le plus de duels. Elle non plus ne décide plus seule : elle est
+   le meilleur défaut quand il existe déjà un podium complet quelque part. */
 function famillePantheon(){
   const fams = (typeof DUEL_FAMILLES === 'object') ? DUEL_FAMILLES.map(f => f.cle) : [];
   let meilleure = null, mieux = -1;
@@ -108,6 +174,45 @@ function famillePantheon(){
     if(n > mieux){ mieux = n; meilleure = f; }
   });
   return meilleure;
+}
+
+/* Les familles proposées en puces, dans l'ordre imposé. On ne propose que les
+   familles JOUABLES (`famillesDuel`, dix titres éligibles au moins) : une puce
+   qui ouvre un podium vide est une puce qui ment. */
+function famillesDuelC(){
+  const jouables = ((typeof famillesDuel === 'function') ? famillesDuel() : []).map(f => f.cle);
+  return DUEL_C_ORDRE.filter(f => jouables.indexOf(f) >= 0);
+}
+
+/* RETOUR-02 POINT 2 — LA FAMILLE SE CHOISIT, ELLE N'EST PLUS IMPOSÉE.
+
+   Le choix vit dans `ui`, l'état d'écran, et PAS dans `db` : le RETOUR le dit
+   en toutes lettres. Conséquence assumée — il ne voyage pas d'un appareil à
+   l'autre et ne survit pas à un rechargement complet. Ce n'est pas une
+   préférence de la personne au sens des goûts, c'est « ce que je regarde en ce
+   moment » ; le mettre dans `db` le ferait synchroniser, dater un bloc de
+   goûts, et arbitrer contre l'autre appareil pour un choix qui ne vaut que le
+   temps d'un aller-retour d'onglet.
+
+   Un choix devenu injouable (des titres retirés, la famille passe sous le
+   seuil) retombe silencieusement sur le défaut : on ne montre jamais un podium
+   vide sous une puce allumée. */
+function familleDuelChoisie(){
+  const dispo = famillesDuelC();
+  if(!dispo.length) return null;
+  if(ui.duelFam && dispo.indexOf(ui.duelFam) >= 0) return ui.duelFam;
+  const defaut = famillePantheon() || familleDuelProfil();
+  return (defaut && dispo.indexOf(defaut) >= 0) ? defaut : dispo[0];
+}
+
+function setFamilleDuel(f){
+  if(famillesDuelC().indexOf(f) < 0) return;
+  if(ui.duelFam === f) return;
+  ui.duelFam = f;
+  /* La carte vit dans `viewProfile`, qui n'a pas de repeint ciblé pour elle.
+     Un rendu complet est le geste juste ici : la personne vient de changer de
+     sujet, et tout l'entête du profil suit. */
+  if(typeof render === 'function') render();
 }
 
 function totalDuelsFamille(f){
@@ -122,58 +227,116 @@ function totalDuelsFamille(f){
 
 /* ==================== §4.1 et §4.2 — LA CARTE ET LE PANTHÉON ==================== */
 
+/* Les trois premiers du podium d'une famille, résolus en titres.
+
+   CORRECTION DE RELECTURE (11/08/2026) — L'ALIGNEMENT EST CONSERVÉ, LES TROUS
+   AUSSI. La première version finissait par `.filter(Boolean)` : un n°1 devenu
+   inéligible (👎 posé après coup, « je ne l'ai pas vu ») disparaissait, et le
+   n°2 était SILENCIEUSEMENT PROMU au liseré doré et à la phrase de règne, sans
+   que `db.podium` ait bougé d'un octet. Reproduit en relecture :
+   podium `["1","2","3"]`, n°1 = « Le Parrain », phrase affichée = « Heat règne
+   sur tes films ». Le libellé de FAMILLE restait juste — c'est le RANG qui
+   mentait, et c'était une régression de véracité : `pantheonHtml` refusait de
+   dessiner un podium incomplet plutôt que d'inventer un vainqueur.
+   Un rang non résolu vaut donc `null` et reste à sa place. L'éventail dessine
+   les cases qu'il a, la phrase de règne ne se dit que si le PREMIER est là, et
+   le partage n'est proposé que si les trois le sont. */
+function troisDuPodium(fam){
+  const pod = ((db.podium || {})[fam] || []).slice(0, 3);
+  if(!pod.length) return [];
+  const parId = (typeof titresParIdDuel === 'function') ? titresParIdDuel(fam) : {};
+  return pod.map(id => parId[String(id)] || null);
+}
+
+/* L'ÉVENTAIL. Le n°1 devant et doré, les 2 et 3 derrière, inclinés de part et
+   d'autre. Les rangs 2 et 3 sont DÉCORATIFS — pas de nom, pas de médaille :
+   c'est le prix assumé de la variante C, et la maquette le dit dans sa note.
+   Le nom du n°1, lui, est dans la phrase de règne juste à côté.
+
+   DÉCISION D'ADRIEN DU 11/08/2026 — AMENDEMENT À RETOUR-02 POINT 1. L'éventail
+   n'est PAS un bouton. Ma première livraison en avait fait le déclencheur du
+   partage, pour ne pas rendre `partagerPodium` orpheline ; la relecture a
+   mesuré les trois défauts que ça produisait — découvrabilité nulle (aucun
+   fond, aucune bordure, aucun texte : le seul indice était un `aria-label`,
+   invisible), conflit de geste (le geste spontané sur un podium miniature est
+   « l'agrandir »), et échec pur sous trois titres (`construirePodiumPng`
+   refuse, la personne recevait « Impossible de créer l'image »).
+   Le partage part donc dans un petit bouton carré ↗ posé À CÔTÉ de « Jouer »,
+   comme la maquette 21 le fait sur la carte compacte, et il n'apparaît que
+   lorsque le podium a réellement ses trois titres. Ce n'est plus un arbitrage
+   ouvert : c'est la spec amendée. */
+function eventailDuelHtml(t){
+  if(!t.filter(Boolean).length) return '';
+  const aff = (x, cls)=> (typeof affDuel === 'function') ? affDuel(x, cls, 'w185') : '';
+  return '<div class="dcev" aria-hidden="true">'+
+    (t[1] ? '<span class="dcev2">'+aff(t[1], 'dcevimg')+'</span>' : '')+
+    (t[2] ? '<span class="dcev3">'+aff(t[2], 'dcevimg')+'</span>' : '')+
+    (t[0] ? '<span class="dcev1">'+aff(t[0], 'dcevimg')+'</span>' : '')+
+  '</div>';
+}
+
 /* En tête de Mon profil. Le bloc Duel de Mes goûts (`carteDuelGouts`) RESTE en
    place, inchangé : le §0.6 le dit, et cette carte est un raccourci, pas un
    déménagement. */
 function carteDuelProfil(){
-  const fam = familleDuelProfil();
+  const fam = familleDuelChoisie();
   if(!fam) return '';
-  const n = nouveauxADepartager(fam);
-  const pantheon = famillePantheon();
-  /* Le ton du §0.4 fait loi, et il vient du code existant (app-11) : on
-     encourage, on ne décourage jamais. « n nouveaux titres à départager »,
-     jamais un total restant, jamais « viens jouer ». */
-  const titre = n > 0
-    ? n + ' nouveau' + (n > 1 ? 'x' : '') + ' titre' + (n > 1 ? 's' : '') + ' à départager'
-    : 'Podium à jour — rejouer ?';
-  return '<div class="wrap" style="padding-bottom:0"><div class="card dprof">'+
-    '<div class="dpttl"><span aria-hidden="true">🏆</span>'+esc(titre)+'</div>'+
-    jaugeDuelHtml(fam)+
-    (pantheon ? pantheonHtml(pantheon) : '')+
-    '<div class="dpact">'+
-      /* Le bouton défend le podium AFFICHÉ, pas un autre. `familleDuelProfil`
-         et `famillePantheon` peuvent différer — l'une cherche où il reste à
-         jouer, l'autre où l'on a le plus joué — et « Défendre mon podium »
-         ouvrait alors une famille dont on ne montrait rien. */
-      '<button class="btn" onclick="ouvrirDuel(\''+(pantheon || fam)+'\')">'+
-        (pantheon ? 'Défendre mon podium' : 'Jouer')+'</button>'+
-      (pantheon ? '<button class="btn ghost" onclick="partagerPodium(\''+pantheon+'\')">'+
-                  '↗ Partager</button>' : '')+
+  const t = troisDuPodium(fam);
+  const lib = libelleFamilleDuel(fam);
+  /* LA PHRASE DE RÈGNE, et son repli. Avec un n°1 RÉSOLU, on le nomme — c'est
+     le sujet de la carte. Sans lui (pas de podium, ou n°1 devenu inéligible),
+     on invite, sans jamais annoncer un reste à faire (§0.4). On ne promeut
+     personne à sa place : voir `troisDuPodium`. */
+  const phrase = t[0]
+    ? esc(t[0].nom) + ' règne sur tes ' + esc(lib)
+    : 'Départage tes ' + esc(lib);
+  /* Le partage n'est offert que sur un podium COMPLET : `construirePodiumPng`
+     refuse en dessous de trois, et un bouton qui rend « Impossible de créer
+     l'image » est un bouton qu'il ne fallait pas montrer. */
+  const partageable = !!(t[0] && t[1] && t[2]);
+  const fams = famillesDuelC();
+  return '<div class="wrap" style="padding-bottom:0"><div class="card dprofc">'+
+    '<div class="dcrang">'+
+      eventailDuelHtml(t)+
+      '<div class="dctxt">'+
+        '<b class="dcttl">'+phrase+'</b>'+
+        jaugeDuelHtml(fam, true)+
+        /* Les puces SOUS la jauge, dans l'ordre imposé. Elles peuvent passer à
+           la ligne : sur un écran de 375 px, mieux vaut une carte un peu plus
+           haute qu'une puce qui touche « Jouer ». */
+        (fams.length > 1 ? '<div class="dcfams">'+fams.map(f=>
+          '<button class="fchip'+(f === fam ? ' on' : '')+'" '+
+            'aria-pressed="'+(f === fam ? 'true' : 'false')+'" '+
+            'onclick="setFamilleDuel(\''+f+'\')">'+esc(libelleFamilleDuel(f))+'</button>').join('')+
+        '</div>' : '')+
+      '</div>'+
+      '<button class="btn dcjouer" onclick="ouvrirDuel(\''+fam+'\')">Jouer</button>'+
+      (partageable
+        ? '<button class="btn ghost dcpart" onclick="partagerPodium(\''+fam+'\')" '+
+            'aria-label="Partager mon podium">↗</button>'
+        : '')+
     '</div>'+
   '</div></div>';
 }
 
-/* Trois marches : or au centre et plus haute, argent à gauche, bronze à droite
-   (maquette 14). Moins de trois titres au podium → pas de panthéon, la carte
-   seule : un podium à deux marches n'est pas un podium. */
-function pantheonHtml(fam){
-  const pod = ((db.podium || {})[fam] || []).slice(0, 3);
-  if(pod.length < 3) return '';
-  const parId = (typeof titresParIdDuel === 'function') ? titresParIdDuel(fam) : {};
-  const t = pod.map(id => parId[String(id)]).filter(Boolean);
-  if(t.length < 3) return '';
-  const marche = (x, rang, cls)=>
-    '<div class="dmarche '+cls+'">'+
-      (typeof affDuel === 'function' ? affDuel(x, 'dmaff', 'w185') : '')+
-      '<div class="dmnom">'+esc(x.nom)+'</div>'+
-      '<div class="dmsoc"><b>'+rang+'</b></div>'+
-    '</div>';
-  return '<div class="dpant">'+
-      marche(t[1], '2', 'argent') + marche(t[0], '1', 'or') + marche(t[2], '3', 'bronze')+
-    '</div>'+
-    '<div class="tiny muted" style="text-align:center;margin-top:6px">Bâti sur '+
-      totalDuelsFamille(fam)+' duel'+(totalDuelsFamille(fam) > 1 ? 's' : '')+'</div>';
-}
+/* PIERRE TOMBALE — RETOUR-02 POINT 1, 11/08/2026. `pantheonHtml` construisait
+   le grand podium à marches (or au centre, 132 px de haut) en tête de Mon
+   profil. Le point 1 l'en retire : la variante C le remplace par l'éventail
+   ci-dessus, cinq fois plus petit.
+
+   IL N'A PAS ÉTÉ DÉPLACÉ, IL A ÉTÉ SUPPRIMÉ, et il faut le dire clairement.
+   Le RETOUR dit « il reste sur la carte de PARTAGE, où il brille » — et c'est
+   vrai : la carte de partage EXISTE toujours, entière, avec ses trois marches.
+   Mais elle est dessinée au CANVAS (`construirePodiumPng`, §5), pas en HTML.
+   Elle n'a jamais appelé `pantheonHtml` et ne l'appellera pas. Garder ici une
+   fonction HTML sans appelant, c'est très exactement ce qui est arrivé à
+   `duelPasVu` (point 19 du 02/08, puis point 6 de ce RETOUR) : du code mort
+   qui a l'air vivant. Elle part, avec ses règles CSS (`.dpant`, `.dmarche`,
+   `.dmaff`, `.dmnom`, `.dmsoc` et la surcouche premium de `.dmaff`).
+
+   Ce qui a été VÉRIFIÉ avant de la retirer : `pantheonHtml` n'avait qu'un seul
+   appelant, `carteDuelProfil`. `troisDuPodium`, qu'elle partageait avec
+   l'éventail, reste — c'est elle qui porte la résolution podium → titres. */
 
 /* ==================== §4.4 — LA PASTILLE DE LA BARRE DU BAS ====================
 

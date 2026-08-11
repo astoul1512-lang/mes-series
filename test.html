@@ -8732,6 +8732,27 @@ window.MODE_TEST = true;
     try{ localStorage.removeItem(DUELJOUR_CLE); localStorage.removeItem(ECLAIRS_CLE); }catch(e){}
     eclairFaitCetteSession = false;
     duel = Object.assign({}, DUEL_VIDE);
+    ui.duelFam = null;
+    return db;
+  }
+
+  /* CORRECTION DE RELECTURE (11/08/2026) — UN DÉCOR OÙ LES TROIS FAMILLES SONT
+     RÉELLEMENT JOUABLES. `duelBase` ne crée que des films : tout test qui itère
+     `['film','serie','anime']` et saute les familles injouables n'en éprouvait
+     donc qu'UNE — la boucle passait au vert sans avoir rien exécuté sur `serie`
+     ni sur `anime`, alors que le cahier exige « test : 3 familles ».
+     `DUEL_MINI` titres éligibles par famille, et la frontière de la
+     bibliothèque (`familleDe`) : le genre « Animation » fait l'animé. */
+  function duelBase3(n){
+    const par = n || 12;
+    duelBase(0);
+    for(let i = 1; i <= par; i++) db.movies[i] = film(i, ['Drame'], true);
+    for(let i = 1; i <= par; i++)
+      db.shows[100 + i] = serie(100 + i, [ep(1, HIER)], {'1x1':1},
+                                { name:'S' + i, genres:['Drame'] });
+    for(let i = 1; i <= par; i++)
+      db.shows[200 + i] = serie(200 + i, [ep(1, HIER)], {'1x1':1},
+                                { name:'A' + i, genres:['Animation'] });
     return db;
   }
 
@@ -8872,17 +8893,91 @@ window.MODE_TEST = true;
          '« pas vu » ne compte pas comme joué : le bandeau harcèlerait');
   });
 
-  test('D-6 — « Je ne l\'ai pas vu » est REBRANCHÉ sur l\'écran de duel', ()=>{
-    duelBase(12);
-    const d = sansEcran(()=>{ ouvrirDuel('film'); return duel; });
+  /* CORRECTION DE RELECTURE (11/08/2026) — D-6 OUVRE LA FEUILLE ET CLIQUE.
+     L'ancienne version validait « le geste a atterri ailleurs » par un
+     `codeDe(ficheDuel).indexOf('duelPasVu') >= 0` : une recherche de
+     sous-chaîne dans le SOURCE. La feuille n'était jamais ouverte, le bouton
+     jamais rendu ni cliqué — et c'est très exactement pour ça que le bloquant
+     (la session de duel détruite par le popstate de `retirerGarde`) est passé
+     au vert. Un test qui lit le code n'éprouve pas le chemin.
+     Les trois zones réseau de la fiche sont bouchonnées : ce sont elles qui
+     empêchent d'ouvrir la feuille hors ligne, pas la feuille elle-même. */
+  function avecFicheSansReseau(fn){
+    const v = { p: window.blocPlateformes, c: window.zoneCasting, r: window.zoneRecos,
+                b: window.zoneBande, d: window.detailDuel };
+    window.blocPlateformes = ()=> '';
+    window.zoneCasting = ()=> '';
+    window.zoneRecos = ()=> '';
+    window.zoneBande = ()=> '';
+    window.detailDuel = ()=> null;
+    try{ return fn(); }
+    finally{
+      window.blocPlateformes = v.p; window.zoneCasting = v.c;
+      window.zoneRecos = v.r; window.zoneBande = v.b; window.detailDuel = v.d;
+    }
+  }
+
+  testAsync('D-6 — l\'écran de duel s\'allège, et le geste part dans la fiche', async ()=>{
+    duelBase(14);
+    sansEcran(()=> ouvrirDuel('film'));
     const h = sansEcran(()=> ecranDuelJeu());
-    vrai(/duelPasVu\(/.test(h),
-         'le bouton du §6.1 manque : duelPasVu redevient du code mort');
-    /* Deux boutons, un par titre — pas de question « lequel ? ». */
+    vrai(!/duelPasVu\(/.test(h), 'les boutons « Pas vu » sont encore sur l\'écran de duel');
+    vrai(!/dpasvu/.test(h), 'le bloc `.dpasvu` est encore émis');
     const boite = document.createElement('div'); boite.innerHTML = h;
-    egal(boite.querySelectorAll('.dpasvu button').length, 2);
-    /* Et « Je ne sais pas / les deux » est toujours là. */
+    egal(boite.querySelectorAll('.dcarte').length, 2);
     vrai(/duelPasse\(\)/.test(h), 'le bouton du milieu a disparu');
+
+    /* LE POINT D'ENTRÉE, verrouillé. Sans lui, un lot futur qui retirerait la
+       pastille rendrait `ficheDuel` inatteignable depuis le duel et
+       `duelPasVu` redeviendrait du code mort — pendant que ce test resterait
+       vert. C'est le motif exact du point 19. */
+    vrai(/dpastille/.test(h) && /ficheDuel\(/.test(h),
+         'la pastille ne mène plus à la fiche : le geste devient inatteignable');
+
+    /* LA FEUILLE, OUVERTE POUR DE VRAI — avec le VRAI `openSheet`, et c'est le
+       point clé. La première tentative de correction stubbait `openSheet` pour
+       lire le HTML : `poserGarde('feuille')` n'était alors jamais appelée, donc
+       `retirerGarde` sortait à son premier `if`, donc aucun `history.back()`,
+       donc aucun popstate — et le test restait vert AVEC le bloquant en place.
+       Contre-épreuve faite : en neutralisant le correctif d'`app-02`, cette
+       version-ci rougit, la version bouchonnée non. C'est la différence entre
+       éprouver un chemin et le décrire. */
+    const t = (duel.paire || [])[0];
+    avecFicheSansReseau(()=> sansEcran(()=> ficheDuel(t.media, String(t.id))));
+    vrai(document.getElementById('sheet').classList.contains('show'),
+         'la feuille ne s\'est pas ouverte : le reste du cas ne prouve rien');
+    const bf = document.getElementById('sheetin');
+    const ligne = bf.querySelector('.du19pasvu');
+    vrai(!!ligne, '« Je ne l\'ai pas vu » n\'est pas rendu dans la fiche');
+    vrai(/Je ne l/.test(ligne.textContent), 'la ligne n\'est pas nommée');
+    egal(ligne.parentNode.lastElementChild, ligne,
+         'la ligne n\'est pas la dernière de la fiche : ce n\'est pas l\'action principale');
+    /* La garde d'historique est bien posée — c'est elle qui déclenchera le
+       `history.back()` au moment de la fermeture. Sans elle, le cas ci-dessous
+       ne traverserait pas le chemin qui casse. */
+    vrai(gardesHisto.feuille === true,
+         'la garde d\'historique n\'est pas posée : le chemin du bloquant n\'est pas emprunté');
+
+    /* ON CLIQUE. C'est ce clic-là qui manquait, et c'est lui qui révèle le
+       bloquant : le geste doit servir le duel SUIVANT, pas tuer la session. */
+    const avantFaits = duel.faits, avantPaquet = duel.paquet.length;
+    const clic = ligne.getAttribute('onclick') || '';
+    vrai(clic.indexOf('duelPasVu(') >= 0, 'la ligne n\'appelle pas duelPasVu');
+    sansEcran(()=> ligne.click());
+    /* LE POPSTATE ARRIVE UNE TÂCHE PLUS TARD — c'est toute l'histoire du
+       bloquant : `duelPasVu` faisait correctement son travail, et c'est le
+       `history.back()` de `closeSheet` qui détruisait la session APRÈS. Un
+       test synchrone ne pouvait pas le voir. On laisse donc la boucle
+       d'événements tourner avant de regarder. */
+    await new Promise(ok => setTimeout(ok, 0));
+    await new Promise(ok => setTimeout(ok, 30));
+    vrai(db.gouts.pasVus.indexOf(t.media + ':' + t.id) >= 0, 'le titre n\'est pas récusé');
+    egal(duel.paquet.length, avantPaquet - 1, 'le titre n\'est pas sorti du paquet');
+    egal(duel.faits, avantFaits, 'le geste a compté un duel : ce n\'est pas un vote');
+    /* LE BLOQUANT, en deux assertions : la session doit être VIVANTE. */
+    egal(duel.actif, true,
+         'la session de duel a été détruite par le geste (popstate de retirerGarde)');
+    egal((duel.paire || []).length, 2, 'aucune paire suivante n\'a été servie');
   });
 
   test('D-7 — « pas vu » est RÉVERSIBLE : le titre revient dans « Titres écartés »', ()=>{
@@ -8943,14 +9038,32 @@ window.MODE_TEST = true;
     vrai(codeDe(viewGouts).indexOf('blocEcartes') >= 0, '« Titres écartés » a disparu');
   });
 
-  test('D-11 — le panthéon exige TROIS titres, pas deux', ()=>{
+  /* RETOUR-02 POINT 1 (11/08/2026) — D-11 est RÉÉCRIT. Le grand podium à
+     marches (`pantheonHtml`) a quitté le profil et le dépôt : ce qui doit être
+     éprouvé maintenant, c'est l'éventail — et le fait qu'il sache faire avec
+     moins de trois titres, là où les marches, elles, disparaissaient. */
+  test('D-11 — l\'éventail montre ce qu\'il a, le n°1 devant', ()=>{
     duelBase(12);
     for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
     projeterPodium('film');
-    vrai(sansEcran(()=> pantheonHtml('film')).indexOf('dpant') >= 0);
+    ui.duelFam = 'film';
+    const h = sansEcran(()=> carteDuelProfil());
+    vrai(h.indexOf('dcev1') >= 0, 'le n°1 de l\'éventail est absent');
+    vrai(h.indexOf('dcev2') >= 0 && h.indexOf('dcev3') >= 0, 'les rangs 2 et 3 sont absents');
+    vrai(h.indexOf('dpant') < 0, 'le grand podium à marches est encore dans le profil');
+    /* Deux titres : l'éventail se contente de deux, il ne disparaît pas. Le
+       podium à marches, lui, exigeait trois marches — c'était sa contrainte,
+       pas celle de la carte. */
     db.podium.film = ['1','2'];
-    egal(sansEcran(()=> pantheonHtml('film')), '',
-         'un podium à deux marches s\'affiche : ce n\'est pas un podium');
+    const h2 = sansEcran(()=> carteDuelProfil());
+    vrai(h2.indexOf('dcev1') >= 0 && h2.indexOf('dcev2') >= 0);
+    vrai(h2.indexOf('dcev3') < 0, 'un troisième rang est dessiné sans troisième titre');
+    /* Et sans podium du tout, la carte existe encore : elle invite. */
+    db.podium.film = [];
+    const h3 = sansEcran(()=> carteDuelProfil());
+    vrai(h3.indexOf('dprofc') >= 0, 'la carte disparaît quand le podium est vide');
+    vrai(/Départage tes films/.test(h3), 'sans podium, la carte n\'invite pas');
+    vrai(!/règne/.test(h3), 'une phrase de règne sans n°1');
   });
 
   test('D-12 — « bâti sur N duels » ne compte pas chaque duel deux fois', ()=>{
@@ -9172,10 +9285,326 @@ window.MODE_TEST = true;
     }finally{ window.nouveauxADepartager = vraiNouveaux; }
   });
 
-  test('D-27 — « Défendre mon podium » défend celui qui est affiché', ()=>{
-    const c = codeDe(carteDuelProfil);
-    vrai(/pantheon \|\| fam/.test(c),
-         'le bouton ouvre une famille dont la carte ne montre rien');
+  /* RETOUR-02 POINT 3 — D-27 est RÉÉCRIT, et il devient plus fort. Il vérifiait
+     que le bouton ouvrait la famille du podium AFFICHÉ, en lisant le code
+     (`pantheon || fam`). Il n'y a plus deux familles : il n'y en a qu'une,
+     celle des puces, et tout en découle. On l'éprouve donc sur le RÉSULTAT, sur
+     les trois familles, comme l'acceptation le demande. */
+  test('D-27 — libellé, podium, jauge et bouton parlent TOUS de la même famille', ()=>{
+    /* CORRECTION DE RELECTURE (11/08/2026) — LES TROIS FAMILLES, POUR DE BON.
+       Ce cas itérait bien `['film','serie','anime']`, mais sur un décor qui
+       n'en rendait qu'UNE jouable : les deux autres branches n'étaient jamais
+       exécutées, et l'assertion sur la puce allumée passait par son premier
+       terme (aucune puce n'était rendue, `fams.length > 1` étant faux). Elle
+       était vide de sens, et sans message d'échec. */
+    duelBase3(12);
+    ['film','serie','anime'].forEach(f=>{
+      for(let i = 1; i <= 12; i++) ecrireClassement(f, i, 1000 + i, 3);
+      projeterPodium(f);
+    });
+    egal(famillesDuelC(), ['film','anime','serie'],
+         'le décor ne rend pas les trois familles jouables : le test n\'éprouve rien');
+    ['film','serie','anime'].forEach(f=>{
+      ui.duelFam = f;
+      const h = sansEcran(()=> carteDuelProfil());
+      const lib = libelleFamilleDuel(f);
+      vrai(h.indexOf('ouvrirDuel(\''+f+'\')') >= 0,
+           '« Jouer » ouvre une autre famille que celle affichée : ' + f);
+      vrai(h.indexOf(lib) >= 0, 'le libellé ne parle pas de ' + f);
+      /* LA PUCE ALLUMÉE EST CELLE-LÀ, ET LES DEUX AUTRES SONT ÉTEINTES.
+         L'ancienne formulation avait un « ou » qui la rendait toujours vraie. */
+      const boite = document.createElement('div'); boite.innerHTML = h;
+      const on = [].slice.call(boite.querySelectorAll('.fchip.on'));
+      egal(on.length, 1, 'zéro ou plusieurs puces allumées pour ' + f);
+      egal(on[0].textContent, lib, 'la puce allumée n\'est pas celle de ' + f);
+      egal(on[0].getAttribute('aria-pressed'), 'true', 'aria-pressed faux sur ' + f);
+      /* Et la jauge affichée est bien celle de CETTE famille. */
+      vrai(h.indexOf('>'+stabiliteDuel(f)+' %<') >= 0,
+           'la jauge ne parle pas de ' + f + ' (attendu ' + stabiliteDuel(f) + ' %)');
+    });
+  });
+
+  test('RETOUR-02 point 3 — un n°1 devenu inéligible ne promeut PAS le n°2', ()=>{
+    /* CORRECTION DE RELECTURE (11/08/2026). `troisDuPodium` finissait par un
+       `.filter(Boolean)` : le rang du podium mentait silencieusement. */
+    duelBase(12);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    ui.duelFam = 'film';
+    const tete = db.podium.film[0];
+    vrai(sansEcran(()=> carteDuelProfil()).indexOf('règne sur tes films') >= 0,
+         'la phrase de règne manque alors que le podium est complet');
+    /* On rend le n°1 inéligible sans toucher au podium : c'est le cas réel
+       (un 👎 posé après coup, ou « je ne l'ai pas vu »). */
+    poserAvis('movie', tete, -1);
+    const h = sansEcran(()=> carteDuelProfil());
+    egal(db.podium.film[0], tete, 'le décor a bougé : le test ne prouve plus rien');
+    vrai(h.indexOf('règne') < 0,
+         'un remplaçant a été couronné à la place du n°1 : le rang ment');
+    vrai(/Départage tes films/.test(h), 'la carte n\'invite pas en repli');
+    /* Et le partage disparaît : le podium n'a plus ses trois titres, et
+       `construirePodiumPng` refuserait. */
+    vrai(h.indexOf('partagerPodium') < 0,
+         'le partage est proposé sur un podium incomplet : il rendrait une erreur');
+  });
+
+  test('RETOUR-02 point 1 (amendé le 11/08) — le partage est un bouton, pas l\'éventail', ()=>{
+    /* DÉCISION D'ADRIEN DU 11/08/2026, amendement au cahier : petit carré ↗ à
+       côté de « Jouer », comme la maquette 21 ; l'éventail n'est pas un bouton ;
+       le ↗ n'apparaît que si le podium a ses trois titres. */
+    duelBase(12);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    ui.duelFam = 'film';
+    const h = sansEcran(()=> carteDuelProfil());
+    const boite = document.createElement('div'); boite.innerHTML = h;
+    const ev = boite.querySelector('.dcev');
+    vrai(!!ev, 'l\'éventail a disparu');
+    egal(ev.tagName, 'DIV', 'l\'éventail est encore un bouton');
+    vrai(!ev.getAttribute('onclick'), 'l\'éventail porte encore un geste');
+    const part = boite.querySelector('.dcpart');
+    vrai(!!part, 'le bouton de partage manque');
+    vrai(part.getAttribute('onclick').indexOf('partagerPodium(\'film\')') >= 0);
+    vrai(!!part.getAttribute('aria-label'), 'le bouton ↗ n\'est pas nommé');
+    /* `partagerPodium` n'est donc pas orpheline — c'est tout l'enjeu. */
+    vrai(codeDe(carteDuelProfil).indexOf('partagerPodium') >= 0);
+  });
+
+  test('RETOUR-02 point 2 — les puces pilotent tout, dans l\'ordre imposé', ()=>{
+    duelBase3(12);
+    ui.duelFam = null;
+    /* L'ORDRE RENDU, pas seulement la constante : le test d'avant vérifiait
+       `DUEL_C_ORDRE` et jamais l'écran. Correction de relecture. */
+    ['film','serie','anime'].forEach(f=>{
+      for(let i = 1; i <= 12; i++) ecrireClassement(f, i, 1000 + i, 3);
+      projeterPodium(f);
+    });
+    const bt = document.createElement('div');
+    bt.innerHTML = sansEcran(()=> carteDuelProfil());
+    egal([].slice.call(bt.querySelectorAll('.fchip')).map(b=>b.textContent),
+         ['films','animés','séries'],
+         'l\'ordre imposé Films · Animés · Séries n\'est pas celui qui est rendu');
+    /* Et un clic CHANGE réellement de famille — avec trois familles jouables,
+       cette fois, donc l'assertion a un sens. */
+    sansEcran(()=> setFamilleDuel('serie'));
+    egal(familleDuelChoisie(), 'serie', 'la puce ne pilote pas la famille');
+    sansEcran(()=> setFamilleDuel('anime'));
+    egal(familleDuelChoisie(), 'anime');
+    /* L'ordre est IMPOSÉ par le point 1 : Films · Animés · Séries. Il n'est pas
+       celui de `DUEL_FAMILLES` — c'est tout l'intérêt de le déclarer. */
+    egal(DUEL_C_ORDRE, ['film','anime','serie']);
+    const dispo = famillesDuelC();
+    /* Un choix injouable retombe sur le défaut, jamais sur un podium vide. */
+    ui.duelFam = 'zorglub';
+    vrai(dispo.indexOf(familleDuelChoisie()) >= 0,
+         'une famille inconnue laisse la carte parler dans le vide');
+    /* Et le choix est mémorisé dans l'état d'écran, pas dans `db`. */
+    if(dispo.length){
+      sansEcran(()=> setFamilleDuel(dispo[0]));
+      egal(ui.duelFam, dispo[0], 'le choix n\'est pas mémorisé');
+      egal(familleDuelChoisie(), dispo[0]);
+      vrai(codeDe(setFamilleDuel).indexOf('db') < 0,
+           'le choix de famille écrit dans `db` : le RETOUR dit état d\'écran');
+    }
+  });
+
+  test('RETOUR-02 point 1 — plus aucun total en accroche, et la carte est courte', ()=>{
+    duelBase(12);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    ui.duelFam = 'film';
+    const h = sansEcran(()=> carteDuelProfil());
+    /* Le titre disait « 370 nouveaux titres à départager ». Plus rien de tel. */
+    vrai(!/à départager/.test(h), 'un total de titres restants est encore en accroche');
+    vrai(!/nouveau/.test(h), 'le compte de nouveaux titres est encore affiché');
+    vrai(/règne sur tes films/.test(h), 'la phrase de règne a disparu');
+    /* La jauge garde son pourcentage, en bout et discret — plus de phrase. */
+    vrai(!/stable à/.test(h), 'la phrase longue de la jauge est encore dans la carte');
+    vrai(/dcjauge/.test(h) && /%/.test(h), 'le pourcentage discret a disparu');
+    /* `nouveauxADepartager` n'est pas devenue orpheline pour autant : la
+       pastille de la barre du bas s'en sert toujours (§4.4). */
+    vrai(codeDe(compteDuelPastille).indexOf('nouveauxADepartager') >= 0,
+         '`nouveauxADepartager` n\'a plus d\'appelant : c\'est le motif du point 19');
+  });
+
+  groupe('RETOUR-02 — puce Animés, styles translucides, recherche d\'acteurs');
+
+  /* ---- Point 4 : la puce Animés de la bibliothèque ---- */
+
+  test('point 4 — un animé vu sort de « Séries » et entre dans « Animés »', ()=>{
+    baseVierge();
+    /* « Commencée » veut dire un épisode coché : c'est `statutSerie` qui le dit,
+       et c'est la définition que la bibliothèque utilise déjà. */
+    db.shows[1] = serie(1, [ep(1,HIER)], {'1x1':1}, { name:'Dark', genres:['Drame'] });
+    db.shows[2] = serie(2, [ep(1,HIER)], {'1x1':1},
+                        { name:'One Piece', genres:['Animation','Aventure'] });
+    const L = listesProfil();
+    const noms = l => l.map(x => x.o.name).sort();
+    egal(noms(L.series), ['Dark'], 'un animé est resté dans « Séries »');
+    egal(noms(L.animes), ['One Piece'], 'l\'animé n\'est pas dans « Animés »');
+    /* LA SOMME NE BOUGE PAS : ce qui quitte l'un entre dans l'autre. */
+    egal(L.series.length + L.animes.length, 2, 'un titre s\'est perdu en route');
+  });
+
+  test('point 4 — la frontière est celle de la BIBLIOTHÈQUE, pas celle du catalogue', ()=>{
+    baseVierge();
+    /* Un dessin animé occidental : `familleDe` le compte comme animé (genre
+       Animation, sans condition de langue), `estAnimeRech` non (il exige une
+       langue asiatique). C'est la première qui fait foi ici — sans quoi un
+       titre serait un animé dans son podium et une série dans sa bibliothèque,
+       sur le même écran. */
+    db.shows[3] = serie(3, [ep(1,HIER)], {'1x1':1},
+                        { name:'Bojack', genres:['Animation','Comédie'] });
+    egal(listesProfil().animes.length, 1,
+         'la bibliothèque n\'utilise pas la frontière du duel');
+    egal(estAnimeProfil(db.shows[3]), familleDe(db.shows[3], 'tv') === 'anime',
+         'estAnimeProfil s\'est mise à décider toute seule');
+  });
+
+  test('point 4 — la puce s\'ajoute après « Séries », et seulement s\'il y a des animés', ()=>{
+    baseVierge();
+    db.shows[1] = serie(1, [ep(1,HIER)], {'1x1':1}, { name:'Dark', genres:['Drame'] });
+    let h = sansEcran(()=> viewProfile());
+    vrai(!/data-tab="animes"/.test(h), 'une puce Animés vide est proposée');
+    db.shows[2] = serie(2, [ep(1,HIER)], {'1x1':1}, { name:'One Piece', genres:['Animation'] });
+    h = sansEcran(()=> viewProfile());
+    vrai(/data-tab="animes"/.test(h), 'la puce Animés manque');
+    /* L'ORDRE D'AVANT NE BOUGE PAS : Séries reste en premier, Animés s'insère
+       juste après, puis Films et À voir. */
+    const i = t => h.indexOf('data-tab="'+t+'"');
+    vrai(i('series') < i('animes') && i('animes') < i('films') && i('films') < i('avoir'),
+         'l\'ordre des puces de bibliothèque a changé');
+    /* Et le champ de recherche du profil sait dire où il cherche. */
+    egal(PF12_OU.animes, 'mes animés', 'la recherche ne sait pas nommer l\'onglet Animés');
+  });
+
+  /* ---- Points 5 et 7 : les fonds translucides sous la surcouche premium ---- */
+
+  test('points 5 et 7 — une variante translucide éteint elle-même le dégradé', async ()=>{
+    const css = await (await fetch('./app.css')).text();
+    /* Le point 7 : `.cl1rejouer` nu perdait contre `body .btn`. */
+    vrai(/\.btn\.cl1rejouer\{/.test(css),
+         '`.cl1rejouer` est encore un sélecteur nu : il perd contre `body .btn`');
+    vrai(!/(^|[^.\w])\.cl1rejouer\{/m.test(css), 'le sélecteur nu traîne encore');
+    const bloc = css.slice(css.indexOf('.btn.cl1rejouer{'), css.indexOf('.btn.cl1rejouer{') + 260);
+    vrai(/background-image:\s*none/.test(bloc),
+         'le dégradé premium n\'est pas éteint : relever la spécificité ne suffit pas');
+    /* Le point 5 : toute puce porte un `background-image` en permanence, pour
+       que l'état actif soit un CHANGEMENT de valeur et non une apparition. */
+    vrai(/body \.chip,\s*\n?\s*body \.fchip\{background-image:linear-gradient\(transparent,transparent\)\}/
+           .test(css.replace(/\r/g,'')),
+         'les puces n\'ont pas de fond-image au repos : iOS escamote la bascule');
+    vrai(/body \.chip\.on,[\s\S]{0,40}background-image:var\(--px-grad\)/.test(css),
+         'la puce active ne reçoit plus le dégradé commun');
+  });
+
+  test('points 5 et 7 — la règle vaut aussi pour les puces neuves du duel', async ()=>{
+    const css = await (await fetch('./app.css')).text();
+    /* `.fchip` est née avec la variante C : elle devait entrer dans la règle,
+       pas à côté. */
+    vrai(/body \.fchip\.on/.test(css), 'les puces de famille du duel sont hors de la règle');
+  });
+
+  /* ---- Point 8 : la recherche d'acteurs en plein écran ---- */
+
+  test('point 8 — la recherche d\'acteurs prend tout l\'écran, comme celle du profil', ()=>{
+    baseVierge();
+    duel = Object.assign({}, DUEL_VIDE);
+    rechActeur.ouvert = false;
+    /* En place : plus de champ de saisie, une porte. */
+    const h = sansEcran(()=> viewGouts());
+    vrai(!/oninput="chercherActeur/.test(h),
+         'on tape encore en place : les résultats repassent sous « Terminé »');
+    vrai(/ouvrirRechActeur\(\)/.test(h), 'la porte vers la recherche plein écran manque');
+    /* Ouverte : `viewGouts` ne peint QUE cet écran — donc ni « Terminé », ni
+       le reste de la page. C'est ce qui rend les résultats visibles. */
+    rechActeur.ouvert = true;
+    try{
+      const p = sansEcran(()=> viewGouts());
+      vrai(/pf12plein/.test(p), 'l\'écran plein n\'est pas celui du motif existant');
+      vrai(!/gbarre/.test(p), '« Terminé » flotte encore par-dessus les résultats');
+      vrai(!/Je ne veux pas voir/.test(p), 'le reste de Mes goûts est encore peint');
+      vrai(/id="qact"/.test(p) && /saisieActeur\(/.test(p), 'le champ a perdu sa saisie');
+      vrai(/fermerRechActeur\(\)/.test(p), 'aucun moyen d\'annuler');
+    }finally{ rechActeur.ouvert = false; }
+  });
+
+  test('point 8 — la barre du bas se retire, et le retour referme sans quitter', ()=>{
+    /* Les 64 px de la barre sont rendus aux résultats : même ligne que le
+       point 12, dans `render`. */
+    vrai(codeDe(render).indexOf('rechActeur.ouvert') >= 0,
+         'la barre du bas reste : un résultat de moins à l\'écran');
+    /* Entrée-garde d'historique, comme la recherche du profil. */
+    vrai(codeDe(ouvrirRechActeur).indexOf("poserGarde('acteurs')") >= 0);
+    vrai(codeDe(fermerRechActeur).indexOf("retirerGarde('acteurs')") >= 0);
+    vrai(codeDe(goBack).indexOf('fermerRechActeur') >= 0,
+         'le retour quitte Mes goûts au lieu de fermer la recherche');
+    /* Et la position de défilement est rendue : on revient là où on était. */
+    vrai(codeDe(fermerRechActeur).indexOf('yAvant') >= 0);
+  });
+
+  test('point 8 — la frappe attend, et le champ n\'est jamais réécrit', ()=>{
+    baseVierge();
+    rechActeur.ouvert = true;
+    try{
+      /* Sous deux caractères, rien ne part et rien n'est en attente. */
+      sansEcran(()=> saisieActeur('K'));
+      egal(rechActeur.res, null);
+      egal(rechActeur.occupe, false, 'une requête est partie sur une seule lettre');
+      /* Le délai existe — il n'existait pas du tout avant ce point. */
+      egal(ACTEUR_ATTENTE, 320, 'le délai de frappe n\'est plus celui des deux autres champs');
+      vrai(codeDe(saisieActeur).indexOf('setTimeout') >= 0,
+           'la recherche part à chaque touche : une requête TMDB par caractère');
+      /* Le repeint est CIBLÉ : il ne réécrit jamais le champ, sinon le curseur
+         sauterait à chaque caractère. Il couvre en revanche les DEUX zones —
+         les résultats ET la liste des suivis (correction de relecture). */
+      const cp = codeDe(peindreActeurs);
+      vrai(cp.indexOf('resacteurs') >= 0);
+      vrai(cp.indexOf('actsuivis') >= 0,
+           'la liste des suivis n\'est pas repeinte : l\'ajout reste invisible');
+      vrai(cp.indexOf("view !== 'gouts'") >= 0,
+           'le repeint n\'a pas de garde de vue, contrairement au motif pf12');
+      vrai(cp.indexOf('qact') < 0, 'le repeint réécrit le champ : le curseur sauterait');
+    }finally{ rechActeur.ouvert = false; clearTimeout(acteurTimer); }
+  });
+
+  test('point 8 (amendé le 11/08) — l\'ajout se voit : ✓, liste à jour, champ prêt', ()=>{
+    /* DÉCISION D'ADRIEN DU 11/08/2026, amendement au cahier. La première
+       livraison restait bien en plein écran, mais SANS aucun retour visible :
+       l'acteur était enregistré et rien ne le disait. */
+    baseVierge();
+    rechActeur.ouvert = true;
+    rechActeur.q = 'keanu';
+    rechActeur.res = [{ id:6384, nom:'Keanu Reeves', photo:null },
+                      { id:7, nom:'Autre', photo:null }];
+    try{
+      sansEcran(()=> ajouterActeur(6384, 'Keanu Reeves'));
+      egal(db.gouts.acteurs.length, 1, 'l\'ajout n\'est pas enregistré');
+      egal(rechActeur.ouvert, true, 'l\'écran s\'est refermé après un ajout');
+      /* ③ le champ est prêt pour le suivant… */
+      egal(rechActeur.q, '', 'le champ ne se vide pas : on ne peut pas enchaîner');
+      /* …mais les résultats RESTENT, sinon le ✓ du ① ne se verrait jamais. */
+      egal(rechActeur.res.length, 2, 'les résultats ont été effacés avec le champ');
+      /* ① le « + » de la ligne est devenu « ✓ », et elle n'est plus touchable. */
+      const br = document.createElement('div'); br.innerHTML = corpsRechActeur();
+      const lignes = [].slice.call(br.querySelectorAll('.lact'));
+      egal(lignes.length, 2);
+      egal(lignes[0].tagName, 'DIV', 'un acteur déjà suivi est encore proposé à l\'ajout');
+      vrai(!!lignes[0].querySelector('.lok'), 'le ✓ manque sur l\'acteur déjà suivi');
+      egal(lignes[1].tagName, 'BUTTON', 'l\'autre résultat n\'est plus ajoutable');
+      /* ② l'acteur apparaît en tête, sous le champ. */
+      const bs = document.createElement('div'); bs.innerHTML = listeActeursSuivisHtml();
+      egal(bs.querySelectorAll('.lact').length, 1, 'la liste des suivis ne s\'allonge pas');
+      vrai(/Keanu Reeves/.test(bs.textContent));
+      /* Et la sortie ne s\'appelle plus « Annuler » quand on vient d\'ajouter. */
+      vrai(/>Terminé</.test(ecranRechActeur()),
+           'le bouton dit « Annuler » alors qu\'on vient d\'ajouter un acteur');
+    }finally{ rechActeur.ouvert = false; rechActeur.res = null; rechActeur.q = ''; }
+    /* En place (écran fermé), le comportement d'avant ne bouge pas. */
+    baseVierge();
+    rechActeur.q = 'x';
+    sansEcran(()=> ajouterActeur(1, 'A'));
+    egal(rechActeur.q, '', 'le comportement en place a changé');
   });
 
   /* ==================== Bilan ====================

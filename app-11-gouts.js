@@ -4167,15 +4167,24 @@ function duelPasse(){
    Ce n'est pas un avis : ça ne dit rien du goût, seulement que la bibliothèque
    se trompe. Le duel n'est donc pas compté.
 
-   POINT 19, 02/08 — PLUS AUCUN ÉCRAN N'APPELLE CETTE FONCTION. Son seul bouton
-   vivait au bas de la feuille du ⓘ, et les trois boutons de cette feuille ont
-   été retirés (« les 3 boutons du bas sont moches, fais la fiche normale avec
-   la possibilité de fermer la fiche, c'est tout »). Le geste n'a AUCUN
-   équivalent ailleurs : « Je ne sais pas / les deux » passe la paire, il ne
-   récuse pas le titre. La disparition est assumée, mais le code ne l'est pas —
-   la fonction reste, entière et testée, parce que sa place naturelle est
-   l'écran du duel, à côté de « Je ne sais pas / les deux », et que la rebrancher
-   coûtera alors une ligne. La supprimer, c'est la réécrire plus tard. */
+   SON HISTOIRE, PARCE QU'ELLE EXPLIQUE OÙ ELLE VIT AUJOURD'HUI :
+
+     · POINT 19 (02/08) — elle est devenue ORPHELINE. Son seul bouton vivait au
+       bas de la feuille du ⓘ, et les trois boutons de cette feuille ont été
+       retirés. La fonction a été gardée, entière et testée, plutôt que
+       supprimée : « la supprimer, c'est la réécrire plus tard ».
+     · SPEC-06 §6.1 (10/08) — rebranchée sur l'écran de duel, en deux boutons
+       « 🚫 Pas vu — {titre} ».
+     · RETOUR-02 POINT 6 (11/08) — les deux boutons encombraient l'écran. Le
+       geste est REVENU dans la fiche ⓘ, en une ligne discrète tout en bas
+       (`.du19pasvu`, voir `ficheDuel`). C'est sa place : on ouvre la fiche
+       parce qu'on hésite, et c'est en la lisant qu'on se dit « en fait je ne
+       l'ai jamais vu ».
+
+   ELLE A DONC UN APPELANT, ET UN SEUL — cette ligne-là. Ce commentaire a
+   affirmé le contraire pendant huit jours après le rebranchement du 10/08 :
+   corrigé en relecture le 11/08. Un commentaire qui survit à son état est ce
+   qui a rendu l'orphelinat possible la première fois. */
 function duelPasVu(media, id){
   if(typeof closeSheet === 'function') closeSheet();
   const c = media+':'+String(id);
@@ -4464,20 +4473,20 @@ function ecranDuelJeu(){
     '<div class="dcartes">'+carteDuel(a, 0)+'<span class="dvs">VS</span>'+carteDuel(b, 1)+'</div>'+
     /* Une sortie honnête, écrite en toutes lettres. */
     '<button class="dneutre" onclick="duelPasse()">Je ne sais pas / les deux</button>'+
-    /* SPEC-06 §6.1 — « JE NE L'AI PAS VU » REVIENT, À SA PLACE NATURELLE.
-       `duelPasVu` existait, entière et testée, sans plus aucun appelant depuis
-       le point 19 du 02/08 ; le commentaire au-dessus d'elle désignait cet
-       écran et disait « la rebrancher coûtera alors une ligne ». La voici.
-       DEUX BOUTONS PLUTÔT QU'UN QUI DEMANDE « lequel ? » : la question serait
-       une feuille de plus au milieu d'un geste qui doit durer une seconde, et
-       les deux titres sont déjà à l'écran, chacun au-dessus du sien.
-       Le geste n'est plus irréversible — voir §6.2 dans `duelPasVu`. */
-    '<div class="dpasvu">'+
-      '<button onclick="duelPasVu(\''+a.media+'\',\''+escJs(String(a.id))+'\')">'+
-        '🚫 Pas vu — '+esc(a.nom)+'</button>'+
-      '<button onclick="duelPasVu(\''+b.media+'\',\''+escJs(String(b.id))+'\')">'+
-        '🚫 Pas vu — '+esc(b.nom)+'</button>'+
-    '</div>'+
+    /* RETOUR-02 POINT 6 (11/08/2026) — LES DEUX BOUTONS « 🚫 Pas vu » PARTENT.
+       Décision d'Adrien : ils encombrent l'écran. SPEC-06 §6.1 les avait posés
+       ici, sous « Je ne sais pas / les deux », en faisant valoir que les deux
+       titres étaient déjà à l'écran. C'est vrai, et ce n'est pas ce qui pose
+       problème : le problème est que deux gros boutons de plus font trois
+       commandes empilées sous un geste qui doit durer une seconde.
+
+       LE GESTE NE DISPARAÎT PAS, IL DÉMÉNAGE — et c'est la moitié de ce point.
+       `duelPasVu` a déjà été rendue orpheline une fois (point 19 du 02/08) ;
+       elle est repartie dans la FICHE ⓘ, où l'on est justement en train de
+       regarder de quel titre il s'agit, et où une ligne discrète suffit.
+       L'écran de duel ne garde donc que : les deux cartes, « Je ne sais pas /
+       les deux », et la sortie. Voir `ficheDuel`.
+       PIERRE TOMBALE : la classe `.dpasvu` quitte `app.css` avec ce point. */
   '</div>';
 }
 
@@ -4515,8 +4524,10 @@ function ecranDuelJeu(){
    manquent pas (on referme, on touche la jaquette), mais « Je ne l'ai pas vu »
    n'a AUCUN équivalent — c'était le seul geste qui retirait un titre du paquet
    en cours de partie, « Je ne sais pas / les deux » passe la paire sans récuser
-   le titre. Sa disparition est assumée. `duelPasVu` n'est plus appelée par
-   l'app ; elle n'est pas supprimée pour autant (voir sa propre note).
+   le titre. — MISE À JOUR DU 11/08/2026 : ce paragraphe décrivait l'état du
+   02/08. Le geste est REVENU dans cette feuille avec RETOUR-02 point 6, en une
+   ligne discrète tout en bas plutôt qu'en gros bouton. `duelPasVu` a donc bien
+   un appelant, et c'est ici. Corrigé en relecture.
 
    CHAQUE ⓘ OUVRE SON TITRE, et plus par un index. La version précédente avait
    besoin de `duel.paire.indexOf(t)` pour son bouton « C'est celui-là » ; le
@@ -4648,6 +4659,37 @@ function ficheDuel(media, id){
       (num ? blocPlateformes(media, id) : '')+
       (num ? zoneCasting(media, id) : '')+
       (num ? zoneRecos(media, id) : '')+
+      /* RETOUR-02 POINT 6 (11/08/2026) — « JE NE L'AI PAS VU », ICI ET NULLE
+         PART AILLEURS.
+
+         Les deux boutons « 🚫 Pas vu — {titre} » ont quitté l'écran de duel :
+         ils l'encombraient. Le geste, lui, ne disparaît pas — `duelPasVu` a
+         déjà été rendue orpheline une fois (point 19 du 02/08) et le
+         commentaire posé au-dessus d'elle a servi de rappel pendant huit jours.
+         Une seconde fois serait une habitude.
+
+         SA PLACE EST ICI, et c'est même mieux qu'avant : on ouvre la fiche
+         précisément parce qu'on hésite, et c'est en la lisant qu'on se dit
+         « en fait je ne l'ai jamais vu ». Plus besoin de deux boutons nommés
+         pour lever l'ambiguïté — la feuille ne parle que d'un titre.
+
+         EN BAS, ET DISCRÈTE. Ce n'est pas l'action principale de la fiche : on
+         vient y lire, pas y renoncer. Elle est donc la dernière ligne, en
+         retrait, sous les recommandations. La réversibilité est intacte — le
+         titre part dans « Titres écartés » de Mes goûts et se reprend (§6.2) —
+         et `duelPasVu` referme la feuille elle-même. Le duel n'est PAS compté :
+         elle appelle `duelSuivant`, pas `appliquerVote`.
+
+         ELLE NE S'AFFICHE QUE PENDANT UN DUEL. La garde est légère parce que
+         la feuille l'est déjà : `ficheDuel` sort à sa deuxième ligne si le
+         titre n'est pas dans `duel.paire`. On ajoute `duel.actif` pour dire
+         l'intention plutôt que de s'en remettre à une garde située ailleurs —
+         proposer d'écarter un titre d'un paquet qui n'existe pas serait une
+         commande qui ne fait rien. */
+      (duel.actif
+        ? '<button class="du19pasvu" onclick="duelPasVu(\''+media+'\',\''+
+            escJs(String(id))+'\')">Je ne l\'ai pas vu</button>'
+        : '')+
     '</div>');
 }
 
@@ -5138,7 +5180,8 @@ function reprendreEcarte(media, id){
    voir, et les acteurs qu'on suit.
 --------------------------------------------------------------------------- */
 
-let rechActeur = { q:'', res:null, occupe:false, seq:0 };
+/* `ouvert` et `yAvant` : RETOUR-02 point 8, la recherche plein écran. */
+let rechActeur = { q:'', res:null, occupe:false, seq:0, ouvert:false, yAvant:0 };
 /* Une seule tentative de chargement des genres par session : sans ce verrou,
    un écran sans genres se redessinait à l'infini. */
 let goutsGenresDemandes = false;
@@ -5282,11 +5325,168 @@ function retirerActeur(id){
   db.gouts.acteurs = db.gouts.acteurs.filter(a=>String(a.id) !== String(id));
   oublierSuggestions(); toucheGouts('acteurs'); render();
 }
+/* RETOUR-02 POINT 8 — EN PLEIN ÉCRAN, ON RESTE, ET ON LE MONTRE.
+
+   DÉCISION D'ADRIEN DU 11/08/2026 — AMENDEMENT AU CAHIER. RETOUR-02 point 8
+   écrivait « à la sélection OU à l'annulation, l'écran Mes goûts revient ». Ma
+   première livraison faisait déjà l'inverse — rester en plein écran pour
+   enchaîner les ajouts — sans que ce soit arbitré, et surtout SANS AUCUN RETOUR
+   VISIBLE : la relecture a mesuré `db.gouts.acteurs.length` à 1 et zéro `.lact`
+   à l'écran, aucun toast. L'ajout était bien enregistré et rien ne le disait.
+   Sur ce point précis, c'était moins bon qu'avant le lot.
+
+   Le cahier est amendé ainsi, et ce n'est plus un écart :
+     ① le « + » de la ligne devient « ✓ » — et il le reste, un acteur déjà suivi
+        n'est plus proposé à l'ajout ;
+     ② l'acteur apparaît AUSSITÔT en tête, sous le champ, dans la liste des
+        suivis ;
+     ③ le champ se vide pour enchaîner — sans effacer les résultats, sinon le ✓
+        du ① ne se verrait jamais.
+   « Terminé » ou l'annulation ferment le plein écran et rendent Mes goûts à
+   jour. Le critère « au moins 4 résultats visibles clavier ouvert » tient.
+
+   Le focus n'est pas repris : on ne réécrit pas l'`<input>`, on met seulement
+   sa `value` à vide — le clavier reste levé, prêt pour le nom suivant. */
 function ajouterActeur(id, nom){
   if(db.gouts.acteurs.some(a=>String(a.id) === String(id))) return;
   db.gouts.acteurs.push({ id:id, nom:nom });
-  rechActeur = { q:'', res:null, occupe:false, seq:rechActeur.seq };
-  oublierSuggestions(); toucheGouts('acteurs'); render();
+  oublierSuggestions(); toucheGouts('acteurs');
+  if(!rechActeur.ouvert){
+    /* En place (l'écran n'est pas ouvert) : comportement d'avant le lot. */
+    rechActeur = Object.assign(rechActeur, { q:'', res:null, occupe:false });
+    return render();
+  }
+  rechActeur.q = '';                       // ③ prêt pour le suivant
+  const i = document.getElementById('qact');
+  if(i) i.value = '';                      // sans réécrire le champ : le clavier reste
+  peindreActeurs();                        // ① et ② d'un seul repeint
+}
+
+/* ===========================================================================
+   RETOUR-02 POINT 8 (11/08/2026) — LA RECHERCHE D'ACTEURS PASSE EN PLEIN ÉCRAN
+
+   CE QUI N'ALLAIT PAS, mesuré en vidéo par Adrien : clavier ouvert, on tape
+   « Keanu r ». Le 1ᵉʳ résultat est visible. Le 2ᵉ passe DERRIÈRE le bouton
+   « Terminé », qui flotte en `position:sticky` par-dessus la liste. Le 3ᵉ passe
+   derrière la barre du bas. Un seul résultat cliquable sur huit.
+
+   C'EST EXACTEMENT LE POINT 12 DU PROFIL, sur un autre écran — et il a déjà été
+   mesuré et réglé là-bas : « clavier à sa hauteur réelle (300 px), il reste UN
+   résultat visible sur sept en place ; en plein écran, quatre sur sept ». On ne
+   réinvente donc rien, on APPLIQUE LE MÊME MOTIF, brique par brique :
+
+     · un court-circuit de vue — `viewGouts` ne peint QUE cet écran quand il est
+       ouvert, donc plus de « Terminé » et plus de barre du bas ;
+     · `body.accueil`, posé par `render` (app-03), qui retire la barre du bas ;
+     · une entrée-garde d'historique, pour que le bouton retour du téléphone
+       ferme la recherche au lieu de quitter l'écran ;
+     · la position de défilement mémorisée, et rendue à la fermeture ;
+     · un repeint CIBLÉ des résultats, qui ne réécrit jamais le champ — sans
+       quoi le curseur sauterait à chaque caractère ;
+     · un délai de frappe, que cette recherche-ci n'avait pas du tout : elle
+       partait à TMDB à chaque touche.
+
+   CE QU'ON NE COPIE PAS : les « dernières recherches » du profil. Elles ont un
+   sens quand on fouille sa bibliothèque plusieurs fois par jour ; on ne suit
+   pas huit acteurs par semaine.
+=========================================================================== */
+const ACTEUR_ATTENTE = 320;
+let acteurTimer = null;
+/* CORRECTION DE RELECTURE (11/08/2026) — LA REQUÊTE EN VOL EST ANNULÉE, pas
+   seulement ignorée. Le motif `pf12` a `pf12Abort` + `avorterPf12()` ; la copie
+   se contentait d'incrémenter un jeton `seq`, donc la requête partait jusqu'au
+   bout et seule sa réponse était jetée. Sur un champ où l'on tape un nom
+   complet, ce sont trois ou quatre requêtes TMDB qui vivent leur vie pour rien,
+   et qui retiennent une connexion sur un réseau lent. Une divergence de plus
+   entre le clone et son modèle — celle-ci coûtait quelque chose. */
+let acteurAbort = null;
+
+function ouvrirRechActeur(){
+  rechActeur.ouvert = true;
+  rechActeur.yAvant = window.scrollY || 0;
+  rechActeur.q = ''; rechActeur.res = null; rechActeur.occupe = false;
+  if(typeof poserGarde === 'function') poserGarde('acteurs');
+  render();
+  window.scrollTo(0, 0);
+  const i = document.getElementById('qact');
+  if(i) i.focus();
+}
+/* Remettre l'état à plat, SANS toucher à l'historique ni à l'écran. C'est ce
+   dont `render` (app-03) a besoin pour sa garde anti-fuite : la recherche
+   appartient à Mes goûts, quitter l'écran doit la désarmer — mais un
+   `history.back()` déclenché en plein rendu est très exactement le mécanisme
+   qui détruisait la session de duel (point 6).
+   Elle vit ICI et pas dans app-03 pour que `rechActeur` reste écrite par un
+   seul fichier : le contrôle n° 5 du lanceur le demande, et il a raison — un
+   état que deux fichiers écrivent n'appartient plus à personne. */
+function oublierRechActeur(){
+  avorterActeur();
+  rechActeur.ouvert = false; rechActeur.q = '';
+  rechActeur.res = null; rechActeur.occupe = false;
+}
+
+function fermerRechActeur(sansRendu){
+  avorterActeur();                     // ce qui est en vol n'intéresse plus personne
+  rechActeur.ouvert = false;
+  rechActeur.q = ''; rechActeur.res = null; rechActeur.occupe = false;
+  if(typeof retirerGarde === 'function') retirerGarde('acteurs');
+  if(sansRendu) return;
+  render();
+  window.scrollTo(0, rechActeur.yAvant || 0);
+}
+
+/* L'écran, et rien d'autre. Pas de `header()` : le champ EST l'en-tête, comme
+   sur la recherche du profil. */
+function ecranRechActeur(){
+  const g = db.gouts;
+  return '<div class="pf12plein">'+
+    '<div class="pf12champ">'+
+      '<div class="pf12z">'+I.search+
+        '<input type="search" id="qact" enterkeyhint="search" autocomplete="off" '+
+          'autocorrect="off" autocapitalize="off" spellcheck="false" '+
+          'placeholder="Chercher un acteur ou une actrice" value="'+esc(rechActeur.q)+'" '+
+          'oninput="saisieActeur(this.value)" '+
+          'onkeydown="if(event.key===\'Enter\')this.blur()">'+
+      '</div>'+
+      /* « Terminé » dès qu'un acteur est suivi : on ne sort pas d'un écran où
+         l'on vient d'ajouter quelque chose par un bouton qui dit « Annuler ».
+         Rien n'est annulé — les choix sont enregistrés au fil des appuis. */
+      '<button class="pf12an" onclick="fermerRechActeur()">'+
+        (g.acteurs.length ? 'Terminé' : 'Annuler')+'</button>'+
+    '</div>'+
+    /* ② du point 8 amendé : les acteurs suivis, sous le champ, dans leur propre
+       nœud — c'est lui que `peindreActeurs` repeint à chaque ajout. Sans
+       identifiant, la liste ne bougeait jamais et l'ajout était invisible. */
+    '<div class="wrap" style="padding-bottom:0" id="actsuivis">'+
+      listeActeursSuivisHtml()+'</div>'+
+    '<div class="wrap" style="padding-top:8px"><div id="resacteurs">'+corpsRechActeur()+'</div></div>'+
+  '</div>';
+}
+
+/* Le délai de frappe, qui manquait. Sans lui, « Keanu Reeves » partait douze
+   fois à TMDB — douze requêtes pour un seul résultat utile, et onze réponses
+   qui arrivaient dans le désordre (seul le jeton `seq` évitait qu'elles
+   s'affichent). Le même 320 ms que la recherche du profil et que la barre de
+   Recherche : trois champs, un seul réflexe. */
+function avorterActeur(){
+  clearTimeout(acteurTimer);
+  rechActeur.seq++;
+  if(acteurAbort){ try{ acteurAbort.abort(); }catch(e){} acteurAbort = null; }
+}
+function saisieActeur(v){
+  rechActeur.q = v;
+  clearTimeout(acteurTimer);
+  const q = String(v == null ? '' : v).trim();
+  if(q.length < 2){
+    avorterActeur();
+    rechActeur.res = null; rechActeur.occupe = false;
+    peindreActeurs();
+    return;
+  }
+  avorterActeur();
+  rechActeur.occupe = true;
+  peindreActeurs();
+  acteurTimer = setTimeout(()=> chercherActeur(q), ACTEUR_ATTENTE);
 }
 
 async function chercherActeur(q){
@@ -5295,7 +5495,9 @@ async function chercherActeur(q){
   if(q.trim().length < 2){ rechActeur.res = null; rechActeur.occupe = false; return peindreActeurs(); }
   rechActeur.occupe = true; peindreActeurs();
   try{
-    const d = await tmdb('/search/person', { query:q.trim(), include_adult:'false' });
+    if(typeof AbortController === 'function') acteurAbort = new AbortController();
+    const d = await tmdb('/search/person', { query:q.trim(), include_adult:'false' },
+                         acteurAbort ? { signal: acteurAbort.signal } : undefined);
     if(seq !== rechActeur.seq) return;
     rechActeur.res = (d.results||[])
       .filter(p => p && p.id && p.name)
@@ -5310,9 +5512,31 @@ async function chercherActeur(q){
 }
 
 /* Seule la liste se redessine : redessiner l'écran emporterait le champ. */
+/* CORRECTION DE RELECTURE (11/08/2026) — LE REPEINT COUVRE LES DEUX ZONES, ET
+   IL SE GARDE COMME `peindreProfil`.
+   Il ne réécrivait que `#resacteurs`, or la liste des suivis est émise HORS de
+   ce nœud : elle ne bougeait donc jamais, d'où l'absence de retour visible à
+   l'ajout. Et il n'avait ni garde de vue ni repli sur `render()`, contrairement
+   au motif qu'il est censé réutiliser — deux divergences relevées en relecture,
+   sur un clone qui se disait réutilisation. */
 function peindreActeurs(){
-  const el = document.getElementById('resacteurs');
-  if(el) el.innerHTML = corpsRechActeur();
+  if(typeof view !== 'undefined' && view !== 'gouts') return;
+  const res = document.getElementById('resacteurs');
+  const sui = document.getElementById('actsuivis');
+  if(!res || !sui) return (typeof render === 'function') ? render() : undefined;
+  res.innerHTML = corpsRechActeur();
+  sui.innerHTML = listeActeursSuivisHtml();
+}
+
+/* La liste des acteurs suivis, sous le champ. Sortie dans sa propre fonction
+   parce qu'elle est désormais repeinte seule. */
+function listeActeursSuivisHtml(){
+  const l = (db.gouts && db.gouts.acteurs) || [];
+  if(!l.length) return '';
+  return '<div class="listact choisis">'+l.map(a=>
+    '<div class="lact"><div class="ph2">'+esc(a.nom[0])+'</div><span>'+esc(a.nom)+'</span>'+
+    '<button class="lretirer" onclick="retirerActeur('+a.id+')" aria-label="Retirer">'+
+    I.close+'</button></div>').join('')+'</div>';
 }
 function corpsRechActeur(){
   if(rechActeur.occupe)
@@ -5320,11 +5544,22 @@ function corpsRechActeur(){
   if(!rechActeur.res) return '';
   if(!rechActeur.res.length)
     return '<div class="tiny muted" style="padding:8px 0">Personne de ce nom.</div>';
+  /* ① du point 8 amendé : un acteur DÉJÀ SUIVI porte un ✓ et n'est plus
+     proposé à l'ajout. C'est le retour immédiat du geste, et c'est aussi la
+     réponse à « est-ce que je l'ai déjà ? » quand on cherche deux fois le même
+     nom. Un `<div>` et non un `<button>` : il n'y a plus rien à toucher. */
+  const suivi = id => ((db.gouts && db.gouts.acteurs) || [])
+    .some(a => String(a.id) === String(id));
+  const vignette = p => (srcImage(p.photo,'w185')
+    ? '<img src="'+srcImage(p.photo,'w185')+'" alt="">'
+    : '<div class="ph2">'+esc(p.nom[0])+'</div>');
   return '<div class="listact">'+rechActeur.res.map(p=>
-    '<button class="lact" onclick="ajouterActeur('+p.id+',\''+escJs(p.nom)+'\')">'+
-      (srcImage(p.photo,'w185') ? '<img src="'+srcImage(p.photo,'w185')+'" alt="">' : '<div class="ph2">'+esc(p.nom[0])+'</div>')+
-      '<span>'+esc(p.nom)+'</span><i>'+I.plus+'</i>'+
-    '</button>').join('')+'</div>';
+    suivi(p.id)
+      ? '<div class="lact dedans">'+vignette(p)+
+          '<span>'+esc(p.nom)+'</span><i class="lok" aria-label="Déjà suivi">✓</i></div>'
+      : '<button class="lact" onclick="ajouterActeur('+p.id+',\''+escJs(p.nom)+'\')">'+
+          vignette(p)+'<span>'+esc(p.nom)+'</span><i>'+I.plus+'</i>'+
+        '</button>').join('')+'</div>';
 }
 
 function viewGouts(){
@@ -5333,6 +5568,10 @@ function viewGouts(){
      on y revient à la fin. Le retour (flèche, geste, bouton matériel) le ferme
      sans quitter Mes goûts — voir `goBack`. */
   if(duel.actif) return ecranDuel();
+  /* RETOUR-02 POINT 8 — la recherche d'acteurs prend tout l'écran : rien
+     d'autre n'est peint, donc ni « Terminé » ni la barre du bas ne peuvent
+     recouvrir un résultat. Même court-circuit que `viewProfile` (point 12). */
+  if(rechActeur.ouvert) return ecranRechActeur();
   const g = db.gouts;
   /* D3 — cet écran ne fait plus partie de l'inscription : plus personne
      n'appelle `go('gouts',{from:'compte'})`. La variante « dernière étape de
@@ -5512,9 +5751,12 @@ function viewGouts(){
       '<button class="lretirer" onclick="retirerActeur('+a.id+')" aria-label="Retirer">'+I.close+'</button></div>'
     ).join('')+'</div>';
   }
-  html += '<input class="inp" id="qact" type="search" placeholder="Chercher un acteur ou une actrice" '+
-    'value="'+esc(rechActeur.q)+'" oninput="chercherActeur(this.value)" autocomplete="off">'+
-    '<div id="resacteurs">'+corpsRechActeur()+'</div>'+
+  /* RETOUR-02 POINT 8 — LE CHAMP DEVIENT UNE PORTE. Il n'y a plus de saisie ici :
+     taper en place remettait les résultats sous « Terminé » et sous la barre du
+     bas, ce que le point corrige. Un appui ouvre l'écran plein, où il y a de la
+     place. Même geste et même habillage que la barre de recherche du profil. */
+  html += '<button class="pf12b" onclick="ouvrirRechActeur()">'+I.search+
+      '<span>Chercher un acteur ou une actrice</span></button>'+
   '</div>';
 
   /* La barre de validation est collée en bas, pas reléguée en fin de page.
