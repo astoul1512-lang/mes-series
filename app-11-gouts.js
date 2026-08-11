@@ -101,9 +101,30 @@ function migrerGouts(){
      de sens que par rapport à lui. */
   if(!Array.isArray(g.grainesSuspendues)) g.grainesSuspendues = [];
   if(!Array.isArray(g.ambiances)) g.ambiances = [];
+  /* RETOUR-01 POINT 4 (11/08/2026) — L'IA EST ACTIVE PAR DÉFAUT, décision
+     d'Adrien. Les deux interrupteurs étaient à l'ARRÊT à la livraison
+     (opt-in) ; le résultat mesuré en prod est que l'IA n'a jamais été appelée
+     une seule fois : journal vide, zéro requête vers `/ia`. Un opt-in qui ne
+     se voit pas est un opt-in que personne ne trouve. Le sens s'inverse donc :
+     l'IA marche, et l'interrupteur des Réglages sert à la COUPER.
+
+     LE PASSAGE DES BASES EXISTANTES. Poser le défaut à `true` ne suffit pas :
+     une base déjà migrée porte `false` en dur, et la ligne ne la toucherait
+     jamais. `g.iaV` est le marqueur de version de ce sous-bloc — absent, on
+     rallume les deux interrupteurs UNE FOIS, puis on pose le marqueur. Une
+     personne qui coupe l'IA après ce passage garde son choix pour de bon : le
+     marqueur est déjà là, la bascule ne repasse pas.
+     C'est la seule fois où ce lot écrit un réglage à la place de quelqu'un, et
+     c'est le sens même de la décision — sans quoi le point 4 ne changerait
+     rien pour la seule base qui existe. */
   if(!g.ia || typeof g.ia !== 'object' || Array.isArray(g.ia)) g.ia = {};
-  if(typeof g.ia.decouvrir !== 'boolean') g.ia.decouvrir = false;
-  if(typeof g.ia.recherche !== 'boolean') g.ia.recherche = false;
+  if(g.iaV !== 2){
+    g.ia.decouvrir = true;
+    g.ia.recherche = true;
+    g.iaV = 2;
+  }
+  if(typeof g.ia.decouvrir !== 'boolean') g.ia.decouvrir = true;
+  if(typeof g.ia.recherche !== 'boolean') g.ia.recherche = true;
   /* POINT 2 (02/08) — LES TITRES RÉPONDUS 🤷, sous la forme « media:id ».
      C'est une VRAIE réponse — « je l'ai vu, il ne m'a rien fait, ne me le
      redemande pas » — et non l'absence d'avis, qui existait déjà.
@@ -2219,74 +2240,136 @@ function editoParCle(cle){ return RANGEES_EDITO.find(r => r.cle === cle) || null
 /* ---------------------------------------------------------------------------
    « TOP 10 POUR TOI » (§1 rangée 2)
 
-   LA SEULE RANGÉE DE L'ÉCRAN QUI NE PROPOSE RIEN À DÉCOUVRIR : elle montre ce
-   que la personne a DÉJÀ vu, classé. Elle ne passe donc pas par `tamiser`, qui
-   retire précisément ce qui est dans la bibliothèque — et c'est volontaire, pas
-   un oubli. Elle ne coûte AUCUNE requête TMDB : tout est en local.
+   RETOUR-01 POINT 3, 11/08/2026 — ELLE CHANGE DE NATURE, SUR DÉCISION D'ADRIEN.
 
-   La construction suit la spec, dans l'ordre : le classement Elo du duel
-   (`db.classement`), puis les 👍, puis les mieux notés vus. Un titre 👎 n'y
-   entre jamais — poids 0 veut dire exclu, ici comme ailleurs.
+   CE QU'ELLE ÉTAIT : la seule rangée de Découvrir qui ne proposait rien à
+   découvrir. Elle montrait la bibliothèque, classée par le duel puis par les
+   👍. Constat de prod : « n'affiche que des titres déjà vus — ça n'a pas de
+   sens dans Découvrir ». C'est juste. Un écran qui répond à « que regarder ce
+   soir ? » n'ouvre pas sur dix titres déjà regardés, et le classement des vus
+   a déjà son écran — le panthéon de Mon profil, où il est chez lui.
 
-   Elle se met à jour IMMÉDIATEMENT après un duel ou un pouce, sans requête :
-   `signatureGouts` compte déjà les avis et le podium, `veilleBiblio` périme la
-   vitrine, et le recalcul ne redemande rien pour cette rangée-là.
+   CE QU'ELLE EST : un TOP 10 DE RECOMMANDATIONS. Dix titres NON VUS, classés
+   par affinité avec ce que le duel et les 👍 disent des goûts. Le libellé ne
+   change pas — « Top 10 pour toi » décrit mieux ça que l'ancienne rangée.
+
+   D'OÙ VIENNENT LES CANDIDATS, ET POURQUOI ÇA NE COÛTE RIEN. La rangée
+   n'ouvre AUCUNE requête à elle : elle repêche dans les viviers que les autres
+   rangées de l'écran ont déjà rapportés, et les RECLASSE. C'est ce qui fait
+   d'elle un « top » : la crème de tout ce que Découvrir a à proposer
+   aujourd'hui, sortie devant. Elle ne consomme donc PAS le `vus` partagé — un
+   titre du Top 10 peut reparaître plus bas dans la rangée dont il vient, comme
+   dans n'importe quel « meilleur de ». La règle « le premier servi garde les
+   titres » vaut entre rangées qui PUISENT ; celle-ci ne puise pas, elle relit.
+
+   L'INVARIANT DU POINT 3, et il n'a aucune exception : un titre de la
+   bibliothèque n'entre jamais ici. `dejaChezMoi` le dit, et les viviers sont
+   déjà passés par `tamiser` — la double garde est volontaire, parce que c'est
+   exactement la régression qu'on corrige.
+
+   LE CLASSEMENT. L'affinité d'abord (les genres du podium pèsent plus que ceux
+   des 👍, un genre ne peut pas peser plus de trois fois), le rang du vivier
+   d'origine ensuite (une recommandation du podium passe devant une nouveauté),
+   la note TMDB enfin, le nom pour finir. Aucun tirage au sort : deux rendus de
+   suite donnent le même ordre, exigence de §1 (« jamais de changement sous le
+   doigt »).
 --------------------------------------------------------------------------- */
 const TOP10_TAILLE = 10;
-/* Les genres qui définissent une humeur, côté BIBLIOTHÈQUE cette fois : c'est
-   le seul moyen de recalculer le Top 10 sur une humeur sans requête. Noms
-   canoniques (libellé film), `genreCanon` s'occupe des séries. */
+/* Les genres qui définissent une humeur. Noms canoniques (libellé film),
+   `genreCanon` s'occupe des séries. */
 const GENRES_HUMEUR = {
   rire:      ['Comédie'],
   frisson:   ['Horreur','Thriller','Mystère'],
   reflechir: ['Science-Fiction','Drame','Mystère'],
   detente:   ['Comédie','Familial','Animation']
 };
-function noteBiblio(media, id){
-  const o = media === 'tv' ? db.shows[id] : db.movies[id];
-  return (o && typeof o.note === 'number') ? o.note : 0;
+/* Le poids d'un genre selon d'où il vient. Le podium est un jugement rendu
+   (deux titres comparés, un choisi) ; le 👍 est un jugement isolé. Le premier
+   vaut donc davantage — c'est la même hiérarchie que `moteurCoeur`. */
+const TOP10_PODIUM = 6, TOP10_AIME = 4, TOP10_GENRE_MAX = 3;
+
+/* Le profil d'affinité : genre canonique en minuscules → poids. Construit sur
+   la bibliothèque, sans une seule requête. */
+function profilAffiniteTop10(cadre){
+  const poids = {};
+  const ajouter = (genres, p)=>{
+    (genres || []).forEach(g=>{
+      const n = String((typeof genreCanon === 'function') ? genreCanon(g) : g).toLowerCase();
+      if(!n) return;
+      poids[n] = Math.min((poids[n] || 0) + p, p * TOP10_GENRE_MAX);
+    });
+  };
+  famillesDuCadre(cadre).forEach(f=>{
+    moteurCoeur(f).forEach(t=>{
+      if(cadre.medias.indexOf(t.media) < 0) return;
+      const p = t.rang >= 0 ? TOP10_PODIUM : (aAime(t.media, t.id) ? TOP10_AIME : 0);
+      if(p) ajouter(t.genres, p);
+    });
+  });
+  return poids;
 }
-function top10Pour(cadre, humeur){
-  const fams = famillesDuCadre(cadre);
+/* L'affinité d'un candidat TMDB. Les candidats portent des IDENTIFIANTS de
+   genre, le profil des NOMS : `nomGenreParId` fait le pont, et `genreCanon`
+   réconcilie les deux taxonomies (film et série ne partagent aucun id).
+   Si `genresTMDB` n'est pas chargé, l'affinité vaut zéro partout et le
+   classement retombe sur le rang du vivier puis la note — dégradé, jamais
+   faux. */
+function affiniteTop10(x, poids){
+  let s = 0;
+  (x.genre_ids || []).forEach(id=>{
+    const n = (typeof nomGenreParId === 'function') ? nomGenreParId(x.media, id) : null;
+    if(!n) return;
+    s += poids[String((typeof genreCanon === 'function') ? genreCanon(n) : n).toLowerCase()] || 0;
+  });
+  return s;
+}
+/* `viviers` : [{ l:[candidats], poids:n }], le poids disant de quelle rangée
+   la liste vient. Appelé une seule fois, depuis le calcul de la vitrine, quand
+   toutes les rangées sont composées. */
+function top10Pour(cadre, humeur, viviers){
   const voulus = humeur ? (GENRES_HUMEUR[humeur] || []).map(n => String(n).toLowerCase()) : null;
-  const colle = t => {
+  const poids = profilAffiniteTop10(cadre);
+  const colle = x => {
     if(!voulus) return true;
-    return (t.genres || []).some(g =>
-      voulus.indexOf(String((typeof genreCanon === 'function') ? genreCanon(g) : g)
-        .toLowerCase()) >= 0);
+    return (x.genre_ids || []).some(id=>{
+      const n = (typeof nomGenreParId === 'function') ? nomGenreParId(x.media, id) : null;
+      return !!n && voulus.indexOf(
+        String((typeof genreCanon === 'function') ? genreCanon(n) : n).toLowerCase()) >= 0;
+    });
   };
-  const out = [], vus = {};
-  const pousser = t => {
-    if(!t || out.length >= TOP10_TAILLE) return;
-    if(cadre.medias.indexOf(t.media) < 0) return;
-    if(!t.affiche) return;                        // une rangée d'affiches, pas de cases grises
-    if(avisDe(t.media, t.id) === -1) return;      // un 👎 n'est le top de personne
-    if(!colle(t)) return;
-    const k = t.media + ':' + t.id;
-    if(vus[k]) return; vus[k] = 1;
-    out.push({ id:Number(t.id), media:t.media, nom:t.nom, affiche:t.affiche, bandeau:null,
-               date:t.date || null, note:noteBiblio(t.media, t.id) || null, votes:0,
-               genre_ids:[], langue:null });
-  };
-  /* 1 — le classement Elo, toutes familles du cadre fondues sur le score. */
-  const parId = {};
-  fams.forEach(f => titresVus(f).forEach(t => { parId[f + ':' + t.id] = t; }));
-  const classes = [];
-  fams.forEach(f => classementTrie(f).forEach(id => {
-    const t = parId[f + ':' + id];
-    if(t) classes.push({ t:t, s:scoreClassement(f, id) });
-  }));
-  classes.sort((a, b) => b.s - a.s).forEach(e => pousser(e.t));
-  /* 2 — les 👍, puis 3 — les mieux notés vus. Deux passes sur la même liste :
-     `pousser` dédoublonne, un titre déjà classé ne repasse pas. */
-  const tous = [];
-  fams.forEach(f => titresVus(f).forEach(t => tous.push(t)));
-  tous.filter(t => aAime(t.media, t.id))
-      .sort((a, b) => noteBiblio(b.media, b.id) - noteBiblio(a.media, a.id))
-      .forEach(pousser);
-  tous.slice().sort((a, b) => noteBiblio(b.media, b.id) - noteBiblio(a.media, a.id))
-      .forEach(pousser);
-  return out;
+  const parCle = {};
+  (viviers || []).forEach(v=>{
+    (v.l || []).forEach(x=>{
+      if(!x || !x.id || !x.affiche) return;         // une rangée d'affiches, pas de cases grises
+      if(cadre.medias.indexOf(x.media) < 0) return;
+      /* L'INVARIANT DU POINT 3 : jamais un titre déjà chez soi — donc jamais un
+         titre vu. C'est la régression qu'on corrige, elle se garde deux fois. */
+      if(typeof dejaChezMoi === 'function' && dejaChezMoi(x.media, x.id)) return;
+      if(typeof estRefuseSugg === 'function' && estRefuseSugg(x.media, x.id)) return;
+      /* CORRECTION DE RELECTURE (11/08/2026) — LA GARDE DU 👎 REVIENT.
+         L'ancienne `top10Pour` portait `if(avisDe(...) === -1) return;` et la
+         réécriture l'a laissée tomber SANS LE DIRE — ni le commit, ni le compte
+         rendu ne la mentionnaient, et le test qui la couvrait a été remplacé.
+         C'est le pire genre de perte : silencieuse.
+         Elle n'est pas redondante avec `dejaChezMoi`. Le chemin d'atteinte est
+         réel : marquer vu → 👎 → « Retirer de ma liste » (`removeMovie` ne purge
+         pas `db.avis`). Le titre explicitement détesté ressortait alors EN TÊTE
+         du top, puisque son genre est celui qu'on regarde. Un 👎 n'est le top de
+         personne — c'était vrai avant le point 3, ça l'est toujours. */
+      if(typeof avisDe === 'function' && avisDe(x.media, x.id) === -1) return;
+      if(!colle(x)) return;
+      const k = x.media + ':' + x.id;
+      const e = parCle[k] || (parCle[k] = { x:x, rang:0, aff:affiniteTop10(x, poids) });
+      e.rang = Math.max(e.rang, v.poids || 1);
+    });
+  });
+  return Object.keys(parCle).map(k => parCle[k])
+    .sort((a, b)=> (b.aff - a.aff)
+                || (b.rang - a.rang)
+                || ((b.x.note || 0) - (a.x.note || 0))
+                || (a.x.nom < b.x.nom ? -1 : a.x.nom > b.x.nom ? 1 : 0))
+    .slice(0, TOP10_TAILLE)
+    .map(e => e.x);
 }
 
 /* ---------------------------------------------------------------------------
@@ -2866,12 +2949,30 @@ async function chargerSuggestions(force){
       if(l.length) platesPret = { titre:titreRangeePlates(), l:l };
     }
 
-    /* SPEC-04 §1 rangée 2 — LE TOP 10. Aucune requête, aucun tamis : il montre
-       la bibliothèque, pas des découvertes. En mode humeur il se recalcule sur
-       les genres de l'humeur et retombe sur le Top 10 de la famille s'il
-       n'atteint pas dix titres, exactement comme le §2 le demande. */
-    let top10 = top10Pour(cadre, hum);
-    if(hum && top10.length < TOP10_TAILLE) top10 = top10Pour(cadre, null);
+    /* SPEC-04 §1 rangée 2, RÉÉCRITE PAR RETOUR-01 POINT 3 — LE TOP 10 DE
+       RECOMMANDATIONS. Il vient EN DERNIER dans le dépouillement alors qu'il
+       s'affiche EN PREMIER, et c'est exactement le point : il ne puise pas, il
+       relit. Les viviers ci-dessous sont ceux que les autres rangées viennent
+       de composer ; leur poids dit à quel point la rangée d'origine est
+       personnelle. Aucune requête n'est ajoutée, `vus` n'est pas touché.
+       En mode humeur il se recalcule sur les genres de l'humeur et retombe sur
+       le top de la famille s'il n'atteint pas dix titres, comme le §2 le
+       demande depuis le début. */
+    const viviersTop = [];
+    const vivier = (l, poids)=>{ if(l && l.length) viviersTop.push({ l:l, poids:poids }); };
+    if(espritPret)  vivier(espritPret.l, 5);   // recommandé par le podium ou un 👍
+    if(favorisPret) vivier(favorisPret.l, 5);  // recommandé par plusieurs 👍
+    if(humPret) ['principale','sures','courts'].forEach(v => vivier(humPret[v], 4));
+    if(acteurPret)  vivier(acteurPret.l, 3);   // un acteur suivi
+    if(genrePret)   vivier(genrePret.l, 3);    // le genre au meilleur taux
+    sectionsPretes.forEach(s => vivier(s.l, 2));
+    if(cerclePret)  vivier(cerclePret.l, 2);
+    if(incontPret)  vivier(incontPret.l, 1);
+    if(platesPret)  vivier(platesPret.l, 1);
+    vivier(nouv, 1);
+    RANGEES_EDITO.forEach(def => vivier(edito[def.cle], 1));
+    let top10 = top10Pour(cadre, hum, viviersTop);
+    if(hum && top10.length < TOP10_TAILLE) top10 = top10Pour(cadre, null, viviersTop);
 
     /* « Bientôt » : on ne mélange pas les médias un pour un comme ailleurs —
        c'est la DATE qui range la rangée. Une affiche est exigée : un titre
@@ -3059,12 +3160,29 @@ function rangeesSuggerees(){
   const s = suggestions;
   const hum = humeurActive();
   const hdef = hum ? humeurDef(hum) : null;
-  /* Le Top 10 ne passe ni par `propre` ni par le malus des refus : ce sont des
-     titres de la bibliothèque, pas des propositions. Il ne verse rien dans
-     « Aussi pour toi » non plus (`sansRepli`) — reproposer ce qu'on a déjà vu
-     serait le contraire d'une découverte. */
+  /* RETOUR-01 POINT 3 — le Top 10 passe DÉSORMAIS par `propre` : ce sont des
+     propositions, et les deux retraits du rendu les concernent comme les
+     autres (le titre montré en grand ne se répète pas six vignettes plus bas,
+     un titre écarté disparaît partout). Il ne passe toujours ni par
+     `classerParMalus` ni par `reculerDejaVus` : c'est un CLASSEMENT, et
+     reculer son n°3 le viderait de son sens. Il ne verse rien dans « Aussi
+     pour toi » non plus (`sansRepli`) — ses titres sont déjà dans les rangées
+     dont il les a repêchés, les remettre une troisième fois serait absurde. */
   const poserTop = ()=>{
-    const l = (s.top10 || []).slice(0, TOP10_TAILLE);
+    /* CORRECTION DE RELECTURE (11/08/2026) — « PLUS JAMAIS » VAUT AUSSI PENDANT
+       LA FENÊTRE DE RECALCUL. `propre` teste le hero et les titres écartés,
+       mais pas `dejaChezMoi` — et `suggCourantes()` rend son entrée de cache
+       même périmée. Scénario reproduit en relecture : ouvrir un titre depuis le
+       Top 10, le marquer vu, revenir sur Découvrir → il y était encore quelques
+       secondes. Le reste de l'écran vit avec cette péremption asynchrone depuis
+       toujours ; ici le critère d'acceptation dit « plus JAMAIS », et une
+       rangée qui promet des titres non vus doit tenir sa promesse à la seconde
+       près. La garde est posée ICI et pas dans `propre` : « Bientôt » montre
+       délibérément des titres de la bibliothèque (R7), la mettre en commun la
+       viderait. */
+    const frais = (s.top10 || []).filter(x =>
+      !(typeof dejaChezMoi === 'function' && dejaChezMoi(x.media, x.id)));
+    const l = propre(frais).slice(0, TOP10_TAILLE);
     if(l.length) brut.push({ cle:'top10', titre:'Top 10 pour toi', l:l,
                              top:true, sansRepli:true });
   };

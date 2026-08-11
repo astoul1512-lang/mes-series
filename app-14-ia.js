@@ -59,7 +59,11 @@ function iaActive(quoi){
 
 /* L'interrupteur des Réglages. Éteindre efface le cache de l'écran concerné :
    sinon la phrase générée hier resterait affichée après extinction, et le §4.5
-   promet que l'app éteinte est EXACTEMENT l'app d'avant. */
+   promet que l'app éteinte est EXACTEMENT l'app d'avant.
+
+   RETOUR-01 POINT 4 (11/08/2026) — L'INTERRUPTEUR SERT À COUPER, PAS À
+   ALLUMER. L'IA est active par défaut pour un compte connecté (voir
+   `migrerGouts`, app-11). Le sens du geste change : ce bouton est une SORTIE. */
 function basculerIA(quoi){
   if(quoi !== 'decouvrir' && quoi !== 'recherche') return;
   if(!db.gouts) return;
@@ -71,6 +75,27 @@ function basculerIA(quoi){
   if(typeof toucheGouts === 'function') toucheGouts('ia');
   else if(typeof saveDB === 'function') saveDB();
   if(typeof render === 'function') render();
+  /* RETOUR-01 POINT 4 — À LA (RÉ)ACTIVATION, LE LOT PART IMMÉDIATEMENT. C'est
+     le comportement qu'Adrien a observé en débloquant l'IA à la main le 10/08,
+     et il est confirmé voulu ET testé. La raison du silence d'avant est
+     simple : allumer l'interrupteur depuis les Réglages ne repeint pas
+     Découvrir, or `apresRenduDecouvrirIA` est accroché au rendu de la vitrine.
+     L'IA restait donc allumée et muette jusqu'au prochain passage sur
+     Découvrir — ce qui ressemble à s'y méprendre à un interrupteur qui ne fait
+     rien.
+
+     CE QUE ÇA COÛTE, DIT JUSTE (correction de relecture, 11/08/2026). La
+     première rédaction affirmait « rallumer trois fois dans la journée ne
+     dépense pas une requête de plus ». C'est faux, et c'était mesurable :
+     COUPER efface le marqueur de jour (`oublierCacheIA` pose `o.jour = ''`),
+     donc chaque rallumage refait un lot complet — trois cycles couper/rallumer
+     = trois lots = six requêtes. Les gardes qui tiennent vraiment sont le
+     verrou inter-onglets et le drapeau de module, qui empêchent DEUX lots
+     simultanés. Ce qui borne réellement le coût d'un interrupteur qu'on
+     triture, c'est le plafond de trente : il SURVIT à l'extinction, parce que
+     `oublierCacheIA` garde `n` en effaçant les textes. */
+  if(o[quoi] && quoi === 'decouvrir' && typeof apresRenduDecouvrirIA === 'function')
+    apresRenduDecouvrirIA();
 }
 
 /* ------------------------------- LE CACHE -------------------------------- */
@@ -89,8 +114,22 @@ function basculerIA(quoi){
    soixante minutes plus tard. */
 const IA_CLE = 'ms.ia.v1';
 
+/* RETOUR-01 POINT 5 (11/08/2026) — `pitchs` : LE PITCH DE CHAQUE HERO, PAS
+   SEULEMENT DU PREMIER DE LA JOURNÉE.
+   Forme : { jour:'AAAA-MM-JJ', n:<places prises aujourd'hui>,
+             t:{ '<humeur|->:<media>:<id>': '<texte, ou "" si rien à dire>' } }
+   LA CLÉ EST (HUMEUR, TITRE), PAS LE TITRE SEUL, et c'est voulu : le pitch
+   d'une humeur est un AUTRE texte que celui du jour — il dit en quoi le titre
+   répond à l'ambiance demandée. Un même titre sous quatre humeurs coûte donc
+   quatre requêtes. RETOUR-01 point 5 écrit « cache par titre » ; la lettre
+   dirait de n'en faire qu'une, l'esprit (§2 de SPEC-04) dit le contraire. On
+   suit l'esprit, et on l'écrit ici plutôt que de laisser croire au lecteur que
+   la lettre est tenue. Relevé en relecture.
+   La chaîne vide est un ÉTAT, pas un trou : elle veut dire « on a demandé, il
+   n'y a rien à afficher » et empêche chaque repeint de redemander. */
 function cacheIAVide(){
-  return { jour:'', pitch:null, titres:null, humeurs:{}, rech:{ pourquoi:{} } };
+  return { jour:'', pitch:null, titres:null, humeurs:{},
+           pitchs:{ jour:'', n:0, t:{} }, rech:{ pourquoi:{} } };
 }
 
 function lireCacheIA(){
@@ -102,6 +141,15 @@ function lireCacheIA(){
   if(!o.rech || typeof o.rech !== 'object' || Array.isArray(o.rech)) o.rech = { pourquoi:{} };
   if(!o.rech.pourquoi || typeof o.rech.pourquoi !== 'object' || Array.isArray(o.rech.pourquoi))
     o.rech.pourquoi = {};
+  /* RETOUR-01 point 5 — le compteur de pitchs se remet à zéro au changement de
+     jour, ici, en LECTURE : le plafond est journalier, et un cache de la veille
+     ne doit jamais faire croire que la journée est déjà consommée. */
+  if(!o.pitchs || typeof o.pitchs !== 'object' || Array.isArray(o.pitchs))
+    o.pitchs = { jour:'', n:0, t:{} };
+  if(!o.pitchs.t || typeof o.pitchs.t !== 'object' || Array.isArray(o.pitchs.t)) o.pitchs.t = {};
+  if(typeof o.pitchs.n !== 'number' || !(o.pitchs.n >= 0)) o.pitchs.n = 0;
+  const auj = (typeof todayISO === 'function') ? todayISO() : '';
+  if(o.pitchs.jour !== auj) o.pitchs = { jour:auj, n:0, t:{} };
   return o;
 }
 
@@ -113,7 +161,13 @@ function ecrireCacheIA(o){
    écran : les deux IA s'éteignent séparément (SPEC-05 §6). */
 function oublierCacheIA(quoi){
   const o = lireCacheIA();
-  if(quoi === 'decouvrir'){ o.jour = ''; o.pitch = null; o.titres = null; o.humeurs = {}; }
+  /* RETOUR-01 point 5 — les pitchs par titre s'effacent avec le reste de
+     Découvrir, mais le COMPTEUR de la journée reste : couper puis rallumer
+     l'IA ne doit pas rendre trente nouvelles requêtes. */
+  if(quoi === 'decouvrir'){
+    o.jour = ''; o.pitch = null; o.titres = null; o.humeurs = {};
+    o.pitchs = { jour:o.pitchs.jour, n:o.pitchs.n, t:{} };
+  }
   if(quoi === 'recherche') o.rech = { pourquoi:{} };
   ecrireCacheIA(o);
 }
@@ -306,6 +360,13 @@ async function lotIAduJour(){
     const cle = x.media + ':' + x.id;
     const aimes = titresAimesIA(8);
 
+    /* Les DEUX places du lot, prises avant la première requête (correction de
+       relecture, 11/08/2026 — voir le pavé du plafond). Plafond atteint : on
+       pose quand même le marqueur de jour dans le `finally` ? Non — on sort
+       sans le poser, pour que le lot reparte demain. Un jour où trente pitchs
+       ont déjà été demandés n'a pas besoin d'un trente-et-unième. */
+    if(!reserverPitchIA(2)) return;
+
     /* Requête 1 — le pitch du jour. */
     const r1 = await appelIA('pitch_jour', {
       titre: x.nom,
@@ -347,6 +408,12 @@ async function lotIAduJour(){
     maj.jour = jour;
     maj.pitch = pitch ? { cle: cle, texte: pitch } : null;
     maj.titres = titres;
+    /* RETOUR-01 point 5 — le résultat va dans le cache par titre comme les
+       autres. Le lot n'est plus un cas à part : c'est le premier pitch de la
+       journée, rien de plus. Les places, elles, ont été prises AU DÉPART, en
+       tête de cette fonction — et il en faut DEUX, parce que le lot fait deux
+       requêtes (le pitch et les intitulés). Il n'en comptait qu'une. */
+    maj.pitchs.t['-:' + cle] = pitch || '';
     ecrireCacheIA(maj);
 
     if(typeof view !== 'undefined' && view === 'discover' && typeof peindreDisc === 'function')
@@ -358,13 +425,153 @@ async function lotIAduJour(){
 }
 
 /* Ce que la vitrine lit. Rendre `null` veut dire « garde ta ligne au cœur » —
-   il n'y a pas de phrase creuse de remplacement (§3). */
+   il n'y a pas de phrase creuse de remplacement (§3).
+
+   RETOUR-01 POINT 5 — elle lit d'abord le cache PAR TITRE, puis retombe sur
+   l'ancienne case unique du lot du jour. La double lecture n'est pas une
+   hésitation : un cache écrit par la version d'hier (`ms.ia.v1` ne change pas
+   de nom) doit continuer d'afficher son pitch, sinon la première ouverture
+   après mise à jour perd la phrase du matin pour rien. */
 function pitchIAduJour(x){
   if(!x || !iaActive('decouvrir')) return null;
   const o = lireCacheIA();
+  const cle = x.media + ':' + x.id;
+  const v = o.pitchs.t['-:' + cle];
+  if(typeof v === 'string') return v ? texteIAAcceptable(v, 220) : null;
   if(o.jour !== todayISO() || !o.pitch) return null;
-  if(o.pitch.cle !== x.media + ':' + x.id) return null;   // la proposition a tourné
+  if(o.pitch.cle !== cle) return null;                    // la proposition a tourné
   return texteIAAcceptable(o.pitch.texte, 220);
+}
+
+/* ---- RETOUR-01 POINT 5 : LE PITCH SUIT LE HERO, ET S'ARRÊTE À TRENTE ----
+
+   CE QUI N'ALLAIT PAS. Le pitch ne couvrait que la PREMIÈRE proposition du
+   jour. Un « Pas pour moi » et la proposition suivante retombait sur la ligne
+   ❤ socle — vérifié, zéro appel. Trois gestes changent le hero : « Pas pour
+   moi », changer de famille, poser ou retirer une humeur. Aucun des trois ne
+   demandait de pitch.
+
+   CE QUE ÇA FAIT MAINTENANT. À chaque rendu de la vitrine, on regarde le hero
+   affiché : s'il n'a pas encore de pitch en cache, on en demande un. Une
+   requête par TITRE, jamais par rendu — le cache est la garde, et il retient
+   aussi les échecs (chaîne vide), sans quoi un repeint suffirait à redemander.
+
+   NON BLOQUANT, ET C'EST LA MOITIÉ DU POINT. La ligne socle est déjà à
+   l'écran ; le pitch la remplace quand il arrive, par un repeint ciblé de
+   Découvrir. Rien n'attend, rien ne clignote, et si le pitch n'arrive jamais
+   la ligne socle reste — mot pour mot, comme le §3 l'exige.
+
+   LE PLAFOND : TRENTE PAR JOUR, puis socle silencieux. C'est le chiffre du
+   RETOUR, et il vaut la peine de dire ce qu'il n'est PAS. Le commentaire
+   d'origine affirmait que trente était « le budget par personne du relais, donc
+   un plafond plus haut ne récolterait que des refus ». C'est faux, et la
+   relecture l'a relevé : `BUDGET_UTILISATEUR_JOUR` est PARTAGÉ par les sept
+   tâches — un plafond de trente sur les seuls pitchs garantit au contraire des
+   refus serveur sur les autres. Trente est donc un plafond de CONFORT, pas une
+   déduction : au-delà de trente propositions dans la journée, on n'est plus en
+   train de choisir un film. Ça dégrade proprement dans tous les cas (refus
+   serveur → `{indisponible}` → socle), mais le raisonnement écrit devait être
+   juste.
+
+   LE COMPTEUR SE PREND AU DÉPART, PAS AU RETOUR — CORRECTION DE RELECTURE
+   (11/08/2026). Il était incrémenté à l'arrivée de la réponse : toute requête
+   en vol était donc invisible du plafond, et `iaPitchsEnCours` ne gardait qu'une
+   clé identique. Mesuré par le relecteur avec des valeurs réalistes (un « Pas
+   pour moi » toutes les 700 ms, réponse en 2,5 s) : depuis n = 29, QUATRE
+   appels partaient et n finissait à 33. Le critère « le 31ᵉ du jour ne part
+   pas » n'était pas tenu.
+   `reserverPitchIA()` prend la place AVANT d'appeler : le plafond compte des
+   DÉPARTS, ce qui est la seule chose qu'il puisse honnêtement borner. Et le lot
+   du jour, qui fait DEUX requêtes, en réserve deux ; le pitch d'humeur, qui en
+   faisait une sans jamais compter, réserve la sienne.
+
+   CE QU'IL NE FAUT PAS FAIRE : déclencher depuis `pitchOuRaison`. Elle est
+   appelée à chaque construction de HTML, y compris par les tests et par les
+   repeints partiels. Le déclenchement reste APRÈS le rendu (§4.4), au même
+   endroit que le lot du jour. */
+const IA_PITCH_MAX = 30;
+let iaPitchsEnCours = {};
+
+/* Prend `n` places dans le plafond du jour, ou rend `false` si elles n'y sont
+   plus. Écrit tout de suite : une réservation qui attendrait la réponse ne
+   réserverait rien. */
+function reserverPitchIA(n){
+  const combien = n || 1;
+  const o = lireCacheIA();
+  if(o.pitchs.n + combien > IA_PITCH_MAX) return false;
+  o.pitchs.n += combien;
+  ecrireCacheIA(o);
+  return true;
+}
+
+function clePitchIA(hum, x){ return (hum || '-') + ':' + x.media + ':' + x.id; }
+
+function toucherPitchHeroIA(){
+  if(!iaActive('decouvrir')) return;
+  /* Le lot du jour n'est pas encore passé : c'est LUI qui fera le premier
+     pitch, avec son verrou inter-onglets. Deux demandes pour le même titre le
+     même matin, c'est exactement ce que ce verrou existe pour éviter. */
+  if(iaLotEnCours) return;
+  const o = lireCacheIA();
+  if(o.jour !== todayISO()) return;
+  const x = (typeof propositionDuJour === 'function') ? propositionDuJour() : null;
+  if(!x || !x.nom) return;
+  const hum = (typeof humeurActive === 'function') ? humeurActive() : null;
+  const k = clePitchIA(hum, x);
+  if(typeof o.pitchs.t[k] === 'string') return;      // déjà demandé, réussi ou non
+  /* Une humeur fraîchement posée a son propre chemin (`toucherHumeurIA`) et sa
+     propre échéance à 6 h : on ne double pas sa requête. On ne prend le relais
+     que lorsque SA case ne parle plus du titre affiché — c'est-à-dire après un
+     « Pas pour moi » à l'intérieur de l'humeur. */
+  if(hum){
+    const e = o.humeurs[hum];
+    if(iaHumeursEnCours[hum]) return;
+    if(e && e.jusqua > Date.now() && e.cle === x.media + ':' + x.id) return;
+  }
+  if(iaPitchsEnCours[k]) return;
+  /* Sans relais joignable, aucune requête ne partirait : on ne consomme pas une
+     place du plafond pour un appel qui n'aura pas lieu. */
+  if(!iaJoignable()) return;
+  if(!reserverPitchIA(1)) return;                    // plafond atteint : socle silencieux
+  iaPitchsEnCours[k] = true;
+  setTimeout(()=>{ pitchHeroIA(k, hum, x).catch(()=>{}); }, 0);
+}
+
+async function pitchHeroIA(k, hum, x){
+  try{
+    const hdef = (hum && typeof humeurDef === 'function') ? humeurDef(hum) : null;
+    /* `pms` et non `params` : `params` est un nom d'état partagé du dépôt, et
+       le contrôle n° 5 du lanceur de tests refuse — à juste titre — qu'un
+       fichier écrive un nom qui ne lui a pas été ouvert, fût-ce dans une
+       portée locale. Le contrôle est statique ; il a raison de l'être. */
+    const pms = {
+      titre: x.nom,
+      genres: genresAimesIA(5),
+      note: x.note || '',
+      forme: formeTitreIA(x),
+      aimes: titresAimesIA(8)
+    };
+    if(hdef) pms.humeur = hdef.label;
+    const r = await appelIA(hdef ? 'pitch_humeur' : 'pitch_jour', pms);
+    const texte = r ? texteIAAcceptable(r.texte, 220) : null;
+    /* On relit le cache au retour : une autre demande a pu aboutir entre-temps.
+       Le compteur, lui, a déjà été pris au départ (`reserverPitchIA`) — le
+       toucher ici compterait deux fois. */
+    const o = lireCacheIA();
+    o.pitchs.t[k] = texte || '';
+    ecrireCacheIA(o);
+    if(!texte) return;
+    /* Le hero a pu tourner pendant la requête : on ne repeint que si la phrase
+       qui vient de rentrer est celle du titre affiché. Sinon elle attendra
+       tranquillement dans son cache — revenir dessus ne recoûtera rien. */
+    const encore = (typeof propositionDuJour === 'function') ? propositionDuJour() : null;
+    const humNow = (typeof humeurActive === 'function') ? humeurActive() : null;
+    if(!encore || clePitchIA(humNow, encore) !== k) return;
+    if(typeof view !== 'undefined' && view === 'discover' && typeof peindreDisc === 'function')
+      peindreDisc();
+  }finally{
+    delete iaPitchsEnCours[k];
+  }
 }
 
 function intituleIA(cle, defaut){
@@ -457,6 +664,11 @@ async function lotHumeurIA(cle){
     /* L'humeur a pu être retirée pendant l'attente : on ne dépense pas une
        requête pour un écran qu'on ne regarde plus. */
     if(typeof humeurActive === 'function' && humeurActive() !== cle) return;
+    /* Correction de relecture (11/08/2026) — ce chemin-ci faisait une requête
+       sans jamais toucher le compteur du jour : le plafond du point 5 ignorait
+       purement et simplement les pitchs d'humeur. Il en prend une place, comme
+       tout le monde. */
+    if(!reserverPitchIA(1)) return;
     const r = await appelIA('pitch_humeur', {
       titre: x.nom,
       humeur: hdef.label,
@@ -482,9 +694,13 @@ function pitchIAHumeur(cle, x){
   if(!cle || !x || !iaActive('decouvrir')) return null;
   const o = lireCacheIA();
   const e = o.humeurs[cle];
-  if(!e || e.jusqua <= Date.now() || !e.texte) return null;
-  if(e.cle !== x.media + ':' + x.id) return null;
-  return texteIAAcceptable(e.texte, 220);
+  if(e && e.jusqua > Date.now() && e.texte && e.cle === x.media + ':' + x.id)
+    return texteIAAcceptable(e.texte, 220);
+  /* RETOUR-01 point 5 — la case d'humeur ne porte QU'UN titre, celui qui était
+     à l'écran quand l'humeur a été posée. Après un « Pas pour moi » à
+     l'intérieur de l'humeur, c'est le cache par titre qui prend le relais. */
+  const v = o.pitchs.t[cle + ':' + x.media + ':' + x.id];
+  return (typeof v === 'string' && v) ? texteIAAcceptable(v, 220) : null;
 }
 
 /* ------------- L'AFFINAGE LOCAL DE LA RECETTE D'HUMEUR (§2 a) ------------- */
@@ -679,10 +895,18 @@ function ressembleAUneEnvieIA(q, nTitres, nGens){
 
 let envieEnCoursIA = false;
 
-function routerEnvieIA(q, nTitres, nGens){
+/* RETOUR-01 POINT 6 (11/08/2026) — `force` COURT-CIRCUITE L'HEURISTIQUE, et
+   c'est tout ce que le mode ✦ ajoute ici. L'heuristique existe pour DEVINER si
+   un texte est une envie quand personne ne l'a dit ; quand quelqu'un a appuyé
+   sur ✦, il l'a dit. Continuer à deviner reviendrait à refuser une envie de
+   deux mots (« un braquage ») au motif qu'elle en fait moins de quatre, sur un
+   écran qui vient de se teindre en violet pour annoncer le contraire.
+   L'interrupteur « IA de la Recherche », lui, n'est pas court-circuité : ✦
+   éteint ne rend pas l'IA obligatoire. */
+function routerEnvieIA(q, nTitres, nGens, force){
   if(!iaActive('recherche')) return;
   if(envieEnCoursIA) return;
-  if(!ressembleAUneEnvieIA(q, nTitres, nGens)) return;
+  if(!force && !ressembleAUneEnvieIA(q, nTitres, nGens)) return;
   envieEnCoursIA = true;
   setTimeout(()=>{ traduireEnvieIA(q).catch(()=>{}); }, 0);
 }
@@ -913,4 +1137,207 @@ async function chargerPourquoiIA(media, id, titre, cle){
   }finally{
     delete pourquoiEnCoursIA[cle];
   }
+}
+
+/* ===========================================================================
+   RETOUR-01 POINT 8 (11/08/2026) — LE TRI « ✦ MES GOÛTS » DEVIENT RÉELLEMENT IA
+
+   CE QUI N'ALLAIT PAS. Le bouton portait une ✦ — le signe que l'app réserve à
+   l'IA partout ailleurs — et le tri derrière était à 100 % local. Ce n'était pas
+   une panne, c'était un mensonge d'étiquette. Décision d'Adrien : l'IA doit
+   faire le classement, et la ✦ redevient honnête.
+
+   L'ARCHITECTURE EST IMPOSÉE PAR LE §8, ET ELLE EST LA SEULE POSSIBLE. Classer
+   24 478 titres par IA n'existe pas. Ce qui existe, c'est affiner le HAUT d'un
+   pré-classement local :
+
+     ① le moteur local pré-classe tout, comme aujourd'hui (`ordonnerParGoutRech`,
+        `scoreGoutRech` — pas une ligne n'y change) ;
+     ② `classer_grille` envoie le profil agrégé et les CENT PREMIERS candidats,
+        et reçoit l'ordre affiné — une liste d'INDICES, jamais des titres ;
+     ③ UNE requête par grille, cache par signature (famille + filtres), et la
+        signature porte `signatureGouts` : un 👍 de plus périme le classement ;
+     ④ non bloquant — l'ordre local s'affiche tout de suite, l'ordre IA s'applique
+        à l'arrivée SEULEMENT si la personne n'a pas encore défilé ; sinon il
+        attend le prochain affichage. Jamais de réorganisation sous le doigt ;
+     ⑤ au-delà des cent premiers, l'ordre local continue, sans rupture ;
+     ⑥ IA indisponible → tri local, sans bruit. Le §6 de SPEC-05 est catégorique :
+        « le socle sans IA est le produit, pas un mode dégradé ».
+
+   POURQUOI LE CACHE VIT EN MÉMOIRE ET PAS DANS `localStorage`. Un classement de
+   grille est attaché à une session de recherche : on filtre, on regarde, on
+   change d'avis. Le §8 demande « re-filtrer à l'identique = zéro appel », ce
+   qu'une mémoire de module tient parfaitement. Le persister ferait ressortir au
+   matin l'ordre d'hier soir, pour une grille dont TMDB aura changé la première
+   page — un cache qui survit à sa donnée est un cache qui ment. */
+
+const IA_GRILLE_MAX = 100;
+/* Signature → { rangs:{ 'media:id':n }, quand }. Bornée : une session de
+   recherche fait quelques grilles, pas mille, et on ne veut pas d'une fuite. */
+const IA_GRILLE_CACHE_MAX = 20;
+let iaGrilleCache = {};
+let iaGrilleEnCours = {};
+
+/* La signature d'une grille : famille + filtres + l'état des goûts. C'est elle
+   qui décide « même grille » et « autre grille » — donc elle qui décide si une
+   requête part. Elle est construite à partir de l'état de la Recherche, jamais
+   à partir de ce qui est affiché : deux écrans identiques doivent donner la
+   même signature, y compris à un titre près dans la fournée. */
+function signatureGrilleIA(){
+  if(typeof etatRech !== 'function') return null;
+  const r = etatRech();
+  const l = c => (typeof listeRech === 'function') ? listeRech(c).slice().sort().join(',') : '';
+  const sig = (typeof signatureGouts === 'function') ? signatureGouts() : 0;
+  return [r.fam, r.amb || '', r.ambiance || '', r.note || '', r.pasvu || '',
+          r.statut || '', r.gore || '', r.avec || '',
+          l('genre'), l('origine'), l('epoque'), l('duree'), l('plate'),
+          (r.sans || []).slice().sort().join(','), 'g' + sig].join('|');
+}
+
+/* Ce que `ordonnerParGoutRech` consulte (app-15). Rend `null` quand il n'y a
+   rien à appliquer — et « rien » est le cas normal : IA éteinte, tri « note »,
+   classement pas encore arrivé. */
+function ordreIAGrilleRech(){
+  if(typeof iaActive !== 'function' || !iaActive('recherche')) return null;
+  if(typeof triRech === 'function' && triRech() !== 'gouts') return null;
+  const sig = signatureGrilleIA();
+  if(!sig) return null;
+  const e = iaGrilleCache[sig];
+  return (e && e.rangs) ? e.rangs : null;
+}
+
+/* Ce que le modèle a le droit de voir de la personne : des genres et des
+   titres, agrégés. Jamais un pseudo, jamais un identifiant, jamais un
+   historique — §4.1, la même règle que partout ailleurs dans ce fichier. */
+function profilGrilleIA(){
+  const bouts = [];
+  try{
+    const g = (typeof profilGoutsRech === 'function') ? profilGoutsRech() : null;
+    if(g){
+      const forts = Object.keys(g).sort((a, b)=> g[b] - g[a]).slice(0, 6);
+      if(forts.length) bouts.push('genres les plus regardés : ' + forts.join(', '));
+    }
+  }catch(e){}
+  const aimes = titresAimesIA(6);
+  if(aimes.length) bouts.push('titres aimés : ' + aimes.join(', '));
+  return bouts.join(' ; ').slice(0, 400);
+}
+
+/* Une ligne par candidat, dans l'ordre local. Le format est celui du gabarit
+   serveur : il numérote lui-même, on ne lui envoie que le contenu. */
+function candidatGrilleIA(x){
+  const an = (x.release_date || x.first_air_date || '').slice(0, 4);
+  const genres = (typeof genresTitreRech === 'function')
+    ? genresTitreRech(x, x.__media).slice(0, 3).join(', ') : '';
+  const note = (typeof x.vote_average === 'number' && x.vote_average)
+    ? String(Math.round(x.vote_average * 10) / 10) : '';
+  const nom = String(x.title || x.name || x.nom || '').slice(0, 60);
+  return [nom, an ? '(' + an + ')' : '', genres ? '· ' + genres : '', note ? '· ' + note : '']
+    .filter(Boolean).join(' ');
+}
+
+/* Le déclencheur. Appelé APRÈS que la grille est à l'écran — jamais pendant sa
+   construction, exactement comme le pitch de Découvrir (§4.4). */
+function toucherClassementIA(){
+  if(!iaActive('recherche')) return;
+  if(typeof triRech !== 'function' || triRech() !== 'gouts') return;
+  if(typeof etatRech !== 'function') return;
+  const r = etatRech();
+  if(!Array.isArray(r.res) || r.res.length < 2) return;
+  const sig = signatureGrilleIA();
+  if(!sig) return;
+  if(iaGrilleCache[sig]) return;          // ③ re-filtrer à l'identique ne coûte rien
+  if(iaGrilleEnCours[sig]) return;
+  iaGrilleEnCours[sig] = true;
+  setTimeout(()=>{ classerGrilleIA(sig).catch(()=>{}); }, 0);
+}
+
+async function classerGrilleIA(sig){
+  try{
+    const r = etatRech();
+    /* ② les cent premiers du pré-classement local, et eux seuls. On fige la
+       liste ICI : la fournée suivante peut arriver pendant la requête, et un
+       ordre rendu sur une liste qui a bougé désignerait d'autres titres. */
+    /* CORRECTION DE RELECTURE (11/08/2026) — LES DEUX NUMÉROTATIONS DOIVENT
+       ÊTRE LA MÊME. Le client envoyait `cands.map(candidatGrilleIA)` et
+       remappait la réponse par `cands[i]`. Or le serveur numérote APRÈS
+       filtrage : `liste()` fait `.map(texte).filter(Boolean)` puis numérote.
+       Une seule ligne vide côté serveur — et `candidatGrilleIA` rend `''` quand
+       titre, année, genres et note sont tous absents — décalait TOUTE la
+       numérotation, et le classement désignait alors les mauvais titres, en
+       silence. Probabilité faible, conséquence indétectable : le pire couple.
+       On filtre donc ICI, et on garde le titre et sa ligne appariés. Ce qui
+       part est exactement ce qui sera numéroté. */
+    const paires = r.res.slice(0, IA_GRILLE_MAX)
+      .map(x => ({ x:x, ligne: candidatGrilleIA(x) }))
+      .filter(e => !!e.ligne);
+    const cands = paires.map(e => e.x);
+    if(cands.length < 2) return;
+    const d = await appelIA('classer_grille', {
+      profil: profilGrilleIA(),
+      candidats: paires.map(e => e.ligne)
+    });
+    if(d) noterRequeteIA();
+    const ordre = (d && Array.isArray(d.ordre)) ? d.ordre : null;
+    /* ⑥ IA indisponible ou réponse inutilisable → rien. On mémorise quand même
+       la signature, avec un classement VIDE : sans ça, chaque « Voir plus »
+       relancerait la même requête pour le même silence. */
+    const rangs = {};
+    if(ordre){
+      let n = 0;
+      ordre.forEach(i=>{
+        const x = cands[i];
+        if(!x) return;                    // indice hors de NOTRE liste : il tombe
+        const k = x.__media + ':' + x.id;
+        if(k in rangs) return;
+        rangs[k] = n++;
+      });
+    }
+    iaGrilleCache[sig] = { rangs: Object.keys(rangs).length ? rangs : null, quand: Date.now() };
+    const cles = Object.keys(iaGrilleCache);
+    if(cles.length > IA_GRILLE_CACHE_MAX){
+      const garde = cles.sort((a, b)=> iaGrilleCache[b].quand - iaGrilleCache[a].quand)
+                        .slice(0, IA_GRILLE_CACHE_MAX);
+      const neuf = {};
+      garde.forEach(k=>{ neuf[k] = iaGrilleCache[k]; });
+      iaGrilleCache = neuf;
+    }
+    appliquerOrdreIARech(sig);
+  }finally{
+    delete iaGrilleEnCours[sig];
+  }
+}
+
+/* ④ LA RÈGLE DU DOIGT, et c'est elle qui décide de tout ici.
+
+   Réordonner une grille qu'on est en train de parcourir fait disparaître le
+   titre qu'on regardait. La règle du §1 de SPEC-04 — « jamais de changement
+   sous le doigt » — vaut ici mot pour mot. On applique donc SEULEMENT si la
+   personne est encore en haut de l'écran, c'est-à-dire si elle n'a pas commencé
+   à parcourir. Sinon on ne fait rien : le classement est en cache, et le
+   prochain affichage complet de la grille (changement de filtre, retour sur
+   l'onglet, bascule de tri) le prendra tel quel, sans une requête de plus.
+
+   CORRECTION DE RELECTURE (11/08/2026) — LE SEUIL PASSE DE 40 PX À ZÉRO. « Sous
+   40 px » ne dit pas « il n'a pas défilé », il dit « il n'a pas beaucoup
+   défilé ». Le scénario relevé : la grille se peint, le doigt lance un
+   défilement inertiel, la réponse arrive 900 ms plus tard alors que `scrollY`
+   vaut 30 — la garde passait, et `peindreRech()` remplaçait tout le contenu EN
+   PLEIN MOUVEMENT. C'est exactement ce que ④ interdit.
+   Zéro est le seul seuil qui se défende sans modéliser l'inertie : au-dessus,
+   il faudrait un `scrollend` ou un drapeau tactile, c'est-à-dire une machinerie
+   pour gagner quelques réordonnancements dont personne n'a besoin — le
+   classement s'appliquera au prochain affichage, gratuitement. */
+
+function appliquerOrdreIARech(sig){
+  if(typeof view === 'undefined' || view !== 'search') return;
+  if(signatureGrilleIA() !== sig) return;              // la grille a changé de sujet
+  const e = iaGrilleCache[sig];
+  if(!e || !e.rangs) return;
+  if((window.scrollY || 0) !== 0) return;   // on a parcouru : ce sera pour la prochaine fois
+  const r = etatRech();
+  if(typeof ordonnerParGoutRech !== 'function') return;
+  r.res = ordonnerParGoutRech(r.res);
+  r.matchI = 0;
+  if(typeof peindreRech === 'function') peindreRech();
 }

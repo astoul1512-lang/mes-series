@@ -160,6 +160,20 @@ const SCHEMA_LISTE = {
   properties: { textes: { type: "array", items: { type: "string" }, maxItems: 12 } },
   required: ["textes"],
 };
+/* RETOUR-01 POINT 8 (11/08/2026) — `classer_grille` NE REND PAS DES TITRES,
+   ELLE REND UN ORDRE. Une liste d'ENTIERS : les indices des candidats envoyés,
+   du plus pertinent au moins pertinent. C'est ce qui rend la tâche sûre par
+   construction — le modèle ne peut RIEN ajouter à la grille, il ne peut que la
+   réordonner. Un indice hors bornes tombe, un indice répété tombe, un indice
+   manquant garde sa place locale.
+   `maxItems` vaut 100, le plafond de `maxtitres` pour cette tâche : c'est la
+   seule qui dépasse 12, et le §8 du RETOUR l'impose (« les ~100 premiers
+   candidats »). */
+const SCHEMA_ORDRE = {
+  type: "object",
+  properties: { ordre: { type: "array", items: { type: "integer" }, maxItems: 100 } },
+  required: ["ordre"],
+};
 
 // ---------------------------------------------------------------------------
 // SPEC-05 §6 — LE VOCABULAIRE FERMÉ DES CRITÈRES
@@ -290,6 +304,39 @@ export function construire(tache: string, params: unknown): Gabarit | null {
     return { consigne: lignes.filter(Boolean).join("\n"), schema: SCHEMA_TEXTE };
   }
 
+  if (tache === "classer_grille") {
+    /* Les candidats arrivent déjà mis en forme par le client, une ligne par
+       titre : « 0. Whiplash (2014) · drame, musique · 8,4 ». On ne reconstruit
+       rien ici — mais on RECOUPE : `liste` borne le nombre (100) et la longueur
+       de chaque ligne, et retire au passage tout ce qui ressemble à un
+       identifiant. Un client bavard ne fait pas grossir le prompt. */
+    const cands = liste(p.candidats, t.maxtitres, 120);
+    if (cands.length < 2) return null;           // classer un titre n'a pas de sens
+    const profil = texte(p.profil, 400);
+    const numerotes = cands.map((c, i) => i + ". " + c);
+    return {
+      consigne: [
+        CONSIGNE_COMMUNE,
+        "",
+        "Voici une liste numérotée de titres, déjà pré-classés par un moteur",
+        "local. Réordonne-les du plus pertinent au moins pertinent POUR CETTE",
+        "PERSONNE, d'après le profil ci-dessous.",
+        "",
+        "RÈGLES, et elles ne se négocient pas :",
+        "— Réponds UNIQUEMENT par la liste des numéros, dans le nouvel ordre.",
+        "— N'invente aucun numéro : n'utilise que ceux de la liste.",
+        "— Ne répète aucun numéro, et n'en oublie aucun.",
+        "— N'écris aucun texte, aucune explication, aucun titre.",
+        "",
+        profil ? "PROFIL DE LA PERSONNE : " + profil : "",
+        "",
+        "TITRES :",
+        numerotes.join("\n"),
+      ].filter(Boolean).join("\n"),
+      schema: SCHEMA_ORDRE,
+    };
+  }
+
   if (tache === "intitules_rangees") {
     const base = liste(p.intitules, t.maxtitres, 60);
     if (!base.length) return null;
@@ -381,7 +428,7 @@ export function construire(tache: string, params: unknown): Gabarit | null {
 // ---------------------------------------------------------------------------
 export type Critere = { cle: string; val: string };
 export type Rendu = { texte?: string; textes?: string[]; criteres?: Critere[];
-                      nom?: string; emoji?: string };
+                      nom?: string; emoji?: string; ordre?: number[] };
 
 export function valider(tache: string, brut: unknown): Rendu | null {
   if (!tacheConnue(tache)) return null;
@@ -397,6 +444,37 @@ export function valider(tache: string, brut: unknown): Rendu | null {
     if (INTERDIT_EMOTION.test(v)) return null;   // §0.4, contrôle de sortie
     return v;
   };
+
+  if (tache === "classer_grille") {
+    /* RETOUR-01 point 8 — LA VALIDATION EST TOUT CE QUI PROTÈGE ICI. Le schéma
+       part chez le fournisseur, mais un fournisseur qui l'ignore ne le dit pas.
+       On garde donc, dans l'ordre rendu, les entiers qui sont de VRAIS indices
+       et qu'on n'a pas déjà vus. Ce qui manque n'est pas ajouté : le client
+       complète avec son propre ordre local, ce qui est exactement le
+       comportement dégradé qu'on veut (l'ordre local est la vérité de repli).
+       On ne rejette PAS l'entrée pour un mauvais indice — c'est le même
+       arbitrage que pour les critères d'envie : un indice faux en moins laisse
+       un classement un peu moins affiné, un rejet total laisserait l'ordre
+       local, alors qu'on a déjà payé la requête. */
+    if (!Array.isArray(o.ordre)) return null;
+    if (o.ordre.length > t.maxtitres) return null;
+    /* Le relais borne à `maxtitres` (100) sans savoir combien de candidats ce
+       client-là a envoyés : il n'a pas à s'en souvenir d'une requête à l'autre.
+       Le client, lui, le sait — et il écarte ce qui dépasse SA liste. Deux
+       bornes qui ne se recouvrent pas tout à fait valent mieux qu'une borne
+       qui aurait besoin d'un état. */
+    const vus: Record<number, boolean> = {};
+    const l: number[] = [];
+    for (const x of o.ordre) {
+      if (typeof x !== "number" || !isFinite(x)) continue;
+      const i = Math.trunc(x);
+      if (i < 0 || i >= t.maxtitres) continue;
+      if (vus[i]) continue;
+      vus[i] = true;
+      l.push(i);
+    }
+    return l.length ? { ordre: l } : null;
+  }
 
   if (tache === "intitules_rangees") {
     if (!Array.isArray(o.textes)) return null;

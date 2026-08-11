@@ -620,12 +620,32 @@ function etatRech(){
     /* `touche` : la personne a-t-elle composé quelque chose elle-même ? La
        proposition du jour ne compte pas — voir `nouvelleOuvertureRech`. */
     touche:false, reprise:null,
+    /* RETOUR-01 POINT 6 (11/08/2026) — LE MODE ✦, ET IL TIENT DANS UN BOOLÉEN.
+       `envie` à vrai = la barre est violette, tout ce qui est tapé part au
+       routeur d'envie à la validation, et la recherche de TITRE est en
+       sommeil. C'est la maquette 20 OPTION T : « la COULEUR est le mode ».
+       Il n'est PAS persisté : chaque ouverture de Recherche repart en mode
+       titre, comme tout le reste de la phrase (§4.8). */
+    envie:false,
     jeu:null
   };
   return ui.rech;
 }
 function rechTexte(){ return (etatRech().q || '').trim(); }
-function enRechercheTitre(){ return rechTexte().length >= RECH_MIN; }
+/* RETOUR-01 POINT 6 — LE POINT DE BASCULE UNIQUE DE L'ÉCRAN. `enRechercheTitre`
+   décidait déjà, à elle seule, si on voit la liste de titres ou l'écran de
+   sélection. Le mode ✦ s'y branche ici et NULLE PART AILLEURS : ✦ allumé, on
+   n'est jamais en recherche de titre, donc l'état intermédiaire « Rien trouvé »
+   qui décourageait ne peut plus apparaître — non pas parce qu'on l'a masqué,
+   mais parce qu'on n'y entre plus. */
+function enRechercheTitre(){
+  const r = etatRech();
+  /* `envie` ne vaut que si l'IA de la Recherche est allumée : une base dont
+     l'interrupteur a été coupé pendant que le mode était actif retrouve la
+     recherche de titre, elle ne se retrouve pas devant un écran muet. */
+  const envie = !!r.envie && (typeof iaActive !== 'function' || iaActive('recherche'));
+  return !envie && rechTexte().length >= RECH_MIN;
+}
 
 /* ---------------- La phrase entre deux sessions (§4.8) ----------------
    REMISE À ZÉRO À CHAQUE OUVERTURE. Un filtre qu'on a oublié avoir posé est
@@ -713,6 +733,7 @@ function nouvelleOuvertureRech(){
                   epoque:listeRech('epoque'), duree:listeRech('duree'),
                   plate:listeRech('plate'), note:r.note, pasvu:r.pasvu };
   r.q = ''; r.qtitres = []; r.qgens = []; r.qerr = '';
+  r.envie = false;                     // RETOUR-01 point 6 : on rouvre en mode titre
   r.amb = null; r.sans = []; r.genre = []; r.origine = [];
   r.epoque = []; r.duree = []; r.note = null; r.pasvu = null; r.plate = [];
   r.jeu = null;
@@ -978,6 +999,18 @@ function saisieRech(v){
   const avant = enRechercheTitre();
   r.q = v;
   clearTimeout(rechTimer); avorterRech();
+  /* RETOUR-01 POINT 6 — EN MODE ✦, LA FRAPPE NE DÉCLENCHE RIEN. Ni requête de
+     titre, ni requête IA : l'invariant de SPEC-05 (« jamais d'appel IA pendant
+     la frappe ») n'est pas assoupli par ce point, il est même renforcé — c'est
+     la validation, et elle seule, qui parle au relais. `enRechercheTitre` rend
+     déjà faux ici ; ce retour anticipé évite en plus le repeint inutile de la
+     grille à chaque caractère. */
+  if(r.envie){
+    r.qtitres = []; r.qgens = []; r.qloading = false; r.qerr = '';
+    const c = document.querySelector('.qclear');
+    if(c) c.classList.toggle('masque', !r.q);
+    return;
+  }
   if(enRechercheTitre() !== avant){ oublierDefil('search'); window.scrollTo(0,0); }
   if(!enRechercheTitre()){
     r.qtitres = []; r.qgens = []; r.qloading = false; r.qerr = '';
@@ -2056,6 +2089,14 @@ async function chargerGrilleRech(suite){
     r.loading = false; r.charge = true; r.err = ''; r.errSuite = false;
     peindreRech();
 
+    /* RETOUR-01 POINT 8 (11/08/2026) — LE CLASSEMENT IA SE DEMANDE APRÈS LE
+       RENDU, jamais pendant. La grille locale est à l'écran ci-dessus ; ce
+       rendez-vous ne fait que poser une question, et il est idempotent (une
+       requête par signature de grille, cache compris). Il ne part que sur le
+       tri « mes goûts » et avec l'IA de la Recherche allumée — sinon il ne fait
+       rien du tout, et le tri d'aujourd'hui reste le tri d'aujourd'hui. */
+    if(typeof toucherClassementIA === 'function') toucherClassementIA();
+
     /* B5 — ET SEULEMENT MAINTENANT, LE RESTE DE L'AMORÇAGE. Les jaquettes sont
        à l'écran ; les étages suivants se font lire derrière, et le compteur se
        précise tout seul. Volontairement PAS attendu : `chargerGrilleRech` a
@@ -2274,16 +2315,97 @@ function viewRecherche(){
     '<div id="rres">'+corpsRech()+'</div>' +
     '<div style="height:20px"></div>';
 }
+/* RETOUR-01 POINT 6 — LA BARRE, ET SON BOUTON ✦ (maquette 20, OPTION T).
+
+   CE QUI N'ALLAIT PAS. La recherche d'envie fonctionnait parfaitement, mais
+   elle était INVISIBLE : rien à l'écran ne disait qu'elle existait, et son état
+   intermédiaire décourageait — taper « Je veux un film d'action » affichait
+   « Rien trouvé pour … » sans issue, parce que la recherche de TITRE répondait
+   pendant la frappe. Seule la validation routait l'envie, et il fallait le
+   savoir.
+
+   CE QUE FAIT OPTION T, ET RIEN DE PLUS :
+     · un bouton ✦ discret DANS la barre, à droite ;
+     · ✦ éteint = la recherche de titre d'aujourd'hui, strictement inchangée ;
+     · un appui = la barre entière se teinte de violet (fond, liseré, icône ✦ à
+       gauche) et tout ce qui est tapé — ou déjà tapé — part au routeur d'envie ;
+     · re-appui = retour à la barre normale.
+   Pas de sélecteur, pas de pastille, pas de détection automatique : la COULEUR
+   est le mode, et c'est la seule chose qui change à l'écran.
+
+   L'ICÔNE DE GAUCHE CHANGE AUSSI, et c'est voulu par la maquette : la loupe
+   dit « je cherche un nom », l'étoile dit « je décris une envie ». Deux
+   symboles pour deux gestes, au même endroit.
+
+   LA CROIX ET LE ✦ NE SE MARCHENT PAS DESSUS : le ✦ occupe le bord droit dans
+   les DEUX modes — il ne doit ni apparaître ni disparaître, sans quoi la croix
+   sauterait d'un cran au premier caractère tapé — et la croix se range à sa
+   gauche, une fois pour toutes.
+
+   CORRECTION DE RELECTURE (11/08/2026) — LE ✦ N'EXISTE PAS SI L'IA DE LA
+   RECHERCHE EST COUPÉE. Il était affiché en toutes circonstances et
+   `champRech` n'interrogeait jamais l'interrupteur : couper l'IA de la
+   Recherche, taper une envie, appuyer sur ✦ → la barre virait au violet et
+   `routerEnvieIA` sortait à sa première ligne. Rien ne se passait, aucun
+   message, aucun repli. Une affordance qui ne fait rien est pire qu'une
+   affordance absente : elle apprend à ne plus faire confiance à l'écran.
+   L'interrupteur ne bougeant pas en cours de saisie, retirer le bouton ne fait
+   sauter aucune croix ; `.qnoia` rend simplement ses 34 px au champ. */
 function champRech(){
   const r = etatRech();
-  return '<div class="qbar">'+I.search+
+  const ia = (typeof iaActive === 'function') && iaActive('recherche');
+  const on = !!r.envie && ia;
+  return '<div class="qbar'+(on ? ' qiaon' : '')+(ia ? '' : ' qnoia')+'">'+
+    (on ? '<span class="qetoile" aria-hidden="true">✦</span>' : I.search)+
     '<input type="search" id="q" enterkeyhint="search" autocomplete="off" autocorrect="off" '+
-      'placeholder="Un titre, une personne, une envie…" value="'+esc(r.q)+'" oninput="saisieRech(this.value)" '+
+      'placeholder="'+(on ? 'Décris ton envie…' : 'Un titre, une personne, une envie…')+'" '+
+      'value="'+esc(r.q)+'" oninput="saisieRech(this.value)" '+
       /* La touche Entrée est la SEULE validation, et donc le seul chemin qui a
-         le droit de réveiller l'IA (RB-1). */
-      'onkeydown="if(event.key===\'Enter\'){this.blur();lancerTitre(true)}">'+
+         le droit de réveiller l'IA (RB-1). Son comportement ne change pas avec
+         le point 6 : elle valide, et valider route l'envie. */
+      'onkeydown="if(event.key===\'Enter\'){this.blur();validerRech()}">'+
     '<button class="qclear'+(r.q?'':' masque')+'" onclick="saisieRech(\'\')" '+
-      'aria-label="Effacer">'+I.close+'</button></div>';
+      'aria-label="Effacer">'+I.close+'</button>'+
+    (ia ? '<button class="qia'+(on ? ' on' : '')+'" onclick="basculerEnvieRech()" '+
+      'aria-pressed="'+(on ? 'true' : 'false')+'" '+
+      'aria-label="Chercher par envie">✦</button>' : '')+'</div>';
+}
+
+/* La validation, dans les deux modes. Elle existe pour que le `onkeydown` de la
+   barre n'ait pas à connaître le mode : un seul chemin, une seule règle. */
+function validerRech(){
+  const r = etatRech();
+  if(!r.envie) return lancerTitre(true);
+  const q = rechTexte();
+  if(!q) return;
+  if(typeof routerEnvieIA === 'function') routerEnvieIA(q, 0, 0, true);
+}
+
+/* Le bouton ✦. Allumer avec du texte déjà tapé l'envoie TOUT DE SUITE : c'est
+   le geste naturel de quelqu'un qui vient d'écrire son envie, a vu « Rien
+   trouvé », et cherche quoi faire. Éteindre rend la barre à la recherche de
+   titre — et relance la recherche du texte resté en place, sinon on aurait une
+   barre pleine et un écran qui parle d'autre chose. */
+function basculerEnvieRech(){
+  const r = etatRech();
+  /* Le bouton n'est plus rendu quand l'IA de la Recherche est coupée ; la garde
+     est là pour le chemin programmatique (un test, un raccourci futur) et pour
+     que le mode ne puisse pas s'allumer sans que rien ne le serve. */
+  if(typeof iaActive === 'function' && !iaActive('recherche')){ r.envie = false; return; }
+  r.envie = !r.envie;
+  clearTimeout(rechTimer); avorterRech();
+  r.qtitres = []; r.qgens = []; r.qloading = false; r.qerr = '';
+  oublierDefil('search');
+  if(view === 'search') window.scrollTo(0, 0);
+  /* Le champ lui-même n'est jamais réécrit par `peindreRech` (il perdrait le
+     curseur) : ici il DOIT l'être, puisque c'est sa peau qui change. On repeint
+     donc l'écran entier, une fois, sur un geste explicite. */
+  render();
+  const i = document.getElementById('q');
+  if(i && r.envie) i.focus();
+  if(r.envie) return validerRech();
+  if(enRechercheTitre()) lancerTitre(false);
+  else peindreRech();
 }
 function puceFamillesRech(){
   const r = etatRech();
@@ -2318,6 +2440,18 @@ function peindreRech(){
   if(puces) puces.outerHTML = puceFamillesRech();
   const c = document.querySelector('.qclear');
   if(c) c.classList.toggle('masque', !etatRech().q);
+  /* CORRECTION DE RELECTURE (11/08/2026) — LE CHAMP SUIT `r.q` QUAND ELLE EST
+     VIDÉE PAR L'APP. `peindreRech` ne réécrit jamais l'`<input>` — et c'est
+     volontaire, le réécrire pendant la frappe ferait sauter le curseur. Mais
+     `traduireEnvieIA` vide `r.q` après avoir routé une envie : le texte restait
+     alors affiché au-dessus de pilules qui, elles, avaient pris sa place, la
+     croix d'effacement disparaissait (elle suit `r.q`), et un second Entrée ne
+     faisait rien. Le défaut préexistait sur le chemin Entrée ; le mode ✦ en
+     fait le flux NOMINAL, donc systématiquement visible.
+     On ne recopie que dans ce sens-là — champ non vide, état vide — ce qui ne
+     peut arriver qu'après une écriture de l'app, jamais pendant une frappe. */
+  const q = document.getElementById('q');
+  if(q && !etatRech().q && q.value) q.value = '';
 }
 /* SPEC-05 §5 et §7 — L'ORDRE DE L'ÉCRAN A CHANGÉ, PAS LE MOTEUR.
    Hier : la grande phrase « Je veux… », les tuiles d'envie, la grille.
@@ -2349,8 +2483,13 @@ function corpsTitreRech(){
       '<p>Vérifie ta connexion, puis réessaie.</p>'+
       '<button class="btn ghost" onclick="lancerTitre()">Réessayer</button></div>';
   if(!r.qtitres.length && !r.qgens.length)
+    /* RETOUR-01 POINT 6 — UNE LIGNE, PAS UN ÉCRAN. Le vide de la recherche de
+       titre est le seul endroit où quelqu'un découvre que le ✦ existe au moment
+       exact où il en a besoin : il vient de taper une envie, et on lui dit quoi
+       faire. Le §6 demande une ligne — c'en est une. */
     return '<div class="empty"><h3>Rien trouvé pour « '+esc(rechTexte())+' »</h3>'+
-      '<p>Essaie une autre orthographe, ou change de famille juste au-dessus.</p></div>';
+      '<p>Essaie une autre orthographe, change de famille juste au-dessus, '+
+      'ou appuie sur ✦ pour chercher par envie.</p></div>';
   let h = '';
   if(r.qtitres.length)
     h += '<div class="sectitle">Titres</div>'+

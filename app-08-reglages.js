@@ -67,9 +67,16 @@ function viewSettings(){
     ligne('Notifications', resumeNotif(), "go('notifs',{from:'settings'})", I.cloche)+
     /* SPEC-04 §4.5 et SPEC-05 §6 — LES DEUX INTERRUPTEURS DE L'IA, ici et pas
        ailleurs : ce groupe s'appelle « Ce que l'app me propose », et c'est très
-       exactement de ça qu'il s'agit. Ils sont ÉTEINTS À LA LIVRAISON — opt-in,
-       jamais opt-out — et séparés l'un de l'autre, parce que quelqu'un peut
-       vouloir des textes dans Découvrir sans laisser l'IA lire ses recherches.
+       exactement de ça qu'il s'agit. Ils restent séparés l'un de l'autre, parce
+       que quelqu'un peut vouloir des textes dans Découvrir sans laisser l'IA
+       lire ses recherches.
+
+       RETOUR-01 POINT 4 (11/08/2026) — ILS SONT ALLUMÉS PAR DÉFAUT, ET CE PAVÉ
+       DISAIT LE CONTRAIRE. Il portait encore « ÉTEINTS À LA LIVRAISON — opt-in,
+       jamais opt-out » alors que le lot a inversé le sens du réglage : l'IA
+       marche, et ces deux boutons servent à la COUPER. Un texte d'explication
+       qui survit à la décision qu'il explique est pire qu'une absence de texte.
+       Relevé en relecture.
        Le sous-texte est celui de la spec, mot pour mot : il dit ce qui part
        (des titres, des genres) et ce qui ne part pas (l'identité). Une phrase
        vague ici serait un consentement obtenu à l'aveugle. */
