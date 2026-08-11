@@ -1237,6 +1237,10 @@ function goBack(){
      && typeof fermerJeuRech === 'function') return fermerJeuRech();
   if(view === 'profile' && typeof pf12 !== 'undefined' && pf12.ouvert
      && typeof fermerRechPf12 === 'function') return fermerRechPf12();
+  /* RETOUR-02 point 8 — le retour ferme la recherche d'acteurs, il ne quitte
+     pas Mes goûts. Même règle que la recherche du profil juste au-dessus. */
+  if(view === 'gouts' && typeof rechActeur !== 'undefined' && rechActeur.ouvert
+     && typeof fermerRechActeur === 'function') return fermerRechActeur();
   const t = cibleRetour();
   if(!t) return;
   /* Un deuxième appui pendant que l'écran glisse encore ne doit pas lancer
@@ -1315,6 +1319,15 @@ window.addEventListener('popstate', function(e){
   if(view === 'profile' && typeof pf12 !== 'undefined' && pf12.ouvert){
     const garde = consommerGarde('pf12');
     if(typeof fermerRechPf12 === 'function') fermerRechPf12();
+    if(!garde){ try{ history.pushState(etatHisto(view, params, iHisto), '', adresseCourante()); }catch(err){} }
+    return;
+  }
+  /* RETOUR-02 point 8 — la recherche d'acteurs de Mes goûts, exactement sur le
+     même modèle : le `popstate` consomme SA garde et la referme, sans quitter
+     l'écran. */
+  if(view === 'gouts' && typeof rechActeur !== 'undefined' && rechActeur.ouvert){
+    const garde = consommerGarde('acteurs');
+    if(typeof fermerRechActeur === 'function') fermerRechActeur();
     if(!garde){ try{ history.pushState(etatHisto(view, params, iHisto), '', adresseCourante()); }catch(err){} }
     return;
   }

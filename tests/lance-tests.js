@@ -207,9 +207,13 @@ const ETAT_PARTAGE = {
             reste de son état (les textes générés) vit en localStorage, hors
             synchro, comme le §4.3 l'exige. */
          'app-14-ia.js','app-15-filtres.js','app-16-duel-plus.js'],
+  /* RETOUR-02 point 2 (11/08/2026) : `app-16-duel-plus.js` y écrit UNE chose,
+     `ui.duelFam` — la famille choisie dans la carte duel du profil. Le RETOUR
+     exige que ce choix soit un « état d'écran local, pas `db` » : c'est très
+     exactement ce que `ui` est, et c'est la seule raison de cette ligne. */
   ui:   ['app-02-outils.js','app-03-vues.js','app-04-decouvrir.js','app-05-plateformes.js',
          'app-06-serie.js','app-07-partage.js','app-10-sorties.js','app-11-gouts.js',
-         'app-12-recherche.js','app-15-filtres.js'],
+         'app-12-recherche.js','app-15-filtres.js','app-16-duel-plus.js'],
   /* La navigation. `app-08-reglages.js` y écrit parce qu'il pose lui-même la
      destination après une déconnexion. */
   view:   ['app-02-outils.js','app-03-vues.js','app-08-reglages.js'],

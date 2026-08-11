@@ -116,6 +116,13 @@ function render(){
      sans qu'on ait rien demandé. Elle est ici plutôt que dans `go()` parce que
      `render()` est le seul passage obligé — un `go()` oublié quelque part ne
      peut pas contourner ce rangement. */
+  /* RETOUR-02 point 8 — même garde anti-fuite pour la recherche d'acteurs :
+     elle appartient à Mes goûts, et à lui seul. Sans cette ligne, quitter
+     l'écran pendant qu'elle est ouverte la laisserait armée, et y revenir
+     tomberait sur un champ de recherche au lieu de la page. */
+  if(view !== 'gouts' && typeof rechActeur !== 'undefined' && rechActeur.ouvert){
+    if(typeof fermerRechActeur === 'function') fermerRechActeur(true);
+  }
   if(view !== 'profile' && typeof pf12 !== 'undefined' && pf12.ouvert){
     rangerRecentPf12(); avorterPf12(); pf12.ouvert = false; pf12.q = '';
     pf12.pers = null; pf12.persEtat = ''; pf12.persErr = '';
@@ -158,7 +165,13 @@ function render(){
        plein écran veut dire sans la barre du bas : mesuré clavier levé (300 px),
        elle laisse voir 1 résultat sur 7 en place contre 4 sur 7 ici. Les 64 px
        de la barre sont la dernière chose à rendre aux résultats. */
-    || (view === 'profile' && typeof pf12 !== 'undefined' && pf12.ouvert));
+    || (view === 'profile' && typeof pf12 !== 'undefined' && pf12.ouvert)
+    /* RETOUR-02 POINT 8 (11/08/2026) — la recherche d'acteurs de Mes goûts
+       suit le même chemin, et pour la même mesure : clavier levé, les résultats
+       passaient sous « Terminé » et sous la barre du bas. Une ligne ici, la
+       même qu'au point 12 — c'est le motif qui est réutilisé, pas une seconde
+       version de la règle. */
+    || (view === 'gouts' && typeof rechActeur !== 'undefined' && rechActeur.ouvert));
   app.classList.remove('enter','back');
   /* Le retour à deux couches gère lui-même son mouvement : pas d'animation par-dessus. */
   if(sansAnim){ sansAnim = false; navDir = 'none'; }
@@ -681,7 +694,7 @@ const PF12_TRIS = [['recent','Récents'], ['ancien','Anciens'], ['az','A→Z'], 
 /* Le champ DOIT dire où il cherche : sans ça, la recherche de la bibliothèque
    et celle de l'onglet Recherche (qui, elle, fouille tout le catalogue TMDB)
    deviennent indistinguables une fois le reste de l'écran effacé. */
-const PF12_OU = { series:'mes séries', films:'mes films',
+const PF12_OU = { series:'mes séries', animes:'mes animés', films:'mes films',
                   avoir:'ce que je veux voir', pause:'mes séries en pause' };
 
 /* ---------------------------------------------------------------------------
@@ -691,12 +704,42 @@ const PF12_OU = { series:'mes séries', films:'mes films',
    que trier, filtrer et chercher doivent traiter une série et un film de la
    même manière. C'est ce qui évite de réécrire quatre fois la même règle.
 --------------------------------------------------------------------------- */
+/* RETOUR-02 POINT 4 (11/08/2026) — LA BIBLIOTHÈQUE A UNE PUCE ANIMÉS.
+
+   CE QUI N'ALLAIT PAS. Le profil proposait Séries / Films / À voir / En pause.
+   Les animés vus étaient noyés dans « Séries » — alors que TOUT le reste de
+   l'app les sépare : le duel a sa famille `anime`, Découvrir a sa puce, la
+   Recherche a la sienne. La seule vue où l'on regarde SA bibliothèque était
+   aussi la seule à ne pas faire la différence.
+
+   LA FRONTIÈRE EST CELLE QUI EXISTE DÉJÀ, et c'est le point important : on
+   n'en invente pas une troisième. `familleDe(o, 'tv')` (app-11) est la
+   frontière de la BIBLIOTHÈQUE — genre « Animation » présent, sans condition de
+   langue. C'est elle qui alimente `titresVus`, donc le duel, donc le podium.
+   L'autre frontière du dépôt, `estAnimeRech` (app-12), ajoute la langue
+   d'origine japonaise : elle sert au CATALOGUE TMDB, où il faut distinguer un
+   dessin animé américain d'un animé. Ici on range ce qu'on a déjà chez soi, et
+   la règle doit être celle du duel — sans quoi une série serait un animé dans
+   son podium et une série dans sa bibliothèque, sur le même écran.
+
+   LES COMPTES S'AJUSTENT SANS SE PERDRE : ce qui quitte « Séries » entre dans
+   « Animés », et la somme ne bouge pas (84 + 15 dans l'exemple du RETOUR).
+   L'ORDRE DES PUCES NE CHANGE PAS — Séries reste en premier, c'est l'usage
+   principal ; la puce s'AJOUTE, juste après. */
+function estAnimeProfil(s){
+  if(typeof familleDe !== 'function') return false;
+  return familleDe(s, 'tv') === 'anime';
+}
 function listesProfil(){
   const S = Object.values(db.shows), F = Object.values(db.movies);
   const sr = s => ({ m:'tv', o:s });
   const fm = f => ({ m:'movie', o:f });
+  /* « Commencée » au sens de la bibliothèque : ni à voir, ni en pause. C'est
+     exactement le filtre d'avant, sorti pour être appliqué deux fois. */
+  const commencees = S.filter(s=>{ const st = statutSerie(s); return st!=='avoir' && st!=='pause'; });
   return {
-    series: S.filter(s=>{ const st = statutSerie(s); return st!=='avoir' && st!=='pause'; }).map(sr),
+    series: commencees.filter(s => !estAnimeProfil(s)).map(sr),
+    animes: commencees.filter(estAnimeProfil).map(sr),
     films:  F.filter(f=> statutFilm(f)==='vu').map(fm),
     avoir:  S.filter(s=> statutSerie(s)==='avoir').map(sr)
              .concat(F.filter(f=> statutFilm(f)==='avoir').map(fm)),
@@ -1235,9 +1278,15 @@ function viewProfile(){
   Object.values(db.movies).filter(m=>m.seen).forEach(m=> minutes += (m.runtime||100));
 
   const L = listesProfil();
-  const tabs = [['series','Séries',L.series.length],
-                ['films','Films',L.films.length],
-                ['avoir','À voir',L.avoir.length]];
+  /* RETOUR-02 POINT 4 — la puce « Animés » s'AJOUTE, juste après « Séries ».
+     L'ordre d'avant ne bouge pas : Séries en premier, c'est l'usage principal.
+     Elle n'apparaît QUE s'il y a des animés — comme « En pause », et pour la
+     même raison : une puce à zéro n'est pas une information, c'est une porte
+     vers un écran vide. */
+  const tabs = [['series','Séries',L.series.length]];
+  if(L.animes.length) tabs.push(['animes','Animés',L.animes.length]);
+  tabs.push(['films','Films',L.films.length],
+            ['avoir','À voir',L.avoir.length]);
   if(L.pause.length) tabs.push(['pause','En pause',L.pause.length]);
   /* la puce « En pause » disparaît quand la dernière série reprend : on ne laisse pas
      l'onglet sélectionné pointer dans le vide */

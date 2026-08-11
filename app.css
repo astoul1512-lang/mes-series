@@ -1752,9 +1752,14 @@ body.rphnette .rphrase{background:#15171e}
      juste dessous. Deux commandes pour le même effet, c'est une commande de
      trop, et une seule des deux aurait pu se lire. */
   /* `.btn.fi9dans` et non `.fi9dans` seul : `.btn.ghost` pose déjà un fond, et
-     un nom de classe unique ne suffirait pas à passer devant lui. */
+     un nom de classe unique ne suffirait pas à passer devant lui.
+     RETOUR-02 point 7 — `background-image:none` ajouté par cohérence de règle.
+     Il était déjà couvert par `body .btn.ghost` (qui éteint le dégradé), mais
+     ce bouton ne DOIT pas dépendre de la présence de `.ghost` dans son HTML
+     pour être lisible : une variante translucide s'éteint elle-même. */
   .btn.fi9dans{color:#9cc4ff;
     background:color-mix(in srgb, var(--accent) 12%, var(--surface2));
+    background-image:none;box-shadow:none;
     border:1px solid color-mix(in srgb, var(--accent) 40%, transparent)}
   @supports not (color:color-mix(in srgb, red 50%, transparent)){
     .btn.fi9dans{background:#3d8bff1f;border-color:#3d8bff66}
@@ -1859,8 +1864,24 @@ body.rphnette .rphrase{background:#15171e}
   .cl1tete p{font-size:12.5px;color:var(--muted);margin-top:4px;line-height:1.4}
   /* Le bouton reprend le bleu de l'accent en fond translucide plutôt qu'en
      aplat : il est DANS une carte, et un aplat plein y ferait un second appel à
-     l'action concurrent de « Terminé », en bas d'écran. */
-  .cl1rejouer{margin-top:11px;width:100%;display:flex;background:#3d8bff22;
+     l'action concurrent de « Terminé », en bas d'écran.
+
+     RETOUR-02 POINT 7 (11/08/2026) — `.btn.cl1rejouer` ET NON `.cl1rejouer`.
+     Le sélecteur nu pesait (0,1,0) et perdait contre `body .btn` (0,1,1) de la
+     surcouche premium : le dégradé plein était peint PAR-DESSUS le fond
+     translucide, sans toucher au texte, resté bleu accent. Résultat à l'écran :
+     « Départager mes films → » en bleu sur bleu, illisible. Le commentaire
+     ci-dessus disait exactement ce qu'il fallait faire, et la surcouche le
+     défaisait en silence.
+     `background-image:none` est la MOITIÉ QUI COMPTE : relever la spécificité
+     du `background` en raccourci ne suffit pas, parce que la surcouche n'écrit
+     pas `background` mais `background-image`, et que les deux ne se battent
+     pas — le raccourci pose l'image à `none`, puis la surcouche la repose.
+     Il faut donc l'éteindre là où l'on se déclare translucide.
+     Même motif que `.btn.fi9dans` (ligne ~1755), et c'est la règle générale du
+     lot : voir l'inventaire complet en tête de la surcouche premium. */
+  .btn.cl1rejouer{margin-top:11px;width:100%;display:flex;background:#3d8bff22;
+    background-image:none;box-shadow:none;
     border:1px solid #3d8bff55;color:var(--accent);font-size:13px}
 
   /* Les puces de famille. Elles se partagent la largeur au lieu de défiler :
@@ -2119,6 +2140,17 @@ body.rphnette .rphrase{background:#15171e}
      l'avance : le fond sombre et le trait clair valent pour toutes. */
   .iconbtn.du19x svg{width:17px;height:17px}
   .iconbtn.du19x:active{background:rgba(7,7,10,.8)}
+  /* RETOUR-02 point 6 — la dernière ligne de la fiche, et elle doit LE RESTER.
+     Pas un bouton : un lien, centré, en retrait, sans fond ni bordure. Ce qui
+     l'empêche de ressembler à une action principale est précisément ce qui
+     rend le geste sûr — on ne renonce pas à un titre par erreur de visée.
+     La zone tactile fait 44 px de haut malgré tout (padding), parce qu'une
+     commande discrète n'est pas une commande difficile à toucher. */
+  .du19pasvu{display:block;width:100%;margin:14px 0 2px;padding:12px 0;
+    background:none;border:0;font-family:inherit;font-size:12.5px;font-weight:600;
+    color:var(--muted);text-align:center;text-decoration:underline;
+    text-underline-offset:3px}
+  .du19pasvu:active{color:var(--text)}
 
   /* ===========================================================================
      CYCLE 3 — POINT 6 : le suivi en retour
@@ -2364,28 +2396,57 @@ body.rphnette .rphrase{background:#15171e}
     transition:width .3s}
   .djauge span{display:block;font-size:11.5px;color:var(--muted);margin-top:5px}
 
-  /* --- La carte et le panthéon de Mon profil (§4.1, §4.2) --- */
-  .dprof{padding:14px}
-  .dpttl{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:750}
-  .dpant{display:flex;align-items:flex-end;justify-content:center;gap:10px;margin-top:14px}
-  .dmarche{width:29%;text-align:center}
-  .dmaff{width:100%;border-radius:8px;display:block;object-fit:cover}
-  .dmarche.or .dmaff{height:132px}
-  .dmarche.argent .dmaff,.dmarche.bronze .dmaff{height:106px}
-  .dmnom{font-size:11px;margin-top:5px;line-height:1.2;height:2.4em;overflow:hidden}
-  .dmsoc{margin-top:4px;border-radius:6px 6px 0 0;background:var(--surface2);
-    padding:5px 0;font-size:12px;font-weight:800}
-  .dmarche.or .dmsoc{background:rgba(212,175,55,.22);color:#e7cd7a;padding:11px 0}
-  .dmarche.argent .dmsoc{background:rgba(200,208,220,.16);color:#cfd6e2}
-  .dmarche.bronze .dmsoc{background:rgba(191,124,73,.18);color:#e0a97a}
-  .dpact{display:flex;gap:8px;margin-top:14px}
-  .dpact .btn{flex:1}
+  /* --- La carte duel de Mon profil, VARIANTE C (RETOUR-02 points 1 à 3) ---
 
-  /* --- « Je ne l'ai pas vu », rebranché (§6.1) --- */
-  .dpasvu{display:flex;gap:8px;margin-top:8px}
-  .dpasvu button{flex:1;min-width:0;background:none;border:1px solid var(--line);
-    color:var(--muted);border-radius:10px;padding:8px 10px;font-size:11.5px;
-    font-family:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+     PIERRE TOMBALE. `.dprof`, `.dpttl`, `.dpact`, `.dpant`, `.dmarche`,
+     `.dmaff`, `.dmnom` et `.dmsoc` sont retirés avec le grand podium à marches
+     (voir la pierre tombale d'`app-16-duel-plus.js`). Ce qui les remplace tient
+     en une rangée : l'éventail, le texte, le bouton.
+
+     LA CIBLE EST DE ~90 PX, et c'est un chiffre du RETOUR, pas une intention.
+     On y arrive ainsi : 12 de padding + 62 d'éventail + 12 de padding = 86 px,
+     la colonne de texte (titre 17 + jauge 18 + puces 24 = 59 px) tenant sous
+     les 62. Les puces peuvent passer à la ligne sur un écran étroit — la carte
+     grandit alors d'une vingtaine de pixels, ce qui est très exactement le prix
+     de la garantie « aucun contact avec Jouer ». */
+  .dprofc{padding:12px}
+  .dcrang{display:flex;align-items:center;gap:12px}
+  /* L'ÉVENTAIL. Trois affiches en position absolue dans une boîte fixe : le n°1
+     devant et droit, les 2 et 3 derrière, inclinés de part et d'autre. Le
+     conteneur est un bouton (il partage le podium) : il ne doit donc porter
+     aucun fond ni aucune bordure de bouton. */
+  .dcev{position:relative;width:78px;height:62px;flex:none;background:none;border:0;padding:0}
+  .dcev span{position:absolute;display:block}
+  .dcevimg{width:100%;height:100%;object-fit:cover;border-radius:6px;display:block}
+  .dcev1{left:22px;top:0;width:34px;height:50px;z-index:2}
+  .dcev1 .dcevimg{border:1px solid rgba(212,175,55,.55);box-shadow:0 5px 14px rgba(212,175,55,.22)}
+  .dcev2{left:0;top:7px;width:30px;height:44px;transform:rotate(-9deg);opacity:.85}
+  .dcev3{right:0;top:7px;width:30px;height:44px;transform:rotate(9deg);opacity:.85}
+  .dctxt{flex:1;min-width:0}
+  .dcttl{display:block;font-size:13.5px;font-weight:750;line-height:1.25;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* La jauge et son pourcentage DISCRET en bout — plus de phrase en accroche,
+     plus de total restant : le point 1 les retire tous les deux. */
+  .dcjauge{display:flex;align-items:center;gap:8px;margin:7px 0 6px}
+  .dcjauge .djb{flex:1;min-width:0}
+  .dcjauge span{flex:none;font-size:11px;font-weight:700;color:var(--muted)}
+  /* Les puces famille, SOUS la jauge. `flex-wrap` est la garantie de non-contact
+     avec « Jouer » : plutôt deux lignes qu'un chevauchement. */
+  .dcfams{display:flex;flex-wrap:wrap;gap:5px}
+  .fchip{padding:4px 9px;border-radius:999px;background:var(--surface2);
+    border:1px solid var(--line);color:var(--muted);font-size:11px;font-weight:700;
+    font-family:inherit;white-space:nowrap}
+  .fchip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  /* SÉPARÉ des puces, et la marge le dit. `flex:none` : le bouton garde sa
+     largeur, c'est la colonne de texte qui cède. */
+  .btn.dcjouer{flex:none;align-self:center;margin-left:6px;padding:9px 14px;
+    border-radius:10px;font-size:13px}
+
+  /* --- « Je ne l'ai pas vu » (RETOUR-02 point 6) ---
+     PIERRE TOMBALE : `.dpasvu` et `.dpasvu button` sont retirés avec les deux
+     boutons de l'écran de duel (§6.1). Le geste vit désormais en bas de la
+     fiche ⓘ, sur une seule ligne discrète — voir `.du19pasvu`, plus bas, dans
+     le bloc de la feuille du duel. */
 
   /* --- La pastille de la barre du bas (§4.4) --- */
   .tabpip{position:absolute;top:2px;right:50%;margin-right:-20px;min-width:16px;height:16px;
@@ -2528,9 +2589,12 @@ body.rphnette .rphrase{background:#15171e}
      monde, l'OMBRE seulement pour ce qui ne défile pas en rail. Le repli du §3,
      si la mesure iPhone le demande, tient maintenant en une ligne — retirer le
      second bloc — et il retirera réellement quelque chose. */
+  /* `.dmaff` est sorti de cette liste avec le podium à marches (RETOUR-02
+     point 1). L'éventail de la variante C a son propre liseré — doré sur le
+     n°1, rien sur les deux autres : un liseré blanc par-dessus aurait mangé la
+     seule chose qui distingue le premier. */
   body .poster,
-  body .pcard .wrapimg,
-  body .dmaff{
+  body .pcard .wrapimg{
     border:1px solid rgba(255,255,255,.09);
     border-radius:12px;
   }
@@ -2548,8 +2612,7 @@ body.rphnette .rphrase{background:#15171e}
   body .dhead .poster,
   body .srow .poster,
   body .gcard .poster,
-  body .pcard .wrapimg,
-  body .dmaff{
+  body .pcard .wrapimg{
     box-shadow:0 10px 28px rgba(0,0,0,.45);
   }
   /* MESURE À FAIRE — elle ne peut pas se faire depuis le bac à sable : iPhone,
@@ -2624,7 +2687,69 @@ body.rphnette .rphrase{background:#15171e}
      sienne, dans la même matière. Relevé en relecture. */
   body .btn.h4btn{background-image:linear-gradient(135deg,#8b6cff,#a78bfa);
     box-shadow:0 6px 22px rgba(139,108,255,.38)}
-  body .chip.on{background-image:var(--px-grad);box-shadow:var(--px-lueur)}
+  /* ===== RETOUR-02 POINTS 5 ET 7 (11/08/2026) — UNE SEULE RÈGLE, PAS UNE
+     RUSTINE PAR BOUTON =====
+
+     DEUX SYMPTÔMES, UNE RACINE. Le point 7 (bouton « Départager mes {famille} »
+     illisible, bleu sur bleu) et le point 5 (les puces de bibliothèque du
+     profil ne changent pas de couleur sur iPhone) viennent du même endroit :
+     cette surcouche pose des `background-image` par-dessus des `background`
+     posés en RACCOURCI ailleurs, et les deux ne se battent pas — ils
+     s'empilent. Le raccourci gagne la couleur de FOND, la surcouche gagne
+     l'IMAGE, et l'image est peinte au-dessus.
+
+     L'INVENTAIRE, fait à la main sur tout `app.css` en croisant les classes
+     réellement émises par les `app-*.js`. Toutes les règles qui posent un
+     `background` en raccourci sur un élément portant aussi `.btn`, `.chip` ou
+     `.rond` :
+
+       CASSÉ, corrigé par ce lot
+         · `.cl1rejouer` (0,1,0)              → `.btn.cl1rejouer` + image éteinte
+
+       DÉJÀ CORRECTS — spécificité ≥ (0,2,0), ils battent `body .btn` (0,1,1)
+         · `.btn.fi9dans` (0,2,0)             modèle de la correction
+         · `.actions .btn.carre.actif` (0,3,0)
+         · `.btn.ghost` (0,2,0)               + neutralisée par `body .btn.ghost`
+         · `.btn.h4btn` (0,2,0)               + reprise par `body .btn.h4btn`
+
+       SANS COLLISION — jamais dans l'état que la surcouche vise
+         · `.chip.hors` (0,2,0)               ne porte jamais `.on`
+         · `.chip.h4chip` (0,2,0)             état non-`on` seulement
+         · `.chip.h4chip.on` (0,3,0)          reprise par `body .chip.h4chip.on`
+         · `.rcarte .rond.vu:active` (0,3,1)  aucun `background-image` sur `.rond`
+         · `.chip.chiplogo img` (0,2,1)       cible l'`<img>` enfant
+
+     LA RÈGLE, en une phrase : une variante qui se déclare TRANSLUCIDE éteint
+     elle-même le `background-image` de la surcouche, et le fait depuis un
+     sélecteur d'au moins deux classes. Pas de neutralisation à distance, pas
+     de `!important`, pas d'exception nommée.
+
+     ===== ET LE POINT 5, QUI DEMANDE UNE LIGNE DE PLUS =====
+
+     Les puces de bibliothèque du profil basculent bien : `peindreProfil` fait
+     `classList.toggle('on', …)`, et `.chip.on` pose son fond. Sur iPhone, la
+     couleur ne suivait pas. La piste ③ du RETOUR est la bonne : l'état actif
+     se joue ici sur un `background-image` qui passe de RIEN à un dégradé,
+     pendant que `body .chip` transitionne `background-color`. WebKit ne
+     repeint pas de façon fiable une propriété non transitionnée qu'on fait
+     apparaître à partir de `none`, sur un élément déjà en transition — le
+     dégradé n'arrivait jamais, et le fond bleu dessous était masqué par rien
+     du tout, donc invisible.
+
+     LA CORRECTION EST STRUCTURELLE : toute puce porte un `background-image` EN
+     PERMANENCE. À l'état neutre c'est un dégradé transparent — invisible,
+     sans coût, mais présent. La bascule devient donc dégradé → dégradé, une
+     interpolation que WebKit sait faire, au lieu de `none` → dégradé, qu'il
+     escamote. C'est la même règle pour tout ce qui se peint par `.on` : on
+     n'allume pas une propriété, on en change la valeur.
+
+     Elle vaut pour les puces de famille du duel (`.fchip`, RETOUR-02 point 1),
+     qui sont neuves et auraient hérité du même défaut, et pour la future puce
+     Animés du point 4 — c'est une puce comme les autres, et c'est le but. */
+  body .chip,
+  body .fchip{background-image:linear-gradient(transparent,transparent)}
+  body .chip.on,
+  body .fchip.on{background-image:var(--px-grad);box-shadow:var(--px-lueur)}
   /* `.fam.on`, que le §2.4 nomme, N'EXISTE PAS dans le dépôt : les puces de
      famille sont `.chip.on`, traitées ci-dessus. Les puces d'HUMEUR, elles,
      sont `.chip.h4chip.on` (0,3,0) et leur `background` en raccourci écrasait
