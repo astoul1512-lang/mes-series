@@ -227,28 +227,52 @@ function totalDuelsFamille(f){
 
 /* ==================== §4.1 et §4.2 — LA CARTE ET LE PANTHÉON ==================== */
 
-/* Les trois premiers du podium d'une famille, résolus en titres. Rend une
-   liste éventuellement plus courte que trois — l'éventail sait faire avec. */
+/* Les trois premiers du podium d'une famille, résolus en titres.
+
+   CORRECTION DE RELECTURE (11/08/2026) — L'ALIGNEMENT EST CONSERVÉ, LES TROUS
+   AUSSI. La première version finissait par `.filter(Boolean)` : un n°1 devenu
+   inéligible (👎 posé après coup, « je ne l'ai pas vu ») disparaissait, et le
+   n°2 était SILENCIEUSEMENT PROMU au liseré doré et à la phrase de règne, sans
+   que `db.podium` ait bougé d'un octet. Reproduit en relecture :
+   podium `["1","2","3"]`, n°1 = « Le Parrain », phrase affichée = « Heat règne
+   sur tes films ». Le libellé de FAMILLE restait juste — c'est le RANG qui
+   mentait, et c'était une régression de véracité : `pantheonHtml` refusait de
+   dessiner un podium incomplet plutôt que d'inventer un vainqueur.
+   Un rang non résolu vaut donc `null` et reste à sa place. L'éventail dessine
+   les cases qu'il a, la phrase de règne ne se dit que si le PREMIER est là, et
+   le partage n'est proposé que si les trois le sont. */
 function troisDuPodium(fam){
   const pod = ((db.podium || {})[fam] || []).slice(0, 3);
   if(!pod.length) return [];
   const parId = (typeof titresParIdDuel === 'function') ? titresParIdDuel(fam) : {};
-  return pod.map(id => parId[String(id)]).filter(Boolean);
+  return pod.map(id => parId[String(id)] || null);
 }
 
 /* L'ÉVENTAIL. Le n°1 devant et doré, les 2 et 3 derrière, inclinés de part et
    d'autre. Les rangs 2 et 3 sont DÉCORATIFS — pas de nom, pas de médaille :
    c'est le prix assumé de la variante C, et la maquette le dit dans sa note.
-   Le nom du n°1, lui, est dans la phrase de règne juste à côté. */
-function eventailDuelHtml(fam, t){
-  if(!t.length) return '';
+   Le nom du n°1, lui, est dans la phrase de règne juste à côté.
+
+   DÉCISION D'ADRIEN DU 11/08/2026 — AMENDEMENT À RETOUR-02 POINT 1. L'éventail
+   n'est PAS un bouton. Ma première livraison en avait fait le déclencheur du
+   partage, pour ne pas rendre `partagerPodium` orpheline ; la relecture a
+   mesuré les trois défauts que ça produisait — découvrabilité nulle (aucun
+   fond, aucune bordure, aucun texte : le seul indice était un `aria-label`,
+   invisible), conflit de geste (le geste spontané sur un podium miniature est
+   « l'agrandir »), et échec pur sous trois titres (`construirePodiumPng`
+   refuse, la personne recevait « Impossible de créer l'image »).
+   Le partage part donc dans un petit bouton carré ↗ posé À CÔTÉ de « Jouer »,
+   comme la maquette 21 le fait sur la carte compacte, et il n'apparaît que
+   lorsque le podium a réellement ses trois titres. Ce n'est plus un arbitrage
+   ouvert : c'est la spec amendée. */
+function eventailDuelHtml(t){
+  if(!t.filter(Boolean).length) return '';
   const aff = (x, cls)=> (typeof affDuel === 'function') ? affDuel(x, cls, 'w185') : '';
-  return '<button class="dcev" onclick="partagerPodium(\''+fam+'\')" '+
-      'aria-label="Partager mon podium">'+
+  return '<div class="dcev" aria-hidden="true">'+
     (t[1] ? '<span class="dcev2">'+aff(t[1], 'dcevimg')+'</span>' : '')+
     (t[2] ? '<span class="dcev3">'+aff(t[2], 'dcevimg')+'</span>' : '')+
-    '<span class="dcev1">'+aff(t[0], 'dcevimg')+'</span>'+
-  '</button>';
+    (t[0] ? '<span class="dcev1">'+aff(t[0], 'dcevimg')+'</span>' : '')+
+  '</div>';
 }
 
 /* En tête de Mon profil. Le bloc Duel de Mes goûts (`carteDuelGouts`) RESTE en
@@ -259,16 +283,21 @@ function carteDuelProfil(){
   if(!fam) return '';
   const t = troisDuPodium(fam);
   const lib = libelleFamilleDuel(fam);
-  /* LA PHRASE DE RÈGNE, et son repli. Avec un n°1, on le nomme — c'est le
-     sujet de la carte. Sans podium du tout (famille jouable mais jamais
-     jouée), on invite, sans jamais annoncer un reste à faire (§0.4). */
-  const phrase = t.length
+  /* LA PHRASE DE RÈGNE, et son repli. Avec un n°1 RÉSOLU, on le nomme — c'est
+     le sujet de la carte. Sans lui (pas de podium, ou n°1 devenu inéligible),
+     on invite, sans jamais annoncer un reste à faire (§0.4). On ne promeut
+     personne à sa place : voir `troisDuPodium`. */
+  const phrase = t[0]
     ? esc(t[0].nom) + ' règne sur tes ' + esc(lib)
     : 'Départage tes ' + esc(lib);
+  /* Le partage n'est offert que sur un podium COMPLET : `construirePodiumPng`
+     refuse en dessous de trois, et un bouton qui rend « Impossible de créer
+     l'image » est un bouton qu'il ne fallait pas montrer. */
+  const partageable = !!(t[0] && t[1] && t[2]);
   const fams = famillesDuelC();
   return '<div class="wrap" style="padding-bottom:0"><div class="card dprofc">'+
     '<div class="dcrang">'+
-      eventailDuelHtml(fam, t)+
+      eventailDuelHtml(t)+
       '<div class="dctxt">'+
         '<b class="dcttl">'+phrase+'</b>'+
         jaugeDuelHtml(fam, true)+
@@ -282,6 +311,10 @@ function carteDuelProfil(){
         '</div>' : '')+
       '</div>'+
       '<button class="btn dcjouer" onclick="ouvrirDuel(\''+fam+'\')">Jouer</button>'+
+      (partageable
+        ? '<button class="btn ghost dcpart" onclick="partagerPodium(\''+fam+'\')" '+
+            'aria-label="Partager mon podium">↗</button>'
+        : '')+
     '</div>'+
   '</div></div>';
 }

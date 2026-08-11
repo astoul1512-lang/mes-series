@@ -389,6 +389,11 @@
     box-shadow:0 0 0 3px rgba(167,139,250,.15)}
   .qbar.qiaon input::placeholder{color:#8b7fb8}
   .qbar.qiaon .qclear{color:#a78bfa}
+  /* CORRECTION DE RELECTURE (11/08/2026) — IA de la Recherche coupée : pas de
+     bouton ✦, donc pas de place à lui réserver. Le champ récupère ses 34 px et
+     la croix reprend le bord. */
+  .qbar.qnoia input{padding-right:38px}
+  .qbar.qnoia .qclear{right:8px}
   .masque{visibility:hidden;pointer-events:none}
   .resume.masque{display:none}
 
@@ -631,6 +636,10 @@
   .lact i{color:var(--accent);display:grid;place-items:center}
   .lact i svg,.lretirer svg{width:17px;height:17px}
   .lact:active{background:var(--surface);border-radius:10px}
+  /* RETOUR-02 point 8 (amendé le 11/08) — un acteur DÉJÀ SUIVI dans les
+     résultats : le « + » devient « ✓ » et la ligne cesse d'être touchable. */
+  .lact.dedans{opacity:.72}
+  .lact .lok{color:var(--ok);font-style:normal;font-size:15px;font-weight:800}
   .lretirer{color:var(--muted);padding:6px;display:grid;place-items:center}
   .lretirer:active{color:#ff9b9b}
 
@@ -1873,11 +1882,18 @@ body.rphnette .rphrase{background:#15171e}
      « Départager mes films → » en bleu sur bleu, illisible. Le commentaire
      ci-dessus disait exactement ce qu'il fallait faire, et la surcouche le
      défaisait en silence.
-     `background-image:none` est la MOITIÉ QUI COMPTE : relever la spécificité
-     du `background` en raccourci ne suffit pas, parce que la surcouche n'écrit
-     pas `background` mais `background-image`, et que les deux ne se battent
-     pas — le raccourci pose l'image à `none`, puis la surcouche la repose.
-     Il faut donc l'éteindre là où l'on se déclare translucide.
+     LAQUELLE DES DEUX MOITIÉS COMPTE — rectification du 11/08/2026, après que le
+     contrôle statique ajouté au lanceur a mis mon propre commentaire en défaut.
+     La première rédaction affirmait que `background-image:none` était « la
+     moitié qui compte » et que la spécificité ne suffisait pas. C'est l'inverse :
+     la cascade s'applique PROPRIÉTÉ PAR PROPRIÉTÉ, et le raccourci `background:`
+     pose lui-même `background-image:none`. `.btn.cl1rejouer` (0,2,0) l'emporte
+     donc sur `body .btn` (0,1,1) — sur la couleur ET sur l'image. C'est la
+     SPÉCIFICITÉ qui opère.
+     `background-image:none` reste écrit, pour deux raisons qui ne sont pas
+     décoratives : il dit l'intention à qui relit, et il tient encore le jour où
+     une règle premium plus lourde viendrait viser le même élément. C'est une
+     ceinture, pas les bretelles — mais on ne la retire pas.
      Même motif que `.btn.fi9dans` (ligne ~1755), et c'est la règle générale du
      lot : voir l'inventaire complet en tête de la surcouche premium. */
   .btn.cl1rejouer{margin-top:11px;width:100%;display:flex;background:#3d8bff22;
@@ -2398,7 +2414,7 @@ body.rphnette .rphrase{background:#15171e}
 
   /* --- La carte duel de Mon profil, VARIANTE C (RETOUR-02 points 1 à 3) ---
 
-     PIERRE TOMBALE. `.dprof`, `.dpttl`, `.dpact`, `.dpant`, `.dmarche`,
+     PIERRE TOMBALE, 11/08/2026. `.dprof`, `.dpttl`, `.dpact`, `.dpant`, `.dmarche`,
      `.dmaff`, `.dmnom` et `.dmsoc` sont retirés avec le grand podium à marches
      (voir la pierre tombale d'`app-16-duel-plus.js`). Ce qui les remplace tient
      en une rangée : l'éventail, le texte, le bouton.
@@ -2423,8 +2439,18 @@ body.rphnette .rphrase{background:#15171e}
   .dcev2{left:0;top:7px;width:30px;height:44px;transform:rotate(-9deg);opacity:.85}
   .dcev3{right:0;top:7px;width:30px;height:44px;transform:rotate(9deg);opacity:.85}
   .dctxt{flex:1;min-width:0}
-  .dcttl{display:block;font-size:13.5px;font-weight:750;line-height:1.25;
-    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* CORRECTION DE RELECTURE (11/08/2026) — LA PHRASE DE RÈGNE NE SE TRONQUE
+     PLUS. Elle portait `white-space:nowrap` + `text-overflow:ellipsis` : mesuré
+     à 375 px, « One Piece règne sur tes animés » demandait 241 px pour 139
+     disponibles — il manquait 102 px, et ce qui s'affichait était « One Piece
+     règne s… ». Le nom de la famille, c'est-à-dire très exactement ce que le
+     point 3 demandait de rendre juste, n'apparaissait JAMAIS. Tronqué aussi à
+     390 et 430 px, sur les cinq longueurs de n°1 essayées.
+     La maquette, elle, ne tronque pas : son `<b>` laisse la phrase passer sur
+     deux lignes. On fait pareil, et on borne à deux lignes pour que la carte ne
+     s'allonge pas indéfiniment sur un titre à rallonge. */
+  .dcttl{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+    font-size:13.5px;font-weight:750;line-height:1.25;overflow:hidden}
   /* La jauge et son pourcentage DISCRET en bout — plus de phrase en accroche,
      plus de total restant : le point 1 les retire tous les deux. */
   .dcjauge{display:flex;align-items:center;gap:8px;margin:7px 0 6px}
@@ -2441,6 +2467,13 @@ body.rphnette .rphrase{background:#15171e}
      largeur, c'est la colonne de texte qui cède. */
   .btn.dcjouer{flex:none;align-self:center;margin-left:6px;padding:9px 14px;
     border-radius:10px;font-size:13px}
+  /* Le partage, décision d'Adrien du 11/08 (amendement au point 1) : un petit
+     carré à côté de « Jouer », comme la maquette 21 sur la carte compacte —
+     et non l'éventail rendu cliquable, qui n'annonçait rien. 44 px de côté,
+     c'est la cible tactile minimale ; discret parce que ce n'est pas l'action
+     principale de la carte. Il n'est rendu que sur un podium complet. */
+  .btn.ghost.dcpart{flex:none;align-self:center;margin-left:6px;width:44px;height:44px;
+    padding:0;border-radius:10px;font-size:16px;line-height:1;color:var(--muted)}
 
   /* --- « Je ne l'ai pas vu » (RETOUR-02 point 6) ---
      PIERRE TOMBALE : `.dpasvu` et `.dpasvu button` sont retirés avec les deux
@@ -2717,12 +2750,21 @@ body.rphnette .rphrase{background:#15171e}
          · `.chip.h4chip` (0,2,0)             état non-`on` seulement
          · `.chip.h4chip.on` (0,3,0)          reprise par `body .chip.h4chip.on`
          · `.rcarte .rond.vu:active` (0,3,1)  aucun `background-image` sur `.rond`
+         · `.rcarte .rond` (0,2,1)            idem — ajouté à l'inventaire le
+                                              11/08 : il manquait, et l'inventaire
+                                              se disait exhaustif. Sans effet
+                                              mesuré, mais une liste qui se
+                                              prétend complète doit l'être.
          · `.chip.chiplogo img` (0,2,1)       cible l'`<img>` enfant
 
-     LA RÈGLE, en une phrase : une variante qui se déclare TRANSLUCIDE éteint
-     elle-même le `background-image` de la surcouche, et le fait depuis un
-     sélecteur d'au moins deux classes. Pas de neutralisation à distance, pas
-     de `!important`, pas d'exception nommée.
+     LA RÈGLE, en une phrase : une variante qui se déclare TRANSLUCIDE le fait
+     depuis un sélecteur assez lourd pour passer devant la règle premium qui la
+     vise — deux classes contre `body .btn` et `body .chip`, TROIS contre
+     `body .chip.on` — et éteint en plus le `background-image`. Pas de
+     neutralisation à distance, pas de `!important`, pas d'exception nommée.
+     ELLE EST DÉSORMAIS TENUE PAR UN CONTRÔLE : `tests/lance-tests.js`, contrôle
+     « premium ». Le prochain bouton fantôme ne rejouera pas le défaut en
+     silence — c'était le dernier trou de ce point, relevé en relecture.
 
      ===== ET LE POINT 5, QUI DEMANDE UNE LIGNE DE PLUS =====
 

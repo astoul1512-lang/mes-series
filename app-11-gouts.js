@@ -2346,6 +2346,17 @@ function top10Pour(cadre, humeur, viviers){
          titre vu. C'est la régression qu'on corrige, elle se garde deux fois. */
       if(typeof dejaChezMoi === 'function' && dejaChezMoi(x.media, x.id)) return;
       if(typeof estRefuseSugg === 'function' && estRefuseSugg(x.media, x.id)) return;
+      /* CORRECTION DE RELECTURE (11/08/2026) — LA GARDE DU 👎 REVIENT.
+         L'ancienne `top10Pour` portait `if(avisDe(...) === -1) return;` et la
+         réécriture l'a laissée tomber SANS LE DIRE — ni le commit, ni le compte
+         rendu ne la mentionnaient, et le test qui la couvrait a été remplacé.
+         C'est le pire genre de perte : silencieuse.
+         Elle n'est pas redondante avec `dejaChezMoi`. Le chemin d'atteinte est
+         réel : marquer vu → 👎 → « Retirer de ma liste » (`removeMovie` ne purge
+         pas `db.avis`). Le titre explicitement détesté ressortait alors EN TÊTE
+         du top, puisque son genre est celui qu'on regarde. Un 👎 n'est le top de
+         personne — c'était vrai avant le point 3, ça l'est toujours. */
+      if(typeof avisDe === 'function' && avisDe(x.media, x.id) === -1) return;
       if(!colle(x)) return;
       const k = x.media + ':' + x.id;
       const e = parCle[k] || (parCle[k] = { x:x, rang:0, aff:affiniteTop10(x, poids) });
@@ -3158,7 +3169,20 @@ function rangeesSuggerees(){
      pour toi » non plus (`sansRepli`) — ses titres sont déjà dans les rangées
      dont il les a repêchés, les remettre une troisième fois serait absurde. */
   const poserTop = ()=>{
-    const l = propre(s.top10 || []).slice(0, TOP10_TAILLE);
+    /* CORRECTION DE RELECTURE (11/08/2026) — « PLUS JAMAIS » VAUT AUSSI PENDANT
+       LA FENÊTRE DE RECALCUL. `propre` teste le hero et les titres écartés,
+       mais pas `dejaChezMoi` — et `suggCourantes()` rend son entrée de cache
+       même périmée. Scénario reproduit en relecture : ouvrir un titre depuis le
+       Top 10, le marquer vu, revenir sur Découvrir → il y était encore quelques
+       secondes. Le reste de l'écran vit avec cette péremption asynchrone depuis
+       toujours ; ici le critère d'acceptation dit « plus JAMAIS », et une
+       rangée qui promet des titres non vus doit tenir sa promesse à la seconde
+       près. La garde est posée ICI et pas dans `propre` : « Bientôt » montre
+       délibérément des titres de la bibliothèque (R7), la mettre en commun la
+       viderait. */
+    const frais = (s.top10 || []).filter(x =>
+      !(typeof dejaChezMoi === 'function' && dejaChezMoi(x.media, x.id)));
+    const l = propre(frais).slice(0, TOP10_TAILLE);
     if(l.length) brut.push({ cle:'top10', titre:'Top 10 pour toi', l:l,
                              top:true, sansRepli:true });
   };
@@ -4143,15 +4167,24 @@ function duelPasse(){
    Ce n'est pas un avis : ça ne dit rien du goût, seulement que la bibliothèque
    se trompe. Le duel n'est donc pas compté.
 
-   POINT 19, 02/08 — PLUS AUCUN ÉCRAN N'APPELLE CETTE FONCTION. Son seul bouton
-   vivait au bas de la feuille du ⓘ, et les trois boutons de cette feuille ont
-   été retirés (« les 3 boutons du bas sont moches, fais la fiche normale avec
-   la possibilité de fermer la fiche, c'est tout »). Le geste n'a AUCUN
-   équivalent ailleurs : « Je ne sais pas / les deux » passe la paire, il ne
-   récuse pas le titre. La disparition est assumée, mais le code ne l'est pas —
-   la fonction reste, entière et testée, parce que sa place naturelle est
-   l'écran du duel, à côté de « Je ne sais pas / les deux », et que la rebrancher
-   coûtera alors une ligne. La supprimer, c'est la réécrire plus tard. */
+   SON HISTOIRE, PARCE QU'ELLE EXPLIQUE OÙ ELLE VIT AUJOURD'HUI :
+
+     · POINT 19 (02/08) — elle est devenue ORPHELINE. Son seul bouton vivait au
+       bas de la feuille du ⓘ, et les trois boutons de cette feuille ont été
+       retirés. La fonction a été gardée, entière et testée, plutôt que
+       supprimée : « la supprimer, c'est la réécrire plus tard ».
+     · SPEC-06 §6.1 (10/08) — rebranchée sur l'écran de duel, en deux boutons
+       « 🚫 Pas vu — {titre} ».
+     · RETOUR-02 POINT 6 (11/08) — les deux boutons encombraient l'écran. Le
+       geste est REVENU dans la fiche ⓘ, en une ligne discrète tout en bas
+       (`.du19pasvu`, voir `ficheDuel`). C'est sa place : on ouvre la fiche
+       parce qu'on hésite, et c'est en la lisant qu'on se dit « en fait je ne
+       l'ai jamais vu ».
+
+   ELLE A DONC UN APPELANT, ET UN SEUL — cette ligne-là. Ce commentaire a
+   affirmé le contraire pendant huit jours après le rebranchement du 10/08 :
+   corrigé en relecture le 11/08. Un commentaire qui survit à son état est ce
+   qui a rendu l'orphelinat possible la première fois. */
 function duelPasVu(media, id){
   if(typeof closeSheet === 'function') closeSheet();
   const c = media+':'+String(id);
@@ -4491,8 +4524,10 @@ function ecranDuelJeu(){
    manquent pas (on referme, on touche la jaquette), mais « Je ne l'ai pas vu »
    n'a AUCUN équivalent — c'était le seul geste qui retirait un titre du paquet
    en cours de partie, « Je ne sais pas / les deux » passe la paire sans récuser
-   le titre. Sa disparition est assumée. `duelPasVu` n'est plus appelée par
-   l'app ; elle n'est pas supprimée pour autant (voir sa propre note).
+   le titre. — MISE À JOUR DU 11/08/2026 : ce paragraphe décrivait l'état du
+   02/08. Le geste est REVENU dans cette feuille avec RETOUR-02 point 6, en une
+   ligne discrète tout en bas plutôt qu'en gros bouton. `duelPasVu` a donc bien
+   un appelant, et c'est ici. Corrigé en relecture.
 
    CHAQUE ⓘ OUVRE SON TITRE, et plus par un index. La version précédente avait
    besoin de `duel.paire.indexOf(t)` pour son bouton « C'est celui-là » ; le
@@ -5290,20 +5325,41 @@ function retirerActeur(id){
   db.gouts.acteurs = db.gouts.acteurs.filter(a=>String(a.id) !== String(id));
   oublierSuggestions(); toucheGouts('acteurs'); render();
 }
+/* RETOUR-02 POINT 8 — EN PLEIN ÉCRAN, ON RESTE, ET ON LE MONTRE.
+
+   DÉCISION D'ADRIEN DU 11/08/2026 — AMENDEMENT AU CAHIER. RETOUR-02 point 8
+   écrivait « à la sélection OU à l'annulation, l'écran Mes goûts revient ». Ma
+   première livraison faisait déjà l'inverse — rester en plein écran pour
+   enchaîner les ajouts — sans que ce soit arbitré, et surtout SANS AUCUN RETOUR
+   VISIBLE : la relecture a mesuré `db.gouts.acteurs.length` à 1 et zéro `.lact`
+   à l'écran, aucun toast. L'ajout était bien enregistré et rien ne le disait.
+   Sur ce point précis, c'était moins bon qu'avant le lot.
+
+   Le cahier est amendé ainsi, et ce n'est plus un écart :
+     ① le « + » de la ligne devient « ✓ » — et il le reste, un acteur déjà suivi
+        n'est plus proposé à l'ajout ;
+     ② l'acteur apparaît AUSSITÔT en tête, sous le champ, dans la liste des
+        suivis ;
+     ③ le champ se vide pour enchaîner — sans effacer les résultats, sinon le ✓
+        du ① ne se verrait jamais.
+   « Terminé » ou l'annulation ferment le plein écran et rendent Mes goûts à
+   jour. Le critère « au moins 4 résultats visibles clavier ouvert » tient.
+
+   Le focus n'est pas repris : on ne réécrit pas l'`<input>`, on met seulement
+   sa `value` à vide — le clavier reste levé, prêt pour le nom suivant. */
 function ajouterActeur(id, nom){
   if(db.gouts.acteurs.some(a=>String(a.id) === String(id))) return;
   db.gouts.acteurs.push({ id:id, nom:nom });
-  /* RETOUR-02 POINT 8 — EN PLEIN ÉCRAN, ON RESTE. Le `render()` complet vidait
-     le champ et rendait le focus au néant : après un acteur ajouté, il fallait
-     retoucher le champ et retaper son texte pour en ajouter un second. On garde
-     donc l'écran ouvert et la recherche telle quelle ; c'est la liste des
-     choisis, en haut, qui s'allonge sous les yeux. En place (ancien mode), le
-     comportement d'avant est conservé, y compris la remise à zéro du champ. */
-  if(!rechActeur.ouvert) rechActeur = Object.assign(rechActeur,
-    { q:'', res:null, occupe:false });
   oublierSuggestions(); toucheGouts('acteurs');
-  if(rechActeur.ouvert) peindreActeurs();
-  else render();
+  if(!rechActeur.ouvert){
+    /* En place (l'écran n'est pas ouvert) : comportement d'avant le lot. */
+    rechActeur = Object.assign(rechActeur, { q:'', res:null, occupe:false });
+    return render();
+  }
+  rechActeur.q = '';                       // ③ prêt pour le suivant
+  const i = document.getElementById('qact');
+  if(i) i.value = '';                      // sans réécrire le champ : le clavier reste
+  peindreActeurs();                        // ① et ② d'un seul repeint
 }
 
 /* ===========================================================================
@@ -5336,6 +5392,14 @@ function ajouterActeur(id, nom){
 =========================================================================== */
 const ACTEUR_ATTENTE = 320;
 let acteurTimer = null;
+/* CORRECTION DE RELECTURE (11/08/2026) — LA REQUÊTE EN VOL EST ANNULÉE, pas
+   seulement ignorée. Le motif `pf12` a `pf12Abort` + `avorterPf12()` ; la copie
+   se contentait d'incrémenter un jeton `seq`, donc la requête partait jusqu'au
+   bout et seule sa réponse était jetée. Sur un champ où l'on tape un nom
+   complet, ce sont trois ou quatre requêtes TMDB qui vivent leur vie pour rien,
+   et qui retiennent une connexion sur un réseau lent. Une divergence de plus
+   entre le clone et son modèle — celle-ci coûtait quelque chose. */
+let acteurAbort = null;
 
 function ouvrirRechActeur(){
   rechActeur.ouvert = true;
@@ -5347,9 +5411,22 @@ function ouvrirRechActeur(){
   const i = document.getElementById('qact');
   if(i) i.focus();
 }
+/* Remettre l'état à plat, SANS toucher à l'historique ni à l'écran. C'est ce
+   dont `render` (app-03) a besoin pour sa garde anti-fuite : la recherche
+   appartient à Mes goûts, quitter l'écran doit la désarmer — mais un
+   `history.back()` déclenché en plein rendu est très exactement le mécanisme
+   qui détruisait la session de duel (point 6).
+   Elle vit ICI et pas dans app-03 pour que `rechActeur` reste écrite par un
+   seul fichier : le contrôle n° 5 du lanceur le demande, et il a raison — un
+   état que deux fichiers écrivent n'appartient plus à personne. */
+function oublierRechActeur(){
+  avorterActeur();
+  rechActeur.ouvert = false; rechActeur.q = '';
+  rechActeur.res = null; rechActeur.occupe = false;
+}
+
 function fermerRechActeur(sansRendu){
-  clearTimeout(acteurTimer);
-  rechActeur.seq++;                    // ce qui est en vol n'intéresse plus personne
+  avorterActeur();                     // ce qui est en vol n'intéresse plus personne
   rechActeur.ouvert = false;
   rechActeur.q = ''; rechActeur.res = null; rechActeur.occupe = false;
   if(typeof retirerGarde === 'function') retirerGarde('acteurs');
@@ -5371,16 +5448,17 @@ function ecranRechActeur(){
           'oninput="saisieActeur(this.value)" '+
           'onkeydown="if(event.key===\'Enter\')this.blur()">'+
       '</div>'+
-      '<button class="pf12an" onclick="fermerRechActeur()">Annuler</button>'+
+      /* « Terminé » dès qu'un acteur est suivi : on ne sort pas d'un écran où
+         l'on vient d'ajouter quelque chose par un bouton qui dit « Annuler ».
+         Rien n'est annulé — les choix sont enregistrés au fil des appuis. */
+      '<button class="pf12an" onclick="fermerRechActeur()">'+
+        (g.acteurs.length ? 'Terminé' : 'Annuler')+'</button>'+
     '</div>'+
-    /* Les acteurs déjà suivis restent visibles : c'est le seul moyen de savoir
-       qu'on vient d'en ajouter un, une fois « Terminé » parti de l'écran. */
-    (g.acteurs.length
-      ? '<div class="wrap" style="padding-bottom:0"><div class="listact choisis">'+g.acteurs.map(a=>
-          '<div class="lact"><div class="ph2">'+esc(a.nom[0])+'</div><span>'+esc(a.nom)+'</span>'+
-          '<button class="lretirer" onclick="retirerActeur('+a.id+')" aria-label="Retirer">'+
-          I.close+'</button></div>').join('')+'</div></div>'
-      : '')+
+    /* ② du point 8 amendé : les acteurs suivis, sous le champ, dans leur propre
+       nœud — c'est lui que `peindreActeurs` repeint à chaque ajout. Sans
+       identifiant, la liste ne bougeait jamais et l'ajout était invisible. */
+    '<div class="wrap" style="padding-bottom:0" id="actsuivis">'+
+      listeActeursSuivisHtml()+'</div>'+
     '<div class="wrap" style="padding-top:8px"><div id="resacteurs">'+corpsRechActeur()+'</div></div>'+
   '</div>';
 }
@@ -5390,16 +5468,22 @@ function ecranRechActeur(){
    qui arrivaient dans le désordre (seul le jeton `seq` évitait qu'elles
    s'affichent). Le même 320 ms que la recherche du profil et que la barre de
    Recherche : trois champs, un seul réflexe. */
+function avorterActeur(){
+  clearTimeout(acteurTimer);
+  rechActeur.seq++;
+  if(acteurAbort){ try{ acteurAbort.abort(); }catch(e){} acteurAbort = null; }
+}
 function saisieActeur(v){
   rechActeur.q = v;
   clearTimeout(acteurTimer);
   const q = String(v == null ? '' : v).trim();
   if(q.length < 2){
-    rechActeur.seq++;
+    avorterActeur();
     rechActeur.res = null; rechActeur.occupe = false;
     peindreActeurs();
     return;
   }
+  avorterActeur();
   rechActeur.occupe = true;
   peindreActeurs();
   acteurTimer = setTimeout(()=> chercherActeur(q), ACTEUR_ATTENTE);
@@ -5411,7 +5495,9 @@ async function chercherActeur(q){
   if(q.trim().length < 2){ rechActeur.res = null; rechActeur.occupe = false; return peindreActeurs(); }
   rechActeur.occupe = true; peindreActeurs();
   try{
-    const d = await tmdb('/search/person', { query:q.trim(), include_adult:'false' });
+    if(typeof AbortController === 'function') acteurAbort = new AbortController();
+    const d = await tmdb('/search/person', { query:q.trim(), include_adult:'false' },
+                         acteurAbort ? { signal: acteurAbort.signal } : undefined);
     if(seq !== rechActeur.seq) return;
     rechActeur.res = (d.results||[])
       .filter(p => p && p.id && p.name)
@@ -5426,9 +5512,31 @@ async function chercherActeur(q){
 }
 
 /* Seule la liste se redessine : redessiner l'écran emporterait le champ. */
+/* CORRECTION DE RELECTURE (11/08/2026) — LE REPEINT COUVRE LES DEUX ZONES, ET
+   IL SE GARDE COMME `peindreProfil`.
+   Il ne réécrivait que `#resacteurs`, or la liste des suivis est émise HORS de
+   ce nœud : elle ne bougeait donc jamais, d'où l'absence de retour visible à
+   l'ajout. Et il n'avait ni garde de vue ni repli sur `render()`, contrairement
+   au motif qu'il est censé réutiliser — deux divergences relevées en relecture,
+   sur un clone qui se disait réutilisation. */
 function peindreActeurs(){
-  const el = document.getElementById('resacteurs');
-  if(el) el.innerHTML = corpsRechActeur();
+  if(typeof view !== 'undefined' && view !== 'gouts') return;
+  const res = document.getElementById('resacteurs');
+  const sui = document.getElementById('actsuivis');
+  if(!res || !sui) return (typeof render === 'function') ? render() : undefined;
+  res.innerHTML = corpsRechActeur();
+  sui.innerHTML = listeActeursSuivisHtml();
+}
+
+/* La liste des acteurs suivis, sous le champ. Sortie dans sa propre fonction
+   parce qu'elle est désormais repeinte seule. */
+function listeActeursSuivisHtml(){
+  const l = (db.gouts && db.gouts.acteurs) || [];
+  if(!l.length) return '';
+  return '<div class="listact choisis">'+l.map(a=>
+    '<div class="lact"><div class="ph2">'+esc(a.nom[0])+'</div><span>'+esc(a.nom)+'</span>'+
+    '<button class="lretirer" onclick="retirerActeur('+a.id+')" aria-label="Retirer">'+
+    I.close+'</button></div>').join('')+'</div>';
 }
 function corpsRechActeur(){
   if(rechActeur.occupe)
@@ -5436,11 +5544,22 @@ function corpsRechActeur(){
   if(!rechActeur.res) return '';
   if(!rechActeur.res.length)
     return '<div class="tiny muted" style="padding:8px 0">Personne de ce nom.</div>';
+  /* ① du point 8 amendé : un acteur DÉJÀ SUIVI porte un ✓ et n'est plus
+     proposé à l'ajout. C'est le retour immédiat du geste, et c'est aussi la
+     réponse à « est-ce que je l'ai déjà ? » quand on cherche deux fois le même
+     nom. Un `<div>` et non un `<button>` : il n'y a plus rien à toucher. */
+  const suivi = id => ((db.gouts && db.gouts.acteurs) || [])
+    .some(a => String(a.id) === String(id));
+  const vignette = p => (srcImage(p.photo,'w185')
+    ? '<img src="'+srcImage(p.photo,'w185')+'" alt="">'
+    : '<div class="ph2">'+esc(p.nom[0])+'</div>');
   return '<div class="listact">'+rechActeur.res.map(p=>
-    '<button class="lact" onclick="ajouterActeur('+p.id+',\''+escJs(p.nom)+'\')">'+
-      (srcImage(p.photo,'w185') ? '<img src="'+srcImage(p.photo,'w185')+'" alt="">' : '<div class="ph2">'+esc(p.nom[0])+'</div>')+
-      '<span>'+esc(p.nom)+'</span><i>'+I.plus+'</i>'+
-    '</button>').join('')+'</div>';
+    suivi(p.id)
+      ? '<div class="lact dedans">'+vignette(p)+
+          '<span>'+esc(p.nom)+'</span><i class="lok" aria-label="Déjà suivi">✓</i></div>'
+      : '<button class="lact" onclick="ajouterActeur('+p.id+',\''+escJs(p.nom)+'\')">'+
+          vignette(p)+'<span>'+esc(p.nom)+'</span><i>'+I.plus+'</i>'+
+        '</button>').join('')+'</div>';
 }
 
 function viewGouts(){

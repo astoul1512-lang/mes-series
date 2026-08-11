@@ -593,6 +593,49 @@ function openSheet(html, cle){
    absorbée par la garde « même écran » — au pire, un appui retour de plus,
    jamais une sortie d'app ni un écran faux. */
 const gardesHisto = {};
+
+/* ===========================================================================
+   RETOUR-02 POINT 6 — CORRECTION DE RELECTURE (11/08/2026), LE BLOQUANT.
+
+   `retirerGarde` appelle `history.back()`. Ce recul engendre un `popstate` —
+   NOTRE popstate, une tâche plus tard — et jusqu'ici rien ne le distinguait de
+   celui d'un vrai bouton retour. Le gestionnaire le prenait donc pour un geste
+   de la personne et cherchait « quoi fermer », en descendant sa liste de
+   branches : feuille, puis DUEL, puis le reste.
+
+   CE QUE ÇA CASSAIT, mesuré par le relecteur sur l'app réelle. « Je ne l'ai pas
+   vu », dans la fiche ⓘ pendant une session de duel :
+     1. `duelPasVu` fait `closeSheet()` — la classe `.show` part ;
+     2. `closeSheet` appelle `retirerGarde('feuille')` → `history.back()` ;
+     3. `duelPasVu` finit correctement son travail : paquet 14 → 13,
+        `duelSuivant()` sert une paire, `render()` peint deux cartes ;
+     4. le `popstate` arrive ALORS : `.show` est déjà retiré, la branche feuille
+        est sautée, la branche `duel.actif` attrape → `fermerDuel()` → la
+        session est détruite, sept duels sur dix perdus, écran « Mes goûts ».
+   Sur le duel du jour c'était pire : `terminerDuel` avait déjà marqué la
+   journée jouée, et l'écran de résultat était balayé sans avoir été vu.
+
+   LA RACINE PRÉEXISTE au lot 02 — fermer la fiche ⓘ par le fond pendant un duel
+   tuait déjà la session. Mais tant que « Pas vu » vivait sur l'écran de duel,
+   la feuille était FERMÉE au moment de l'appel, `retirerGarde` sortait à son
+   premier `if`, et personne ne le voyait. En déplaçant le geste DANS la
+   feuille, le point 6 a fait passer un geste métier par ce chemin pour la
+   première fois, et transformé un cas de bord en comportement systématique.
+
+   LA CORRECTION est ici et nulle part ailleurs : on ESTAMPILLE notre propre
+   recul, et le gestionnaire de `popstate` reconnaît le sien et ne fait rien —
+   il n'y a effectivement rien à fermer, l'app vient de le faire elle-même.
+   Elle referme donc aussi la racine préexistante, pour tous les appelants de
+   `retirerGarde` (feuille, duel, jeu, recherches plein écran).
+
+   POURQUOI UNE FENÊTRE DE TEMPS et pas un drapeau booléen : un `history.back()`
+   qui n'engendre AUCUN popstate (navigateur sans entrée précédente, garde qui
+   n'a pas pu se poser) laisserait un drapeau armé pour toujours, et le premier
+   vrai retour serait avalé. Quatre cents millisecondes se referment toutes
+   seules. C'est le motif déjà employé dans ce fichier par
+   `glisseRetour.retardataire()`. */
+let retourGarde = 0;
+
 function poserGarde(nom){
   if(gardesHisto[nom]) return;
   try{
@@ -609,7 +652,8 @@ function consommerGarde(nom){
 function retirerGarde(nom){
   if(!gardesHisto[nom]) return;
   gardesHisto[nom] = false;
-  try{ history.back(); }catch(e){}
+  retourGarde = Date.now();
+  try{ history.back(); }catch(e){ retourGarde = 0; }
 }
 
 function closeSheet(){
@@ -810,6 +854,12 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
            avatarOnglet:null,
            /* Sorties : la section affichée — l'affiche par défaut. */
            sortiesOnglet:'salle',
+           /* RETOUR-02 point 2 — la famille choisie dans la carte duel du
+              profil. Déclarée ici comme tout autre champ d'écran : la première
+              livraison la faisait naître par affectation depuis `app-16`, ce
+              qui la rendait invisible à qui lit ce littéral pour savoir ce que
+              `ui` contient. Relevé en relecture. */
+           duelFam:null,
            /* Abonnements : lequel des deux volets d'action est déplié
               ('suivre', 'code'), ou aucun. Les deux formulaires occupaient tout
               l'écran avant les personnes ; ils ne s'ouvrent plus qu'à la demande. */
@@ -1286,6 +1336,13 @@ window.addEventListener('popstate', function(e){
     try{ history.pushState(etatHisto(view, params, iHisto), '', adresseCourante()); }catch(err){}
     return;
   }
+  /* RETOUR-02 point 6 — CE POPSTATE EST LE NÔTRE. Il vient du `history.back()`
+     de `retirerGarde` : l'état ouvert est déjà refermé par l'app, il n'y a rien
+     à rendre et rien à fermer. Sans cette ligne, la branche suivante qui
+     « trouve quelque chose d'ouvert » ferme un écran que personne n'a demandé
+     de fermer — c'est ce qui détruisait la session de duel. */
+  if(retourGarde && Date.now() - retourGarde < 400){ retourGarde = 0; return; }
+
   const feuille = document.getElementById('sheet');
   if(feuille && feuille.classList.contains('show')){
     /* C3 : si l'entrée consommée était la garde posée à l'ouverture,

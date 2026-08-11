@@ -119,10 +119,19 @@ function render(){
   /* RETOUR-02 point 8 — même garde anti-fuite pour la recherche d'acteurs :
      elle appartient à Mes goûts, et à lui seul. Sans cette ligne, quitter
      l'écran pendant qu'elle est ouverte la laisserait armée, et y revenir
-     tomberait sur un champ de recherche au lieu de la page. */
-  if(view !== 'gouts' && typeof rechActeur !== 'undefined' && rechActeur.ouvert){
-    if(typeof fermerRechActeur === 'function') fermerRechActeur(true);
-  }
+     tomberait sur un champ de recherche au lieu de la page.
+
+     CORRECTION DE RELECTURE (11/08/2026) — ON REMET L'ÉTAT À PLAT ICI, ON
+     N'APPELLE PAS `fermerRechActeur`. Elle appelle `retirerGarde('acteurs')`,
+     donc `history.back()` — EN PLEIN `render()`. C'est structurellement le même
+     mécanisme que celui qui détruisait la session de duel (point 6), et le
+     relecteur a eu raison de le signaler même sans avoir réussi à le faire
+     mordre. La branche `pf12` juste en dessous, qui est le modèle, remet les
+     champs à plat sans toucher à l'historique : on fait pareil. La garde
+     d'historique, elle, sera consommée par le `popstate` du geste qui nous a
+     fait changer d'écran. */
+  if(view !== 'gouts' && typeof rechActeur !== 'undefined' && rechActeur.ouvert
+     && typeof oublierRechActeur === 'function') oublierRechActeur();
   if(view !== 'profile' && typeof pf12 !== 'undefined' && pf12.ouvert){
     rangerRecentPf12(); avorterPf12(); pf12.ouvert = false; pf12.q = '';
     pf12.pers = null; pf12.persEtat = ''; pf12.persErr = '';
