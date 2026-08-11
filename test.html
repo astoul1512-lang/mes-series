@@ -82,6 +82,9 @@ window.MODE_TEST = true;
 <script src="./app-11-gouts.js"></script>
 <script src="./app-12-recherche.js"></script>
 <script src="./app-13-inscription.js"></script>
+<script src="./app-14-ia.js"></script>
+<script src="./app-15-filtres.js"></script>
+<script src="./app-16-duel-plus.js"></script>
 <script src="./app-08-reglages.js"></script>
 
 <script>
@@ -2823,16 +2826,19 @@ window.MODE_TEST = true;
     const nom = "L'\\ 'x' onclick='alert(1)";
     genresTMDB.movie = [{ id:99, nom:nom }];
     ouvrirMotRech('genre');
-    const bouton = document.getElementById('sheetin').querySelector('[onclick*="poserMotRech"]');
+    /* La feuille « une question à la fois » appelle `repondreMotRech` depuis la
+       relecture du 10/08 — c'est `poserMotRech` PLUS la navigation, qui a été
+       sortie de la fonction d'état. L'échappement éprouvé ici est le même. */
+    const bouton = document.getElementById('sheetin').querySelector('[onclick*="repondreMotRech"]');
     vrai(bouton, 'aucun choix de genre rendu');
     /* LE SEUL TEST QUI VAILLE : on déclenche vraiment le gestionnaire et on
        regarde ce qui arrive de l'autre côté. Un échappement qui fuit se voit
        là, jamais à la lecture. `poserMotRech` est remplacée le temps du clic —
        la vraie partirait sur le réseau. */
     const recu = [];
-    const vraiePose = window.poserMotRech;
-    window.poserMotRech = function(c, v){ recu.push([c, v]); };
-    try{ bouton.click(); } finally { window.poserMotRech = vraiePose; }
+    const vraiePose = window.repondreMotRech;
+    window.repondreMotRech = function(c, v){ recu.push([c, v]); };
+    try{ bouton.click(); } finally { window.repondreMotRech = vraiePose; }
     egal(recu, [['genre', nom]], 'le nom n\'est pas revenu intact : l\'échappement fuit');
     closeSheet();
     genresTMDB.movie = null;
@@ -3277,12 +3283,19 @@ window.MODE_TEST = true;
   test('« + préciser » ouvre UNE question, et « Peu importe » mène à la suivante', ()=>{
     const r = rechVierge('film');
     r.amb = null;
+    /* SPEC-05 §4 ET §7 — L'INVITATION A CHANGÉ DE DESTINATION, PAS DE NATURE.
+       Le tableau du §7 dit : « + préciser » (une question) → feuille Filtres
+       accordéon. La pilule vide ouvre donc désormais la feuille entière, et
+       c'est le seul point de ce cas qui bouge. Le chemin « une question à la
+       fois » reste vivant et reste éprouvé ci-dessous : il sert au JEU
+       (`ouvrirAjoutRech(1)`), où la phrase n'est pas à l'écran, et le
+       cul-de-sac du point 19 doit y rester fermé. */
     const boite = document.createElement('div');
     boite.innerHTML = blocPhraseRech();
     const b = boite.querySelector('.rmot.vide');
-    vrai(b, 'l\'invitation à préciser a disparu');
-    vrai(/ouvrirPreciserRech\(\)/.test(b.getAttribute('onclick')),
-         '« + préciser » rouvre la liste des sept champs : le point 5 est perdu');
+    vrai(b, 'l\'invitation à affiner a disparu');
+    vrai(/ouvrirFiltresRech\(\)/.test(b.getAttribute('onclick')),
+         'la pilule vide n\'ouvre pas la feuille Filtres : le §4 est perdu');
 
     const file = fileCriteresRech();
     ouvrirPreciserRech();
@@ -3299,7 +3312,9 @@ window.MODE_TEST = true;
        renseigne rien, donc on retombait indéfiniment sur le même écran. */
     const vraiRelancer = window.relancerRech;
     window.relancerRech = function(){};
-    try{ peuImporteRech(file[0].cle); } finally { window.relancerRech = vraiRelancer; }
+    /* Le bouton de la feuille appelle `peuImporteSuivantRech` : « Peu importe »
+       ne navigue plus tout seul, c'est le bouton qui le promet (RA-2). */
+    try{ peuImporteSuivantRech(file[0].cle); } finally { window.relancerRech = vraiRelancer; }
     const f2 = document.getElementById('sheetin');
     vrai(f2.textContent.indexOf(file[1].titre) >= 0,
          '« Peu importe » rouvre la même question : le cul-de-sac est revenu');
@@ -6863,6 +6878,1808 @@ window.MODE_TEST = true;
       window.etagesRech = vraiEtages; window.chargerGenres = vraiGenres;
       window.tmdb = vraiTmdb; window.peindreRech = vraiePeinture; view = vue;
     }
+  });
+
+
+  /* ==================== SPEC-04 lot C — les branchements IA ====================
+
+     Ce que ces cas doivent EMPÊCHER, et pas seulement constater :
+
+       · qu'une IA éteinte parle quand même (le §4.5 promet l'app d'avant : zéro
+         requête, zéro texte généré) ;
+       · qu'un texte du relais s'affiche sans repasser la validation de sortie
+         du §0.4 côté client — le serveur la fait déjà, ce qui n'excuse rien ;
+       · qu'un pitch écrit pour un titre s'affiche sur un autre après rotation
+         de la proposition du jour ;
+       · qu'un échec déclenche une rafale (la règle « une tentative ») ;
+       · que R7 redevienne cher : le cache des dates doit survivre à l'onglet.
+
+     Le cache vit en localStorage : chaque cas le remet à zéro lui-même, sinon
+     l'ordre de la page changerait leurs résultats. */
+  groupe('SPEC-04 lot C — les branchements IA');
+
+  function iaVierge(){
+    baseVierge();
+    db.gouts.ia = { decouvrir:false, recherche:false };
+    try{ localStorage.removeItem(IA_CLE); localStorage.removeItem(DATESFR_CLE);
+         localStorage.removeItem(IA_BIENTOT_CLE); }catch(e){}
+  }
+  const TITRE_JOUR = { id:1399, media:'tv', nom:'Severance', note:8.7, pourquoi:'Parce que tu as aimé Dark' };
+
+  test('C1 — l\'interrupteur est ÉTEINT à la livraison, sur les deux écrans', ()=>{
+    baseVierge();
+    delete db.gouts.ia;
+    migrerGouts();
+    egal(db.gouts.ia, { decouvrir:false, recherche:false }, 'le défaut a bougé');
+    vrai(!iaActive('decouvrir') && !iaActive('recherche'), 'une IA est allumée par défaut');
+    vrai(!iaActive('nimporte'), 'un nom inconnu allume quelque chose');
+  });
+
+  test('C1b — le sous-bloc « ia » existe dans la découpe de synchro', ()=>{
+    vrai(Array.isArray(GOUT_BLOCS.ia) && GOUT_BLOCS.ia.indexOf('ia') >= 0,
+         'sans lui, allumer l\'IA daterait TOUS les goûts et écraserait l\'autre appareil');
+  });
+
+  test('C2 — IA éteinte : le hero garde sa ligne au cœur, même avec un cache plein', ()=>{
+    iaVierge();
+    localStorage.setItem(IA_CLE, JSON.stringify({ jour: todayISO(),
+      pitch:{ cle:'tv:1399', texte:'Une horlogerie de bureau, glaçante et drôle.' },
+      titres:{ acclames:'Les mieux notés' }, humeurs:{}, rech:{pourquoi:{}} }));
+    egal(pitchIAduJour(TITRE_JOUR), null, 'un texte est sorti alors que l\'IA est éteinte');
+    egal(intituleIA('acclames', 'Acclamés par la critique'), 'Acclamés par la critique',
+         'un intitulé a été réécrit alors que l\'IA est éteinte');
+    egal(pitchOuRaison(TITRE_JOUR, null), 'Parce que tu as aimé Dark',
+         'la ligne au cœur a été remplacée');
+  });
+
+  test('C3 — IA allumée : le pitch du jour remplace la ligne de raison', ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    localStorage.setItem(IA_CLE, JSON.stringify({ jour: todayISO(),
+      pitch:{ cle:'tv:1399', texte:'Une horlogerie de bureau, glaçante et drôle.' },
+      titres:null, humeurs:{}, rech:{pourquoi:{}} }));
+    egal(pitchOuRaison(TITRE_JOUR, null), 'Une horlogerie de bureau, glaçante et drôle.');
+  });
+
+  test('C4 — le pitch d\'hier ne s\'affiche pas aujourd\'hui', ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    localStorage.setItem(IA_CLE, JSON.stringify({ jour: HIER,
+      pitch:{ cle:'tv:1399', texte:'Le pitch de la veille.' },
+      titres:{ acclames:'Hier' }, humeurs:{}, rech:{pourquoi:{}} }));
+    egal(pitchIAduJour(TITRE_JOUR), null, 'un pitch périmé est passé');
+    egal(intituleIA('acclames', 'Acclamés par la critique'), 'Acclamés par la critique');
+  });
+
+  test('C5 — un pitch écrit pour un autre titre ne se recycle pas', ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    localStorage.setItem(IA_CLE, JSON.stringify({ jour: todayISO(),
+      pitch:{ cle:'movie:27205', texte:'Un braquage dans les rêves.' },
+      titres:null, humeurs:{}, rech:{pourquoi:{}} }));
+    egal(pitchIAduJour(TITRE_JOUR), null,
+         'le pitch d\'Inception s\'est affiché sous Severance');
+  });
+
+  test('C6 — la validation de sortie mord côté client : longueur et §0.4', ()=>{
+    egal(texteIAAcceptable('x'.repeat(220), 220).length, 220, 'la limite exacte doit passer');
+    egal(texteIAAcceptable('x'.repeat(221), 220), null, 'un caractère de trop est passé');
+    egal(texteIAAcceptable('   ', 220), null, 'du vide est passé');
+    egal(texteIAAcceptable('Une   phrase\n espacée.', 220), 'Une phrase espacée.');
+    egal(texteIAAcceptable('Dans la veine de Dark, que tu as adoré.', 220), null,
+         '« que tu as adoré » est passé — c\'est l\'émotion par procuration du §0.4');
+    egal(texteIAAcceptable('Proche de ton coup de cœur.', 220), null, '« ton coup de cœur » est passé');
+    egal(texteIAAcceptable('Ta série préférée revient.', 220), null, '« ta préférée » est passé');
+    vrai(texteIAAcceptable('Dans la veine de Dark. Une saison, une histoire complète.', 220),
+         'une phrase factuelle a été refusée à tort');
+  });
+
+  test('C7 — un pitch interdit stocké malgré tout ne s\'affiche pas', ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    localStorage.setItem(IA_CLE, JSON.stringify({ jour: todayISO(),
+      pitch:{ cle:'tv:1399', texte:'Dans la veine de Dark, que tu as adoré.' },
+      titres:null, humeurs:{}, rech:{pourquoi:{}} }));
+    egal(pitchIAduJour(TITRE_JOUR), null, 'la seconde barrière n\'a pas tenu');
+  });
+
+  test('C8 — éteindre efface le cache de CET écran, pas de l\'autre', ()=>{
+    iaVierge();
+    db.gouts.ia = { decouvrir:true, recherche:true };
+    localStorage.setItem(IA_CLE, JSON.stringify({ jour: todayISO(),
+      pitch:{ cle:'tv:1399', texte:'Un texte.' }, titres:null, humeurs:{ frisson:{jusqua:9e15,cle:'tv:1',texte:'x'} },
+      rech:{ pourquoi:{ 'a':{ quand:1, texte:'y' } } } }));
+    sansEcran(()=> basculerIA('decouvrir'));
+    const o = JSON.parse(localStorage.getItem(IA_CLE));
+    egal(o.jour, '', 'le lot de Découvrir a survécu à l\'extinction');
+    egal(o.pitch, null);
+    egal(Object.keys(o.humeurs).length, 0, 'les humeurs ont survécu');
+    egal(Object.keys(o.rech.pourquoi).length, 1, 'le cache de la Recherche a été effacé par erreur');
+    vrai(!iaActive('decouvrir') && iaActive('recherche'), 'les deux interrupteurs sont liés');
+  });
+
+  test('C9 — l\'échéance des humeurs est le prochain 6 h, pas 24 h glissantes', ()=>{
+    const t = prochain6hIA();
+    vrai(t > Date.now(), 'une échéance déjà passée');
+    vrai(t - Date.now() <= 30 * 3600000, 'plus de 30 h : ce n\'est plus « jusqu\'à 6 h »');
+    egal(new Date(t).getHours(), 6, 'l\'échéance ne tombe pas à 6 h');
+  });
+
+  test('C10 — un pitch d\'humeur expiré ne s\'affiche plus', ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    localStorage.setItem(IA_CLE, JSON.stringify({ jour: todayISO(), pitch:null, titres:null,
+      humeurs:{ frisson:{ jusqua: Date.now() - 1, cle:'tv:1399', texte:'De la tension, jamais de sang.' } },
+      rech:{pourquoi:{}} }));
+    egal(pitchIAHumeur('frisson', TITRE_JOUR), null, 'un pitch d\'humeur périmé est passé');
+    localStorage.setItem(IA_CLE, JSON.stringify({ jour: todayISO(), pitch:null, titres:null,
+      humeurs:{ frisson:{ jusqua: Date.now() + 60000, cle:'tv:1399', texte:'De la tension, jamais de sang.' } },
+      rech:{pourquoi:{}} }));
+    egal(pitchIAHumeur('frisson', TITRE_JOUR), 'De la tension, jamais de sang.');
+    egal(pitchOuRaison(TITRE_JOUR, 'frisson'), 'De la tension, jamais de sang.');
+  });
+
+  test('C11 — un intitulé réécrit ne s\'applique qu\'aux rangées éditoriales', ()=>{
+    vrai(IA_RANGEES_LIBELLES.indexOf('acclames') >= 0, 'les rangées éditoriales ont disparu de la liste');
+    ['top10','esprit','favoris','genre','plates','incont'].forEach(c=>{
+      vrai(IA_RANGEES_LIBELLES.indexOf(c) < 0,
+           'la rangée « '+c+' » porte une donnée dans son titre : la faire réécrire la perdrait');
+    });
+  });
+
+  testAsync('C12 — sans compte connecté, appelIA ne touche pas au réseau', async ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    db.auth = null;
+    let appels = 0;
+    const vrai_ = window.sbFetch;
+    window.sbFetch = async ()=>{ appels++; return { texte:'x' }; };
+    try{
+      egal(await appelIA('pitch_jour', { titre:'X' }), null);
+      egal(appels, 0, 'une requête est partie sans compte : le relais l\'aurait refusée en 401');
+    }finally{ window.sbFetch = vrai_; }
+  });
+
+  testAsync('C13 — {indisponible:true} n\'est pas réessayé', async ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
+    let appels = 0;
+    const vrai_ = window.sbFetch;
+    window.sbFetch = async ()=>{ appels++; return { indisponible:true }; };
+    try{
+      egal(await appelIA('pitch_jour', { titre:'X' }), null);
+      egal(appels, 1, 'une rafale : le §4.4 interdit le réessai côté client');
+    }finally{ window.sbFetch = vrai_; }
+  });
+
+  testAsync('C14 — une erreur de contrat ne remonte jamais dans l\'écran', async ()=>{
+    iaVierge();
+    db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
+    const vrai_ = window.sbFetch;
+    const vraiWarn = console.warn;
+    window.sbFetch = async ()=>{ const e = new Error('tâche inconnue'); e.status = 400; throw e; };
+    console.warn = ()=>{};
+    try{
+      egal(await appelIA('inventee', {}), null, 'un throw est sorti d\'appelIA');
+    }finally{ window.sbFetch = vrai_; console.warn = vraiWarn; }
+  });
+
+  testAsync('C15 — IA éteinte : le lot du jour ne part pas', async ()=>{
+    iaVierge();
+    db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
+    let appels = 0;
+    const vrai_ = window.sbFetch;
+    window.sbFetch = async ()=>{ appels++; return { texte:'x' }; };
+    try{
+      apresRenduDecouvrirIA();
+      await new Promise(r=> setTimeout(r, 30));
+      egal(appels, 0, 'l\'écran a parlé au relais alors que l\'interrupteur est éteint');
+    }finally{ window.sbFetch = vrai_; }
+  });
+
+  test('C16 — ce qui part au fournisseur ne contient ni pseudo ni identifiant', ()=>{
+    iaVierge();
+    db.pseudo = 'adrien'; db.auth = { token:'jeton', uid:'11111111-2222-3333' };
+    db.shows[1399] = serie(1399, [ep(1,HIER)], {}, { name:'Severance', genres:['Drame','Mystère'] });
+    db.avis.tv['1399'] = { v:1, quand:2 };
+    const aimes = titresAimesIA(8), genres = genresAimesIA(5);
+    egal(aimes, ['Severance']);
+    egal(genres, ['Drame','Mystère']);
+    const tout = JSON.stringify({ aimes:aimes, genres:genres });
+    vrai(tout.indexOf('adrien') < 0 && tout.indexOf('jeton') < 0 && tout.indexOf('1111') < 0,
+         'une donnée d\'identité s\'est glissée dans ce qui part');
+  });
+
+  test('C17 — l\'affinage d\'humeur demande DEUX signaux, pas un', ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    /* Un profil qui aime la tension et n'aime pas l'horreur : le gore s'écarte. */
+    db.shows[1] = serie(1, [ep(1,HIER)], {}, { name:'Thriller', genres:['Thriller'] });
+    db.movies[2] = { id:2, title:'Gore', genres:['Horreur'], seen:true, addedAt:1 };
+    db.avis.tv['1'] = { v:1, quand:1 };
+    db.avis.movie['2'] = { v:-1, quand:1 };
+    egal(recetteAffineeHumeur('frisson').sansGore, true);
+    /* Le même profil sans le 👎 sur l'horreur : un seul signal ne suffit pas
+       si l'horreur est aimée. */
+    db.avis.movie['2'] = { v:1, quand:1 };
+    egal(recetteAffineeHumeur('frisson').sansGore, false,
+         'on a écarté le gore chez quelqu\'un qui aime l\'horreur');
+    /* Et un profil muet ne déclenche rien. */
+    db.avis = { tv:{}, movie:{} };
+    egal(recetteAffineeHumeur('frisson').sansGore, false);
+    egal(recetteAffineeHumeur('rire').sansGore, false, 'l\'affinage déborde sur une autre humeur');
+  });
+
+  test('C18 — l\'affinage passe bien dans la requête TMDB de l\'humeur', ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    db.shows[1] = serie(1, [ep(1,HIER)], {}, { name:'Thriller', genres:['Thriller'] });
+    db.movies[2] = { id:2, title:'Gore', genres:['Horreur'], seen:true, addedAt:1 };
+    db.avis.tv['1'] = { v:1, quand:1 };
+    db.avis.movie['2'] = { v:-1, quand:1 };
+    const r = requeteHumeur('tv', { medias:['tv'], origine:'sansAnime' }, 'frisson', 'principale');
+    vrai(String(r.p.without_keywords || '').indexOf('10292') >= 0,
+         'le gore n\'a pas été écarté côté séries');
+    db.avis = { tv:{}, movie:{} };
+    const r2 = requeteHumeur('tv', { medias:['tv'], origine:'sansAnime' }, 'frisson', 'principale');
+    egal(r2.p.without_keywords, undefined, 'un profil muet a quand même déclenché l\'affinage');
+  });
+
+  test('C18b — interrupteur ÉTEINT : la recette est EXACTEMENT celle du lot A', ()=>{
+    /* Relecture du 10/08 : l'affinage s'appliquait interrupteur éteint, donc le
+       rendu différait du lot A — ce que le §4.5 interdit en toutes lettres. */
+    iaVierge();
+    db.gouts.ia.decouvrir = false;
+    db.shows[1] = serie(1, [ep(1,HIER)], {}, { name:'Thriller', genres:['Thriller'] });
+    db.movies[2] = { id:2, title:'Gore', genres:['Horreur'], seen:true, addedAt:1 };
+    db.avis.tv['1'] = { v:1, quand:1 };
+    db.avis.movie['2'] = { v:-1, quand:1 };
+    const r = requeteHumeur('tv', { medias:['tv'], origine:'sansAnime' }, 'frisson', 'principale');
+    egal(r.p.without_keywords, undefined,
+         'l\'IA éteinte, la recette est affinée quand même : l\'app n\'est plus celle d\'avant');
+  });
+
+  test('C19 — R7 : le cache des dates françaises survit à la fermeture', ()=>{
+    iaVierge();
+    Object.keys(datesFR).forEach(k=> delete datesFR[k]);
+    datesFR['550'] = { cine:['2026-09-01'], stream:[], premiere:'2026-09-01',
+                       q:Date.now(), j:todayISO() };
+    ecrireDatesFR();
+    Object.keys(datesFR).forEach(k=> delete datesFR[k]);
+    datesFRLues = false;
+    lireDatesFR();
+    egal((datesFR['550'] || {}).cine, ['2026-09-01'], 'le cache n\'a pas été relu : R7 repaye tout chaque jour');
+  });
+
+  test('C20 — un cache de dates de plus de 24 h est ignoré', ()=>{
+    iaVierge();
+    Object.keys(datesFR).forEach(k=> delete datesFR[k]);
+    const vieux = {}; vieux['550'] = { cine:['2020-01-01'], stream:[], premiere:null,
+                                        q: Date.now() - 25 * 3600000 };
+    localStorage.setItem(DATESFR_CLE, JSON.stringify(vieux));
+    datesFRLues = false;
+    lireDatesFR();
+    egal(datesFR['550'], undefined, 'une date vieille de plus d\'un jour a été reprise');
+  });
+
+  test('C21 — R7 : le paquet est plafonné, et les deux fonctions partagent la clé', ()=>{
+    iaVierge();
+    for(let i = 1; i <= 80; i++) db.movies[i] = { id:i, title:'F'+i, seen:false, addedAt:i };
+    egal(filmsSuivisBornes().length, BIENTOT_MAX_FILMS, 'le plafond ne mord pas');
+    /* Les plus récemment ajoutés d'abord : le film 80 est dedans, le film 1 non. */
+    vrai(filmsSuivisBornes().indexOf(80) >= 0, 'le film le plus récent est hors du paquet');
+    vrai(filmsSuivisBornes().indexOf(1) < 0, 'le plus ancien est passé devant le plus récent');
+    const a = codeDe(filmsBientot), b = codeDe(chargerBientotPerso);
+    vrai(a.indexOf('filmsSuivisBornes') >= 0 && b.indexOf('filmsSuivisBornes') >= 0,
+         'les deux ne calculent plus la même clé : le chargement repartirait sans fin');
+  });
+
+  test('C22 — R7 : l\'amorçage de « Bientôt » ne se fait qu\'une fois par jour', ()=>{
+    iaVierge();
+    for(let i = 1; i <= 3; i++) db.movies[i] = { id:i, title:'F'+i, seen:false, addedAt:i };
+    let lances = 0;
+    const vraiCharge = window.chargerBientotPerso;
+    window.chargerBientotPerso = async ()=>{ lances++; };
+    try{
+      amorcerBientotDuJour();
+      amorcerBientotDuJour();
+      egal(localStorage.getItem(IA_BIENTOT_CLE), todayISO(), 'le jour n\'a pas été marqué');
+      amorcerBientotDuJour();
+      /* Le lancement est différé : ce qu'on vérifie ici, c'est que le marqueur
+         ferme la porte dès le premier appel — le compte réel est asynchrone. */
+      vrai(lances === 0, 'le chargement n\'est plus différé : il bloquerait le rendu');
+    }finally{ window.chargerBientotPerso = vraiCharge; }
+  });
+
+  test('C23 — la vitrine prend ses rendez-vous APRÈS avoir été construite', ()=>{
+    const c = codeDe(vitrineBody);
+    const iRangees = c.indexOf('rangees.forEach');
+    const iRdv = c.indexOf('apresRenduVitrine');
+    vrai(iRangees >= 0 && iRdv > iRangees,
+         'le lot IA se déclenche avant que l\'écran soit construit — le §4.3 l\'interdit');
+    vrai(codeDe(propositionJourHtml).indexOf('appelIA') < 0,
+         'le hero appelle le relais pendant son rendu : c\'est une attente déguisée');
+  });
+
+
+  /* ===== Les invariants que la relecture du 10/08 a trouvés absents =====
+
+     Trois familles de défauts sont passées à travers 23 cas, et ce n'est pas un
+     hasard : les 23 regardaient tous des LECTURES de cache. Aucun ne comptait ce
+     qu'une journée coûte, aucun ne suivait un geste jusqu'à la requête. Les cas
+     ci-dessous comblent exactement ces trous — ce sont eux qui auraient dû
+     tomber en rouge avant la livraison. */
+
+  testAsync('C24 — une journée IA allumée coûte EXACTEMENT deux requêtes', async ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
+    const taches = [];
+    const vrai_ = window.sbFetch, vraiProp = window.propositionDuJour,
+          vraiRang = window.rangeesSuggerees, vraiPeindre = window.peindreDisc;
+    window.sbFetch = async (chemin, opt)=>{
+      taches.push(JSON.parse(opt.body).tache);
+      return { texte:'Une phrase honnête et factuelle.', textes:['Les mieux notés'] };
+    };
+    window.propositionDuJour = ()=> ({ id:1399, media:'tv', nom:'Severance', note:8.7 });
+    window.rangeesSuggerees = ()=> [{ cle:'acclames', titre:'Acclamés par la critique' }];
+    window.peindreDisc = function(){};
+    try{
+      apresRenduDecouvrirIA();
+      await new Promise(r=> setTimeout(r, 60));
+      egal(taches.sort(), ['intitules_rangees','pitch_jour'],
+           'le lot du jour ne coûte pas exactement les deux requêtes annoncées');
+      /* Et le second rendu du même jour ne coûte RIEN. C'est la moitié de la
+         promesse du §4.3, et elle n'était vérifiée nulle part. */
+      taches.length = 0;
+      apresRenduDecouvrirIA();
+      apresRenduDecouvrirIA();
+      await new Promise(r=> setTimeout(r, 60));
+      egal(taches, [], 'le lot repart à chaque rendu de la journée');
+    }finally{
+      window.sbFetch = vrai_; window.propositionDuJour = vraiProp;
+      window.rangeesSuggerees = vraiRang; window.peindreDisc = vraiPeindre;
+      try{ localStorage.removeItem(IA_VERROU_CLE); }catch(e){}
+    }
+  });
+
+  testAsync('C25 — deux onglets le même matin ne font pas quatre requêtes', async ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
+    /* Le verrou vit en localStorage : c'est le SEUL état que deux onglets
+       partagent. Le simuler, c'est le prendre puis demander le lot. */
+    vrai(prendreVerrouIA(), 'le verrou ne se prend pas');
+    let appels = 0;
+    const vrai_ = window.sbFetch;
+    window.sbFetch = async ()=>{ appels++; return { texte:'x' }; };
+    try{
+      apresRenduDecouvrirIA();          // le « second onglet »
+      await new Promise(r=> setTimeout(r, 40));
+      egal(appels, 0, 'le second onglet a redemandé le lot : 4 requêtes au lieu de 2');
+      /* Et un verrou abandonné ne bloque pas éternellement. */
+      localStorage.setItem(IA_VERROU_CLE, String(Date.now() - 2 * 60000));
+      vrai(prendreVerrouIA(), 'un onglet fermé au milieu du lot bloque le lot pour toujours');
+    }finally{ window.sbFetch = vrai_; rendreVerrouIA(); }
+  });
+
+  testAsync('C26 — le pitch d\'humeur ARRIVE, même si la proposition tarde', async ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
+    ui.disc = ui.disc || {}; ui.disc.humeur = 'frisson';
+    /* Le cas exact du défaut : au premier appui, la case de cache de l'humeur
+       est vide et `propositionDuJour()` rend `null`. Avant correction, la
+       fonction sortait sans rien faire et le pitch n'apparaissait JAMAIS. */
+    let pret = null;
+    const vraiProp = window.propositionDuJour, vrai_ = window.sbFetch,
+          vraiHum = window.humeurActive, vraiPeindre = window.peindreDisc;
+    window.propositionDuJour = ()=> pret;
+    window.humeurActive = ()=> 'frisson';
+    window.peindreDisc = function(){};
+    let appels = 0;
+    window.sbFetch = async ()=>{ appels++; return { texte:'De la tension, jamais de sang.' }; };
+    try{
+      const p = lotHumeurIA('frisson');
+      await new Promise(r=> setTimeout(r, 30));
+      egal(appels, 0, 'la requête est partie avant que l\'humeur ait une proposition');
+      pret = { id:1399, media:'tv', nom:'Severance', note:8 };   // la recette arrive
+      await p;
+      egal(appels, 1, 'le pitch d\'humeur n\'est jamais demandé — le §2 promet 1 requête');
+      egal(pitchIAHumeur('frisson', pret), 'De la tension, jamais de sang.');
+    }finally{
+      window.propositionDuJour = vraiProp; window.sbFetch = vrai_;
+      window.humeurActive = vraiHum; window.peindreDisc = vraiPeindre;
+      if(ui.disc) ui.disc.humeur = null;
+    }
+  });
+
+  testAsync('C27 — une humeur sans proposition ne pose PAS d\'échéance', async ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
+    const vraiProp = window.propositionDuJour, vrai_ = window.sbFetch;
+    const vraiMax = IA_ATTENTE_MAX;   // raccourcie plus bas, restaurée en `finally`
+    window.propositionDuJour = ()=> null;
+    window.sbFetch = async ()=>({ texte:'x' });
+    try{
+      /* La borne est raccourcie pour le test : ce qu'on éprouve est le
+         COMPORTEMENT au bout de la borne, pas la durée de la borne. */
+      IA_ATTENTE_MAX = 10;
+      await lotHumeurIA('frisson');
+      const o = lireCacheIA();
+      egal(o.humeurs.frisson, undefined,
+           'une échéance a été posée sans texte : le prochain appui ne réessaiera jamais');
+    }finally{
+      window.propositionDuJour = vraiProp; window.sbFetch = vrai_;
+      IA_ATTENTE_MAX = vraiMax;
+    }
+  });
+
+  test('C28 — R7 ne recompose plus la vitrine : zéro requête TMDB ajoutée', ()=>{
+    /* Le défaut mesuré en relecture valait 115 requêtes, interrupteur ÉTEINT.
+       Sa cause était une ligne : `oublierSuggestions()`, qui pose `quand = 0`
+       sur toutes les cases et force une vitrine complète. Ce cas lit la forme
+       parce que c'est la forme qui coûtait. */
+    const c = codeDe(amorcerBientotDuJour);
+    vrai(c.indexOf('oublierSuggestions') < 0,
+         'R7 périme encore tout le cache : 55 requêtes de vitrine, et un écran qui bouge tout seul');
+    vrai(c.indexOf('chargerSuggestions') < 0,
+         'R7 relance encore une composition de vitrine');
+    vrai(c.indexOf('chargerBientotPerso') >= 0, 'R7 ne charge plus rien du tout');
+  });
+
+  test('C29 — le cache des dates est calé sur le JOUR, pas sur 24 h glissantes', ()=>{
+    iaVierge();
+    Object.keys(datesFR).forEach(k=> delete datesFR[k]);
+    /* Écrit il y a 25 h mais MARQUÉ AUJOURD'HUI : c'est le cas de celui qui
+       ouvre l'app à la même heure chaque jour. Avec un TTL glissant, il
+       repayait ses soixante requêtes ; avec un cache calé sur le jour, non. */
+    const o = {}; o['550'] = { cine:['2026-09-01'], stream:[], premiere:null,
+                               q: Date.now() - 25 * 3600000, j: todayISO() };
+    localStorage.setItem(DATESFR_CLE, JSON.stringify(o));
+    datesFRLues = false; lireDatesFR();
+    egal((datesFR['550'] || {}).cine, ['2026-09-01'],
+         'une entrée du jour a été jetée : les 60 requêtes repartent presque tous les jours');
+    /* Et celle d'hier ne survit pas. */
+    Object.keys(datesFR).forEach(k=> delete datesFR[k]);
+    const o2 = {}; o2['550'] = { cine:['2020-01-01'], stream:[], premiere:null,
+                                 q: Date.now(), j: HIER };
+    localStorage.setItem(DATESFR_CLE, JSON.stringify(o2));
+    datesFRLues = false; lireDatesFR();
+    egal(datesFR['550'], undefined, 'une date d\'hier est resservie aujourd\'hui');
+  });
+
+  test('C30 — le cache des dates n\'est sérialisé qu\'UNE fois par chargement', ()=>{
+    vrai(codeDe(dateFRDe).indexOf('ecrireDatesFR') < 0,
+         'le blob est resérialisé après chaque film : jusqu\'à 60 fois d\'affilée');
+    vrai(codeDe(chargerBientotPerso).indexOf('ecrireDatesFR') >= 0,
+         'le cache des dates n\'est plus jamais écrit');
+  });
+
+  testAsync('C31 — des intitulés en nombre différent sont refusés en bloc', async ()=>{
+    iaVierge();
+    db.gouts.ia.decouvrir = true;
+    db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
+    const vrai_ = window.sbFetch, vraiProp = window.propositionDuJour,
+          vraiRang = window.rangeesSuggerees, vraiPeindre = window.peindreDisc;
+    window.propositionDuJour = ()=> ({ id:1399, media:'tv', nom:'Severance', note:8 });
+    window.rangeesSuggerees = ()=> [{ cle:'acclames', titre:'Acclamés' },
+                                    { cle:'nouv', titre:'Nouveautés' }];
+    window.peindreDisc = function(){};
+    /* Un fournisseur qui rend UN texte pour DEUX titres : sans le garde, la
+       rangée « Nouveautés » prendrait le nom d'« Acclamés ». C'est le seul
+       rempart contre une rangée renommée avec le titre d'une autre, et il
+       n'était éprouvé nulle part. */
+    window.sbFetch = async (chemin, opt)=>{
+      const t = JSON.parse(opt.body).tache;
+      return t === 'pitch_jour' ? { texte:'Une phrase.' } : { textes:['Un seul'] };
+    };
+    try{
+      await lotIAduJour();
+      egal(intituleIA('acclames', 'Acclamés'), 'Acclamés',
+           'un décalage de nombre a renommé une rangée avec le titre d\'une autre');
+      egal(intituleIA('nouv', 'Nouveautés'), 'Nouveautés');
+    }finally{
+      window.sbFetch = vrai_; window.propositionDuJour = vraiProp;
+      window.rangeesSuggerees = vraiRang; window.peindreDisc = vraiPeindre;
+    }
+  });
+
+  test('C32 — « Vu par tes proches » ne part pas à la réécriture', ()=>{
+    egal(IA_RANGEES_LIBELLES.indexOf('cercle'), -1,
+         'la rangée du cercle est réécrite : elle nomme une SOURCE, pas une intention');
+  });
+
+  /* ============ SPEC-05 lot A — la Recherche nouvelle génération ============
+
+     Ce que ces cas empêchent :
+
+       · qu'un critère que « + préciser » savait poser hier devienne
+         inatteignable (le §1 exige un SUR-ENSEMBLE STRICT — c'est la règle
+         d'or de la spec, et la seule qui puisse faire régresser un usage
+         quotidien sans qu'on s'en aperçoive) ;
+       · qu'une ambiance recopie ses règles dans les filtres ponctuels — alors
+         la retirer ne retirerait plus rien ;
+       · que « Tout effacer » emporte l'ambiance active (§9) ;
+       · que le tri « mes goûts » FILTRE au lieu de trier, ou qu'il réordonne
+         ce qui est déjà à l'écran ;
+       · que le titre montré en carte soit aussi dans la grille ;
+       · qu'un `with_status` parte sur `/discover/movie`, que TMDB refuserait. */
+  groupe('SPEC-05 lot A — pilules, filtres, ambiances, match, tri');
+
+  function rechNG(fam){
+    const r = rechVierge(fam || 'tout');
+    db.avis = { tv:{}, movie:{} };
+    db.podium = { film:[], serie:[], anime:[], maj:0 };
+    db.gouts.ambiances = [];
+    r.ambiance = null; r.statut = null; r.gore = null; r.avec = null; r.matchI = 0;
+    try{ localStorage.removeItem(TRI_CLE); }catch(e){}
+    return r;
+  }
+  /* La feuille est du HTML : on la lit dans une boîte détachée plutôt que
+     d'ouvrir vraiment `#sheetin`, qui appartient à d'autres cas. */
+  function boiteHtml(html){
+    const d = document.createElement('div'); d.innerHTML = html; return d;
+  }
+  function sectionsOuvertes(){
+    return sectionsFiltresRech().map(s=>{
+      sectionFiltreOuverte = s.id;
+      return { id:s.id, html: optionsSectionFiltre(s.id) };
+    });
+  }
+
+  test('RA1 — la feuille Filtres est un sur-ensemble STRICT de « + préciser »', ()=>{
+    const r = rechNG('serie');
+    genresTMDB.tv = [{id:18,nom:'Drame'},{id:35,nom:'Comédie'}];
+    genresTMDB.movie = [{id:18,nom:'Drame'}];
+    db.gouts.plates = [{ id:8, nom:'Netflix' }];
+    const parSection = {};
+    sectionsOuvertes().forEach(s=>{ parSection[s.id] = s.html; });
+    /* Les sept critères d'hier ont chacun leur section, et « genre » couvre à
+       la fois les tuiles mesurées et les genres TMDB. */
+    ['genre','epoque','duree','origine','plate','note'].forEach(c=>{
+      vrai(parSection[c] && parSection[c].length > 0, 'la section « '+c+' » est vide ou absente');
+    });
+    vrai(/poserFiltreRech\('pasvu','non'\)/.test(parSection.divers || ''),
+         '« que je n\'ai pas vu » a disparu de la feuille');
+    /* Et chaque VALEUR des tables mesurées est proposée, pas seulement la
+       section : c'est là que se cachait le risque de perte. */
+    RECH_EPOQUES.forEach(e=> vrai(parSection.epoque.indexOf(e.id) >= 0,
+      'l\'époque « '+e.mot+' » a disparu'));
+    RECH_NOTES.forEach(n=> vrai(parSection.note.indexOf("'"+n.id+"'") >= 0,
+      'la note « '+n.mot+' » a disparu'));
+    originesRech().forEach(o=> vrai(parSection.origine.indexOf("'"+o.id+"'") >= 0,
+      'l\'origine « '+o.mot+' » a disparu'));
+    ambiancesRech().forEach(a=> vrai(parSection.genre.indexOf("'"+a.id+"'") >= 0,
+      'la tuile « '+(a.t||a.mot)+' » a disparu'));
+    vrai(parSection.genre.indexOf('Comédie') >= 0, 'les genres TMDB ont disparu');
+    vrai(parSection.plate.indexOf('Netflix') >= 0, 'les plateformes déclarées ont disparu');
+  });
+
+  test('RA2 — les listes restent pilotées par la famille', ()=>{
+    const r = rechNG('anime');
+    egal(originesRech().length, 3, 'la règle « animés = 3 origines » est cassée');
+    sectionFiltreOuverte = 'duree';
+    /* Hors films, la durée ne disparaît plus : elle parle en épisodes. */
+    const d = optionsSectionFiltre('duree');
+    vrai(d.indexOf('ep25') >= 0 && d.indexOf('ep50') >= 0, 'les formats épisodes manquent');
+    vrai(d.indexOf("'court'") < 0, 'une durée de film est proposée sur les animés');
+    r.fam = 'film';
+    const d2 = optionsSectionFiltre('duree');
+    vrai(d2.indexOf("'court'") >= 0 && d2.indexOf('ep25') < 0,
+         'les formats épisodes sont proposés sur les films');
+    /* Et « Série / animé » n'existe pas dans la famille Films. */
+    vrai(!sectionsFiltresRech().some(s => s.id === 'statut'),
+         'le statut est proposé sur les films — TMDB refuserait la requête');
+    r.fam = 'serie';
+    vrai(sectionsFiltresRech().some(s => s.id === 'statut'), 'le statut manque sur les séries');
+  });
+
+  test('RA3 — les sous-genres animés n\'apparaissent que sur Animés et Tout', ()=>{
+    const r = rechNG('tout');
+    genresTMDB.tv = [{id:18,nom:'Drame'}]; genresTMDB.movie = [{id:18,nom:'Drame'}];
+    sectionFiltreOuverte = 'genre';
+    vrai(optionsSectionFiltre('genre').indexOf('shonen') >= 0, 'absents sur « Tout »');
+    r.fam = 'anime';
+    vrai(optionsSectionFiltre('genre').indexOf('shonen') >= 0, 'absents sur « Animés »');
+    r.fam = 'film';
+    vrai(optionsSectionFiltre('genre').indexOf('shonen') < 0, 'proposés sur « Films »');
+  });
+
+  test('RA4 — une ambiance ne recopie JAMAIS ses règles dans les filtres', ()=>{
+    const r = rechNG('tout');
+    sansEcran(()=>{
+      enregistrerAmbiance({ id:'a1', emoji:'🌙', nom:'Soirée',
+        regles: ambianceRegles({ fam:'serie', genre:['Drame'], note:'8', gore:'non' }),
+        creeLe:1 });
+    });
+    const vraiRelance = window.relancerRech; window.relancerRech = function(){};
+    try{ basculerAmbiance('a1'); }finally{ window.relancerRech = vraiRelance; }
+    egal(r.ambiance, 'a1');
+    egal(listeRech('genre'), [], 'les règles de l\'ambiance ont contaminé les filtres');
+    egal(r.note, null, 'la note de l\'ambiance a été recopiée dans l\'état ponctuel');
+    /* Mais la RECHERCHE, elle, les voit. */
+    egal(critereRech('genre'), ['Drame'], 'l\'ambiance n\'est pas prise en compte');
+    egal(critereUnRech('note'), '8');
+    egal(critereUnRech('gore'), 'non');
+    /* Et le geste est réversible d'un second appui. */
+    window.relancerRech = function(){};
+    try{ basculerAmbiance('a1'); }finally{ window.relancerRech = vraiRelance; }
+    egal(r.ambiance, null);
+    egal(critereRech('genre'), [], 'retirer l\'ambiance n\'a rien retiré');
+  });
+
+  test('RA5 — la main de la personne l\'emporte sur l\'ambiance', ()=>{
+    const r = rechNG('tout');
+    sansEcran(()=> enregistrerAmbiance({ id:'a1', emoji:'🌙', nom:'S',
+      regles: ambianceRegles({ note:'7', genre:['Drame'] }), creeLe:1 }));
+    r.ambiance = 'a1';
+    r.note = 'exc';
+    egal(critereUnRech('note'), 'exc', 'l\'ambiance écrase le choix de la personne');
+    r.genre = ['Comédie'];
+    egal(critereRech('genre').sort(), ['Comédie','Drame'], 'les genres ne se cumulent pas');
+  });
+
+  test('RA6 — « Tout effacer » ne touche pas l\'ambiance active (§9)', ()=>{
+    const r = rechNG('tout');
+    sansEcran(()=> enregistrerAmbiance({ id:'a1', emoji:'🌙', nom:'S',
+      regles: ambianceRegles({ genre:['Drame'] }), creeLe:1 }));
+    r.ambiance = 'a1'; r.genre = ['Comédie']; r.gore = 'non'; r.statut = 'finie';
+    const vraiRelance = window.relancerRech; window.relancerRech = function(){};
+    try{ viderRech(); }finally{ window.relancerRech = vraiRelance; }
+    egal(r.ambiance, 'a1', 'l\'ambiance a été emportée par « Tout effacer »');
+    egal(listeRech('genre'), []);
+    egal(r.gore, null); egal(r.statut, null);
+    egal(critereRech('genre'), ['Drame'], 'l\'ambiance ne s\'applique plus après effacement');
+  });
+
+  test('RA7 — le sous-bloc « ambiances » est daté seul', ()=>{
+    rechNG('tout');
+    vrai(Array.isArray(GOUT_BLOCS.ambiances) && GOUT_BLOCS.ambiances.indexOf('ambiances') >= 0,
+         'sans sous-bloc, créer une ambiance écraserait les genres de l\'autre appareil');
+    db.gouts.majBlocs = {};
+    sansEcran(()=> enregistrerAmbiance({ id:'a2', emoji:'✨', nom:'X',
+      regles:ambianceRegles(null), creeLe:1 }));
+    vrai(db.gouts.majBlocs.ambiances > 0, 'le bloc n\'a pas été daté');
+    egal(db.gouts.majBlocs.genres, undefined, 'les genres ont été datés au passage');
+    egal(db.gouts.majBlocs.plates, undefined, 'les plateformes ont été datées au passage');
+  });
+
+  test('RA8 — le plafond de 12 ambiances tient', ()=>{
+    rechNG('tout');
+    sansEcran(()=>{
+      for(let i = 0; i < 14; i++)
+        enregistrerAmbiance({ id:'a'+i, emoji:'✨', nom:'A'+i, regles:ambianceRegles(null), creeLe:i });
+    });
+    egal(db.gouts.ambiances.length, AMB_MAX, 'le plafond du §2 ne mord pas');
+    /* Modifier une ambiance existante passe toujours, plafond ou pas. */
+    sansEcran(()=> enregistrerAmbiance({ id:'a3', emoji:'🔥', nom:'Changée',
+      regles:ambianceRegles(null), creeLe:3 }));
+    egal(db.gouts.ambiances.length, AMB_MAX);
+    egal((db.gouts.ambiances.find(a=>a.id==='a3')||{}).nom, 'Changée',
+         'on ne peut plus modifier une ambiance quand le plafond est atteint');
+  });
+
+  test('RA9 — les pilules disent la sélection, et chacune se retire', ()=>{
+    const r = rechNG('serie');
+    genresTMDB.tv = [{id:18,nom:'Drame'}];
+    r.genre = ['Drame']; r.epoque = ['1990s']; r.gore = 'non'; r.statut = 'finie';
+    const b = boiteHtml(pilulesRech());
+    const txt = b.textContent;
+    ['drame','des années 90','sans gore','qui se finit'].forEach(m=>
+      vrai(txt.toLowerCase().indexOf(m) >= 0, 'la pilule « '+m+' » manque'));
+    /* Chaque pilule porte son retrait, et le retrait passe par la mécanique
+       existante — celle qui sait distinguer un ingrédient d'ambiance mesurée
+       d'un mot posé à la main. */
+    const boutons = [].slice.call(b.querySelectorAll('.rmot')).filter(x=> !x.classList.contains('vide'));
+    vrai(boutons.length >= 4, 'des pilules manquent');
+    boutons.forEach(x=> vrai(/peuImporteRech\('/.test(x.getAttribute('onclick') || ''),
+      'une pilule ne sait pas se retirer'));
+    /* L'époque et la durée sont du CONTEXTE (vert), « avec » est du duo
+       (orange) : la couleur porte du sens, pas de la décoration. */
+    egal(PILULE_TON.epoque, 'ctx'); egal(PILULE_TON.duree, 'ctx'); egal(PILULE_TON.avec, 'duo');
+  });
+
+  test('RA10 — l\'ambiance a une pilule NON retirable ligne à ligne (§2)', ()=>{
+    const r = rechNG('tout');
+    sansEcran(()=> enregistrerAmbiance({ id:'a1', emoji:'🌙', nom:'Soirée',
+      regles:ambianceRegles({ genre:['Drame'] }), creeLe:1 }));
+    r.ambiance = 'a1';
+    const b = boiteHtml(pilulesRech());
+    const fixe = b.querySelector('.rmot.ia.fixe');
+    vrai(fixe && fixe.textContent.indexOf('Soirée') >= 0, 'la pilule d\'ambiance manque');
+    vrai(!fixe.getAttribute('onclick'),
+         'la pilule d\'ambiance se retire ligne à ligne : le §2 l\'interdit');
+  });
+
+  test('RA11 — le statut ne part jamais sur /discover/movie', ()=>{
+    const r = rechNG('serie');
+    r.statut = 'finie';
+    const pTv = paramsSocleRech('tv');
+    egal(pTv.with_status, '3|4', 'le statut ne part pas sur les séries');
+    const pFilm = paramsSocleRech('movie');
+    egal(pFilm.with_status, undefined,
+         'with_status part sur /discover/movie : TMDB refuse la requête entière');
+  });
+
+  test('RA12 — « sans gore » s\'AJOUTE aux mots-clés déjà écartés', ()=>{
+    const r = rechNG('film');
+    r.gore = 'non';
+    egal(paramsSocleRech('movie').without_keywords, RECH_SANS_GORE);
+    /* Sur une recette qui en écarte déjà : les deux, jamais l'un à la place
+       de l'autre. C'est le même piège qu'`ajouterSansRech` a déjà réparé une
+       fois pour les genres. */
+    r.amb = null;
+    const p = paramsSocleRech('movie');
+    vrai(String(p.without_keywords).split(',').indexOf(RECH_SANS_GORE) >= 0);
+  });
+
+  test('RA13 — le tri « mes goûts » TRIE, il ne filtre jamais', ()=>{
+    rechNG('film');
+    genresTMDB.movie = [{id:18,nom:'Drame'},{id:35,nom:'Comédie'}];
+    db.movies[1] = { id:1, title:'A', genres:['Drame'], seen:true, addedAt:1 };
+    db.avis.movie['1'] = { v:1, quand:1 };
+    const l = [
+      { id:9, __media:'movie', title:'Z', genre_ids:[35], vote_average:6 },
+      { id:8, __media:'movie', title:'Y', genre_ids:[18], vote_average:6 },
+      { id:7, __media:'movie', title:'X', genre_ids:[],   vote_average:9 }
+    ];
+    poserTriRech('note', true);
+    egal(ordonnerParGoutRech(l).map(x=>x.id), [9,8,7], 'le tri « note » ne doit rien réordonner ici');
+    poserTriRech('gouts', true);
+    const t = ordonnerParGoutRech(l);
+    egal(t.length, l.length, 'le tri a FILTRÉ — c\'est la règle qu\'il ne doit jamais franchir');
+    egal(t[0].id, 8, 'le titre du genre le plus regardé n\'est pas passé devant');
+    /* Et il est STABLE : deux titres de même score gardent leur ordre d\'arrivée,
+       celui qui porte la pertinence TMDB et l\'anti-monotonie. */
+    const memes = [{ id:1, __media:'movie', genre_ids:[], vote_average:5 },
+                   { id:2, __media:'movie', genre_ids:[], vote_average:5 }];
+    egal(ordonnerParGoutRech(memes).map(x=>x.id), [1,2], 'le tri n\'est pas stable');
+  });
+
+  test('RA14 — le choix de tri est mémorisé, et la raison suit le tri', ()=>{
+    rechNG('film');
+    genresTMDB.movie = [{id:18,nom:'Drame'}];
+    poserTriRech('gouts', true);
+    egal(triRech(), 'gouts', 'le choix n\'est pas mémorisé');
+    const x = { id:5, __media:'movie', title:'A', genre_ids:[18], vote_average:8.2 };
+    vrai(raisonGoutRech(x, 'movie').indexOf('rraison') >= 0, 'aucune raison en tri « mes goûts »');
+    poserTriRech('note', true);
+    egal(triRech(), 'note');
+    egal(raisonGoutRech(x, 'movie'), '',
+         'une raison s\'affiche en tri « note » : la note est déjà la raison');
+  });
+
+  test('RA15 — le défaut à la livraison est « note », le comportement d\'aujourd\'hui', ()=>{
+    try{ localStorage.removeItem(TRI_CLE); }catch(e){}
+    egal(triRech(), 'note', 'le tri par goûts s\'applique tout seul : c\'est le point 13 qui revient');
+  });
+
+  test('RA16 — une page qui arrive ne réordonne pas ce qui est à l\'écran', ()=>{
+    const c = codeDe(chargerGrilleRech);
+    vrai(c.indexOf('ordonnerParGoutRech(fournee)') >= 0,
+         'le tri ne s\'applique plus à la fournée');
+    vrai(c.indexOf('ordonnerParGoutRech(r.res)') < 0,
+         'le tri réordonne toute la grille à chaque « Voir plus » — règle « jamais sous le doigt »');
+    vrai(codeDe(basculerTriRech).indexOf('ordonnerParGoutRech(r.res)') >= 0,
+         'basculer le tri ne réordonne pas ce qui est déjà chargé');
+  });
+
+  test('RA17 — le meilleur match cycle et n\'est pas dupliqué dans la grille', ()=>{
+    const r = rechNG('film');
+    r.res = [ { id:1, __media:'movie', title:'A', vote_average:8 },
+              { id:2, __media:'movie', title:'B', vote_average:7 },
+              { id:3, __media:'movie', title:'C', vote_average:6 } ];
+    r.charge = true; r.total = 3;
+    /* Sans sélection, pas de carte : « le meilleur » ne veut rien dire. */
+    egal(titreMatchRech(), null, 'une carte s\'affiche sans aucun critère');
+    r.genre = ['Drame'];
+    egal(titreMatchRech().id, 1);
+    sansEcran(()=> matchSuivantRech());
+    egal(titreMatchRech().id, 2);
+    sansEcran(()=>{ matchSuivantRech(); matchSuivantRech(); });
+    egal(titreMatchRech().id, 1, '« Suivant → » ne cycle pas');
+    /* Et la grille ne le remontre pas. */
+    const g = boiteHtml(grilleRech());
+    const ids = [].slice.call(g.querySelectorAll('.jq'))
+      .map(b => (b.getAttribute('onclick').match(/ouvrirTitre\((\d+)/) || [])[1]);
+    egal(ids, ['2','3'], 'le titre montré en carte est dupliqué dans la grille');
+  });
+
+  test('RA18 — le duo est 100 % local et parle des DEUX côtés', ()=>{
+    const r = rechNG('film');
+    genresTMDB.movie = [{id:18,nom:'Drame'}];
+    db.movies[1] = { id:1, title:'A', genres:['Drame'], seen:true, addedAt:1 };
+    partage.suivis = [{ id:'u1', pseudo:'Sarah' }];
+    biblios['u1'] = { movies:{ 42:{ id:42, title:'Commun', genres:['Drame'] } }, shows:{} };
+    profilRechCache.duoSig = null;
+    r.avec = 'u1';
+    poserTriRech('gouts', true);
+    const x = { id:42, __media:'movie', title:'Commun', genre_ids:[18], vote_average:7 };
+    const raison = raisonGoutRech(x, 'movie');
+    vrai(raison.indexOf('toi :') >= 0 && raison.indexOf('Sarah :') >= 0,
+         'les deux côtés ne sont pas dits');
+    /* Le titre commun aux deux monte : c\'est la définition de l\'intersection. */
+    const seul = { id:43, __media:'movie', title:'Seul', genre_ids:[18], vote_average:7 };
+    vrai(scoreGoutRech(x) > scoreGoutRech(seul),
+         'un titre de la bibliothèque du proche ne pèse pas plus lourd');
+    /* La carte le dit aussi : « Votre » et non « Ton ». */
+    r.res = [x]; r.charge = true; r.genre = ['Drame'];
+    vrai(boiteHtml(carteMatchRech()).textContent.indexOf('Votre meilleur match') >= 0,
+         'la carte parle au singulier en mode duo');
+    partage.suivis = []; delete biblios['u1']; profilRechCache.duoSig = null;
+  });
+
+  test('RA19 — le compteur de la feuille dit le MÊME chiffre que la barre', ()=>{
+    const r = rechNG('film');
+    r.total = 1234;
+    /* Le même formatage que la barre — espace fine insécable comprise : c'est
+       `toLocaleString('fr-FR')` des deux côtés, et le comparer à une chaîne
+       écrite à la main ferait échouer le cas pour une raison typographique. */
+    vrai(texteVoirFiltresRech().indexOf((1234).toLocaleString('fr-FR')) >= 0,
+         'le bouton ne dit pas le total');
+    /* Et il garde la convention « moins de » des unions : deux compteurs qui
+       ne disent pas la même chose, c\'est un compteur qui ment. */
+    r.pasvu = 'non';
+    vrai(prefixeCompteurRech() === 'moins de ', 'le tamis ne déclenche plus le préfixe');
+    vrai(texteVoirFiltresRech().indexOf('moins de') >= 0,
+         'la feuille annonce un total exact que la barre annonce approché');
+  });
+
+  test('RA20 — la passerelle « enregistrer ces filtres » reprend la sélection', ()=>{
+    const r = rechNG('serie');
+    r.genre = ['Drame']; r.note = '8'; r.gore = 'non'; r.statut = 'finie';
+    const g = reglesDepuisSelectionRech();
+    egal(g.fam, 'serie'); egal(g.genre, ['Drame']); egal(g.note, '8');
+    egal(g.gore, 'non'); egal(g.statut, 'finie');
+    /* Et une ambiance ainsi construite, réactivée, rend la même recherche. */
+    const r2 = rechNG('tout');
+    sansEcran(()=> enregistrerAmbiance({ id:'a9', emoji:'✨', nom:'Reprise', regles:g, creeLe:1 }));
+    r2.ambiance = 'a9'; r2.fam = 'serie';
+    egal(critereRech('genre'), ['Drame']);
+    egal(critereUnRech('note'), '8');
+    egal(paramsSocleRech('tv').with_status, '3|4');
+  });
+
+
+  /* ===== Ce que la relecture du 10/08 a trouvé absent, côté Recherche =====
+
+     Le défaut le plus visible du lot — la feuille détruite au premier clic —
+     est passé à travers vingt cas, parce qu'aucun ne cliquait DEUX fois. Les
+     cas ci-dessous suivent des gestes, pas des états. */
+  groupe('SPEC-05 lot A — corrections de relecture');
+
+  test('RA21 — la feuille Filtres survit à un clic, et à dix', ()=>{
+    const r = rechNG('film');
+    genresTMDB.movie = [{id:18,nom:'Drame'},{id:35,nom:'Comédie'}];
+    const vues = [];
+    const vraiOpen = window.openSheet, vraiRelance = window.relancerRech;
+    window.openSheet = (html, nom)=>{ vues.push(nom); };
+    window.relancerRech = function(){};
+    try{
+      ouvrirFiltresRech();
+      poserFiltreRech('genre', 'Drame');
+      poserFiltreRech('note', 'exc');
+      poserFiltreRech('epoque', '1990s');
+      /* AUCUNE autre feuille ne doit s'être ouverte : ni « Genre ou ambiance »,
+         ni « Déjà vu ou pas ? ». Que la nôtre, redessinée sur place. */
+      egal(vues.filter(n => n !== 'filtres-rech'), [],
+           'un clic dans la feuille Filtres ouvre une autre feuille par-dessus');
+      vrai(vues.length >= 4, 'la feuille ne se redessine pas après un clic');
+      /* Et la section ouverte le reste. */
+      egal(sectionFiltreOuverte, premiereSectionFiltre(),
+           'la section ouverte s\'est refermée sous le doigt');
+    }finally{ window.openSheet = vraiOpen; window.relancerRech = vraiRelance; }
+  });
+
+  test('RA22 — retirer une pilule n\'ouvre RIEN', ()=>{
+    const r = rechNG('film');
+    genresTMDB.movie = [{id:18,nom:'Drame'}];
+    r.genre = ['Drame']; r.note = 'exc';
+    const vues = [];
+    const vraiOpen = window.openSheet, vraiRelance = window.relancerRech;
+    window.openSheet = (html, nom)=>{ vues.push(nom); };
+    window.relancerRech = function(){};
+    try{
+      peuImporteRech('genre');
+      peuImporteRech('note');
+      egal(vues, [], 'le ✕ d\'une pilule ouvre la question suivante');
+      egal(listeRech('genre'), [], 'la pilule ne s\'est pas retirée');
+      egal(r.note, null);
+    }finally{ window.openSheet = vraiOpen; window.relancerRech = vraiRelance; }
+  });
+
+  test('RA23 — poser un mot ne décide plus d\'un écran', ()=>{
+    /* La cause des trois symptômes tenait dans la queue de `poserMotRech` :
+       une fonction d'ÉTAT qui décidait de la NAVIGATION. */
+    const c = codeDe(poserMotRech);
+    ['ouvrirMotRech','ouvrirCritereSuivantRech','ouvrirAjoutRech','openSheet'].forEach(f=>
+      vrai(c.indexOf(f) < 0, 'poserMotRech ouvre encore « '+f+' » : le défaut peut revenir'));
+    /* Et la navigation existe toujours, là où on la veut. */
+    vrai(codeDe(repondreMotRech).indexOf('ouvrirCritereSuivantRech') >= 0,
+         'la feuille « une question à la fois » ne sait plus avancer');
+  });
+
+  test('RA24 — ep25 / ep50 atteignent VRAIMENT TMDB', ()=>{
+    const r = rechNG('serie');
+    r.duree = ['ep50'];
+    const v = variantesDureeRech('tv');
+    egal(v.length, 1, 'aucune variante de durée produite sur les séries');
+    egal(v[0]['with_runtime.lte'], '50',
+         'le format épisode ne part pas à TMDB : la pilule ne filtre rien');
+    egal(v[0]['with_runtime.gte'], '1',
+         'sans plancher, TMDB fait entrer les fiches sans durée renseignée');
+    /* Et les films gardent leur table à eux. */
+    r.fam = 'film'; r.duree = ['court'];
+    egal(variantesDureeRech('movie')[0]['with_runtime.lte'], '90');
+    /* Un identifiant d'une table qui n'est pas celle du média ne produit rien
+       plutôt qu'une borne absurde. */
+    r.duree = ['ep25'];
+    egal(variantesDureeRech('movie'), [{}]);
+  });
+
+  test('RA25 — le tri est RÉVERSIBLE, et pas seulement dans son commentaire', ()=>{
+    const r = rechNG('film');
+    genresTMDB.movie = [{id:18,nom:'Drame'},{id:35,nom:'Comédie'}];
+    db.movies[1] = { id:1, title:'A', genres:['Drame'], seen:true, addedAt:1 };
+    /* L'ordre d'ARRIVÉE : c'est lui qui porte la pertinence TMDB. */
+    r.res = [ { id:9, __media:'movie', title:'Z', genre_ids:[35], vote_average:6, __rang:0 },
+              { id:8, __media:'movie', title:'Y', genre_ids:[18], vote_average:6, __rang:1 },
+              { id:7, __media:'movie', title:'X', genre_ids:[],   vote_average:9, __rang:2 } ];
+    poserTriRech('note', true);
+    sansEcran(()=> basculerTriRech('gouts'));
+    egal(r.res.map(x=>x.id)[0], 8, 'le tri par goûts n\'a pas mordu');
+    /* LE RETOUR — c'est ce qui ne marchait pas : la grille restait dans l'ordre
+       des goûts, seules les raisons disparaissaient. */
+    sansEcran(()=> basculerTriRech('note'));
+    egal(r.res.map(x=>x.id), [9,8,7],
+         'revenir à « note » ne restitue pas l\'ordre d\'arrivée : la bascule est à sens unique');
+    /* Et l'aller-retour est idempotent. */
+    sansEcran(()=> basculerTriRech('gouts'));
+    sansEcran(()=> basculerTriRech('note'));
+    egal(r.res.map(x=>x.id), [9,8,7]);
+  });
+
+  test('RA26 — l\'ordre d\'arrivée est estampillé à l\'arrivée', ()=>{
+    const c = codeDe(chargerGrilleRech);
+    vrai(c.indexOf('__rang') >= 0,
+         'rien ne mémorise l\'ordre d\'arrivée : « note » n\'a plus rien à restituer');
+    vrai(c.indexOf('const depart = suite ? r.res.length : 0') >= 0,
+         'la numérotation ne continue pas d\'une fournée à l\'autre');
+  });
+
+  test('RA27 — en tri « note », la carte montre le mieux noté', ()=>{
+    const r = rechNG('film');
+    /* Volontairement dans le désordre : c'est ce que rend
+       `espacerGenresRech(melangerRech(…))`. */
+    r.res = [ { id:9, __media:'movie', title:'Z', vote_average:6.1, __rang:0 },
+              { id:7, __media:'movie', title:'X', vote_average:8.9, __rang:1 },
+              { id:8, __media:'movie', title:'Y', vote_average:7.4, __rang:2 } ];
+    r.charge = true; r.genre = ['Drame'];
+    poserTriRech('note', true);
+    egal(titreMatchRech().id, 7, 'la carte montre un titre quelconque au lieu du mieux noté');
+    sansEcran(()=> matchSuivantRech());
+    egal(titreMatchRech().id, 8, '« Suivant → » ne descend pas le classement');
+    /* Et la GRILLE, elle, ne bouge pas : son ordre est celui d\'aujourd\'hui. */
+    egal(r.res.map(x=>x.id), [9,7,8],
+         'la carte a réordonné la grille — le §9 promet le comportement d\'aujourd\'hui');
+  });
+
+  test('RA28 — les trois critères neufs sont répondables depuis le jeu', ()=>{
+    const r = rechNG('serie');
+    partage.suivis = [{ id:'u1', pseudo:'Sarah' }];
+    const vues = [];
+    const vraiOpen = window.openSheet;
+    window.openSheet = (html)=>{ vues.push(html); };
+    try{
+      ['statut','gore','avec'].forEach(c=>{ vues.length = 0; ouvrirMotRech(c);
+        vrai(/repondreMotRech\(/.test(vues[0] || ''),
+             'le critère « '+c+' » ouvre une feuille sans une seule option'); });
+    }finally{ window.openSheet = vraiOpen; partage.suivis = []; }
+  });
+
+  test('RA29 — activer une ambiance n\'écrase pas le tri mémorisé', ()=>{
+    const r = rechNG('tout');
+    poserTriRech('gouts', true);
+    sansEcran(()=> enregistrerAmbiance({ id:'a1', emoji:'🌙', nom:'S',
+      regles: ambianceRegles({ genre:['Drame'] }), creeLe:1 }));
+    const vraiRelance = window.relancerRech; window.relancerRech = function(){};
+    try{ sansEcran(()=> basculerAmbiance('a1')); }finally{ window.relancerRech = vraiRelance; }
+    egal(triRech(), 'gouts',
+         'une ambiance a remis le tri à « note » pour toujours : le §7 promet le dernier choix');
+  });
+
+  test('RA30 — les deux textes que le lot devait changer', ()=>{
+    const c = codeDe(champRech) + codeDe(grilleRech);
+    vrai(/une envie/.test(c), 'la barre ne dit pas qu\'on peut y écrire une envie (§0.1)');
+    vrai(/Retire une pilule/.test(c),
+         'l\'écran vide parle encore de « retirer un mot » : il n\'y a plus de phrase (§5)');
+  });
+
+  /* ============ SPEC-05 lot B — l'IA de la Recherche ============
+
+     Ce que ces cas empêchent :
+       · qu'une requête IA parte pendant la frappe, ou alors qu'un titre a été
+         trouvé (le §3 accorde ZÉRO requête à ce cas-là) ;
+       · qu'un critère rendu par le modèle soit posé autrement que par la
+         mécanique de l'écran — une IA n'a pas de passe-droit sur les règles ;
+       · qu'une pilule fantôme s'affiche quand rien n'a été compris ;
+       · que la carte « Pourquoi lui » se redemande à chaque ré-ouverture ;
+       · que l'interrupteur « Recherche » éteint laisse passer quoi que ce soit. */
+  groupe('SPEC-05 lot B — envie, ambiance décrite, pourquoi lui');
+
+  function rechIA(fam){
+    const r = rechNG(fam || 'film');
+    db.gouts.ia = { decouvrir:false, recherche:true };
+    db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
+    genresTMDB.movie = [{id:80,nom:'Crime'},{id:18,nom:'Drame'},{id:35,nom:'Comédie'}];
+    genresTMDB.tv = [{id:80,nom:'Crime'}];
+    try{ localStorage.removeItem(IA_CLE); localStorage.removeItem(IA_QUOTA_CLE); }catch(e){}
+    return r;
+  }
+
+  test('RB1 — l\'heuristique d\'envie ne se déclenche jamais sur un titre trouvé', ()=>{
+    egal(ressembleAUneEnvieIA('un braquage stylé pas trop long', 0, 0), true);
+    egal(ressembleAUneEnvieIA('un braquage stylé pas trop long', 3, 0), false,
+         'une envie part alors que TMDB a trouvé des titres : le §3 dit zéro requête');
+    egal(ressembleAUneEnvieIA('un braquage stylé pas trop long', 0, 2), false,
+         'une envie part alors qu\'une personne a été trouvée');
+    egal(ressembleAUneEnvieIA('severance', 0, 0), false, 'un mot seul est traité comme une envie');
+    egal(ressembleAUneEnvieIA('game of thrones', 0, 0), false, 'trois mots ne font pas une envie');
+    egal(ressembleAUneEnvieIA('the last of us', 0, 0), true,
+         'quatre mots franchissent le seuil du §3 — et c\'est pourquoi le seuil ne suffit pas seul : '+
+         'ce cas ne se produit que si TMDB n\'a RIEN trouvé, ce qui n\'arrive pas sur un vrai titre');
+  });
+
+  testAsync('RB2 — interrupteur Recherche éteint : zéro requête depuis la barre', async ()=>{
+    const r = rechIA('film');
+    db.gouts.ia.recherche = false;
+    let appels = 0;
+    const vrai_ = window.sbFetch;
+    window.sbFetch = async ()=>{ appels++; return { criteres:[] }; };
+    try{
+      routerEnvieIA('un braquage stylé pas trop long', 0, 0);
+      await new Promise(r2=> setTimeout(r2, 30));
+      egal(appels, 0, 'la barre a parlé au relais avec l\'interrupteur éteint');
+    }finally{ window.sbFetch = vrai_; }
+  });
+
+  testAsync('RB3 — une envie comprise devient des pilules, et rien d\'autre ne bouge', async ()=>{
+    const r = rechIA('film');
+    const vrai_ = window.sbFetch, vraiRelance = window.relancerRech, vraiToast = window.toast;
+    let dits = [];
+    window.sbFetch = async ()=>({ criteres:[ { cle:'genre', val:'polar' },
+                                             { cle:'duree', val:'court' },
+                                             { cle:'note',  val:'7' } ] });
+    window.relancerRech = function(){}; window.toast = m => dits.push(m);
+    try{
+      await traduireEnvieIA('un braquage stylé pas trop long');
+      egal(listeRech('genre'), ['Crime'], 'le genre traduit n\'a pas été posé');
+      egal(listeRech('duree'), ['court']);
+      egal(r.note, '7');
+      egal(r.q, '', 'le champ garde l\'envie : l\'écran resterait en mode « titre »');
+      vrai(dits.some(m => /1 requête/.test(m)), 'la ligne de confirmation manque');
+    }finally{ window.sbFetch = vrai_; window.relancerRech = vraiRelance; window.toast = vraiToast; }
+  });
+
+  testAsync('RB4 — rien de compris : un message honnête, AUCUNE pilule fantôme', async ()=>{
+    const r = rechIA('film');
+    const vrai_ = window.sbFetch, vraiRelance = window.relancerRech, vraiToast = window.toast;
+    let dits = [];
+    window.sbFetch = async ()=>({ indisponible:true });     // fournisseurs saturés
+    window.relancerRech = function(){}; window.toast = m => dits.push(m);
+    try{
+      await traduireEnvieIA('bloumf zorglub tagada tsoin');
+      egal(listeRech('genre'), [], 'une pilule est apparue sans qu\'on ait rien compris');
+      egal(r.note, null);
+      vrai(dits.some(m => /Pas compris/.test(m)), 'aucun message honnête');
+    }finally{ window.sbFetch = vrai_; window.relancerRech = vraiRelance; window.toast = vraiToast; }
+  });
+
+  test('RB5 — les critères se posent par la mécanique de l\'écran, pas à la main', ()=>{
+    vrai(codeDe(appliquerCriteresIA).indexOf('poserMotRech') >= 0,
+         'l\'IA écrit dans l\'état sans passer par poserMotRech : elle contourne les règles');
+    /* Un genre que la famille ne sait pas exprimer n'est pas posé : une pilule
+       qui ne filtre rien serait un mensonge à l'écran. */
+    const r = rechIA('film');
+    genresTMDB.movie = [{id:18,nom:'Drame'}];
+    const vraiRelance = window.relancerRech; window.relancerRech = function(){};
+    try{ egal(appliquerCriteresIA([{ cle:'genre', val:'western' }]), 0); }
+    finally{ window.relancerRech = vraiRelance; }
+    egal(listeRech('genre'), [], 'un genre absent du catalogue a été posé quand même');
+    /* Et une clé inventée ne pose rien du tout. */
+    window.relancerRech = function(){};
+    try{ egal(appliquerCriteresIA([{ cle:'humeur', val:'triste' }]), 0); }
+    finally{ window.relancerRech = vraiRelance; }
+  });
+
+  testAsync('RB6 — une description malformée bascule sur le manuel, sans réessai', async ()=>{
+    rechIA('film');
+    ouvrirCreaAmbiance(null);
+    brouillonAmb.onglet = 'ia';
+    brouillonAmb.desc = 'des soirées frissons';
+    let appels = 0;
+    const vrai_ = window.sbFetch, vraiToast = window.toast;
+    window.sbFetch = async ()=>{ appels++; return { indisponible:true }; };
+    window.toast = function(){};
+    try{
+      await traduireAmbianceIA();
+      egal(appels, 1, 'un réessai : le §6 l\'interdit');
+      egal(brouillonAmb.onglet, 'man', 'on ne bascule pas sur le réglage manuel');
+    }finally{ window.sbFetch = vrai_; window.toast = vraiToast; closeSheet(); }
+  });
+
+  testAsync('RB7 — une description comprise remplit les réglages, et tout reste modifiable', async ()=>{
+    rechIA('film');
+    ouvrirCreaAmbiance(null);
+    brouillonAmb.onglet = 'ia';
+    brouillonAmb.desc = 'frissons sans gore, des séries, 50 min max, du bien noté';
+    const vrai_ = window.sbFetch, vraiToast = window.toast;
+    window.sbFetch = async ()=>({ criteres:[ { cle:'fam', val:'serie' },
+                                             { cle:'gore', val:'non' },
+                                             { cle:'duree', val:'ep50' },
+                                             { cle:'note', val:'8' } ],
+                                  nom:'Frissons doux', emoji:'🌙' });
+    window.toast = function(){};
+    try{
+      await traduireAmbianceIA();
+      const g = brouillonAmb.regles;
+      egal(g.fam, 'serie'); egal(g.gore, 'non'); egal(g.duree, ['ep50']); egal(g.note, '8');
+      egal(brouillonAmb.nom, 'Frissons doux'); egal(brouillonAmb.emoji, '🌙');
+      egal(brouillonAmb.source, 'ia', 'le badge ne dit pas d\'où viennent les réglages');
+      /* « L'IA propose, l'utilisateur décide » : toucher une ligne le dit. */
+      sansEcran(()=> cyclerAmb('gore'));
+      egal(brouillonAmb.regles.gore, null, 'la ligne n\'est plus modifiable');
+      egal(brouillonAmb.source, 'modifie', 'le badge prétend encore que tout vient de l\'IA');
+    }finally{ window.sbFetch = vrai_; window.toast = vraiToast; closeSheet(); }
+  });
+
+  test('RB8 — l\'onglet IA n\'existe pas quand l\'interrupteur est éteint', ()=>{
+    rechIA('film');
+    db.gouts.ia.recherche = false;
+    egal(iaRechDispo(), false);
+    ouvrirCreaAmbiance(null);
+    const f = document.getElementById('sheetin');
+    egal(f.querySelectorAll('.ongl').length, 0,
+         'un onglet « ✦ Décris-la » est proposé alors que rien ne se passera derrière');
+    closeSheet();
+    db.gouts.ia.recherche = true;
+    vrai(iaRechDispo(), 'l\'onglet IA reste caché alors que l\'interrupteur est allumé');
+  });
+
+  test('RB9 — « Pourquoi lui » ne s\'affiche pas sans sélection active', ()=>{
+    const r = rechIA('film');
+    egal(selectionActiveRech(), false);
+    egal(blocPourquoiIA('movie', 42, 'X'), '',
+         'la carte s\'affiche sans critères : « pourquoi il te correspond » à QUOI ?');
+    /* Interrupteur éteint : rien non plus, même avec une sélection. */
+    r.genre = ['Drame'];
+    db.gouts.ia.recherche = false;
+    egal(blocPourquoiIA('movie', 42, 'X'), '');
+  });
+
+  test('RB10 — le cache de « Pourquoi lui » dépend du titre ET des critères', ()=>{
+    const r = rechIA('film');
+    r.genre = ['Drame'];
+    const c1 = clePourquoiIA('movie', 42);
+    r.note = 'exc';
+    const c2 = clePourquoiIA('movie', 42);
+    vrai(c1 !== c2, 'la même phrase serait resservie sous une autre sélection');
+    const o = lireCacheIA();
+    o.rech.pourquoi[c2] = { quand: Date.now(), texte:'Un polar nerveux, dans la veine de Drive.' };
+    ecrireCacheIA(o);
+    egal(lirePourquoiIA('movie', 42), 'Un polar nerveux, dans la veine de Drive.');
+    vrai(blocPourquoiIA('movie', 42, 'X').indexOf('Pourquoi il te correspond') >= 0);
+    /* Trente et un jours plus tard, elle a expiré. */
+    const o2 = lireCacheIA();
+    o2.rech.pourquoi[c2].quand = Date.now() - 31 * 86400000;
+    ecrireCacheIA(o2);
+    egal(lirePourquoiIA('movie', 42), null, 'une phrase de plus de 30 jours est resservie');
+  });
+
+  testAsync('RB11 — un échec est mémorisé : pas de rafale en rouvrant l\'aperçu', async ()=>{
+    const r = rechIA('film');
+    r.genre = ['Drame'];
+    let appels = 0;
+    const vrai_ = window.sbFetch;
+    window.sbFetch = async ()=>{ appels++; return { indisponible:true }; };
+    try{
+      const cle = clePourquoiIA('movie', 77);
+      await chargerPourquoiIA('movie', 77, 'X', cle);
+      egal(appels, 1);
+      /* Le second affichage ne redemande pas : l'échec est en cache. */
+      egal(blocPourquoiIA('movie', 77, 'X'), '');
+      await new Promise(r2=> setTimeout(r2, 20));
+      egal(appels, 1, 'chaque ré-ouverture de l\'aperçu repaie la même réponse');
+    }finally{ window.sbFetch = vrai_; }
+  });
+
+  test('RB12 — le synopsis reste intact sous la carte', ()=>{
+    const c = codeDe(viewPreview);
+    const iPq = c.indexOf('blocPourquoiIA');
+    const iSyn = c.indexOf('Synopsis');
+    vrai(iPq >= 0 && iSyn > iPq,
+         'la carte a pris la place du synopsis — le §8 exige qu\'il reste dessous, intact');
+    vrai(/from === 'search'/.test(c),
+         'la carte s\'affiche hors d\'une recherche, où il n\'y a aucun critère à expliquer');
+  });
+
+  test('RB13 — l\'indicateur de quota ne sort jamais des feuilles IA', ()=>{
+    rechIA('film');
+    /* Il est dans la feuille de création d'ambiance… */
+    vrai(indicateurQuotaIA().indexOf('requêtes restantes') >= 0);
+    vrai(codeDe(corpsCreaAmbianceIALotB).indexOf('indicateurQuotaIA') >= 0);
+    /* …et nulle part ailleurs : ni sur les pilules, ni sur la grille, ni sur
+       le hero de Découvrir. SPEC-04 §4.4 : « coût affiché nulle part ». */
+    [pilulesRech, grilleRech, barreTriRech, carteMatchRech, propositionJourHtml, vitrineBody]
+      .forEach(f=> vrai(codeDe(f).indexOf('indicateurQuotaIA') < 0,
+        'un indicateur de quota s\'est invité sur un écran principal'));
+  });
+
+  test('RB14 — le compte de la minute glisse, il ne s\'accumule pas', ()=>{
+    try{ localStorage.setItem(IA_QUOTA_CLE, JSON.stringify([Date.now() - 90000, Date.now()])); }catch(e){}
+    egal(lireQuotaIA().length, 1, 'une requête d\'il y a 90 s compte encore dans la minute');
+  });
+
+
+  /* ===== Lot RB — ce que la relecture a trouvé absent ===== */
+  groupe('SPEC-05 lot B — corrections de relecture');
+
+  testAsync('RB15 — l\'IA ne part JAMAIS pendant la frappe', async ()=>{
+    const r = rechIA('film');
+    let appels = 0;
+    const vrai_ = window.sbFetch, vraiTmdb = window.tmdb, vraiPeindre = window.peindreRech;
+    window.sbFetch = async ()=>{ appels++; return { criteres:[{cle:'genre',val:'polar'}] }; };
+    window.tmdb = async ()=>({ results: [] });      // rien trouvé : le pire cas
+    window.peindreRech = function(){};
+    try{
+      /* Exactement le geste du défaut : on tape, on marque une pause. */
+      saisieRech('un braquage stylé pas trop long');
+      await new Promise(r2=> setTimeout(r2, RECH_ATTENTE + 250));
+      egal(appels, 0,
+           'la frappe a réveillé le relais : le §3 dit « uniquement à la validation », deux fois');
+      egal(r.q, 'un braquage stylé pas trop long', 'le champ a été vidé sous les doigts');
+      /* Et la validation, elle, part. */
+      await lancerTitre(true);
+      await new Promise(r2=> setTimeout(r2, 60));
+      egal(appels, 1, 'la validation ne réveille plus rien du tout');
+    }finally{
+      window.sbFetch = vrai_; window.tmdb = vraiTmdb; window.peindreRech = vraiPeindre;
+      clearTimeout(rechTimer);
+    }
+  });
+
+  test('RB16 — le drapeau de validation ne peut pas être levé par accident', ()=>{
+    /* `setTimeout(lancerTitre, 320)` passerait le retard réel en argument, ce
+       qui lèverait le drapeau. La fonction anonyme est donc la correction, pas
+       une coquetterie. */
+    vrai(codeDe(saisieRech).indexOf('lancerTitre(false)') >= 0,
+         'la minuterie de frappe peut passer pour une validation');
+    vrai(codeDe(chercherTitre).indexOf('valide && typeof routerEnvieIA') >= 0,
+         'le routeur d\'envie ne regarde plus si la personne a validé');
+  });
+
+  testAsync('RB17 — une envie comprise n\'ouvre AUCUNE feuille', async ()=>{
+    const r = rechIA('film');
+    genresTMDB.movie = [{id:80,nom:'Crime'},{id:18,nom:'Drame'}];
+    const vues = [];
+    const vrai_ = window.sbFetch, vraiOpen = window.openSheet,
+          vraiRelance = window.relancerRech, vraiToast = window.toast;
+    window.sbFetch = async ()=>({ criteres:[ { cle:'genre', val:'polar' },
+                                             { cle:'duree', val:'court' },
+                                             { cle:'note',  val:'7' } ] });
+    window.openSheet = (h, n)=>{ vues.push(n || 'sans-nom'); };
+    window.relancerRech = function(){}; window.toast = function(){};
+    try{
+      await traduireEnvieIA('un braquage stylé pas trop long');
+      egal(vues, [], 'une envie à trois critères a empilé trois feuilles');
+      egal(listeRech('genre'), ['Crime'], 'les critères n\'ont pas été posés');
+    }finally{
+      window.sbFetch = vrai_; window.openSheet = vraiOpen;
+      window.relancerRech = vraiRelance; window.toast = vraiToast;
+    }
+  });
+
+  testAsync('RB18 — l\'indicateur ne compte que ce qui a coûté', async ()=>{
+    rechIA('film');
+    try{ localStorage.removeItem(IA_QUOTA_CLE); }catch(e){}
+    const vrai_ = window.sbFetch, vraiToast = window.toast, vraiRelance = window.relancerRech;
+    window.toast = function(){}; window.relancerRech = function(){};
+    window.sbFetch = async ()=>({ indisponible:true });   // saturé : aucun quota consommé
+    try{
+      await traduireEnvieIA('des soirées frissons sans gore, plutôt des séries');
+      egal(lireQuotaIA().length, 0,
+           'une requête refusée est comptée : l\'indicateur ment sur le quota restant');
+      window.sbFetch = async ()=>({ criteres:[{cle:'genre',val:'horreur'}] });
+      await traduireEnvieIA('des soirées frissons sans gore, plutôt des séries');
+      egal(lireQuotaIA().length, 1, 'une requête servie n\'est pas comptée');
+    }finally{ window.sbFetch = vrai_; window.toast = vraiToast; window.relancerRech = vraiRelance; }
+  });
+
+  testAsync('RB19 — un échec de « Pourquoi lui » ne dure pas trente jours', async ()=>{
+    const r = rechIA('film');
+    r.genre = ['Drame'];
+    const cle = clePourquoiIA('movie', 77);
+    const vrai_ = window.sbFetch;
+    window.sbFetch = async ()=>({ indisponible:true });
+    try{
+      await chargerPourquoiIA('movie', 77, 'X', cle);
+      /* Tout de suite après : on ne redemande pas — c'est « une tentative, pas
+         de rafale », et ça vaut pour un écran qu'on rouvre. */
+      vrai(entreePourquoiIA('movie', 77), 'l\'échec n\'est pas mémorisé du tout');
+      /* Deux heures plus tard : la carte a le droit de revenir. */
+      const o = lireCacheIA();
+      o.rech.pourquoi[cle].jusqua = Date.now() - 1;
+      ecrireCacheIA(o);
+      egal(entreePourquoiIA('movie', 77), null,
+           'une saturation passagère condamne la carte pour un mois');
+    }finally{ window.sbFetch = vrai_; }
+  });
+
+  /* ==================== SPEC-06 — le Duel accessible ====================
+
+     Ce que ces cas empêchent :
+       · que le bandeau devienne une rangée de SPEC-04 (§1.1) ou s'affiche là
+         où le §1.4 l'interdit ;
+       · que la paire du jour change sous le doigt ou d'un rendu à l'autre ;
+       · que « je ne l'ai pas vu » redevienne irréversible ;
+       · que la jauge mente — c'est une formule, elle se vérifie ;
+       · qu'un texte de l'app affiche un total restant de titres à départager
+         (§0.4 : le compteur encourage, il ne décourage jamais). */
+  groupe('SPEC-06 — bandeau, éclair, profil, jauge, partage');
+
+  function duelBase(n){
+    baseVierge();
+    for(let i = 1; i <= (n || 12); i++) db.movies[i] = film(i, ['Drame'], true);
+    try{ localStorage.removeItem(DUELJOUR_CLE); localStorage.removeItem(ECLAIRS_CLE); }catch(e){}
+    eclairFaitCetteSession = false;
+    duel = Object.assign({}, DUEL_VIDE);
+    return db;
+  }
+
+  test('D-J1 — la formule de la jauge, telle que le §4.3 l\'écrit', ()=>{
+    duelBase(12);
+    /* 5 titres × 5 duels → 25/25 → 100, plafonné à 97. */
+    for(let i = 1; i <= 5; i++) ecrireClassement('film', i, 1000 + i, 5);
+    egal(stabiliteDuel('film'), 97, 'le plafond de 97 % ne mord pas — 100 % serait un mensonge');
+    /* 5 × 2 → 10/25 → 40. */
+    for(let i = 1; i <= 5; i++) ecrireClassement('film', i, 1000 + i, 2);
+    egal(stabiliteDuel('film'), 40);
+    /* 3 titres classés × 5 duels → 15/25 → 60. */
+    db.classement.film = {};
+    for(let i = 1; i <= 3; i++) ecrireClassement('film', i, 1000 + i, 5);
+    egal(stabiliteDuel('film'), 60);
+    /* Rien de joué → 0. */
+    db.classement.film = {};
+    egal(stabiliteDuel('film'), 0);
+  });
+
+  test('D-J2 — la jauge est monotone : un duel de plus ne la fait jamais baisser', ()=>{
+    duelBase(12);
+    for(let i = 1; i <= 5; i++) ecrireClassement('film', i, 1000 + i, 2);
+    const avant = stabiliteDuel('film');
+    ecrireClassement('film', 1, 1050, 3);
+    vrai(stabiliteDuel('film') >= avant, 'jouer un duel a fait reculer la jauge');
+    /* Et un titre déjà à cinq duels ne la fait pas monter davantage : le min(n,5)
+       du §4.3 borne la contribution de chacun. */
+    for(let i = 1; i <= 5; i++) ecrireClassement('film', i, 1000 + i, 5);
+    const plafond = stabiliteDuel('film');
+    ecrireClassement('film', 1, 1050, 40);
+    egal(stabiliteDuel('film'), plafond, 'un seul titre très joué fait grimper la jauge à lui seul');
+  });
+
+  test('D-J3 — aucun écran n\'affiche un total restant de titres à départager', ()=>{
+    duelBase(12);
+    for(let i = 1; i <= 5; i++) ecrireClassement('film', i, 1000 + i, 5);
+    projeterPodium('film');
+    const h = sansEcran(()=> carteDuelProfil() + jaugeDuelHtml('film'));
+    vrai(!/reste|restant|encore \d+/i.test(h),
+         'un total restant s\'affiche : le §0.4 dit que le compteur encourage, jamais l\'inverse');
+    vrai(/stable à/.test(h), 'la jauge ne dit pas « stable à N % »');
+  });
+
+  test('D-1 — la paire du jour est figée pour la journée', ()=>{
+    duelBase(14);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    const a = sansEcran(()=> bandeauDuelJour());
+    vrai(a.indexOf('duoband') >= 0, 'le bandeau ne s\'affiche pas alors que tout est réuni');
+    const memo = JSON.parse(localStorage.getItem(DUELJOUR_CLE));
+    egal(memo.date, todayISO());
+    /* Le rendre dix fois ne recompose rien : la paire est mémorisée. */
+    for(let i = 0; i < 10; i++) sansEcran(()=> bandeauDuelJour());
+    egal(JSON.parse(localStorage.getItem(DUELJOUR_CLE)).paire, memo.paire,
+         'la paire du jour a changé sous le doigt');
+    /* Le lendemain, elle se recompose. */
+    memo.date = HIER;
+    localStorage.setItem(DUELJOUR_CLE, JSON.stringify(memo));
+    sansEcran(()=> bandeauDuelJour());
+    egal(JSON.parse(localStorage.getItem(DUELJOUR_CLE)).date, todayISO(),
+         'la paire de la veille est resservie aujourd\'hui');
+  });
+
+  test('D-2 — le bandeau disparaît dans TOUS les cas du §1.4', ()=>{
+    duelBase(14);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    vrai(sansEcran(()=> bandeauDuelJour()).indexOf('duoband') >= 0);
+    /* Une fois joué. */
+    marquerDuelJourJoue();
+    egal(sansEcran(()=> bandeauDuelJour()), '', 'le bandeau survit au duel du jour');
+    /* Sans famille jouable. */
+    duelBase(2);
+    egal(sansEcran(()=> bandeauDuelJour()), '',
+         'un module de duel vide s\'affiche dans Découvrir');
+    /* Pendant une session de duel en cours. */
+    duelBase(14);
+    duel.actif = true;
+    egal(sansEcran(()=> bandeauDuelJour()), '');
+    duel = Object.assign({}, DUEL_VIDE);
+  });
+
+  test('D-3 — le bandeau n\'est PAS une rangée, et il s\'ancre sur la position', ()=>{
+    const c = codeDe(vitrineBody);
+    vrai(/iR === 1/.test(c) && c.indexOf('bandeauApresPremiereRangee') >= 0,
+         'l\'ancrage n\'est pas positionnel : réordonner les rangées le perdrait');
+    /* Et il tient AUSSI quand la vitrine ne rend qu'une seule rangée — le §1.3
+       dit « après la première rangée rendue, quelle qu'elle soit ». */
+    vrai(/rangees\.length === 1/.test(c),
+         'avec une seule rangée à l\'écran, le bandeau n\'apparaîtrait jamais');
+    /* Il ne passe par aucune des mécaniques de rangée de SPEC-04. */
+    const b = codeDe(bandeauDuelJour);
+    ['RANGEE_MINI','finRangee','vgtout','Aussi pour toi','tamiser']
+      .forEach(m => vrai(b.indexOf(m) < 0, 'le bandeau touche à « '+m+' » : c\'est un encart, pas une rangée'));
+    /* Et il ne coûte AUCUNE requête : ni TMDB, ni relais IA. */
+    ['tmdb(','appelIA('].forEach(m => vrai(b.indexOf(m) < 0,
+      'le bandeau ouvre une requête — le §1.6 exige zéro coût réseau'));
+  });
+
+  test('D-4 — le duel du jour est une session de UN, sur le moteur existant', ()=>{
+    duelBase(14);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    sansEcran(()=> bandeauDuelJour());
+    sansEcran(()=> jouerDuelJour());
+    egal(duel.mode, 'jour');
+    vrai(duel.actif && duel.paire && duel.paire.length === 2, 'aucune paire servie');
+    const g = duel.paire[0], p = duel.paire[1];
+    const nAvant = duelsJoues('film', g.id);
+    sansEcran(()=> appliquerVote(0));
+    /* Le vote est passé par le chemin habituel : le score est écrit. */
+    egal(duelsJoues('film', g.id), nAvant + 1, 'le vote n\'a pas été écrit dans le classement');
+    vrai(scoreClassement('film', g.id) > scoreClassement('film', p.id) ||
+         duelsJoues('film', p.id) > 0, 'le perdant n\'a pas été touché');
+    /* Et la partie s'arrête là : une session de un. */
+    egal(duel.ecran, 'resultat', 'un second duel a été servi');
+    egal(JSON.parse(localStorage.getItem(DUELJOUR_CLE)).joue, true,
+         'le bandeau reviendra alors que le duel a été joué');
+  });
+
+  test('D-5 — « les deux » et « pas vu » comptent aussi comme joué', ()=>{
+    duelBase(14);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    sansEcran(()=>{ bandeauDuelJour(); jouerDuelJour(); duelPasse(); });
+    egal(duel.ecran, 'resultat', '« je ne sais pas » n\'a pas terminé le duel du jour');
+    egal(JSON.parse(localStorage.getItem(DUELJOUR_CLE)).joue, true);
+    /* Et par « pas vu ». */
+    duelBase(14);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    sansEcran(()=>{
+      bandeauDuelJour(); jouerDuelJour();
+      duelPasVu(duel.paire[0].media, duel.paire[0].id);
+    });
+    egal(JSON.parse(localStorage.getItem(DUELJOUR_CLE)).joue, true,
+         '« pas vu » ne compte pas comme joué : le bandeau harcèlerait');
+  });
+
+  test('D-6 — « Je ne l\'ai pas vu » est REBRANCHÉ sur l\'écran de duel', ()=>{
+    duelBase(12);
+    const d = sansEcran(()=>{ ouvrirDuel('film'); return duel; });
+    const h = sansEcran(()=> ecranDuelJeu());
+    vrai(/duelPasVu\(/.test(h),
+         'le bouton du §6.1 manque : duelPasVu redevient du code mort');
+    /* Deux boutons, un par titre — pas de question « lequel ? ». */
+    const boite = document.createElement('div'); boite.innerHTML = h;
+    egal(boite.querySelectorAll('.dpasvu button').length, 2);
+    /* Et « Je ne sais pas / les deux » est toujours là. */
+    vrai(/duelPasse\(\)/.test(h), 'le bouton du milieu a disparu');
+  });
+
+  test('D-7 — « pas vu » est RÉVERSIBLE : le titre revient dans « Titres écartés »', ()=>{
+    duelBase(12);
+    db.gouts.graines = [{ media:'movie', id:'3', nom:'F3', famille:'film' }];
+    db.gouts.grainesSuspendues = [];
+    const d = sansEcran(()=>{ ouvrirDuel('film'); return duel; });
+    sansEcran(()=> duelPasVu('movie', 3));
+    vrai(db.gouts.pasVus.indexOf('movie:3') >= 0, 'le titre n\'est pas récusé');
+    /* LA GRAINE N'EST PLUS DÉTRUITE : elle est suspendue. */
+    egal(db.gouts.graines.length, 0);
+    egal(db.gouts.grainesSuspendues.length, 1, 'la graine a été effacée pour de bon');
+    /* Il apparaît dans « Titres écartés », avec la bonne mention. */
+    const ec = titresEcartes();
+    const t = ec.find(x => x.media === 'movie' && String(x.id) === '3');
+    vrai(t && t.pasVu, 'le titre récusé n\'apparaît pas dans « Titres écartés »');
+    vrai(sansEcran(()=> blocEcartes()).indexOf('pas vu') >= 0,
+         'la mention « pas vu » manque : un 👎 et un « pas vu » ne se reprennent pas pareil');
+    /* Et la reprise le rend éligible ET restitue sa graine. */
+    sansEcran(()=> reprendreEcarte('movie', 3));
+    egal(db.gouts.pasVus.indexOf('movie:3'), -1, 'le titre reste récusé après reprise');
+    egal(db.gouts.graines.length, 1, 'la graine n\'a pas été restituée');
+    egal(db.gouts.grainesSuspendues.length, 0);
+    vrai(titresEligiblesDuel('film').some(x => String(x.id) === '3'),
+         'le titre repris n\'est pas éligible à la session suivante');
+  });
+
+  test('D-8 — un 👎 se reprend toujours comme avant', ()=>{
+    duelBase(12);
+    poserAvis('movie', 4, -1);
+    const t = titresEcartes().find(x => String(x.id) === '4');
+    vrai(t && !t.pasVu, 'un 👎 est présenté comme un « pas vu »');
+    sansEcran(()=> reprendreEcarte('movie', 4));
+    egal(avisDe('movie', 4), 0, 'le 👎 n\'a pas été retiré');
+  });
+
+  test('D-9 — la pastille compte juste, plafonne à « 9+ », et disparaît à zéro', ()=>{
+    duelBase(12);
+    egal(compteDuelPastille(), 12, 'les nouveaux titres ne sont pas comptés');
+    egal(texteDuelPastille(), '9+', 'au-delà de 9, le §4.4 demande « 9+ »');
+    /* Tous départagés : plus de pastille. */
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    db.podium.film = [];
+    for(let i = 1; i <= 12; i++) db.podium.film.push(String(i));
+    egal(compteDuelPastille(), 0);
+    egal(texteDuelPastille(), '', 'une pastille vide reste affichée');
+  });
+
+  test('D-10 — la carte est en tête du profil, et le bloc de Mes goûts est intact', ()=>{
+    const c = codeDe(viewProfile);
+    const iCarte = c.indexOf('carteDuelProfil');
+    const iCartes = c.indexOf('cartesProfil');
+    vrai(iCarte >= 0 && iCarte < iCartes, 'la carte n\'est pas en tête de Mon profil');
+    /* §0.6 — rien ne disparaît : le bloc Duel de Mes goûts est toujours appelé. */
+    vrai(codeDe(viewGouts).indexOf('carteDuelGouts') >= 0,
+         'le bloc Duel de Mes goûts a été déménagé au lieu d\'être doublé');
+    vrai(codeDe(viewGouts).indexOf('blocEcartes') >= 0, '« Titres écartés » a disparu');
+  });
+
+  test('D-11 — le panthéon exige TROIS titres, pas deux', ()=>{
+    duelBase(12);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    vrai(sansEcran(()=> pantheonHtml('film')).indexOf('dpant') >= 0);
+    db.podium.film = ['1','2'];
+    egal(sansEcran(()=> pantheonHtml('film')), '',
+         'un podium à deux marches s\'affiche : ce n\'est pas un podium');
+  });
+
+  test('D-12 — « bâti sur N duels » ne compte pas chaque duel deux fois', ()=>{
+    duelBase(12);
+    /* Un duel touche DEUX titres : deux entrées à n=1 valent UN duel. */
+    ecrireClassement('film', 1, 1016, 1);
+    ecrireClassement('film', 2, 984, 1);
+    egal(totalDuelsFamille('film'), 1, 'le total annonce le double de la réalité');
+  });
+
+  test('D-13 — l\'éclair ne se pose qu\'une fois par titre, et une par session', ()=>{
+    duelBase(12);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    let ouvertes = 0;
+    const vraiOpen = window.openSheet;
+    window.openSheet = ()=>{ ouvertes++; };
+    try{
+      db.movies[20] = film(20, ['Drame'], true);
+      proposerDuelEclair('movie', 20, 'F20');
+      egal(eclairsPoses().indexOf('movie:20') >= 0, true, 'le titre n\'est pas mémorisé');
+      /* Un second titre dans la même session n'ouvre rien (§3.3). */
+      db.movies[21] = film(21, ['Drame'], true);
+      proposerDuelEclair('movie', 21, 'F21');
+      egal(eclairsPoses().indexOf('movie:21'), -1,
+           'un second éclair a été posé dans la même session d\'app');
+      /* Et le même titre, session suivante, ne revient pas. */
+      eclairFaitCetteSession = false;
+      proposerDuelEclair('movie', 20, 'F20');
+      egal(ouvertes, 0, 'la feuille s\'est ouverte alors que les minuteurs sont différés');
+    }finally{ window.openSheet = vraiOpen; }
+  });
+
+  test('D-14 — pas d\'éclair sans adversaire légitime', ()=>{
+    duelBase(12);
+    db.podium = { film:[], serie:[], anime:[], maj:0 };
+    db.movies[30] = film(30, ['Drame'], true);
+    proposerDuelEclair('movie', 30, 'F30');
+    egal(eclairsPoses().indexOf('movie:30'), -1,
+         'une question a été posée sans podium : le duel ne voudrait rien dire');
+  });
+
+  test('D-15 — un vote éclair passe par le chemin existant, « je ne sais pas » n\'écrit rien', ()=>{
+    duelBase(12);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    const avant = duelsJoues('film', 1);
+    sansEcran(()=> voterEclair('movie', 1, 'film', 2, 1));
+    egal(duelsJoues('film', 1), avant + 1, 'le vote éclair n\'a pas été écrit');
+    vrai(scoreClassement('film', 1) > 1001, 'le gagnant n\'a pas monté');
+    /* « Je ne sais pas » est le bouton qui ferme la feuille : il n'appelle pas
+       `voterEclair`, donc rien n'est écrit. */
+    vrai(codeDe(ouvrirFeuilleEclair).indexOf('closeSheet()"') >= 0,
+         '« Je ne sais pas » écrit quelque chose');
+  });
+
+  test('D-16 — l\'éclair se déclenche sur un geste local, jamais sur une synchro', ()=>{
+    /* La garantie est de FORME : l'accroche est dans `applyWatched` et dans
+       `marquerFilmVu`, deux fonctions qu'aucun import ni aucune synchro
+       n'emprunte. Un drapeau « c'est un import » aurait pu être oublié ; un
+       chemin de code qui n'existe pas ne s'oublie pas. */
+    vrai(codeDe(applyWatched).indexOf('proposerDuelEclair') >= 0,
+         'la fin de série ne déclenche plus rien');
+    vrai(codeDe(applyWatched).indexOf('finiAvant') >= 0,
+         'sans l\'état d\'avant, une série déjà finie reposerait la question');
+    vrai(codeDe(marquerFilmVu).indexOf('proposerDuelEclair') >= 0,
+         'la fin de film ne déclenche plus rien');
+    vrai(codeDe(mergeRemote).indexOf('proposerDuelEclair') < 0,
+         'une synchro peut ouvrir la feuille éclair');
+  });
+
+  test('D-17 — le partage : trois titres au minimum, et un texte en dernier recours', ()=>{
+    duelBase(12);
+    db.podium.film = ['1','2'];
+    egal(nomsPodium('film').length, 2);
+    db.podium.film = ['1','2','3'];
+    egal(nomsPodium('film'), ['F1','F2','F3']);
+    /* Le repli texte dit la même chose sans dépendre d'aucune capacité. */
+    const c = codeDe(partagerPodium);
+    vrai(c.indexOf('navigator.canShare') >= 0 && c.indexOf('createObjectURL') >= 0 &&
+         c.indexOf('partagerPodiumTexte') >= 0,
+         'les trois chemins du §5.2 ne sont pas tous là');
+    /* Et l'affiche est chargée en CORS, sans quoi le canvas se souille et
+       `toBlob` échoue à la dernière étape. */
+    vrai(codeDe(chargerAffichePartage).indexOf("crossOrigin = 'anonymous'") >= 0,
+         'sans crossOrigin, l\'image ne se génère jamais');
+  });
+
+  testAsync('D-18 — l\'image se génère même quand les affiches ne chargent pas', async ()=>{
+    duelBase(12);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    db.podium.film = ['1','2','3'];
+    /* Réseau coupé : chaque affiche échoue, et l'image sort quand même. */
+    const vraieImage = window.Image;
+    window.Image = function(){ const o = {}; setTimeout(()=>{ if(o.onerror) o.onerror(); }, 0);
+                               return o; };
+    try{
+      const b = await construirePodiumPng('film');
+      vrai(b && b.size > 0, 'aucune image produite hors ligne');
+    }finally{ window.Image = vraieImage; }
+  });
+
+
+  /* ===== Lot D — ce que la relecture a trouvé absent ===== */
+  groupe('SPEC-06 — corrections de relecture');
+
+  testAsync('D-19 — JOUER le duel du jour ne fait AUCUNE requête réseau', async ()=>{
+    duelBase(14);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    let requetes = 0;
+    const vraiTmdb = window.tmdb, vraiSb = window.sbFetch;
+    window.tmdb = async ()=>{ requetes++; return { results: [] }; };
+    window.sbFetch = async ()=>{ requetes++; return {}; };
+    try{
+      sansEcran(()=>{ bandeauDuelJour(); jouerDuelJour(); appliquerVote(0); });
+      await new Promise(r=> setTimeout(r, 60));
+      /* C'est le §8, mot pour mot : « onglet réseau vide à l'affichage ET AU
+         JEU ». `terminerDuel` appelait `chargerSuggDuel` en mode jour, pour une
+         réponse que l'écran léger n'affiche même pas. */
+      egal(requetes, 0, 'le duel du jour a demandé quelque chose au réseau');
+    }finally{ window.tmdb = vraiTmdb; window.sbFetch = vraiSb; }
+  });
+
+  test('D-20 — une session normale, elle, garde ses suggestions', ()=>{
+    /* La correction ne doit pas priver l'écran de résultat de SESSION de sa
+       rangée « dans le même esprit » : elle, elle est affichée. */
+    const c = codeDe(terminerDuel);
+    vrai(/duel\.mode !== 'jour'/.test(c) && c.indexOf('chargerSuggDuel') >= 0,
+         'les suggestions de fin de session ont disparu avec la correction');
+  });
+
+  test('D-21 — l\'éclair passe par appliquerVote, pas par un second Elo', ()=>{
+    const c = codeDe(voterEclair);
+    vrai(c.indexOf('appliquerVote') >= 0,
+         'l\'éclair recalcule l\'Elo dans son coin : deux portes, deux comportements');
+    vrai(!/Math\.pow\(10/.test(c), 'la formule Elo est encore dupliquée');
+    vrai(!/: 32/.test(c), 'un K = 32 en dur a réapparu');
+    /* Et la règle du §1.7 s'applique donc à l'éclair comme au duel : un titre
+       non noté qui bat un titre 👍 passe à 👍. */
+    duelBase(12);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    poserAvis('movie', 2, 1);
+    egal(avisDe('movie', 1), 0, 'le titre de départ ne doit pas être noté');
+    sansEcran(()=> voterEclair('movie', 1, 'film', 2, 1));
+    egal(avisDe('movie', 1), 1,
+         'un titre non noté qui bat un 👍 ne passe pas à 👍 : la règle §1.7 ne s\'applique pas à l\'éclair');
+    egal(duel.actif, false, 'la session posée pour l\'éclair n\'a pas été refermée');
+  });
+
+  test('D-22 — la jauge est bien sur les TROIS écrans du §4.3', ()=>{
+    vrai(codeDe(ecranDuelResultat).indexOf('jaugeDuelHtml') >= 0,
+         'la jauge manque sur le résultat de session — le §4.3 la nomme pourtant');
+    vrai(codeDe(ecranResultatDuelJour).indexOf('jaugeDuelHtml') >= 0);
+    vrai(codeDe(carteDuelProfil).indexOf('jaugeDuelHtml') >= 0);
+  });
+
+  test('D-23 — « Retour à Découvrir » y retourne vraiment', ()=>{
+    vrai(codeDe(retourDecouvrirDuel).indexOf("go('discover')") >= 0,
+         'le bouton ferme le duel et laisse la personne sur Mes goûts : le libellé ment');
+    vrai(codeDe(ecranResultatDuelJour).indexOf('retourDecouvrirDuel') >= 0);
+  });
+
+  test('D-24 — la paire du jour oppose bien une TÊTE de podium', ()=>{
+    duelBase(14);
+    for(let i = 1; i <= 12; i++) ecrireClassement('film', i, 1000 + i, 3);
+    projeterPodium('film');
+    /* Un podium à l'ordre connu : le n° 1 est le mieux classé. */
+    db.podium.film = ['12','11','10','9','8'];
+    /* Plusieurs titres jamais joués : le neuf est tiré au hasard parmi eux —
+       c'est voulu, et le test ne doit donc rien supposer sur LEQUEL. Ce qu'il
+       éprouve, c'est l'AUTRE moitié de la paire. */
+    db.movies[13] = film(13, ['Drame'], true);
+    db.movies[14] = film(14, ['Drame'], true);
+    const joues = {};
+    Object.keys(db.classement.film).forEach(id=>{ joues[id] = 1; });
+    for(let essai = 0; essai < 12; essai++){
+      const o = sansEcran(()=> composerDuelJour());
+      vrai(o, 'aucune paire composée');
+      const neufs = o.paire.filter(c => !joues[String(c).slice(6)]);
+      egal(neufs.length, 1, 'la paire du jour n\'oppose pas un neuf à un ancien');
+      const adverse = o.paire.find(c => c !== neufs[0]);
+      egal(adverse, 'movie:12',
+           'l\'adversaire n\'est pas la tête du podium mais un titre quelconque du paquet');
+      try{ localStorage.removeItem(DUELJOUR_CLE); }catch(e){}
+    }
+  });
+
+  test('D-25 — une graine récusée garde son nom dans « Titres écartés »', ()=>{
+    duelBase(12);
+    /* Une graine n'est PAS dans la bibliothèque : c'est tout le cas. */
+    db.gouts.graines = [{ media:'movie', id:'900', nom:'Le Parrain', famille:'film' }];
+    db.gouts.grainesSuspendues = [];
+    sansEcran(()=>{ ouvrirDuel('film'); duelPasVu('movie', 900); });
+    const t = titresEcartes().find(x => String(x.id) === '900');
+    vrai(t, 'la graine récusée n\'apparaît pas dans « Titres écartés »');
+    egal(t.nom, 'Le Parrain',
+         'on ne sait pas ce qu\'on reprend : le §6.2 promet qu\'on peut le reprendre');
+  });
+
+  test('D-26 — la pastille ne repart pas à chaque rendu', ()=>{
+    duelBase(12);
+    let passes = 0;
+    const vraiNouveaux = window.nouveauxADepartager;
+    window.nouveauxADepartager = f => { passes++; return vraiNouveaux(f); };
+    try{
+      pastilleDuelMemo = { sig:null, n:0 };
+      compteDuelPastille();
+      const apres = passes;
+      compteDuelPastille(); compteDuelPastille(); compteDuelPastille();
+      egal(passes, apres,
+           'la pastille reparcourt la bibliothèque à chaque rendu — le §4.4 dit « jamais en continu »');
+      /* Mais un goût qui change l'invalide bien. */
+      poserAvis('movie', 3, 1);
+      compteDuelPastille();
+      vrai(passes > apres, 'la pastille ne voit plus les goûts changer');
+    }finally{ window.nouveauxADepartager = vraiNouveaux; }
+  });
+
+  test('D-27 — « Défendre mon podium » défend celui qui est affiché', ()=>{
+    const c = codeDe(carteDuelProfil);
+    vrai(/pantheon \|\| fam/.test(c),
+         'le bouton ouvre une famille dont la carte ne montre rien');
   });
 
   /* ==================== Bilan ====================

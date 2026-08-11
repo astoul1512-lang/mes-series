@@ -53,6 +53,7 @@ Dans *SQL Editor*, exécuter les fichiers de `migrations/` **dans l'ordre**.
 | `011_suivi_en_retour.sql` | « Suivre en retour », et la notification d'un nouvel abonné |
 | `012_durcissements.sql` | verrou sur les codes de partage, droits alignés, purge, défaut corrigé |
 | `013_push_endpoint.sql` | **SPEC-01 · C7** — un appareil sonne pour le compte connecté, et pour lui seul |
+| `014_relais_ia.sql` | **SPEC-04 · lot B** — l'échelle des fournisseurs d'IA, les compteurs, les budgets et le journal |
 
 Avant d'exécuter `005`, y remplacer deux marques :
 
@@ -110,6 +111,13 @@ Dans *Edge Functions → Secrets* :
 |---|---|
 | `TMDB_KEY` | une clé TMDB. Les deux formats marchent : clé v3 courte, ou jeton v4 (long, commençant par `eyJ`). |
 | `VAPID_PRIVEE` | la clé privée VAPID des notifications push. |
+| `GEMINI_API_KEY` | une clé Google AI Studio. Elle sert aux **deux** étages Gemini de l'échelle IA — c'est la même clé, seul le modèle change. |
+| `OPENROUTER_API_KEY` | une clé OpenRouter, pour l'étage de secours. |
+
+Les deux clés d'IA ne sont pas obligatoires : sans elles, le relais `ia` rend
+`{indisponible:true}` et l'app fonctionne exactement comme si l'IA était
+éteinte. C'est le mode dégradé de SPEC-04 §4.5, et il est le socle, pas un
+pis-aller.
 
 `SUPABASE_URL` et `SUPABASE_SERVICE_ROLE_KEY` sont fournis automatiquement par
 la plateforme : ne pas les créer.
@@ -127,6 +135,7 @@ désactivé** :
 supabase functions deploy tmdb             --no-verify-jwt
 supabase functions deploy supprimer-compte --no-verify-jwt
 supabase functions deploy notifier         --no-verify-jwt
+supabase functions deploy ia               --no-verify-jwt
 ```
 
 `verify_jwt` est désactivé volontairement, pour une raison différente à chaque
@@ -141,6 +150,12 @@ fois — et chacune est protégée autrement :
   associe à ce jeton.
 - **`notifier`** est appelée par le planificateur, qui n'a pas de session. Elle
   est protégée par le secret partagé de `005`.
+- **`ia`** EXIGE pourtant un jeton, et ce n'est pas une contradiction : la
+  plateforme rejetterait les requêtes `OPTIONS` du navigateur avant d'arriver au
+  code, et un préflight CORS n'en porte jamais. La fonction vérifie donc le
+  jeton elle-même — comme `supprimer-compte` — et refuse en `401` tout ce qui
+  n'en a pas. Elle est en outre protégée par la liste blanche des origines, la
+  liste blanche fermée des tâches, et deux plafonds de requêtes.
 
 ### 5 bis. L'adresse depuis laquelle l'app a le droit d'appeler `tmdb`
 
@@ -186,6 +201,7 @@ Les tests du relais tournent sans réseau et sans Supabase :
 
 ```
 deno test --allow-env supabase/functions/tmdb/index.test.ts
+deno test --allow-env supabase/functions/ia/index.test.ts
 ```
 
 Ils couvrent les deux listes blanches — origine connue, origine inconnue,
@@ -194,10 +210,93 @@ absence d'`Origin`, préflight, `/tv/123` accepté, `/account` et
 seule barrière devant la clé TMDB : ne pas livrer une modification de ce
 dossier sans les avoir joués.
 
+Les 77 tests du relais `ia` couvrent le même genre de barrières : origine
+inconnue, absence de jeton, jeton refusé, tâche hors liste blanche, budget
+atteint, compteur plein, bascule sur `429`, tous les étages épuisés, réponse
+malformée, réponse trop longue, et la règle §0.4 (aucun texte généré ne prête un
+sentiment à qui que ce soit). Ils vérifient AUSSI ce qui serait envoyé aux
+fournisseurs : aucun prompt venu du client, aucun identifiant, aucune adresse.
+
+**SPEC-05 lot B (10/08/2026) — la liste blanche compte désormais SIX tâches.**
+Aux trois de Découvrir (`pitch_jour`, `pitch_humeur`, `intitules_rangees`)
+s'ajoutent les trois de la Recherche :
+
+| tâche | déclencheur | rend | étage de départ |
+|---|---|---|---|
+| `envie_phrase` | validation d'une envie écrite dans la barre | une liste de critères | 1 |
+| `ambiance_desc` | « ✦ Traduire en réglages » d'une ambiance | des critères + un nom + un emoji | 1 |
+| `pourquoi_lui` | ouverture d'un aperçu depuis une recherche | deux lignes de texte | 2 |
+
+Les deux premières ne rendent PAS de texte libre : elles rendent des
+identifiants choisis dans un **vocabulaire fermé**, `CRITERES_PERMIS` en tête de
+`functions/ia/gabarits.ts`. Le gabarit l'énumère au modèle et la validation le
+recoupe à la réception ; un critère inventé est jeté sans que le reste tombe.
+Ajouter une valeur à ce vocabulaire demande un redéploiement de la fonction —
+c'est voulu, le vocabulaire d'un modèle n'est pas un réglage.
+
+**`profil_humeur` a été RETIRÉE** au même moment (décision d'Adrien du 10/08) :
+elle n'avait aucun appelant, et une liste blanche fermée qui garde une porte
+inutilisée n'est plus fermée. Le pavé de `functions/ia/config.ts` dit pourquoi
+en détail. Deux contrôles tiennent maintenant l'accord entre les tâches
+DÉCLARÉES et les tâches APPELÉES — un cas d'`index.test.ts` qui fige la liste
+des six, et le contrôle n° 15 de `tests/lance-tests.js` qui relit les
+`appelIA('…')` du front. Ajouter une tâche « pour plus tard » fera tomber les
+deux : c'est voulu.
+
+Aucune migration SQL n'accompagne ce lot : `ia_journal.tache` est du texte
+libre, les compteurs et les budgets sont les mêmes, et les trois tâches passent
+par la même échelle de fournisseurs.
+
+### Et les tests SQL — ceux-là, rien d'autre ne les remplace
+
+```
+psql "<url du projet>" -f supabase/tests/014_relais_ia.test.sql
+```
+
+Les tests Deno remplacent `fetch` par un menteur : ils savent dire qu'un appel
+EST PARTI, jamais ce qu'il FAIT une fois arrivé. La première version du lot B
+est passée verte sur ce point précis, avec une fonction `ia_saturer` qui n'avait
+strictement aucun effet sur un fournisseur aux limites inconnues — c'est-à-dire
+sur les deux étages qu'on appelle en premier, et c'était le seul filet prévu à
+cet endroit.
+
+`014_relais_ia.test.sql` exécute le vrai SQL sur un vrai moteur et éprouve les
+comptes eux-mêmes : la saturation d'une fenêtre, le fait qu'elle n'en mure pas
+une autre, l'arrêt exact au plafond, les deux remboursements (compteur de
+fournisseur et budget), la cohérence entre la sentinelle et le plafond des
+limites inconnues, et le ménage à soixante jours. Chaque cas lève une exception
+nommée : `psql` s'arrête et dit lequel. **Le fichier tout entier est une transaction annulée** (`begin` … `rollback`) :
+tout s'exécute pour de vrai, les assertions mordent pour de vrai, et rien n'est
+jamais validé. C'est ce qui le rend sûr sur la base de production — et non une
+discipline de nommage, qui avait d'ailleurs échoué : la première version
+supprimait la ligne `@global`, c'est-à-dire le compteur du budget global du
+jour, et déclenchait une purge du journal.
+
+Il tourne aussi sur un PostgreSQL local vierge, ce qui évite de toucher au
+projet en ligne :
+
+```
+createdb essai
+psql -d essai -c 'create role anon; create role authenticated; create role service_role;'
+psql -d essai -f supabase/migrations/014_relais_ia.sql
+psql -d essai -f supabase/tests/014_relais_ia.test.sql
+```
+
+> **`service_role` fait partie de la recette, et ce n'est pas un détail.** La
+> migration révoque tout de `public` ; sans grant explicite, la clé de service
+> n'a plus aucun droit et le relais est **muet**. Sur Supabase les *default
+> privileges* le sauvaient, mais c'était un hasard, pas une intention : depuis le
+> 10/08 la migration pose le grant elle-même, et le fichier de tests exige les
+> deux moitiés — `anon` ne peut pas, `service_role` peut encore. Sans le rôle, ce
+> second cas est simplement sauté (avec un `NOTICE`).
+
 > La logique vit dans `functions/tmdb/relais.ts` ; `functions/tmdb/index.ts`
 > ne fait plus que la brancher sur `Deno.serve`. C'est ce qui permet aux tests
 > d'éprouver la fonction sans ouvrir de port. La commande de déploiement ne
-> change pas : les modules importés par l'entrée sont embarqués.
+> change pas : les modules importés par l'entrée sont embarqués. `functions/ia`
+> suit exactement le même découpage, en quatre fichiers : `index.ts` (l'entrée),
+> `relais.ts` (la logique), `config.ts` (l'échelle et les budgets) et
+> `gabarits.ts` (les prompts et la validation).
 
 ## 6. Vérifier
 
@@ -243,3 +342,108 @@ répond `404`, c'est que `010` n'a pas été exécuté.
 
 L'app lit l'URL du projet et la clé publiable dans `app-01` (`DEFAULT_SYNC`).
 Les remplacer par celles du nouveau projet.
+
+## 8. Les limites de l'IA — le chiffre qu'il faut aller chercher soi-même
+
+**À faire une fois, après le déploiement de `ia`.** Tant que ce n'est pas fait,
+le relais fonctionne, mais il découvre la saturation au lieu de l'éviter.
+
+Le § 4.2 de SPEC-04 veut que le relais **n'appelle pas** un fournisseur dont le
+compteur dit qu'il est plein. Pour cela il lui faut deux nombres par étage :
+requêtes par minute, requêtes par jour.
+
+**Google ne les publie plus.** Relevé le 10/08/2026 : la page officielle
+*Gemini API — Rate limits* ne porte plus aucun tableau RPM / RPD / TPM, elle
+renvoie au tableau de bord d'AI Studio et précise que les limites « are not
+guaranteed ». Les deux étages Gemini partent donc avec `limite_minute` et
+`limite_jour` à `NULL`, ce qui veut dire **inconnue** et non *illimitée* : la
+réservation les laisse passer, et c'est le `429` du fournisseur qui les arrête,
+une fois par fenêtre.
+
+Pour fermer cet écart :
+
+1. Ouvrir <https://aistudio.google.com/rate-limit> avec le compte qui porte
+   `GEMINI_API_KEY`, et relever les limites du **Free Tier** pour les deux
+   modèles de l'échelle (colonnes « Requests per minute » et « Requests per
+   day »).
+2. Les poser en base, dans *SQL Editor* :
+
+```sql
+update public.ia_fournisseurs
+   set limite_minute = 15,      -- remplacer par le vrai chiffre relevé
+       limite_jour   = 1000,    -- idem
+       maj = now()
+ where nom = 'gemini-flash';
+
+update public.ia_fournisseurs
+   set limite_minute = 30,      -- idem
+       limite_jour   = 1000,    -- idem
+       maj = now()
+ where nom = 'gemini-flash-lite';
+```
+
+Aucun redéploiement : la fonction relit la table, avec une minute de cache.
+
+### Avant de changer le modèle OpenRouter — lire son catalogue
+
+Le premier modèle choisi ne déclarait pas `structured_outputs`, et l'étage 3
+refusait donc **toutes** les requêtes en HTTP 400, silencieusement. Le catalogue
+le disait d'avance ; il n'avait pas été lu. Avant de poser un modèle ici :
+
+```
+curl -s https://openrouter.ai/api/v1/models \
+  | jq '.data[] | select(.id=="<le modèle>") | .supported_parameters'
+```
+
+`structured_outputs` doit y figurer. Un modèle qui ne l'a pas **ne dégrade pas,
+il refuse** — et l'étage est mort sans un mot dans l'interface. Le changement se
+fait en une ligne, sans redéploiement :
+
+```sql
+update public.ia_fournisseurs
+   set modele = 'nvidia/nemotron-nano-9b-v2:free', maj = now()
+ where nom = 'openrouter';
+```
+
+(À reporter aussi dans `config.ts`, qui sert de repli quand la table est
+injoignable — sinon le repli réintroduit la panne.)
+
+**OpenRouter, lui, publie ses chiffres** et ils sont déjà en base : 20 requêtes
+par minute, 50 par jour tant que le compte n'a pas acheté 10 $ de crédits
+cumulés — au-delà, 1 000 par jour, et le palier reste acquis même si le solde
+retombe. Le compteur est au niveau du **compte**, pas du modèle. Si des crédits
+sont achetés un jour :
+
+```sql
+update public.ia_fournisseurs set limite_jour = 1000, maj = now()
+ where nom = 'openrouter';
+```
+
+### Régler les budgets sur l'usage réel
+
+Au bout de quelques jours, le journal dit ce qui se consomme vraiment :
+
+```sql
+select jour, fournisseur, statut, count(*) as n, round(avg(duree_ms)) as ms
+  from public.ia_journal
+ group by jour, fournisseur, statut
+ order by jour desc, fournisseur, statut;
+```
+
+Il ne contient ni prompt, ni réponse, ni identifiant de personne — un test fige
+la liste exacte des cinq champs écrits, pour qu'on ne puisse pas en ajouter un
+par distraction. `duree_ms` est la durée de l'ÉTAGE, pas de la requête : la
+moyenne par fournisseur ci-dessus est donc lisible telle quelle (elle ne l'était
+pas avant le 10/08 — elle cumulait les étages précédents). Les plafonds, eux, sont dans `functions/ia/config.ts`
+(`BUDGET_UTILISATEUR_JOUR`, `BUDGET_GLOBAL_JOUR`) — les changer demande un
+redéploiement de la fonction, contrairement à l'échelle.
+
+### Le ménage
+
+`ia_journal` et `ia_budget_jour` ne font que grossir, et la seconde porte des
+identifiants. La migration installe `public.ia_menage()`, qui garde soixante
+jours. À appeler de temps en temps, ou à greffer sur le planificateur de `005` :
+
+```sql
+select public.ia_menage();
+```

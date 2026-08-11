@@ -90,7 +90,7 @@ const FICHIERS = [
   'app-01-noyau.js','app-02-outils.js','app-03-vues.js','app-04-decouvrir.js',
   'app-05-plateformes.js','app-06-serie.js','app-07-partage.js',
   'app-08-reglages.js','app-09-notifications.js','app-10-sorties.js','app-11-gouts.js',
-  'app-12-recherche.js','app-13-inscription.js'
+  'app-12-recherche.js','app-13-inscription.js','app-14-ia.js','app-15-filtres.js','app-16-duel-plus.js'
 ];
 
 /* ---------------------------------------------------------------------------
@@ -201,10 +201,15 @@ const ETAT_PARTAGE = {
      leur raison d'être. */
   db:   ['app-01-noyau.js','app-03-vues.js','app-04-decouvrir.js','app-06-serie.js',
          'app-07-partage.js','app-08-reglages.js','app-09-notifications.js',
-         'app-11-gouts.js','app-12-recherche.js','app-13-inscription.js'],
+         'app-11-gouts.js','app-12-recherche.js','app-13-inscription.js',
+         /* SPEC-04 lot C : `app-14-ia.js` n'écrit qu'UNE chose dans la base —
+            `db.gouts.ia`, les deux interrupteurs, depuis `basculerIA`. Tout le
+            reste de son état (les textes générés) vit en localStorage, hors
+            synchro, comme le §4.3 l'exige. */
+         'app-14-ia.js','app-15-filtres.js','app-16-duel-plus.js'],
   ui:   ['app-02-outils.js','app-03-vues.js','app-04-decouvrir.js','app-05-plateformes.js',
          'app-06-serie.js','app-07-partage.js','app-10-sorties.js','app-11-gouts.js',
-         'app-12-recherche.js'],
+         'app-12-recherche.js','app-15-filtres.js'],
   /* La navigation. `app-08-reglages.js` y écrit parce qu'il pose lui-même la
      destination après une déconnexion. */
   view:   ['app-02-outils.js','app-03-vues.js','app-08-reglages.js'],
@@ -223,7 +228,17 @@ const ETAT_PARTAGE = {
      refermer — la recherche, et depuis C2 la feuille de confirmation générique
      d'app-02 elle-même (`confirmerDansFeuille`), qui s'en sert pour traiter
      « refermée sans qu'on ait répondu » comme un NON. */
-  FERMETURES: ['app-02-outils.js','app-12-recherche.js']
+  FERMETURES: ['app-02-outils.js','app-12-recherche.js'],
+  /* SPEC-05 — le brouillon d'ambiance en cours d'écriture. Il est DÉCLARÉ dans
+     app-15 (la feuille qui le dessine) et complété par app-14 quand l'IA
+     traduit une description en réglages : c'est le même objet, à deux moments
+     de sa vie. Il meurt avec la feuille, il n'entre jamais dans `db`. */
+  brouillonAmb: ['app-14-ia.js','app-15-filtres.js'],
+  /* SPEC-06 §2.3 — la session de duel. app-16 y écrit UNE fois, dans
+     `jouerDuelJour`, et selon le même protocole qu'`ouvrirDuel` : `oublierDuel()`
+     d'abord (qui règle le vote en vol et tue le minuteur), puis la session de
+     taille un. Le §0.3 interdit un second moteur, pas une seconde porte. */
+  duel: ['app-11-gouts.js','app-16-duel-plus.js']
 };
 
 function ecrituresEtat(fichiers, lire){
@@ -1024,6 +1039,239 @@ function collisionsCss(src){
     console.log('abandon       → ' + (soucis.length
       ? soucis.length + ' écart(s)'
       : marques + ' marques d\'échec, toutes gardées ; la grille passe son signal'));
+    soucis.forEach(d => console.log('   ! ' + d));
+    souci += soucis.length;
+  }
+
+  /* --- 14. SPEC-04 §0.4 — LA COPIE CLIENT EST-ELLE ENCORE LA COPIE ? ---
+
+     `app-14-ia.js` recopie mot pour mot les trois motifs de la règle §0.4
+     depuis `functions/ia/gabarits.ts`, et le commentaire qui l'assume promet
+     qu'« un test le fera remarquer » si le serveur bouge. Ce test n'existait
+     pas — c'était la seule promesse fausse du lot C, relevée en relecture.
+
+     Il ne pouvait pas vivre dans `test.html`, qui ne charge pas de TypeScript ;
+     il vit donc ici, où le lanceur lit déjà des fichiers sur le disque. La
+     duplication reste voulue (deux barrières qui partagent leur source n'en
+     font qu'une) — ce contrôle ne la supprime pas, il la rend surveillée. */
+  {
+    const fs = require('fs'), chemin = require('path');
+    const racine = chemin.join(__dirname, '..');
+    const soucis = [];
+    const js = fs.readFileSync(chemin.join(racine, 'app-14-ia.js'), 'utf8');
+    const ts = fs.readFileSync(chemin.join(racine, 'supabase/functions/ia/gabarits.ts'), 'utf8');
+    /* On compare les LITTÉRAUX, pas les expressions régulières construites :
+       c'est la source qui doit rester identique, et c'est elle qu'on recopie. */
+    const lit = (src, nom)=>{
+      const m = new RegExp('const\\s+' + nom + '\\s*=\\s*([\\s\\S]*?);').exec(src);
+      return m ? m[1].replace(/\s+/g, '') : null;
+    };
+    [['IA_AFFECT','AFFECT'], ['IA_POSSESSIF','POSSESSIF']].forEach(([cli, srv])=>{
+      const a2 = lit(js, cli), b2 = lit(ts, srv);
+      if(!a2 || !b2) soucis.push(cli + ' / ' + srv + ' : introuvable d\'un des deux côtés');
+      else if(a2 !== b2)
+        soucis.push(cli + ' ne correspond plus à ' + srv + ' de gabarits.ts — la barrière client '
+                    + 'a divergé de la barrière serveur (SPEC-04 §0.4)');
+    });
+    /* Et les quatre motifs assemblés, dans le même ordre. On isole le tableau
+       passé à `new RegExp`, on retire les commentaires (les deux fichiers n'en
+       portent pas les mêmes) et les espaces, puis on compare. */
+    const assemble = src=>{
+      const i = src.indexOf('new RegExp(');
+      if(i < 0) return null;
+      const j = src.indexOf('].join(', i);
+      if(j < 0) return null;
+      return src.slice(i, j)
+        .replace(/\/\/[^\n]*/g, ' ')
+        .replace(/\/\*[\s\S]*?\*\//g, ' ')
+        .replace(/\s+/g, '')
+        /* Les deux seules différences LÉGITIMES : le préfixe `IA_` des noms
+           côté client (le fichier vit dans la portée globale de l'app, où un
+           `AFFECT` nu entrerait en collision), et la virgule finale. Tout le
+           reste doit être identique caractère pour caractère. */
+        .replace(/\bIA_/g, '')
+        .replace(/,$/, '');
+    };
+    const mj = assemble(js), mt = assemble(ts);
+    if(!mj || !mt) soucis.push('les motifs assemblés de la §0.4 sont introuvables d\'un des deux côtés');
+    else if(mj !== mt)
+      soucis.push('les motifs assemblés de la §0.4 ont divergé entre le client et le serveur');
+    console.log('§0.4 recopiée → ' + (soucis.length
+      ? soucis.length + ' divergence(s)'
+      : 'client et serveur disent la même chose, motif pour motif'));
+    soucis.forEach(d => console.log('   ! ' + d));
+    souci += soucis.length;
+  }
+
+  /* --- 15. SPEC-04/05 — LA LISTE BLANCHE DU RELAIS N'A NI TROU NI SURPLUS ---
+
+     Décision d'Adrien du 10/08/2026, prise en retirant `profil_humeur` : la
+     liste blanche fermée de `functions/ia/config.ts` doit correspondre
+     EXACTEMENT aux tâches que le front appelle. Une tâche déclarée sans
+     appelant n'est pas inoffensive — elle est appelable par quiconque connaît
+     l'adresse du relais et détient un jeton, elle consomme du budget et du
+     quota fournisseur, et elle n'apporte rien.
+
+     Le pendant côté serveur est un cas de `index.test.ts` qui fige la liste des
+     six. Celui-ci regarde l'autre bout : tous les `appelIA('…')` du front. Les
+     deux ensemble ferment la boucle — un seul des deux ne dit rien, puisque
+     c'est justement leur DÉSACCORD qu'on cherche. */
+  {
+    const fs = require('fs'), chemin = require('path');
+    const racine = chemin.join(__dirname, '..');
+    const soucis = [];
+    const cfg = fs.readFileSync(chemin.join(racine, 'supabase/functions/ia/config.ts'), 'utf8');
+    const bloc = /export const TACHES[^{]*\{([\s\S]*?)\n\};/.exec(cfg);
+    if(!bloc) soucis.push('config.ts : la table TACHES est introuvable');
+    else{
+      /* Les commentaires sont retirés : ils CITENT des noms de tâches (dont
+         `profil_humeur`, dans le pavé qui explique son retrait), et les lire
+         ferait croire à des entrées qui n'existent plus. */
+      const net = bloc[1].replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+      const declarees = new Set((net.match(/^\s*([a-z_]+)\s*:/gm) || [])
+        .map(x => x.replace(/[\s:]/g, '')));
+      const appelees = new Set();
+      for(const f of FICHIERS){
+        const src = fs.readFileSync(chemin.join(racine, f), 'utf8');
+        let m;
+        const re = /appelIA\(\s*'([a-z_]+)'/g;
+        while((m = re.exec(src))) appelees.add(m[1]);
+      }
+      [...declarees].forEach(t=>{
+        if(!appelees.has(t))
+          soucis.push(t + ' : déclarée dans la liste blanche, appelée par aucun écran');
+      });
+      [...appelees].forEach(t=>{
+        if(!declarees.has(t))
+          soucis.push(t + ' : appelée par le front, absente de la liste blanche — 400 garanti');
+      });
+      console.log('liste blanche → ' + (soucis.length
+        ? soucis.length + ' écart(s)'
+        : declarees.size + ' tâches déclarées, ' + appelees.size + ' appelées, aucune orpheline'));
+    }
+    soucis.forEach(d => console.log('   ! ' + d));
+    souci += soucis.length;
+  }
+
+  /* --- 16. SPEC-07 — LA COUCHE DE PEINTURE RESTE UNE COUCHE DE PEINTURE ---
+
+     Le §0.3 et le §1.2 de SPEC-07 sont des contraintes de DIFF, pas de
+     comportement : « app.css est le seul fichier touché », « les jetons :root
+     gardent leurs noms et leurs rôles », « --accent inchangé », « les nouveaux
+     jetons portent tous le préfixe --px- ». Rien de tout ça ne se voit dans
+     test.html, qui ne charge pas la feuille de style — mais tout se lit dans le
+     fichier, et c'est ici que le dépôt lit ses fichiers.
+
+     Ce que ce contrôle attrape, et qu'aucun autre n'attrape : le jour où
+     quelqu'un « améliorera » l'accent en le passant en dégradé dans `:root`,
+     des dizaines d'icônes et de textes qui le lisent deviendront illisibles,
+     et rien ne le dira. */
+  {
+    const fs = require('fs'), chemin = require('path');
+    const css = fs.readFileSync(chemin.join(__dirname, '..', 'app.css'), 'utf8');
+    const soucis = [];
+
+    const racine = /:root\{([\s\S]*?)\}/g;
+    const jetons = {};
+    let m;
+    while((m = racine.exec(css))){
+      (m[1].match(/--[a-z0-9-]+\s*:[^;]*/gi) || []).forEach(d=>{
+        const i = d.indexOf(':');
+        jetons[d.slice(0, i).trim()] = d.slice(i + 1).trim();
+      });
+    }
+    /* Les jetons d'origine gardent leurs noms — tout le code des specs 04, 05
+       et 06 les lit. */
+    ['--bg','--surface','--surface2','--line','--text','--muted','--accent',
+     '--accent-dim','--ok','--warn','--radius'].forEach(n=>{
+      if(!jetons[n]) soucis.push('le jeton ' + n + ' a disparu de :root');
+    });
+    if(jetons['--accent'] !== '#3d8bff')
+      soucis.push('--accent a changé (' + jetons['--accent'] + ') : il est lu en texte et en icône, '
+                  + 'un dégradé n\'y a pas de sens — SPEC-07 §2.4');
+    /* Tout jeton AJOUTÉ porte le préfixe `--px-`. */
+    const connus = ['--bg','--surface','--surface2','--line','--text','--muted','--accent',
+                    '--accent-dim','--ok','--warn','--radius','--safe-b','--safe-t'];
+    Object.keys(jetons).forEach(n=>{
+      if(connus.indexOf(n) < 0 && n.indexOf('--px-') !== 0)
+        soucis.push(n + ' : un jeton ajouté sans le préfixe --px- (SPEC-07 §1.4)');
+    });
+    /* §0.2 — aucune salutation, nulle part. */
+    if(/bonsoir|bonjour|salut\b/i.test(css))
+      soucis.push('une salutation est apparue dans app.css : le §0.2 l\'écarte explicitement');
+    /* §3 — SPEC-07 N'AJOUTE AUCUN PORTEUR DE `backdrop-filter` SAUF LE TOAST.
+       La règle de la spec n'est pas « il n'y en a que quatre dans le dépôt » —
+       il y en avait déjà plus, sur des puces et des badges posés sur une
+       affiche, et ceux-là ne défilent pas et ne contiennent aucun défilement.
+       La règle est : « aucun backdrop-filter NOUVEAU sur un élément qui défile
+       ou contient le défilement ». On borne donc ce que la SECTION SPEC-07 a le
+       droit d'ajouter, ce qui est vérifiable et suffisant : `body .toast`, et
+       rien d'autre. */
+    const iPremium = css.indexOf('SPEC-07 — DESIGN PREMIUM');
+    if(iPremium < 0) soucis.push('la section SPEC-07 a disparu d\'app.css');
+    else{
+      const bloc = css.slice(iPremium).replace(/\/\*[\s\S]*?\*\//g, ' ');
+      const re = /([^{}]+)\{[^{}]*backdrop-filter/g;
+      let b2;
+      while((b2 = re.exec(bloc))){
+        const sel = b2[1].split('}').pop().trim().replace(/\s+/g, ' ');
+        if(sel && sel !== 'body .toast')
+          soucis.push('backdrop-filter ajouté par SPEC-07 sur « ' + sel +
+                      ' » : le §3 ne l\'admet que sur le toast');
+      }
+    }
+    /* P-1 (relecture du 10/08) — CE CONTRÔLE ÉTAIT AVEUGLE AUX SURCHARGES DE
+       MISE EN PAGE, c'est-à-dire précisément là où étaient les régressions.
+
+       `body .d4nom{font-size:31px}` (0,1,1) défaisait
+       `@media (max-width:359px){ .d4nom{font-size:23px} }` (0,1,0) : une media
+       query n'ajoute AUCUNE spécificité. Le piège est mécanique, donc il se
+       vérifie mécaniquement : toute taille de police posée par la section
+       SPEC-07 sur un sélecteur dont le socle borne la taille en petit écran
+       doit être rejouée dans une media query de la section. */
+    if(iPremium >= 0){
+      /* Commentaires blanchis des DEUX côtés : ceux de cette section CITENT
+         `.vgn` et `.filmrow` pour expliquer le repli, et les lire ferait
+         accuser le code de ce que son commentaire raconte. */
+      const sansCom = t => t.replace(/\/\*[\s\S]*?\*\//g, ' ');
+      const socle = sansCom(css.slice(0, iPremium));
+      const bloc = sansCom(css.slice(iPremium));
+      const bornes = new Set();
+      const reMedia = /@media[^{]*max-width[^{]*\{([\s\S]*?)\n\s*\}/g;
+      let m2;
+      while((m2 = reMedia.exec(socle))){
+        (m2[1].match(/\.[A-Za-z_-][A-Za-z0-9_-]*(?=[^{}]*\{[^{}]*font-size)/g) || [])
+          .forEach(c => bornes.add(c));
+      }
+      const dansMedia = bloc.slice(bloc.search(/@media/) < 0 ? bloc.length : bloc.search(/@media/));
+      /* Pas d'ancre sur le `}` précédent : elle serait CONSOMMÉE par la règle
+         d'avant, et une règle sur deux passerait au travers. `[^{}@]` ne peut
+         pas franchir une accolade, ce qui suffit à borner le sélecteur. */
+      const reRegle = /(body\s[^{}@]*?)\{([^{}]*)\}/g;
+      let m3;
+      while((m3 = reRegle.exec(bloc))){
+        if(!/font-size/.test(m3[2])) continue;
+        (m3[1].match(/\.[A-Za-z_-][A-Za-z0-9_-]*/g) || []).forEach(c=>{
+          if(!bornes.has(c)) return;
+          if(dansMedia.indexOf(c) < 0)
+            soucis.push(c + ' : SPEC-07 en change la taille sans rejouer la borne des petits '
+                        + 'écrans — une media query n\'ajoute aucune spécificité (§1.5)');
+        });
+      }
+      /* §3 — le repli doit pouvoir retirer quelque chose. Une ombre posée sur
+         les rails par un sélecteur plus large que ceux qu'on dit retirer rend
+         le repli décoratif : c'est le défaut P-2. */
+      const ombres = bloc.match(/(^|\})\s*([^{}@]+?)\{[^{}]*box-shadow[^{}]*\}/g) || [];
+      ombres.forEach(r=>{
+        if(/\.vgn|\.filmrow/.test(r))
+          soucis.push('une ombre est posée sur un rail (.vgn / .filmrow) : le repli du §3 '
+                      + 'ne pourrait plus rien retirer');
+      });
+    }
+    console.log('premium       → ' + (soucis.length
+      ? soucis.length + ' écart(s)'
+      : Object.keys(jetons).filter(n => n.indexOf('--px-') === 0).length +
+        ' jetons --px-, --accent intact, verre borné'));
     soucis.forEach(d => console.log('   ! ' + d));
     souci += soucis.length;
   }

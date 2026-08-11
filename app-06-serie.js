@@ -490,6 +490,14 @@ function applyWatched(showId, mutate, label, opts){
   const annulable = !opts || opts.annulable !== false;
   const prev = Object.assign({}, sh.watched);
   const saisonsAvant = (typeof saisonsFinies === 'function') ? saisonsFinies(sh) : {};
+  /* SPEC-06 §3.1 — L'ÉTAT « TOUT VU » AVANT LE GESTE. C'est le seul moyen de
+     distinguer « la série vient de se terminer » de « elle l'était déjà ».
+     Ce point d'accroche vaut pour les DEUX chemins que le §3.1 nomme (le
+     dernier épisode coché et « Toute la série vue ») parce que les deux
+     passent par ici — et les imports comme la synchro, eux, n'y passent pas :
+     la règle « seuls les gestes locaux déclenchent » est donc garantie par la
+     forme du code, pas par un drapeau qu'on pourrait oublier de poser. */
+  const finiAvant = (typeof isFinished === 'function') ? isFinished(sh) : false;
   mutate(sh);
   noterDecoches(sh, prev);
   saveDB(); render();
@@ -498,6 +506,12 @@ function applyWatched(showId, mutate, label, opts){
      d'être posée, pour prendre la file derrière elle. */
   if(typeof signalerSaisonsFinies === 'function')
     signalerSaisonsFinies(sh, saisonsAvant, saisonsFinies(sh));
+  /* §3.3 — après que le geste a été appliqué ET confirmé (la barre « Annuler »
+     est posée juste au-dessus) : la feuille ne bloque rien, elle se glisse
+     derrière. */
+  if(!finiAvant && typeof isFinished === 'function' && isFinished(sh) &&
+     typeof proposerDuelEclair === 'function')
+    proposerDuelEclair('tv', showId, sh.name);
 }
 
 /* Épisodes antérieurs, diffusés et non vus, sur toute la série (hors-série exclus) */

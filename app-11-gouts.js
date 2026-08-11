@@ -87,6 +87,23 @@ function migrerGouts(){
      indéfiniment. Ce n'est pas un avis : ça ne dit rien du goût, seulement que
      la bibliothèque se trompe sur ce titre. */
   if(!Array.isArray(g.pasVus)) g.pasVus = [];
+  /* SPEC-04 lot C — les deux interrupteurs de l'IA, ÉTEINTS PAR DÉFAUT (§4.5 :
+     c'est un opt-in, pas un opt-out). Deux drapeaux et pas un seul : le §6 de
+     SPEC-05 tranche que l'IA de la Recherche s'éteint séparément de celle de
+     Découvrir. Un objet plutôt que deux booléens à plat, pour que le sous-bloc
+     de synchro `ia` n'ait qu'une clé à porter. */
+  /* SPEC-05 §2 — LES AMBIANCES : des filtres nommés, créés par la personne.
+     Plafond de 12 (spec), sous-bloc de synchro `ambiances` — elles se fusionnent
+     donc sans écraser les genres ni les plateformes réglés le même jour sur
+     l'autre appareil, ce qui est très exactement le mécanisme de C4. */
+  /* SPEC-06 §6.2 — les graines d'amorçage SUSPENDUES par un « je ne l'ai pas
+     vu ». Elles voyagent avec `graines`, dans le même sous-bloc : elles n'ont
+     de sens que par rapport à lui. */
+  if(!Array.isArray(g.grainesSuspendues)) g.grainesSuspendues = [];
+  if(!Array.isArray(g.ambiances)) g.ambiances = [];
+  if(!g.ia || typeof g.ia !== 'object' || Array.isArray(g.ia)) g.ia = {};
+  if(typeof g.ia.decouvrir !== 'boolean') g.ia.decouvrir = false;
+  if(typeof g.ia.recherche !== 'boolean') g.ia.recherche = false;
   /* POINT 2 (02/08) — LES TITRES RÉPONDUS 🤷, sous la forme « media:id ».
      C'est une VRAIE réponse — « je l'ai vu, il ne m'a rien fait, ne me le
      redemande pas » — et non l'absence d'avis, qui existait déjà.
@@ -539,6 +556,29 @@ function titresEcartes(){
     const m = db.movies[id];
     out.push({ media:'movie', id:id, nom:(m && m.title) || 'Titre retiré de ta liste',
                affiche:(m && m.poster) || null, quand:db.avis.movie[id].quand || 0 });
+  });
+  /* SPEC-06 §6.2 — LES TITRES RÉCUSÉS EN PLEIN DUEL REJOIGNENT CETTE LISTE.
+     Ce n'est pas un avis — ça ne dit rien du goût, seulement que la
+     bibliothèque se trompe sur ce titre — d'où la mention distincte : un 👎 et
+     un « pas vu » ne se reprennent pas pour les mêmes raisons, et l'écran ne
+     doit pas laisser croire le contraire. */
+  ((db.gouts && db.gouts.pasVus) || []).forEach(c=>{
+    const i = String(c).indexOf(':');
+    if(i < 0) return;
+    const media = String(c).slice(0, i), id = String(c).slice(i + 1);
+    if(media !== 'tv' && media !== 'movie') return;
+    const o = media === 'tv' ? db.shows[id] : db.movies[id];
+    /* CORRECTION DE RELECTURE — UNE GRAINE RÉCUSÉE N'EST PAS DANS LA
+       BIBLIOTHÈQUE, par construction : c'est un titre qu'on a dit avoir aimé
+       SANS l'ajouter. Elle s'affichait donc « Titre écarté du duel », sans nom
+       ni affiche — impossible de savoir ce qu'on reprend, alors que le §6.2
+       promet précisément qu'« on peut le reprendre ». `grainesSuspendues` porte
+       le nom : on le lit. */
+    const gr = ((db.gouts && db.gouts.grainesSuspendues) || [])
+      .find(x => x && x.media === media && String(x.id) === String(id));
+    out.push({ media:media, id:id, pasVu:true,
+               nom:(o && (o.name || o.title)) || (gr && gr.nom) || 'Titre écarté du duel',
+               affiche:(o && o.poster) || null, quand:0 });
   });
   return out.sort((a,b)=>b.quand-a.quand);
 }
@@ -2014,6 +2054,35 @@ function requeteHumeur(media, cadre, cle, variante){
        très exactement la rangée qu'on décrit. Le nombre de saisons et
        d'épisodes, lui, n'est filtrable NULLE PART dans `/discover`. */
     else p.with_type = '2';
+  }
+  /* SPEC-04 lot C §2 (a) — L'AFFINAGE DE LA RECETTE SELON LE PROFIL, et il se
+     fait ICI, localement, sans une requête. Le §2 confie cet affinage à l'IA ;
+     le relais du lot B, lui, ne rendait pour `profil_humeur` qu'une PHRASE, pas
+     des critères `/discover`. Deviner des mots-clés TMDB dans du texte libre
+     serait précisément l'à-peu-près que le §0.4 interdit ailleurs. On garde
+     donc le sens de la règle — « Frissonner pour CET utilisateur, ce n'est pas
+     le même Frissonner que pour un autre » — avec la matière qu'on a déjà sous
+     la main : ses 👍 et ses 👎. Une seule inflexion, la seule qui soit
+     mesurable et que le §2 nomme en toutes lettres : la tension contre le gore.
+     Voir `recetteAffineeHumeur` (app-14) pour la règle, et le rapport de lot
+     pour la question posée à Adrien. */
+  /* CORRECTION DE RELECTURE (10/08) — L'AFFINAGE EST SOUS L'INTERRUPTEUR.
+     Il s'appliquait interrupteur ÉTEINT : « Frissonner » ajoutait alors
+     `without_keywords=10292` et le rendu différait du lot A, alors que le §4.5
+     promet que l'app éteinte est EXACTEMENT l'app d'avant. Le §2 range
+     d'ailleurs cet affinage dans « Avec IA (couche optionnelle) ».
+     La décision d'Adrien du 10/08 autorise à le calculer LOCALEMENT plutôt que
+     par une requête ; elle ne dit pas qu'il déborde du périmètre de
+     l'interrupteur. Il reste donc gratuit, et il reste optionnel. */
+  if(typeof recetteAffineeHumeur === 'function' &&
+     typeof iaActive === 'function' && iaActive('decouvrir')){
+    const fin = recetteAffineeHumeur(cle);
+    /* 10292 = « gore » chez TMDB. La recette films du frisson l'écarte déjà ;
+       ce qu'on ajoute ici, c'est de l'écarter AUSSI côté séries et animés, pour
+       un profil qui a dit deux fois qu'il n'en voulait pas. */
+    if(fin.sansGore){
+      p.without_keywords = p.without_keywords ? p.without_keywords + ',10292' : '10292';
+    }
   }
   Object.assign(p, filtreMesPlates());
   return { media:media, p:p };
@@ -3828,6 +3897,13 @@ function paireNeuveDuel(marque){
 }
 
 function duelSuivant(){
+  /* SPEC-06 §2.3 — LE MODE « DUEL DU JOUR », EN UNE LIGNE ET PAS UN MOTEUR DE
+     PLUS. La session de dix reste le moteur ; « jour » est une session dont la
+     taille vaut un. Dès qu'une paire a été servie, tout ce qui rappelle
+     `duelSuivant` termine — et c'est vrai des TROIS sorties du §2.4 : un vote,
+     « je ne sais pas / les deux », et « je ne l'ai pas vu ». Les trois comptent
+     comme joué pour la journée : on ne harcèle pas. */
+  if(duel.mode === 'jour' && duel.paire) return terminerDuel();
   duel.choix = null;
   if(duel.faits >= DUEL_TAILLE || duel.paquet.length < 2) return terminerDuel();
   const p = duel.paquet;
@@ -3999,9 +4075,21 @@ function duelPasVu(media, id){
      le bouton du milieu, juste sous « C'est celui-là », cesse d'être le seul
      geste irréversible de l'app. Laissé tel quel sciemment : la correction
      demande un écran, pas une retouche. */
+  /* SPEC-06 §6.2 (10/08) — LE TODO CI-DESSUS EST FAIT, ET C'ÉTAIT LE DERNIER
+     GESTE IRRÉVERSIBLE DE L'APP. La graine n'est plus DÉTRUITE, elle est
+     SUSPENDUE : elle sort du vivier des suggestions tant que le titre est
+     récusé, et elle revient intacte si on le reprend depuis « Titres écartés ».
+     C'est exactement ce que le commentaire d'origine demandait — « renvoyer le
+     titre dans cette liste plutôt que l'effacer » — et ça ne coûte pas l'écran
+     qu'il redoutait : la liste existait déjà, il suffisait d'y entrer. */
   const gr = (db.gouts && db.gouts.graines) || [];
   const i = gr.findIndex(x => x.media === media && String(x.id) === String(id));
-  if(i >= 0){ gr.splice(i, 1); if(typeof oublierSuggestions === 'function') oublierSuggestions(); }
+  if(i >= 0){
+    if(!Array.isArray(db.gouts.grainesSuspendues)) db.gouts.grainesSuspendues = [];
+    db.gouts.grainesSuspendues.push(gr[i]);
+    gr.splice(i, 1);
+    if(typeof oublierSuggestions === 'function') oublierSuggestions();
+  }
   toucheGouts('pasVus','graines');
   duelSuivant();
   render();
@@ -4062,8 +4150,18 @@ function terminerDuel(){
      l'avoir allongée la fois d'avant ne dit rien de ce qu'on veut lire cette
      fois-ci. Les trois premiers sont en affiche, la liste va donc du 4ᵉ au 10ᵉ. */
   duel.montre = CL_JUSQUA - 3;
+  /* SPEC-06 §2.2 — le duel du jour est joué : le bandeau disparaît jusqu'au
+     lendemain. Posé ICI et pas au moment d'ouvrir l'écran — ouvrir sans
+     répondre puis revenir en arrière ne consomme pas la journée. */
+  if(duel.mode === 'jour' && typeof marquerDuelJourJoue === 'function') marquerDuelJourJoue();
   apresAvis();                      // enregistre, et périme la vitrine
-  chargerSuggDuel(duel.tete);
+  /* D-1 (relecture du 10/08) — LE DUEL DU JOUR NE DEMANDE RIEN À TMDB.
+     `chargerSuggDuel` va chercher des recommandations : c'est ce que l'écran de
+     résultat de SESSION affiche sous le podium. L'écran léger du duel du jour,
+     lui, ne les montre pas — la requête partait donc pour une réponse que
+     personne ne lisait, et le §8 de SPEC-06 exige « zéro requête réseau
+     attribuable au bandeau (onglet réseau vide à l'affichage ET AU JEU) ». */
+  if(duel.mode !== 'jour') chargerSuggDuel(duel.tete);
   render();
 }
 
@@ -4239,13 +4337,29 @@ function ecranDuelJeu(){
      la même chose, ce qui est la moindre des choses pour deux affichages de la
      même progression, à trente pixels l'un de l'autre. */
   const avance = Math.round(Math.min(duel.faits + 1, DUEL_TAILLE) / DUEL_TAILLE * 100);
+  /* §2.3 — pas de barre de progression sur le duel du jour : une barre qui va
+     de 0 à 100 % en un geste ne mesure rien, elle décore. */
   return '<div class="darene">'+
-    '<div class="dbarre"><i style="width:'+avance+'%"></i></div>'+
+    (duel.mode === 'jour' ? '' : '<div class="dbarre"><i style="width:'+avance+'%"></i></div>')+
     '<div class="dquest">Lequel tu as préféré&nbsp;?</div>'+
     '<div class="dsous">Il n\'y a pas de mauvaise réponse.</div>'+
     '<div class="dcartes">'+carteDuel(a, 0)+'<span class="dvs">VS</span>'+carteDuel(b, 1)+'</div>'+
     /* Une sortie honnête, écrite en toutes lettres. */
     '<button class="dneutre" onclick="duelPasse()">Je ne sais pas / les deux</button>'+
+    /* SPEC-06 §6.1 — « JE NE L'AI PAS VU » REVIENT, À SA PLACE NATURELLE.
+       `duelPasVu` existait, entière et testée, sans plus aucun appelant depuis
+       le point 19 du 02/08 ; le commentaire au-dessus d'elle désignait cet
+       écran et disait « la rebrancher coûtera alors une ligne ». La voici.
+       DEUX BOUTONS PLUTÔT QU'UN QUI DEMANDE « lequel ? » : la question serait
+       une feuille de plus au milieu d'un geste qui doit durer une seconde, et
+       les deux titres sont déjà à l'écran, chacun au-dessus du sien.
+       Le geste n'est plus irréversible — voir §6.2 dans `duelPasVu`. */
+    '<div class="dpasvu">'+
+      '<button onclick="duelPasVu(\''+a.media+'\',\''+escJs(String(a.id))+'\')">'+
+        '🚫 Pas vu — '+esc(a.nom)+'</button>'+
+      '<button onclick="duelPasVu(\''+b.media+'\',\''+escJs(String(b.id))+'\')">'+
+        '🚫 Pas vu — '+esc(b.nom)+'</button>'+
+    '</div>'+
   '</div>';
 }
 
@@ -4664,7 +4778,11 @@ function ecranDuelResultat(){
   let html = '<div class="dres">'+
     '<div class="dfete">🏆</div>'+
     '<div class="drtitre">Ton podium</div>'+
-    '<div class="drsous">D\'après tes '+duel.faits+' duel'+(duel.faits>1?'s':'')+'</div>';
+    '<div class="drsous">D\'après tes '+duel.faits+' duel'+(duel.faits>1?'s':'')+'</div>'+
+    /* SPEC-06 §4.3 — la jauge est demandée à TROIS endroits : la carte du
+       profil, le résultat du duel du jour, et ICI, « l'écran de résultat de
+       session existant ». Ce troisième manquait — relevé en relecture. */
+    ((typeof jaugeDuelHtml === 'function') ? jaugeDuelHtml(duel.famille) : '');
   /* Le n°1 au milieu et plus haut : un podium se lit d'un coup d'œil, pas en
      lisant les médailles une par une. */
   const ordre = trois.length >= 3 ? [trois[1], trois[0], trois[2]]
@@ -4797,17 +4915,21 @@ function ecranRattrapage(){
 }
 
 function ecranDuel(){
+  const jour = duel.mode === 'jour';
   const t = duel.ecran === 'jeu'
-    ? (DUEL_FAMILLES.find(f => f.cle === duel.famille) || {}).titre || 'Le duel'
-    : duel.ecran === 'resultat' ? 'Le résultat' : 'Encore une chose';
-  const compteur = duel.ecran === 'jeu'
+    ? (jour ? '⚔ Le duel du jour'
+            : (DUEL_FAMILLES.find(f => f.cle === duel.famille) || {}).titre || 'Le duel')
+    : duel.ecran === 'resultat' ? (jour ? 'Duel du jour' : 'Le résultat') : 'Encore une chose';
+  const compteur = (duel.ecran === 'jeu' && !jour)
     ? '<span class="dcompte">'+Math.min(duel.faits + 1, DUEL_TAILLE)+' / '+DUEL_TAILLE+'</span>'
     : '';
   let html = header(t, { right: compteur+
     '<button class="iconbtn" onclick="fermerDuel()" aria-label="Fermer">'+I.close+'</button>' });
   html += duel.ecran === 'jeu' ? ecranDuelJeu()
-        : duel.ecran === 'resultat' ? ecranDuelResultat()
-        : ecranRattrapage();
+        : duel.ecran === 'resultat'
+            ? ((jour && typeof ecranResultatDuelJour === 'function')
+                 ? ecranResultatDuelJour() : ecranDuelResultat())
+            : ecranRattrapage();
   return html;
 }
 
@@ -4853,13 +4975,36 @@ function blocEcartes(){
         'bâtie sur ces titres. Un appui les remet dans le jeu.</div>'+
       l.map(t=>'<div class="rlig">'+
         affDuel(t, 'rlaff', 'w154')+
-        '<div class="rli"><b>'+esc(t.nom)+'</b><span>👎 écarté</span></div>'+
+        '<div class="rli"><b>'+esc(t.nom)+'</b><span>'+
+          (t.pasVu ? '🚫 pas vu' : '👎 écarté')+'</span></div>'+
         '<button class="btn ghost mini" onclick="reprendreEcarte(\''+t.media+'\',\''+
           escJs(String(t.id))+'\')">Remettre</button>'+
       '</div>').join('')+
     '</div>';
 }
+/* SPEC-06 §6.2 — LA REPRISE SAIT DE QUOI ELLE REPREND. Deux gestes différents
+   ont mené ici : un 👎, qu'on retire, et un « je ne l'ai pas vu », qui sort de
+   `pasVus` et rend sa graine. Les traiter pareil laisserait l'un des deux
+   irréversible en silence — c'est-à-dire le défaut qu'on vient de fermer. */
 function reprendreEcarte(media, id){
+  const c = media + ':' + String(id);
+  const pv = (db.gouts && db.gouts.pasVus) || [];
+  const i = pv.indexOf(c);
+  if(i >= 0){
+    pv.splice(i, 1);
+    const sus = (db.gouts && db.gouts.grainesSuspendues) || [];
+    const j = sus.findIndex(x => x && x.media === media && String(x.id) === String(id));
+    if(j >= 0){
+      if(!Array.isArray(db.gouts.graines)) db.gouts.graines = [];
+      db.gouts.graines.push(sus[j]);
+      sus.splice(j, 1);
+      if(typeof oublierSuggestions === 'function') oublierSuggestions();
+    }
+    toucheGouts('pasVus','graines');
+    toast('Remis dans le jeu');
+    render();
+    return;
+  }
   retirerAvis(media, id);
   toast('Remis dans le jeu');
   render();

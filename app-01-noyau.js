@@ -1399,10 +1399,22 @@ function fusionnerAbosIgnores(rem){
 const GOUT_BLOCS = {
   genres:     ['genres','genresFam','genresFamDe','exclus','animeOui','animeSous'],
   acteurs:    ['acteurs'],
-  graines:    ['graines','amorcageFait'],
+  graines:    ['graines','amorcageFait','grainesSuspendues'],
   plates:     ['plates','platesDemande','suggMesPlates'],
   pasVus:     ['pasVus'],
   pasPourMoi: ['pasPourMoi'],
+  /* SPEC-04 lot C (10/08) — les deux interrupteurs de l'IA. Ils sont dans les
+     goûts, et pas dans un `db.ia` à part, pour une raison de plomberie et une
+     de sens. La plomberie : `payload()` est une liste blanche, et `gouts` y est
+     déjà — un bloc de plus voyage sans qu'on touche à la synchro. Le sens :
+     décider que l'app a le droit de faire écrire des textes est une préférence
+     de la PERSONNE, pas de l'appareil. L'allumer sur le téléphone et la
+     retrouver éteinte sur la tablette n'aurait aucun sens.
+     Le CACHE des textes, lui, reste local (localStorage) — §4.3. */
+  ia:         ['ia'],
+  /* SPEC-05 §2 — les ambiances de la Recherche. Un bloc à elles : en créer une
+     ne doit pas dater les genres ni les graines. */
+  ambiances:  ['ambiances'],
   divers:     ['propose','toutesOrigines','jour','neutres']
 };
 

@@ -11,7 +11,7 @@
    et l'app affiche un bandeau « Recharger » (app-08). Le réseau ne reste le
    premier recours que pour un fichier ABSENT du cache.
    Les appels TMDB ne sont jamais mis en cache. */
-const CACHE = 'mes-series-v91';
+const CACHE = 'mes-series-v96';
 
 const SHELL = ['./', './index.html', './app.css', './manifest.json',
                './icon-192.png', './icon-512.png',
@@ -32,7 +32,10 @@ const SHELL = ['./', './index.html', './app.css', './manifest.json',
                './app-10-sorties.js',
                './app-11-gouts.js',
                './app-12-recherche.js',
-               './app-13-inscription.js'];
+               './app-13-inscription.js',
+               './app-14-ia.js',
+               './app-15-filtres.js',
+               './app-16-duel-plus.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil(

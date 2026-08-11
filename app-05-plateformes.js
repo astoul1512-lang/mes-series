@@ -533,6 +533,15 @@ function viewPreview(){
     '</div>';
   }
 
+  /* SPEC-05 §8 — « ✦ POURQUOI IL TE CORRESPOND », AU-DESSUS DU SYNOPSIS ET
+     JAMAIS À SA PLACE. Le §8 le dit en toutes lettres : « le synopsis officiel
+     reste affiché dessous, intact ». La carte n'apparaît que si l'aperçu vient
+     d'une recherche AVEC une sélection active et que l'interrupteur « IA de la
+     Recherche » est allumé ; sinon `blocPourquoiIA` rend une chaîne vide et cet
+     écran est exactement celui d'avant, à la ligne près. */
+  if((params||{}).from === 'search' && typeof blocPourquoiIA === 'function')
+    html += blocPourquoiIA(isTv ? 'tv' : 'movie', d.id, title);
+
   if(d.overview) html += '<div class="sectitle">Synopsis</div><div class="overview" style="margin-top:0">'+esc(d.overview)+'</div>';
   else html += '<div class="overview muted" style="font-style:italic">Pas de synopsis disponible en français.</div>';
 
@@ -736,8 +745,16 @@ function toggleMovie(id){
    pas encore dans la bibliothèque. `addMovie` fait l'ajout et l'enregistrement ;
    ici on n'ajoute que la question, une fois l'ajout réellement abouti. */
 function marquerFilmVu(id){
+  const dejaVu = !!(db.movies[id] && db.movies[id].seen);
   const p = addMovie(id, true);
-  const suite = ()=>{ if(typeof signalerFilmVu === 'function') signalerFilmVu(id); };
+  const suite = ()=>{
+    if(typeof signalerFilmVu === 'function') signalerFilmVu(id);
+    /* SPEC-06 §3.1 — un film qui PASSE à vu, par un geste de la personne. Le
+       remarquer une seconde fois sur un film déjà vu ne serait pas une fin de
+       visionnage, ce serait un doublon. */
+    if(!dejaVu && typeof proposerDuelEclair === 'function')
+      proposerDuelEclair('movie', id, (db.movies[id] || {}).title);
+  };
   if(p && typeof p.then === 'function') p.then(suite, ()=>{});
   else suite();
 }

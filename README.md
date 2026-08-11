@@ -1,4 +1,4 @@
 # mes-series
 
 Application personnelle de suivi de series et de films. Version en ligne : https://astoul1512-lang.github.io/mes-series/
-Version en production : v91 — SPEC-04 lot A (Découvrir nouvelle génération : la règle des 10, les quatre humeurs, cinq rangées de plus), plus le lot SPEC-08 fusionné le 09/08/2026 sans incrément de version.
+Version en production : v96 — SPEC-07 (design premium : verre et profondeur, affiches, typographie, accent bijou — app.css seul), par-dessus SPEC-06 (le Duel accessible : bandeau du jour, duel éclair, carte et panthéon dans Mon profil, podium partageable, « je ne l'ai pas vu » rebranché et réversible), par-dessus SPEC-05 lot B (l'IA de la Recherche : envie en français, ambiance décrite, « pourquoi il te correspond »), par-dessus le lot A (Recherche nouvelle génération : pilules, feuille Filtres en accordéon, ambiances, meilleur match, tri « mes goûts » et mode duo), par-dessus SPEC-04 lot C (les branchements IA de Découvrir : lot quotidien, humeurs, interrupteurs de Réglages, « Bientôt » personnel), par-dessus le lot B (le relais IA) et le lot A (la règle des 10, les quatre humeurs, cinq rangées de plus).

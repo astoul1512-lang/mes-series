@@ -1057,6 +1057,24 @@ function classerParMalus(l){
    qui sait de quel signal elle tire sa légitimité, et l'app ne doit jamais
    prétendre en savoir plus qu'elle n'en sait.
 --------------------------------------------------------------------------- */
+/* SPEC-04 lot C — la seule porte entre la vitrine et l'IA, et elle est à sens
+   unique : elle LIT un cache, elle ne déclenche rien. Le déclenchement est
+   ailleurs (`apresRenduDecouvrirIA`), après le rendu, jamais pendant — sinon un
+   simple repeint partiel dépenserait une requête (§4.4, « cache d'abord »).
+   `app-14-ia.js` peut être absent (un vieux cache de service worker qui n'a
+   pas encore le fichier) : on ne suppose rien. */
+function pitchOuRaison(x, hum){
+  if(hum && typeof pitchIAHumeur === 'function'){
+    const p = pitchIAHumeur(hum, x);
+    if(p) return p;
+  }
+  if(!hum && typeof pitchIAduJour === 'function'){
+    const p = pitchIAduJour(x);
+    if(p) return p;
+  }
+  return x.pourquoi || '';
+}
+
 function propositionJourHtml(x){
   if(!x) return '';
   const bouts = [year(x.date), x.note ? '★ '+(Math.round(x.note*10)/10) : ''].filter(Boolean);
@@ -1088,9 +1106,16 @@ function propositionJourHtml(x){
          titre vient de la recette de l'humeur, pas du profil. On met donc
          l'étoile violette, qui dit « tu as demandé ça ce soir », et on ne fait
          pas passer une recette pour une déduction personnelle. */
+      /* SPEC-04 lot C §3 — LE PITCH REMPLACE LA LIGNE DE RAISON, OU NE LA
+         REMPLACE PAS. Trois conditions pour qu'il s'affiche : l'interrupteur
+         allumé, un lot du jour arrivé, et un texte qui passe la validation de
+         sortie (longueur, §0.4). Si l'une manque — et c'est le cas par défaut,
+         l'interrupteur étant éteint à la livraison — la ligne au cœur actuelle
+         reste, mot pour mot. Jamais de placeholder, jamais de phrase creuse :
+         c'est écrit noir sur blanc au §3. */
       '<div class="d4pq'+(hdef ? ' h4pq' : '')+'">'+
         (hdef ? '<span class="h4etoile" aria-hidden="true">✦</span>' : I.coeur)+
-        '<span>'+esc(x.pourquoi || 'À découvrir')+'</span></div>'+
+        '<span>'+esc(pitchOuRaison(x, hum) || 'À découvrir')+'</span></div>'+
       '<div class="d4act">'+
         '<button class="btn'+(hdef ? ' h4btn' : '')+'"'+(occupe('serie:'+id)?' disabled':'')+
           ' onclick="ajouterProposition('+id+',\''+media+'\')">Ajouter à ma liste</button>'+
@@ -1228,14 +1253,56 @@ function vitrineBody(){
      ne sait pas s'expliquer dans son titre, c'est la rangée qui est mal
      conçue — c'est au moteur de la nommer mieux, pas à l'écran de la
      rattraper avec une seconde ligne. */
-  rangees.forEach(r=>{
-    html += '<div class="sectitle">'+esc(r.titre)+'</div>'+
+  rangees.forEach((r, iR)=>{
+    /* SPEC-06 §1.3 — LE POINT D'ANCRAGE UNIQUE DU BANDEAU « DUEL DU JOUR ».
+       Il s'insère APRÈS LA PREMIÈRE RANGÉE RENDUE, quelle qu'elle soit — on
+       s'ancre sur la POSITION, jamais sur le nom d'une rangée : si le tableau
+       du §1 de SPEC-04 est réordonné un jour, le bandeau suivra sans retouche.
+       Ce n'est PAS une rangée (§1.1) : pas de numéro, pas de règle des 10, pas
+       de tuile « Tout voir », et ses deux titres ne vont jamais dans « Aussi
+       pour toi ». C'est la SEULE ligne que SPEC-06 ajoute à ce fichier — le
+       §8 en fait un critère d'acceptation vérifiable au diff. */
+    if(iR === 1) html += bandeauApresPremiereRangee();
+    /* SPEC-04 lot C — l'intitulé peut avoir été réécrit par le lot quotidien.
+       `intituleIA` rend le titre d'origine dès que l'IA est éteinte, que le lot
+       n'est pas là, ou que la rangée n'en fait pas partie : la ligne ci-dessous
+       est donc STRICTEMENT celle d'avant quand rien n'est allumé. */
+    const titreJs = (typeof intituleIA === 'function') ? intituleIA(r.cle, r.titre) : r.titre;
+    html += '<div class="sectitle">'+esc(titreJs)+'</div>'+
       '<div class="rangee'+(r.top ? ' h4top' : '')+'" data-rail="rangee-'+esc(r.cle||r.titre)+'">'+
         r.l.slice(0, RANGEE_APERCU)
           .map((x, i) => r.top ? vignetteTop(x, i) : vignetteSugg(x, 'discover')).join('')+
         finRangee(r)+'</div>';
   });
+  /* §4.3 — LE LOT SE GÉNÈRE APRÈS LE PREMIER RENDU, jamais avant. La vitrine
+     ci-dessus est déjà construite : ce qui suit ne fait que poser un rendez-vous
+     pour le tour de boucle suivant, et il est idempotent. Deux rendez-vous sont
+     pris ici, et ils n'ont rien à voir l'un avec l'autre : le lot IA (textes,
+     soumis à l'interrupteur) et la moitié personnelle de « Bientôt » (dates
+     françaises, R7 — du calendrier, aucun modèle). */
+  /* SPEC-06 §1.3 — « après la première rangée rendue, quelle qu'elle soit ».
+     Avec une seule rangée à l'écran, `iR === 1` n'arrivait jamais et le bandeau
+     disparaissait — sans effet aujourd'hui (treize rangées au démarrage), mais
+     l'ancrage doit dire ce qu'il promet. Relevé en relecture. */
+  if(rangees.length === 1) html += bandeauApresPremiereRangee();
+  apresRenduVitrine();
   return html + '<div style="height:6px"></div>';
+}
+
+/* Les rendez-vous d'après-rendu. Groupés dans une fonction pour que
+   `vitrineBody` reste lisible et que le test de non-régression ait un seul
+   nom à surveiller. Toute la prudence est chez les appelées : elles vérifient
+   leur propre cache et ne font rien deux fois. */
+/* Le seul point d'entrée du bandeau de SPEC-06 dans ce fichier. Il rend '' dès
+   que `app-16-duel-plus.js` n'est pas là, ou que l'une des quatre conditions du
+   §1.4 mord. */
+function bandeauApresPremiereRangee(){
+  return (typeof bandeauDuelJour === 'function') ? bandeauDuelJour() : '';
+}
+
+function apresRenduVitrine(){
+  if(typeof apresRenduDecouvrirIA === 'function') apresRenduDecouvrirIA();
+  if(typeof amorcerBientotDuJour === 'function') amorcerBientotDuJour();
 }
 
 /* ---------------------------------------------------------------------------
@@ -1519,6 +1586,12 @@ function setHumeur(cle){
      PAS quand la case de cache existe déjà, ce qui est le cas de l'écran au
      repos qu'on vient de quitter. Revenir au repos ne coûte donc rien. */
   render();
+  /* SPEC-04 lot C §2 — UNE requête par humeur TOUCHÉE, et « touchée » veut dire
+     « devenue active ». Désélectionner ne coûte rien, et re-toucher la même
+     humeur dans la soirée non plus : `toucherHumeurIA` sort tout de suite si le
+     cache tient encore (échéance à 6 h du matin). Le rendu ci-dessus est déjà
+     parti : l'écran d'humeur est à l'image AVANT que la requête ne commence. */
+  if(d.humeur && typeof toucherHumeurIA === 'function') toucherHumeurIA(d.humeur);
   if(!d.humeur) toast('Retour à la proposition du jour');
 }
 

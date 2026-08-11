@@ -65,6 +65,20 @@ function viewSettings(){
        ne défaites pas ce rangement au nom de l'ancienne raison, elle est fausse. */
     ligne('Mes plateformes', resumePlates(), "go('plates',{from:'settings'})", I.tv)+
     ligne('Notifications', resumeNotif(), "go('notifs',{from:'settings'})", I.cloche)+
+    /* SPEC-04 §4.5 et SPEC-05 §6 — LES DEUX INTERRUPTEURS DE L'IA, ici et pas
+       ailleurs : ce groupe s'appelle « Ce que l'app me propose », et c'est très
+       exactement de ça qu'il s'agit. Ils sont ÉTEINTS À LA LIVRAISON — opt-in,
+       jamais opt-out — et séparés l'un de l'autre, parce que quelqu'un peut
+       vouloir des textes dans Découvrir sans laisser l'IA lire ses recherches.
+       Le sous-texte est celui de la spec, mot pour mot : il dit ce qui part
+       (des titres, des genres) et ce qui ne part pas (l'identité). Une phrase
+       vague ici serait un consentement obtenu à l'aveugle. */
+    interrupteurIA('decouvrir', 'Suggestions intelligentes (IA)',
+      'Génère chaque jour quelques textes personnalisés. Fonctionne avec un service externe ; '+
+      'tes titres et genres sont envoyés, jamais ton identité.')+
+    interrupteurIA('recherche', 'IA de la Recherche',
+      'Traduit une envie écrite en français en critères, et explique pourquoi un titre te '+
+      'correspond. Même service externe, mêmes données : des titres et des genres.')+
     /* La langue flottait seule, sous un paragraphe, sans groupe. Elle rejoint
        celui auquel elle appartient : c'est un réglage de ce que l'app propose. */
     '<label class="fld"><span>Langue des fiches</span>'+
@@ -172,6 +186,25 @@ function viewSettings(){
     'Les affiches, les résumés et les dates de diffusion viennent de TMDB. '+
     'Tu n\'as rien d\'autre à configurer.</div>';
   return html;
+}
+
+/* SPEC-04 lot C — la ligne à interrupteur. Elle reprend la boîte `.reg` du
+   reste de l'écran et remplace son chevron par le `.inter` de l'écran des
+   cloches : même composant, même géométrie, aucune classe nouvelle. On n'appelle
+   pas `ligne()` parce que celui-ci pose un chevron en dur — et un chevron dit
+   « ça ouvre un écran », ce qui serait un mensonge sur un interrupteur.
+
+   `quoi` est une constante d'ici ('decouvrir' ou 'recherche') : elle part dans
+   l'onclick sans `escJs` pour la même raison que `t.id` dans les puces de
+   Découvrir — elle ne vient d'aucune saisie. `titre` et `sous` sont échappés. */
+function interrupteurIA(quoi, titre, sous){
+  const on = (typeof iaActive === 'function') && iaActive(quoi);
+  return '<button class="reg" onclick="basculerIA(\''+quoi+'\')" '+
+      'aria-pressed="'+(on ? 'true' : 'false')+'">'+
+    '<i>'+I.eclair+'</i>'+
+    '<span class="rtxt"><b>'+esc(titre)+'</b><em>'+esc(sous)+'</em></span>'+
+    '<span class="inter'+(on ? ' on' : '')+'"><i></i></span>'+
+  '</button>';
 }
 
 /* La langue demandée à TMDB, et son nom en clair. La valeur ne bouge pas :
