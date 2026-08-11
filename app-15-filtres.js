@@ -735,6 +735,12 @@ function basculerTriRech(v){
   r.res = ordonnerParGoutRech(r.res);
   r.matchI = 0;
   peindreRech();
+  /* RETOUR-01 POINT 8 — passer sur « ✦ mes goûts » est le second moment où le
+     classement IA se demande. C'est un geste EXPLICITE : la personne vient de
+     réclamer ce tri-là, et l'écran est déjà repeint avec l'ordre local. Sur
+     « note », `toucherClassementIA` sort tout de suite — on ne prépare pas un
+     classement pour un tri qui ne l'utilise pas. */
+  if(typeof toucherClassementIA === 'function') toucherClassementIA();
 }
 
 function barreTriRech(){
@@ -778,9 +784,27 @@ function ordonnerParGoutRech(l){
   }
   const score = {};
   l.forEach(x=>{ score[x.__media+':'+x.id] = scoreGoutRech(x); });
+  /* RETOUR-01 POINT 8 (11/08/2026) — L'ORDRE IA PASSE DEVANT, QUAND IL EXISTE.
+     ① le score local ci-dessus ne change pas d'une ligne : c'est lui qui
+     pré-classe, et c'est lui qui reste quand l'IA est éteinte, indisponible ou
+     pas encore arrivée (⑥). ⑤ un titre absent du classement IA — au-delà des
+     cent premiers, ou écarté par la validation — vaut `Infinity` et se range
+     donc APRÈS les cent classés, dans son ordre local : la grille ne présente
+     aucune rupture, elle a seulement une tête mieux rangée.
+     `app-14-ia.js` peut être absent (vieux cache de service worker) : on ne
+     suppose rien, ici comme ailleurs. */
+  const ia = (typeof ordreIAGrilleRech === 'function') ? ordreIAGrilleRech() : null;
+  const rangIA = k => (ia && (k in ia)) ? ia[k] : Infinity;
   /* Tri STABLE : à score égal, l'ordre d'arrivée est conservé. */
   return l.map((x, i)=> ({ x:x, i:i }))
-    .sort((a, b)=> (score[b.x.__media+':'+b.x.id] - score[a.x.__media+':'+a.x.id]) || (a.i - b.i))
+    .sort((a, b)=>{
+      const ka = a.x.__media+':'+a.x.id, kb = b.x.__media+':'+b.x.id;
+      if(ia){
+        const ra = rangIA(ka), rb = rangIA(kb);
+        if(ra !== rb) return ra - rb;
+      }
+      return (score[kb] - score[ka]) || (a.i - b.i);
+    })
     .map(o => o.x);
 }
 
@@ -903,6 +927,57 @@ function raisonGoutRech(x, media){
   return l.length ? '<div class="rraison">✦ '+esc(l.join(' · '))+'</div>' : '';
 }
 
+/* ---- RETOUR-01 POINT 7 (11/08/2026) — « DU ACTION » N'EXISTE PLUS ----
+
+   Le gabarit local écrivait `'du '+genre` en dur. Sur les seize genres du
+   vocabulaire, ça donnait « du action », « du animation », « du science-
+   fiction », « du histoire », « du aventure »… — cinq fautes visibles à
+   l'écran, sous une affiche, dans une phrase censée expliquer un choix.
+
+   LA RÈGLE, DANS L'ORDRE, ET ELLE TIENT EN TROIS LIGNES :
+     · le nom commence par une voyelle ou un h muet → « de l' » ;
+     · le nom est féminin → « de la » ;
+     · sinon → « du ».
+
+   Le genre grammatical ne se devine pas d'une terminaison (« la romance » et
+   « le documentaire » finissent tous deux par une voyelle) : il se déclare.
+   D'où la table ci-dessous, qui ne porte QUE les féminins — le masculin est le
+   défaut, et un genre inconnu tombe donc sur « du », qui est le cas le plus
+   fréquent. Un genre qu'on aurait oublié fait une faute mineure, jamais un
+   plantage.
+
+   ELLE COUVRE LES DEUX TAXONOMIES. Les libellés de séries sont d'abord
+   francisés (`libelleGenre` : « kids » → « Jeunesse ») puis ramenés au nom
+   canonique quand il existe (`genreCanon` : « sci-fi & fantasy » →
+   « Science-Fiction »), sans quoi « du sci-fi & fantasy » resterait possible.
+   L'ordre compte : on canonise d'abord, on francise ensuite ce qui reste. */
+const GENRES_FEMININS_RECH = {
+  'action':1, 'animation':1, 'aventure':1, 'comédie':1, 'guerre':1, 'histoire':1,
+  'horreur':1, 'musique':1, 'romance':1, 'science-fiction':1, 'fantasy':1,
+  'information':1, 'téléréalité':1, 'jeunesse':1, 'guerre et politique':1,
+  'action et aventure':1
+};
+/* Voyelle ou h muet en tête. Le seul h aspiré de la liste des genres serait
+   « hongrois » ou « hollandais », qui n'en sont pas : sur ce vocabulaire-là,
+   tout h est muet (« l'horreur », « l'histoire »). On ne modélise donc pas une
+   exception qui n'a aucun représentant. */
+const VOYELLE_RECH = /^[aeiouyàâäéèêëîïôöùûüh]/i;
+
+function nomGenreLisibleRech(nom){
+  const brut = String(nom == null ? '' : nom);
+  const canon = (typeof genreCanon === 'function') ? genreCanon(brut) : brut;
+  const fr = (typeof libelleGenre === 'function') ? libelleGenre(canon) : canon;
+  return String(fr).toLowerCase();
+}
+/* « de l'action », « de la comédie », « du thriller ». Rendue seule pour
+   qu'un test puisse la passer sur les seize genres sans monter un écran. */
+function duGenreRech(nom){
+  const n = nomGenreLisibleRech(nom);
+  if(!n) return '';
+  if(VOYELLE_RECH.test(n)) return 'de l\'' + n;
+  return (GENRES_FEMININS_RECH[n] ? 'de la ' : 'du ') + n;
+}
+
 /* Une raison, d'un côté ou de l'autre. `qui` vaut null pour soi, l'identifiant
    d'un proche sinon. On rend la PREMIÈRE raison vraie, pas une liste : deux
    lignes sous une affiche, c'est une notice. */
@@ -913,7 +988,10 @@ function raisonCoteRech(x, media, qui){
     if(!p) return '';
     if(p.titres[media+':'+x.id]) return 'déjà dans sa bibliothèque';
     const commun = genres.filter(n => p.genres[n]);
-    if(commun.length) return commun[0]+' aussi de son côté';
+    /* RETOUR-01 point 7 — même francisation ici : « sci-fi & fantasy aussi de
+       son côté » était le second endroit où la taxonomie brute passait à
+       l'écran. Pas d'article à poser, seulement un nom lisible. */
+    if(commun.length) return nomGenreLisibleRech(commun[0])+' aussi de son côté';
     return '';
   }
   try{
@@ -922,7 +1000,7 @@ function raisonCoteRech(x, media, qui){
   }catch(e){}
   const g = profilGoutsRech();
   const fort = genres.filter(n => (g[n] || 0) > 0).sort((n1, n2)=> (g[n2]||0) - (g[n1]||0))[0];
-  if(fort) return 'du '+fort+', comme ce que tu regardes';
+  if(fort) return duGenreRech(fort)+', comme ce que tu regardes';
   if(x.vote_average >= 7.5)
     return 'très bien noté · '+String((Math.round(x.vote_average*10)/10).toFixed(1)).replace('.', ',');
   if(genres.length) return 'un genre que tu explores';

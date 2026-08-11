@@ -355,12 +355,26 @@ requêtes par minute, requêtes par jour.
 **Google ne les publie plus.** Relevé le 10/08/2026 : la page officielle
 *Gemini API — Rate limits* ne porte plus aucun tableau RPM / RPD / TPM, elle
 renvoie au tableau de bord d'AI Studio et précise que les limites « are not
-guaranteed ». Les deux étages Gemini partent donc avec `limite_minute` et
-`limite_jour` à `NULL`, ce qui veut dire **inconnue** et non *illimitée* : la
-réservation les laisse passer, et c'est le `429` du fournisseur qui les arrête,
-une fois par fenêtre.
+guaranteed ».
 
-Pour fermer cet écart :
+**Ce que la migration 015 a changé (RETOUR-01 point 4, 11/08/2026).** Les deux
+étages Gemini partaient avec `limite_minute` et `limite_jour` à `NULL`, ce qui
+veut dire *inconnue* et non *illimitée* — sauf que la réservation laisse alors
+tout passer, et que le garde-fou anti-429 du § 4.2 était donc **désarmé en
+production**. La migration 015 pose des limites prudentes, à la fois dans le
+semis (base neuve) et par rattrapage sur les lignes déjà semées sans limite :
+
+| étage | limite_minute | limite_jour |
+|---|---|---|
+| `gemini-flash` | 10 | 1000 |
+| `gemini-flash-lite` | 15 | 1500 |
+
+Ces chiffres ne prétendent pas être ceux de Google : ils sont **assez bas pour
+protéger** et assez hauts pour ne gêner aucun usage réel (le budget par
+personne est de 30 requêtes par jour). Le rattrapage est borné par
+`where limite_minute is null` : un chiffre posé à la main n'est jamais défait.
+
+Pour poser les vrais chiffres le jour où on les connaît :
 
 1. Ouvrir <https://aistudio.google.com/rate-limit> avec le compte qui porte
    `GEMINI_API_KEY`, et relever les limites du **Free Tier** pour les deux
@@ -383,6 +397,15 @@ update public.ia_fournisseurs
 ```
 
 Aucun redéploiement : la fonction relit la table, avec une minute de cache.
+Reporter aussi les valeurs dans `FOURNISSEURS` (`config.ts`), qui sert de repli
+quand la table est injoignable — sinon le repli réintroduit l'écart.
+
+**Le contrôle qui dit que c'est fermé** — attendu : `0`.
+
+```sql
+select count(*) from public.ia_fournisseurs
+ where actif and (limite_minute is null or limite_jour is null);
+```
 
 ### Avant de changer le modèle OpenRouter — lire son catalogue
 

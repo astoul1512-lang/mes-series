@@ -1410,8 +1410,14 @@ const GOUT_BLOCS = {
      décider que l'app a le droit de faire écrire des textes est une préférence
      de la PERSONNE, pas de l'appareil. L'allumer sur le téléphone et la
      retrouver éteinte sur la tablette n'aurait aucun sens.
-     Le CACHE des textes, lui, reste local (localStorage) — §4.3. */
-  ia:         ['ia'],
+     Le CACHE des textes, lui, reste local (localStorage) — §4.3.
+     RETOUR-01 POINT 4 (11/08/2026) — `iaV` voyage AVEC les interrupteurs, dans
+     le même bloc. C'est le marqueur du passage « l'IA devient active par
+     défaut » (voir `migrerGouts`). S'il restait local, couper l'IA sur le
+     téléphone puis ouvrir la tablette la rallumerait : la tablette n'aurait
+     pas encore fait son passage et le referait par-dessus un choix déjà
+     exprimé. Un marqueur de passage voyage avec ce qu'il a modifié. */
+  ia:         ['ia','iaV'],
   /* SPEC-05 §2 — les ambiances de la Recherche. Un bloc à elles : en créer une
      ne doit pas dater les genres ni les graines. */
   ambiances:  ['ambiances'],

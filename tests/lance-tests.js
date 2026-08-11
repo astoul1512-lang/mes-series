@@ -733,6 +733,11 @@ function collisionsCss(src){
                  hero: (document.querySelector('.d4nom')||{}).textContent || null,
                  raison: (document.querySelector('.d4pq')||{}).textContent || null,
                  lien: !!document.querySelector('.d4lien'),
+                 /* RETOUR-01 point 1 : les puces vivent maintenant AU-DESSUS du
+                    hero, plus dessus. On relève les deux faces : la bande doit
+                    être là, et plus rien ne doit être en surimpression. */
+                 bande: !!document.querySelector('#dres .h4bande .chip'),
+                 surhero: document.querySelectorAll('.h4surhero, .h4voile').length,
                  appel: !!document.querySelector('.d4appel'),
                  texte: document.getElementById('app').textContent };
       });
@@ -777,7 +782,14 @@ function collisionsCss(src){
       rate('la tuile « Tout voir » ne dit pas combien de titres il y a');
     if(!riche.hero) rate('aucune proposition du jour en tête d\'écran');
     if(!/Parce que tu as aimé/.test(riche.raison || '')) rate('la proposition n\'a pas de raison lisible');
-    if(!riche.lien) rate('le lien « Ajuster mes goûts » a disparu');
+    /* RETOUR-01 POINT 2 — le contrôle est RETOURNÉ : le lien « Ajuster mes
+       goûts » ne doit plus jamais reparaître dans Découvrir. */
+    if(riche.lien) rate('le lien « Ajuster mes goûts » est encore là (RETOUR-01 point 2)');
+    if(/Ajuster mes goûts/.test(riche.texte))
+      rate('le texte « Ajuster mes goûts » est encore à l\'écran (RETOUR-01 point 2)');
+    /* RETOUR-01 POINT 1 — les puces sont dans le flux, au-dessus du hero. */
+    if(!riche.bande) rate('la bande de puces a disparu de Découvrir (RETOUR-01 point 1)');
+    if(riche.surhero) rate('des puces sont encore posées sur l\'affiche (RETOUR-01 point 1)');
     if(riche.appel) rate('la carte d\'appel au duel s\'affiche sur un profil nourri');
     if(/TMDB/.test(riche.texte)) rate('l\'aveu technique sur les plateformes est encore à l\'écran');
     if(/Je pars de tes/.test(riche.texte)) rate('le pavé de diagnostic est encore à l\'écran');

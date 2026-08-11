@@ -361,11 +361,34 @@
   .credit a{color:var(--muted);text-decoration:underline}
   .qbar{position:relative;margin:0 16px 12px;display:flex;align-items:center}
   .qbar > svg{position:absolute;left:13px;width:17px;height:17px;color:var(--muted);pointer-events:none}
-  .qbar input{padding-left:38px;padding-right:38px}
+  /* RETOUR-01 POINT 6 — le bouton ✦ tient au bord droit, la croix se range à sa
+     gauche. Le champ recule donc de 74 px à droite : 6 (marge) + 34 (le ✦) +
+     26 (la croix) + 8 de respiration. */
+  .qbar input{padding-left:38px;padding-right:74px}
   .qbar input::-webkit-search-cancel-button{display:none}   /* la croix du navigateur ferait doublon */
-  .qclear{position:absolute;right:8px;width:26px;height:26px;border-radius:13px;
+  .qclear{position:absolute;right:44px;width:26px;height:26px;border-radius:13px;
     display:grid;place-items:center;color:var(--muted)}
   .qclear svg{width:15px;height:15px}
+  /* ---- RETOUR-01 POINT 6 : LE MODE ✦ (maquette 20, OPTION T) ----
+     Un seul bouton, dans la barre. Éteint, il est aussi discret que la croix —
+     il ne doit pas se disputer l'attention avec le champ lui-même. Allumé, ce
+     n'est pas LUI qui change, c'est TOUTE LA BARRE : fond, liseré, icône de
+     gauche. « La COULEUR est le mode » — pas de sélecteur, pas de pastille,
+     rien à lire. Le violet est celui de l'IA partout ailleurs dans l'app
+     (`--ia`, les pilules, l'étoile du hero d'humeur) : ce n'est pas une
+     nouvelle couleur, c'est la couleur qui veut déjà dire ça. */
+  .qia{position:absolute;right:6px;width:34px;height:34px;border-radius:9px;
+    display:grid;place-items:center;font-size:15px;line-height:1;
+    background:var(--surface2);border:1px solid var(--line);color:var(--muted);
+    font-family:inherit;transition:background-color .2s,color .2s,border-color .2s}
+  .qia.on{background:linear-gradient(135deg,#7c5cff,#a78bfa);color:#fff;
+    border-color:transparent;box-shadow:0 4px 14px rgba(124,92,255,.33)}
+  .qetoile{position:absolute;left:13px;width:17px;font-size:15px;line-height:1;
+    color:#a78bfa;pointer-events:none;text-align:center}
+  .qbar.qiaon input{background:#161226;border-color:#a78bfa99;color:#e9e2ff;
+    box-shadow:0 0 0 3px rgba(167,139,250,.15)}
+  .qbar.qiaon input::placeholder{color:#8b7fb8}
+  .qbar.qiaon .qclear{color:#a78bfa}
   .masque{visibility:hidden;pointer-events:none}
   .resume.masque{display:none}
 
@@ -1518,12 +1541,11 @@
      jamais au milieu ». À nettoyer par qui rouvrira le socle.
      ===================================================================== */
 
-  /* ---- Le lien qui remplace les deux pavés de texte (point 8) ----
-     Discret, sur une ligne, sans chiffre ni explication. Il ne doit surtout
-     pas retrouver la hauteur de ce qu'il remplace : c'est précisément les
-     cent pixels rendus à la proposition du jour qui ont emporté la décision. */
-  .d4lien{padding:4px 16px 10px}
-  .d4lien button{color:var(--accent);font-weight:650;font-size:13px}
+  /* ---- Le lien qui remplaçait les deux pavés de texte (point 8) ----
+     PIERRE TOMBALE — RETOUR-01 POINT 2, 11/08/2026. `.d4lien` et son bouton
+     sont retirés : le lien « Ajuster mes goûts → » n'est plus émis (voir la
+     pierre tombale d'`app-04-decouvrir.js`). Rien ne le remplace ici — la
+     proposition du jour récupère les quelques pixels. */
 
   /* ---- La proposition du jour ----
      Un seul titre, plein cadre. L'image est un bouton à elle seule : c'est le
@@ -2169,26 +2191,20 @@ body.rphnette .rphrase{background:#15171e}
   .d4pq.h4pq{color:#c9b8ff}
   .h4etoile{flex:0 0 auto;font-size:13px;line-height:1}
 
-  /* ---- R6 : les deux rangées de puces sur le hero (maquette 7) ----
-     Posées en surimpression sur l'affiche du jour, en verre dépoli. Le voile
-     du haut les rend lisibles quelle que soit la luminosité de l'image — on ne
-     la connaît pas à l'avance, et un ciel blanc mangerait des puces claires. */
-  .h4voile{position:absolute;top:0;left:0;right:0;height:150px;pointer-events:none;z-index:1;
-    background:linear-gradient(rgba(7,7,10,.86),rgba(7,7,10,.34) 62%,transparent)}
-  .h4surhero{position:absolute;top:10px;left:0;right:0;z-index:3;
-    display:flex;flex-direction:column;gap:6px}
-  .h4surhero .chips{padding-bottom:0}
-  /* Sur l'image, TOUTES les puces passent au verre dépoli — y compris celles de
-     famille, dont le fond plein (`--surface`) ferait une tache opaque. Les
-     états actifs, eux, gardent leur couleur : bleu pour la famille, violet pour
-     l'humeur, c'est ce qui les distingue au premier coup d'œil. */
-  .h4surhero .chip{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.18);
-    color:rgba(255,255,255,.88);
-    -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
-  .h4surhero .chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
-  .h4surhero .h4chip.on{background:#a78bfa;border-color:#a78bfa;color:#160f2e}
-  /* La bande de repli : pas de hero sous les puces (amorçage, écran vide,
-     grille filtrée). Même contenu, habillage ordinaire. */
+  /* ---- Les deux rangées de puces, AU-DESSUS du hero ----
+     RETOUR-01 POINT 1 (11/08/2026). R6 les avait posées EN SURIMPRESSION sur
+     l'affiche, en verre dépoli, avec un voile pour les rendre lisibles. Le
+     voile faisait bien son travail — mais le point 1 ne parle pas de
+     lisibilité, il parle de RECOUVREMENT : sur iPhone, les puces se posent sur
+     le visage de l'affiche. Deux rangées de ~35 px sous un `top:10px`, contre
+     un `.d4bas` qui remonte de 92 px sur une image de 300 px (250 px en petit
+     écran) : il ne restait que 122 px d'image libre, et 72 px sous 360 px de
+     large. Une bande dans le flux règle le problème PAR CONSTRUCTION, à toutes
+     les largeurs, et supprime du même coup l'habillage double.
+     PIERRE TOMBALE : `.h4voile`, `.h4surhero` et ses quatre règles de puces
+     sont retirés. `body .h4surhero .chip.on` (surcouche premium §2.4) l'est
+     aussi — il n'avait plus de cible. La bande, elle, ne bouge pas d'un pixel :
+     c'est exactement celle qui servait déjà aux écrans sans hero. */
   .h4bande{padding:10px 0 2px}
   .h4bande .chips{padding-bottom:8px}
 
@@ -2617,10 +2633,11 @@ body.rphnette .rphrase{background:#15171e}
      porte un sens — dans la même matière que le reste. Relevé en relecture. */
   body .chip.h4chip.on{background-image:linear-gradient(135deg,#b79bff,#a78bfa);
     box-shadow:0 6px 20px rgba(167,139,250,.34)}
-  /* Sur le hero, la puce active garde son aplat (le verre dépoli du voisinage
-     ne supporte pas un dégradé) : on ne lui en pose pas, et on le dit plutôt
-     que de laisser croire à un oubli. */
-  body .h4surhero .chip.on{background-image:none;box-shadow:none}
+  /* PIERRE TOMBALE — RETOUR-01 POINT 1, 11/08/2026. `body .h4surhero .chip.on`
+     neutralisait le dégradé des puces posées sur l'affiche. Les puces ne sont
+     plus sur l'affiche : la règle n'a plus de cible et disparaît. Les puces de
+     famille reprennent donc le dégradé commun de `body .chip.on`, comme
+     partout ailleurs dans l'app. */
   body .rbadge{background-image:var(--px-grad)}
   body .pcard .pbar>i{background-image:var(--px-grad)}
   /* La jauge de stabilité de SPEC-06 et la barre de progression du duel : deux

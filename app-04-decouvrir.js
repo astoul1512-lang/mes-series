@@ -1092,11 +1092,19 @@ function propositionJourHtml(x){
       'aria-label="'+esc(x.nom)+'">'+
       (img ? '<img class="d4img" loading="lazy" src="'+img+'" alt="">' : '<div class="d4img"></div>')+
     '</button>'+
-    /* Le voile du haut : la luminosité de l'affiche du jour n'est pas connue à
-       l'avance, et des puces en verre dépoli sur un ciel blanc ne se lisent
-       pas. Même motif que la maquette (`.voilehaut`). */
-    '<div class="h4voile" aria-hidden="true"></div>'+
-    '<div class="h4surhero">'+chipsDecouvrir()+'</div>'+
+    /* RETOUR-01 POINT 1 (11/08/2026) — LES PUCES NE SONT PLUS SUR L'IMAGE.
+       Elles y étaient posées en verre dépoli depuis R6 (10/08). Constat de prod
+       sur iPhone : elles se superposent au visage de l'affiche. Le calcul le
+       confirme — deux rangées de ~35 px, un `top:10px`, et un `.d4bas` qui
+       remonte de 92 px ne laissent que 122 px d'image libre, 72 px seulement
+       sous 360 px de large. Aucun réglage de voile ne rattrape ça : le problème
+       n'est pas la LISIBILITÉ des puces (le voile la réglait très bien), c'est
+       le RECOUVREMENT de l'image. Les puces descendent donc dans le flux,
+       AU-DESSUS du hero, dans la bande qui existait déjà pour les écrans sans
+       hero (`bandeChips`) : un seul habillage au lieu de deux, et zéro
+       chevauchement possible, à n'importe quelle largeur.
+       PIERRE TOMBALE : `.h4voile` et `.h4surhero` n'ont plus d'emploi ; leurs
+       règles quittent `app.css` avec ce point. */
     '<div class="d4bas">'+
       '<div class="d4tag'+(hdef ? ' h4on' : '')+'">'+
         (hdef ? '✦ '+esc(hdef.ceSoir) : 'La proposition du jour')+'</div>'+
@@ -1244,10 +1252,13 @@ function vitrineBody(){
       '<p>Ajoute une série ou un film : les suggestions se règlent sur ce que tu regardes.</p>'+
       '<button class="btn ghost" onclick="go(\'search\')">Chercher un titre</button></div>';
 
-  /* Le hero porte les puces ; sans hero, la bande prend le relais au même
-     endroit de l'écran. */
-  let html = (jour ? '' : bandeChips()) +
-             lienAjusterGouts() + propositionJourHtml(jour) + carteProfilPauvre();
+  /* RETOUR-01 POINTS 1 ET 2 (11/08/2026) — la bande de puces devient
+     INCONDITIONNELLE : elle précède le hero au lieu de se poser dessus. Tous
+     les états de cet écran (avec hero, sans hero, vide, en erreur, en attente)
+     ouvrent donc sur exactement la même bande, au même endroit — c'est ce que
+     R6 cherchait, en plus simple.
+     Le lien « Ajuster mes goûts → » a disparu avec le point 2. */
+  let html = bandeChips() + propositionJourHtml(jour) + carteProfilPauvre();
   /* UN SEUL NIVEAU DE TEXTE : le titre (§3.2). Pas de sous-titre, pas de
      pastille, pas de code couleur, aucun vocabulaire de moteur. Si une rangée
      ne sait pas s'expliquer dans son titre, c'est la rangée qui est mal
@@ -1302,6 +1313,12 @@ function bandeauApresPremiereRangee(){
 
 function apresRenduVitrine(){
   if(typeof apresRenduDecouvrirIA === 'function') apresRenduDecouvrirIA();
+  /* RETOUR-01 POINT 5 (11/08/2026) — le pitch suit le hero. Ce rendez-vous-ci
+     est pris à CHAQUE rendu de la vitrine, et c'est voulu : les trois gestes
+     qui changent le hero (« Pas pour moi », famille, humeur) passent tous par
+     là. Il est idempotent — un titre déjà pitché, ou déjà tenté, ne redéclenche
+     rien — et il est borné à trente requêtes par jour. */
+  if(typeof toucherPitchHeroIA === 'function') toucherPitchHeroIA();
   if(typeof amorcerBientotDuJour === 'function') amorcerBientotDuJour();
 }
 
@@ -1323,11 +1340,18 @@ function apresRenduVitrine(){
    repoussait la proposition du jour de près de cent pixels. On ouvrait l'app
    et on lisait deux paragraphes avant de voir le premier film. Et
    l'explication existe déjà au bon endroit — chaque titre porte sa raison.
+
+   PIERRE TOMBALE — RETOUR-01 POINT 2, 11/08/2026. Le lien de remplacement
+   « Ajuster mes goûts → » est SUPPRIMÉ à son tour, sur décision d'Adrien : le
+   duel est mis en avant partout, et un lien qui envoie régler ses goûts à la
+   main n'a plus sa place en tête de Découvrir. `lienAjusterGouts()` n'existe
+   plus, son unique appelant (`vitrineBody`) non plus, et la règle `.d4lien`
+   quitte `app.css`. L'écran Mes goûts reste accessible par Mon profil, qui est
+   désormais son SEUL chemin — c'est voulu, pas un oubli.
+   Ce qu'il ne faut pas faire en le regrettant : le remettre ailleurs dans
+   Découvrir. Il a déjà été déplacé une fois ; le point 2 ne demande pas un
+   nouvel emplacement, il demande sa disparition.
 --------------------------------------------------------------------------- */
-function lienAjusterGouts(){
-  return '<div class="d4lien"><button onclick="go(\'gouts\',{from:\'discover\'})">'+
-    'Ajuster mes goûts →</button></div>';
-}
 
 /* §1.5 / §2.4 — DÉCOUVRIR APPELLE LE DUEL QUAND LE PROFIL EST TROP PAUVRE, et
    seulement là. Une bibliothèque garnie mais aucun 👍, c'est exactement le cas

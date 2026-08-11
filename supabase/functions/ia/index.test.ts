@@ -336,16 +336,42 @@ Deno.test("tous épuisés → {indisponible:true}, aucune erreur brute", async (
   } finally { f.rendre(); }
 });
 
-Deno.test("l'étage de départ dépend de la tâche (§4.2)", async () => {
+/* RETOUR-01 POINT 4 (11/08/2026) — LE CONTRÔLE EST RETOURNÉ. Il vérifiait
+   qu'une tâche courte partait de l'étage 2 (« une phrase de quinze mots ne
+   dépense pas le quota de l'étage qualité »). Décision d'Adrien : toutes les
+   tâches démarrent à l'étage 1, la cascade ne joue que sur saturation ou
+   erreur. Ce cas prouve désormais l'inverse — et il prouve AUSSI que le retour
+   à l'étage 1 est automatique, puisque chaque requête reconstruit son échelle
+   depuis le rang 1 sans qu'aucun état ne soit remis à zéro. */
+Deno.test("RETOUR-01 point 4 : toute tâche part de l'étage 1, et y revient seule", async () => {
   const f = faireSemblant({ fournisseurs: null });
   try {
-    // Une phrase de quinze mots ne dépense pas le quota de l'étage « qualité ».
     await servir(requete({ tache: "intitules_rangees", params: { intitules: ["Nouveautés"] } }));
     const e = f.etages();
     assertEquals(e.length, 1);
-    assert(e[0].indexOf("flash-lite") >= 0,
-      "une tâche courte et fréquente est partie de l'étage 1");
+    /* L'URL porte le MODÈLE, pas le nom de l'étage : « gemini-3.6-flash » pour
+       le rang 1, « gemini-3.5-flash-lite » pour le rang 2. */
+    assert(e[0].indexOf("flash-lite") < 0 && e[0].indexOf("gemini-3.6-flash") >= 0,
+      "une tâche courte part encore de l'étage 2 : « pertinence d'abord » n'est pas tenu");
   } finally { f.rendre(); }
+
+  /* Étage 1 saturé : on descend. Puis, la fenêtre rouverte, on remonte — sans
+     aucune intervention, parce qu'il n'y a rien à remonter. */
+  const g = faireSemblant({ fournisseurs: null, reponses: { "gemini-flash": { statut: 429 } } });
+  try {
+    await servir(requete(PITCH));
+    const e = g.etages();
+    assert(e.length >= 2, "la cascade ne joue plus sur saturation");
+    assert(e[0].indexOf("gemini-3.6-flash") >= 0 && e[1].indexOf("flash-lite") >= 0,
+      "la cascade ne descend pas dans l'ordre des rangs");
+  } finally { g.rendre(); }
+
+  const h = faireSemblant({ fournisseurs: null });
+  try {
+    await servir(requete({ tache: "pourquoi_lui", params: { titre: "Dark" } }));
+    assert((h.etages()[0] || "").indexOf("gemini-3.6-flash") >= 0,
+      "`pourquoi_lui` ne repart pas de l'étage 1 une fois la fenêtre rouverte");
+  } finally { h.rendre(); }
 });
 
 Deno.test("la table l'emporte sur le fichier, et son ordre est respecté", async () => {
@@ -1129,8 +1155,15 @@ Deno.test("M33 — chaque fournisseur réserve avec SES limites, dans le bon sen
     await servir(requete(PITCH));
     const a = f.appels("/rpc/ia_reserver_fournisseur");
     assertEquals(a.length, 3);
+    /* RETOUR-01 point 4 — les deux étages Gemini ne partent plus avec des
+       limites nulles : le repli de `config.ts` porte les mêmes chiffres que le
+       semis corrigé (migration 015). Une limite nulle valait un plafond d'un
+       million, c'est-à-dire aucun garde-fou. */
     assertEquals(JSON.stringify(a[0]),
-      '{"p_fournisseur":"gemini-flash","p_limite_minute":null,"p_limite_jour":null}');
+      '{"p_fournisseur":"gemini-flash","p_limite_minute":10,"p_limite_jour":1000}',
+      "l'étage 1 réserve encore sans limite : le garde-fou anti-429 reste désarmé");
+    assertEquals(JSON.stringify(a[1]),
+      '{"p_fournisseur":"gemini-flash-lite","p_limite_minute":15,"p_limite_jour":1500}');
     assertEquals(JSON.stringify(a[2]),
       '{"p_fournisseur":"openrouter","p_limite_minute":20,"p_limite_jour":50}',
       "les limites d'OpenRouter ne partent pas dans le bon sens");
@@ -1409,9 +1442,14 @@ Deno.test("SPEC-05 — les nouvelles tâches n'échappent pas au jeton ni à l'o
    Le pendant côté front est le contrôle n° 15 de `tests/lance-tests.js` : il
    relit les `appelIA('…')` des fichiers d'écran et les recoupe avec cette
    liste. Les deux ensemble ferment la boucle ; l'un sans l'autre ne dit rien. */
-Deno.test("la liste blanche compte SIX tâches, exactement celles qui ont un appelant", () => {
+Deno.test("la liste blanche compte SEPT tâches, exactement celles qui ont un appelant", () => {
+  /* RETOUR-01 POINT 8 (11/08/2026) — `classer_grille` entre, AVEC son appelant :
+     le tri « ✦ mes goûts » de la Recherche (`toucherClassementIA`, app-14). Le
+     seuil passe de six à sept, et il reste écrit en dur pour la raison dite
+     ci-dessus. */
   const attendues = ["pitch_jour", "pitch_humeur", "intitules_rangees",
-                     "envie_phrase", "ambiance_desc", "pourquoi_lui"].sort();
+                     "envie_phrase", "ambiance_desc", "pourquoi_lui",
+                     "classer_grille"].sort();
   assertEquals(JSON.stringify(Object.keys(TACHES).sort()), JSON.stringify(attendues),
     "la liste blanche ne correspond plus aux tâches appelées — ajoute l'appelant, " +
     "ou retire la tâche, mais pas les deux à moitié");
@@ -1419,4 +1457,49 @@ Deno.test("la liste blanche compte SIX tâches, exactement celles qui ont un app
     "`profil_humeur` est revenue sans appelant : voir le pavé de config.ts");
   assertEquals(construire("profil_humeur", { humeur: "frisson" }), null);
   assertEquals(valider("profil_humeur", { texte: "x" }), null);
+});
+
+/* ---- RETOUR-01 POINT 4 — TOUTES LES TÂCHES DÉMARRENT À L'ÉTAGE 1 ---- */
+
+Deno.test("RETOUR-01 point 4 : aucune tâche ne démarre au-dessus de l'étage 1", () => {
+  for (const [nom, t] of Object.entries(TACHES)) {
+    assertEquals(t.etage_depart, 1,
+      "`" + nom + "` démarre à l'étage " + t.etage_depart +
+      " — la décision du 11/08 dit : pertinence d'abord, cascade seulement sur saturation");
+  }
+});
+
+/* ---- RETOUR-01 POINT 8 — `classer_grille` rend UN ORDRE, pas des titres ---- */
+
+Deno.test("classer_grille : le gabarit numérote et exige une liste de numéros", () => {
+  const g = construire("classer_grille", {
+    profil: "genres les plus regardés : drame, thriller",
+    candidats: ["Whiplash (2014) · drame, musique · 8,4", "Heat (1995) · polar · 8,2"],
+  });
+  assertEquals(g === null, false, "un gabarit valide a été refusé");
+  assertEquals(g!.consigne.includes("0. Whiplash"), true, "les candidats ne sont pas numérotés");
+  assertEquals(g!.consigne.includes("1. Heat"), true);
+  assertEquals(g!.consigne.includes("drame, thriller"), true, "le profil n'est pas transmis");
+  /* Un seul candidat : il n'y a rien à classer, on ne dépense pas la requête. */
+  assertEquals(construire("classer_grille", { candidats: ["Seul (2020)"] }), null);
+  assertEquals(construire("classer_grille", { candidats: [] }), null);
+});
+
+Deno.test("classer_grille : la validation garde les indices valides et jette le reste", () => {
+  const ordreDe = (o: unknown) => JSON.stringify((valider("classer_grille", o) || {}).ordre);
+  assertEquals(ordreDe({ ordre: [2, 0, 1] }), "[2,0,1]");
+  /* Un indice répété ne compte qu'une fois : sinon un titre occuperait deux
+     places et en chasserait un autre. */
+  assertEquals(ordreDe({ ordre: [0, 0, 1] }), "[0,1]");
+  /* Hors bornes, négatif, non entier, non nombre : chacun tombe SEUL. Le reste
+     du classement survit — un indice faux en moins laisse un ordre un peu moins
+     affiné, un rejet total gâcherait une requête déjà payée. */
+  assertEquals(ordreDe({ ordre: [0, 100, -1, "3", null, 2] }), "[0,2]");
+  assertEquals(valider("classer_grille", { ordre: [] }), null, "un ordre vide n'est pas un ordre");
+  assertEquals(valider("classer_grille", { ordre: "0,1" }), null);
+  assertEquals(valider("classer_grille", { texte: "Whiplash d'abord" }), null,
+    "un texte libre est passé : la tâche ne rend QUE des numéros");
+  /* Le nombre d'éléments est borné comme partout ailleurs (`maxtitres`). */
+  const trop = Array.from({ length: 101 }, (_, i) => i);
+  assertEquals(valider("classer_grille", { ordre: trop }), null);
 });

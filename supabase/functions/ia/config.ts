@@ -85,12 +85,19 @@ export type Fournisseur = {
 // JSON valide, champ `texte` présent.
 // ---------------------------------------------------------------------------
 export const FOURNISSEURS: Fournisseur[] = [
-  // Étage 1 — la qualité. Le Flash courant du catalogue Gemini.
+  /* Étage 1 — la qualité. Le Flash courant du catalogue Gemini.
+     RETOUR-01 POINT 4 (11/08/2026) — LES LIMITES NE SONT PLUS NULLES. Elles
+     l'étaient parce que Google ne les publie plus (le pavé ci-dessus le
+     raconte) et que « NULL veut dire inconnue ». La conséquence mesurée en
+     prod : `ia_plafond_inconnu()` vaut un million, donc le garde-fou anti-429
+     était DÉSARMÉ — on découvrait la limite en la dépassant. Une limite
+     prudente et fausse protège ; une limite absente ne protège rien. Ce sont
+     les valeurs qu'Adrien a posées à la main le 10/08, et elles font foi. */
   { nom: "gemini-flash", rang: 1, modele: "gemini-3.6-flash",
-    limite_minute: null, limite_jour: null, actif: true },
+    limite_minute: 10, limite_jour: 1000, actif: true },
   // Étage 2 — le volume. Même clé, limites plus hautes, réponses plus courtes.
   { nom: "gemini-flash-lite", rang: 2, modele: "gemini-3.5-flash-lite",
-    limite_minute: null, limite_jour: null, actif: true },
+    limite_minute: 15, limite_jour: 1500, actif: true },
   /* Étage 3 — le secours, chez quelqu'un d'autre. Un modèle du palier gratuit
      QUI DÉCLARE `structured_outputs`, et ce mot compte : voir le pavé ci-dessous. */
   { nom: "openrouter", rang: 3, modele: "nvidia/nemotron-nano-9b-v2:free",
@@ -120,10 +127,30 @@ export const FOURNISSEURS: Fournisseur[] = [
 // `etage_depart` est un RANG, comparé au `rang` de la table : renuméroter la
 // table (10, 20, 30) viderait l'échelle sans un mot. À savoir avant d'y toucher.
 //
-// `etage_depart` : le §4.2 le demande par tâche. On ne dépense pas le quota du
-// Flash pour une phrase de quinze mots — les tâches courtes et fréquentes
-// partent directement de l'étage 2. Le repli vers l'étage suivant reste piloté
-// par les compteurs, quel que soit l'étage de départ.
+// `etage_depart` : RETOUR-01 POINT 4 (11/08/2026) — IL VAUT 1 POUR TOUTES LES
+// TÂCHES, sur décision d'Adrien. « Plus d'étages de départ par tâche : TOUTES
+// les tâches IA démarrent à l'étage 1 (pertinence d'abord). »
+//
+// CE QUE FAISAIT L'ANCIEN RÉGLAGE, et pourquoi il tombe. Trois tâches sur six
+// partaient de l'étage 2 pour « ne pas dépenser le quota du Flash sur une
+// phrase de quinze mots ». C'était une économie raisonnée — mais elle
+// arbitrait un quota que PERSONNE NE CONNAÎT (les limites du palier gratuit
+// Gemini ne sont plus publiées, voir le pavé plus haut), au prix d'une chose
+// qui, elle, se mesure : la qualité de la phrase affichée. On paie d'abord la
+// pertinence, et on ne descend que contraint.
+//
+// LE RETOUR À L'ÉTAGE 1 EST AUTOMATIQUE, ET IL L'EST PAR CONSTRUCTION : chaque
+// requête reconstruit son échelle à partir du rang 1 (`servirAccepte`), et
+// `ia_reserver_fournisseur` ne refuse un fournisseur que TANT QUE sa fenêtre
+// — minute ou jour — est saturée. Dès que la fenêtre se rouvre, l'étage 1
+// reprend la main sans qu'aucun état ait à être remis à zéro. La cascade
+// 1→2→3 ne joue donc que sur saturation minute/jour ou sur erreur, jamais par
+// choix a priori.
+//
+// LE CHAMP RESTE, VIDE DE VARIÉTÉ MAIS PAS DE SENS : il documente qu'un étage
+// de départ EST un réglage possible, et il garde la porte ouverte pour une
+// tâche future qu'on voudrait volontairement mettre en second. Le supprimer
+// obligerait à réécrire `servirAccepte` pour le réintroduire un jour.
 // ---------------------------------------------------------------------------
 export type Tache = {
   etage_depart: number;
@@ -134,13 +161,14 @@ export type Tache = {
 };
 
 export const TACHES: Record<string, Tache> = {
-  // Le pitch du jour : une fois par jour et par personne, il mérite l'étage 1.
+  // Le pitch du hero. Jusqu'à trente par jour depuis RETOUR-01 point 5 (il
+  // suit chaque changement de hero, plus seulement le premier du matin).
   pitch_jour:        { etage_depart: 1, maxlong: 220, maxtitres: 8 },
   // Le pitch d'une humeur : quelques mots, à la demande, plusieurs fois par
-  // soirée. Étage 2 d'emblée.
-  pitch_humeur:      { etage_depart: 2, maxlong: 220, maxtitres: 8 },
-  // Des variantes de titres de rangées : court et fréquent, étage 2.
-  intitules_rangees: { etage_depart: 2, maxlong: 60,  maxtitres: 12 },
+  // soirée. Étage 1 comme tout le reste depuis RETOUR-01 point 4.
+  pitch_humeur:      { etage_depart: 1, maxlong: 220, maxtitres: 8 },
+  // Des variantes de titres de rangées : court, une fois par jour.
+  intitules_rangees: { etage_depart: 1, maxlong: 60,  maxtitres: 12 },
   //
   // ---- `profil_humeur` A ÉTÉ RETIRÉE — décision d'Adrien du 10/08/2026 ----
   //
@@ -186,9 +214,23 @@ export const TACHES: Record<string, Tache> = {
   // s'y voit tout de suite (des pilules fausses à l'écran).
   envie_phrase:      { etage_depart: 1, maxlong: 60,  maxtitres: 8  },
   ambiance_desc:     { etage_depart: 1, maxlong: 60,  maxtitres: 8  },
-  // « Pourquoi il te correspond » : deux lignes, à l'ouverture d'un aperçu,
-  // donc court et fréquent — étage 2, comme le pitch d'humeur.
-  pourquoi_lui:      { etage_depart: 2, maxlong: 220, maxtitres: 8  },
+  // « Pourquoi il te correspond » : deux lignes, à l'ouverture d'un aperçu.
+  // Étage 1 depuis RETOUR-01 point 4.
+  pourquoi_lui:      { etage_depart: 1, maxlong: 220, maxtitres: 8  },
+  // ---- SPEC-05 / RETOUR-01 point 8 — LE TRI « ✦ MES GOÛTS » ----
+  //
+  // `classer_grille` reçoit le profil agrégé et les ~100 premiers candidats
+  // d'une grille de Recherche (nom, année, genres, note) et rend L'ORDRE
+  // AFFINÉ — une liste d'indices, pas des titres. C'est ce qui la rend sûre :
+  // un indice hors bornes tombe, un indice répété tombe, et ce qui manque
+  // garde sa place locale. Le modèle ne peut donc RIEN ajouter à la grille,
+  // seulement la réordonner.
+  //
+  // `maxtitres` vaut 100 ici, et c'est la seule tâche qui dépasse 12. Le §8 du
+  // RETOUR l'impose : classer 24 478 titres par IA est impossible, classer les
+  // 100 premiers d'un pré-classement local ne l'est pas. Une requête par
+  // grille, cache par signature côté client.
+  classer_grille:    { etage_depart: 1, maxlong: 60,  maxtitres: 100 },
 };
 
 // ---------------------------------------------------------------------------
