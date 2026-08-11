@@ -1411,13 +1411,30 @@ const GOUT_BLOCS = {
      de la PERSONNE, pas de l'appareil. L'allumer sur le téléphone et la
      retrouver éteinte sur la tablette n'aurait aucun sens.
      Le CACHE des textes, lui, reste local (localStorage) — §4.3.
-     RETOUR-01 POINT 4 (11/08/2026) — `iaV` voyage AVEC les interrupteurs, dans
-     le même bloc. C'est le marqueur du passage « l'IA devient active par
-     défaut » (voir `migrerGouts`). S'il restait local, couper l'IA sur le
-     téléphone puis ouvrir la tablette la rallumerait : la tablette n'aurait
-     pas encore fait son passage et le referait par-dessus un choix déjà
-     exprimé. Un marqueur de passage voyage avec ce qu'il a modifié. */
-  ia:         ['ia','iaV'],
+
+     RETOUR-01 POINT 4 — CORRECTION DE RELECTURE (11/08/2026). `iaV` avait été
+     mis à voyager ICI, dans le même bloc que les interrupteurs, au motif qu'un
+     marqueur de passage doit suivre ce qu'il a modifié. Le raisonnement était
+     joli et il était faux, sur les deux moitiés :
+
+       · IL OUVRAIT UN TROU. Ce bloc a pour contrat « le distant gagne, Y
+         COMPRIS quand il n'a pas la clé » — c'est la ligne `if(rg[cle] ===
+         undefined) delete g[cle]` de `fusionnerGouts`, et elle existe pour
+         qu'un réglage abandonné puisse disparaître. Un appareil resté en v96
+         qui TOUCHE son interrupteur IA écrit donc le bloc sans `iaV` ; l'effacer
+         sur l'appareil à jour fait repasser `migrerGouts`, qui voit `iaV !== 2`
+         et RALLUME les deux interrupteurs. Autrement dit : couper l'IA sur le
+         vieil appareil pouvait la rallumer sur le neuf, durablement.
+       · LE DANGER QU'IL PRÉTENDAIT ÉVITER N'EXISTAIT PAS. `migrerGouts` ne
+         DATE aucun bloc — elle répare, elle ne déclare pas. Un `iaV` posé
+         localement n'aurait donc jamais pu gagner un arbitrage contre l'autre
+         appareil, ni rien écraser chez lui.
+
+     `iaV` redevient ce qu'il aurait toujours dû être : un marqueur STRICTEMENT
+     LOCAL, posé une fois par appareil, invisible de la synchro. Chaque appareil
+     fait son passage une fois, pour lui-même, et le choix exprimé après tient
+     partout. Relevé en relecture indépendante. */
+  ia:         ['ia'],
   /* SPEC-05 §2 — les ambiances de la Recherche. Un bloc à elles : en créer une
      ne doit pas dater les genres ni les graines. */
   ambiances:  ['ambiances'],

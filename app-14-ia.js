@@ -82,9 +82,18 @@ function basculerIA(quoi){
      Découvrir, or `apresRenduDecouvrirIA` est accroché au rendu de la vitrine.
      L'IA restait donc allumée et muette jusqu'au prochain passage sur
      Découvrir — ce qui ressemble à s'y méprendre à un interrupteur qui ne fait
-     rien. Le lot garde toutes ses gardes (marqueur de jour, verrou
-     inter-onglets, drapeau de module) : rallumer trois fois dans la journée ne
-     dépense pas une requête de plus. */
+     rien.
+
+     CE QUE ÇA COÛTE, DIT JUSTE (correction de relecture, 11/08/2026). La
+     première rédaction affirmait « rallumer trois fois dans la journée ne
+     dépense pas une requête de plus ». C'est faux, et c'était mesurable :
+     COUPER efface le marqueur de jour (`oublierCacheIA` pose `o.jour = ''`),
+     donc chaque rallumage refait un lot complet — trois cycles couper/rallumer
+     = trois lots = six requêtes. Les gardes qui tiennent vraiment sont le
+     verrou inter-onglets et le drapeau de module, qui empêchent DEUX lots
+     simultanés. Ce qui borne réellement le coût d'un interrupteur qu'on
+     triture, c'est le plafond de trente : il SURVIT à l'extinction, parce que
+     `oublierCacheIA` garde `n` en effaçant les textes. */
   if(o[quoi] && quoi === 'decouvrir' && typeof apresRenduDecouvrirIA === 'function')
     apresRenduDecouvrirIA();
 }
@@ -107,8 +116,15 @@ const IA_CLE = 'ms.ia.v1';
 
 /* RETOUR-01 POINT 5 (11/08/2026) — `pitchs` : LE PITCH DE CHAQUE HERO, PAS
    SEULEMENT DU PREMIER DE LA JOURNÉE.
-   Forme : { jour:'AAAA-MM-JJ', n:<requêtes parties aujourd'hui>,
+   Forme : { jour:'AAAA-MM-JJ', n:<places prises aujourd'hui>,
              t:{ '<humeur|->:<media>:<id>': '<texte, ou "" si rien à dire>' } }
+   LA CLÉ EST (HUMEUR, TITRE), PAS LE TITRE SEUL, et c'est voulu : le pitch
+   d'une humeur est un AUTRE texte que celui du jour — il dit en quoi le titre
+   répond à l'ambiance demandée. Un même titre sous quatre humeurs coûte donc
+   quatre requêtes. RETOUR-01 point 5 écrit « cache par titre » ; la lettre
+   dirait de n'en faire qu'une, l'esprit (§2 de SPEC-04) dit le contraire. On
+   suit l'esprit, et on l'écrit ici plutôt que de laisser croire au lecteur que
+   la lettre est tenue. Relevé en relecture.
    La chaîne vide est un ÉTAT, pas un trou : elle veut dire « on a demandé, il
    n'y a rien à afficher » et empêche chaque repeint de redemander. */
 function cacheIAVide(){
@@ -344,6 +360,13 @@ async function lotIAduJour(){
     const cle = x.media + ':' + x.id;
     const aimes = titresAimesIA(8);
 
+    /* Les DEUX places du lot, prises avant la première requête (correction de
+       relecture, 11/08/2026 — voir le pavé du plafond). Plafond atteint : on
+       pose quand même le marqueur de jour dans le `finally` ? Non — on sort
+       sans le poser, pour que le lot reparte demain. Un jour où trente pitchs
+       ont déjà été demandés n'a pas besoin d'un trente-et-unième. */
+    if(!reserverPitchIA(2)) return;
+
     /* Requête 1 — le pitch du jour. */
     const r1 = await appelIA('pitch_jour', {
       titre: x.nom,
@@ -385,10 +408,11 @@ async function lotIAduJour(){
     maj.jour = jour;
     maj.pitch = pitch ? { cle: cle, texte: pitch } : null;
     maj.titres = titres;
-    /* RETOUR-01 point 5 — la requête du lot compte dans le plafond du jour, et
-       son résultat va dans le cache par titre comme les autres. Le lot n'est
-       plus un cas à part : c'est le premier pitch de la journée, rien de plus. */
-    maj.pitchs.n++;
+    /* RETOUR-01 point 5 — le résultat va dans le cache par titre comme les
+       autres. Le lot n'est plus un cas à part : c'est le premier pitch de la
+       journée, rien de plus. Les places, elles, ont été prises AU DÉPART, en
+       tête de cette fonction — et il en faut DEUX, parce que le lot fait deux
+       requêtes (le pitch et les intitulés). Il n'en comptait qu'une. */
     maj.pitchs.t['-:' + cle] = pitch || '';
     ecrireCacheIA(maj);
 
@@ -437,11 +461,29 @@ function pitchIAduJour(x){
    Découvrir. Rien n'attend, rien ne clignote, et si le pitch n'arrive jamais
    la ligne socle reste — mot pour mot, comme le §3 l'exige.
 
-   LE PLAFOND : TRENTE PAR JOUR, puis socle silencieux. Trente, c'est le budget
-   par personne du relais (`BUDGET_UTILISATEUR_JOUR`, config.ts) : un plafond
-   client plus haut ne servirait qu'à récolter des refus côté serveur, un
-   plafond plus bas laisserait du budget inutilisé. Au-delà, on n'appelle plus
-   et on ne dit rien — le socle n'est pas un message d'erreur.
+   LE PLAFOND : TRENTE PAR JOUR, puis socle silencieux. C'est le chiffre du
+   RETOUR, et il vaut la peine de dire ce qu'il n'est PAS. Le commentaire
+   d'origine affirmait que trente était « le budget par personne du relais, donc
+   un plafond plus haut ne récolterait que des refus ». C'est faux, et la
+   relecture l'a relevé : `BUDGET_UTILISATEUR_JOUR` est PARTAGÉ par les sept
+   tâches — un plafond de trente sur les seuls pitchs garantit au contraire des
+   refus serveur sur les autres. Trente est donc un plafond de CONFORT, pas une
+   déduction : au-delà de trente propositions dans la journée, on n'est plus en
+   train de choisir un film. Ça dégrade proprement dans tous les cas (refus
+   serveur → `{indisponible}` → socle), mais le raisonnement écrit devait être
+   juste.
+
+   LE COMPTEUR SE PREND AU DÉPART, PAS AU RETOUR — CORRECTION DE RELECTURE
+   (11/08/2026). Il était incrémenté à l'arrivée de la réponse : toute requête
+   en vol était donc invisible du plafond, et `iaPitchsEnCours` ne gardait qu'une
+   clé identique. Mesuré par le relecteur avec des valeurs réalistes (un « Pas
+   pour moi » toutes les 700 ms, réponse en 2,5 s) : depuis n = 29, QUATRE
+   appels partaient et n finissait à 33. Le critère « le 31ᵉ du jour ne part
+   pas » n'était pas tenu.
+   `reserverPitchIA()` prend la place AVANT d'appeler : le plafond compte des
+   DÉPARTS, ce qui est la seule chose qu'il puisse honnêtement borner. Et le lot
+   du jour, qui fait DEUX requêtes, en réserve deux ; le pitch d'humeur, qui en
+   faisait une sans jamais compter, réserve la sienne.
 
    CE QU'IL NE FAUT PAS FAIRE : déclencher depuis `pitchOuRaison`. Elle est
    appelée à chaque construction de HTML, y compris par les tests et par les
@@ -449,6 +491,18 @@ function pitchIAduJour(x){
    endroit que le lot du jour. */
 const IA_PITCH_MAX = 30;
 let iaPitchsEnCours = {};
+
+/* Prend `n` places dans le plafond du jour, ou rend `false` si elles n'y sont
+   plus. Écrit tout de suite : une réservation qui attendrait la réponse ne
+   réserverait rien. */
+function reserverPitchIA(n){
+  const combien = n || 1;
+  const o = lireCacheIA();
+  if(o.pitchs.n + combien > IA_PITCH_MAX) return false;
+  o.pitchs.n += combien;
+  ecrireCacheIA(o);
+  return true;
+}
 
 function clePitchIA(hum, x){ return (hum || '-') + ':' + x.media + ':' + x.id; }
 
@@ -474,8 +528,11 @@ function toucherPitchHeroIA(){
     if(iaHumeursEnCours[hum]) return;
     if(e && e.jusqua > Date.now() && e.cle === x.media + ':' + x.id) return;
   }
-  if(o.pitchs.n >= IA_PITCH_MAX) return;             // plafond atteint : socle silencieux
   if(iaPitchsEnCours[k]) return;
+  /* Sans relais joignable, aucune requête ne partirait : on ne consomme pas une
+     place du plafond pour un appel qui n'aura pas lieu. */
+  if(!iaJoignable()) return;
+  if(!reserverPitchIA(1)) return;                    // plafond atteint : socle silencieux
   iaPitchsEnCours[k] = true;
   setTimeout(()=>{ pitchHeroIA(k, hum, x).catch(()=>{}); }, 0);
 }
@@ -497,10 +554,10 @@ async function pitchHeroIA(k, hum, x){
     if(hdef) pms.humeur = hdef.label;
     const r = await appelIA(hdef ? 'pitch_humeur' : 'pitch_jour', pms);
     const texte = r ? texteIAAcceptable(r.texte, 220) : null;
-    /* On relit le cache au retour : une autre demande a pu aboutir entre-temps,
-       et le compteur doit rester juste. */
+    /* On relit le cache au retour : une autre demande a pu aboutir entre-temps.
+       Le compteur, lui, a déjà été pris au départ (`reserverPitchIA`) — le
+       toucher ici compterait deux fois. */
     const o = lireCacheIA();
-    o.pitchs.n++;
     o.pitchs.t[k] = texte || '';
     ecrireCacheIA(o);
     if(!texte) return;
@@ -607,6 +664,11 @@ async function lotHumeurIA(cle){
     /* L'humeur a pu être retirée pendant l'attente : on ne dépense pas une
        requête pour un écran qu'on ne regarde plus. */
     if(typeof humeurActive === 'function' && humeurActive() !== cle) return;
+    /* Correction de relecture (11/08/2026) — ce chemin-ci faisait une requête
+       sans jamais toucher le compteur du jour : le plafond du point 5 ignorait
+       purement et simplement les pitchs d'humeur. Il en prend une place, comme
+       tout le monde. */
+    if(!reserverPitchIA(1)) return;
     const r = await appelIA('pitch_humeur', {
       titre: x.nom,
       humeur: hdef.label,
@@ -1196,11 +1258,24 @@ async function classerGrilleIA(sig){
     /* ② les cent premiers du pré-classement local, et eux seuls. On fige la
        liste ICI : la fournée suivante peut arriver pendant la requête, et un
        ordre rendu sur une liste qui a bougé désignerait d'autres titres. */
-    const cands = r.res.slice(0, IA_GRILLE_MAX);
+    /* CORRECTION DE RELECTURE (11/08/2026) — LES DEUX NUMÉROTATIONS DOIVENT
+       ÊTRE LA MÊME. Le client envoyait `cands.map(candidatGrilleIA)` et
+       remappait la réponse par `cands[i]`. Or le serveur numérote APRÈS
+       filtrage : `liste()` fait `.map(texte).filter(Boolean)` puis numérote.
+       Une seule ligne vide côté serveur — et `candidatGrilleIA` rend `''` quand
+       titre, année, genres et note sont tous absents — décalait TOUTE la
+       numérotation, et le classement désignait alors les mauvais titres, en
+       silence. Probabilité faible, conséquence indétectable : le pire couple.
+       On filtre donc ICI, et on garde le titre et sa ligne appariés. Ce qui
+       part est exactement ce qui sera numéroté. */
+    const paires = r.res.slice(0, IA_GRILLE_MAX)
+      .map(x => ({ x:x, ligne: candidatGrilleIA(x) }))
+      .filter(e => !!e.ligne);
+    const cands = paires.map(e => e.x);
     if(cands.length < 2) return;
     const d = await appelIA('classer_grille', {
       profil: profilGrilleIA(),
-      candidats: cands.map(candidatGrilleIA)
+      candidats: paires.map(e => e.ligne)
     });
     if(d) noterRequeteIA();
     const ordre = (d && Array.isArray(d.ordre)) ? d.ordre : null;
@@ -1241,15 +1316,25 @@ async function classerGrilleIA(sig){
    personne est encore en haut de l'écran, c'est-à-dire si elle n'a pas commencé
    à parcourir. Sinon on ne fait rien : le classement est en cache, et le
    prochain affichage complet de la grille (changement de filtre, retour sur
-   l'onglet, bascule de tri) le prendra tel quel, sans une requête de plus. */
-const IA_GRILLE_DEFIL = 40;
+   l'onglet, bascule de tri) le prendra tel quel, sans une requête de plus.
+
+   CORRECTION DE RELECTURE (11/08/2026) — LE SEUIL PASSE DE 40 PX À ZÉRO. « Sous
+   40 px » ne dit pas « il n'a pas défilé », il dit « il n'a pas beaucoup
+   défilé ». Le scénario relevé : la grille se peint, le doigt lance un
+   défilement inertiel, la réponse arrive 900 ms plus tard alors que `scrollY`
+   vaut 30 — la garde passait, et `peindreRech()` remplaçait tout le contenu EN
+   PLEIN MOUVEMENT. C'est exactement ce que ④ interdit.
+   Zéro est le seul seuil qui se défende sans modéliser l'inertie : au-dessus,
+   il faudrait un `scrollend` ou un drapeau tactile, c'est-à-dire une machinerie
+   pour gagner quelques réordonnancements dont personne n'a besoin — le
+   classement s'appliquera au prochain affichage, gratuitement. */
 
 function appliquerOrdreIARech(sig){
   if(typeof view === 'undefined' || view !== 'search') return;
   if(signatureGrilleIA() !== sig) return;              // la grille a changé de sujet
   const e = iaGrilleCache[sig];
   if(!e || !e.rangs) return;
-  if((window.scrollY || 0) > IA_GRILLE_DEFIL) return;  // on parcourt : ce sera pour la prochaine fois
+  if((window.scrollY || 0) !== 0) return;   // on a parcouru : ce sera pour la prochaine fois
   const r = etatRech();
   if(typeof ordonnerParGoutRech !== 'function') return;
   r.res = ordonnerParGoutRech(r.res);

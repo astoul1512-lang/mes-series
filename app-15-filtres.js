@@ -946,11 +946,13 @@ function raisonGoutRech(x, media){
    fréquent. Un genre qu'on aurait oublié fait une faute mineure, jamais un
    plantage.
 
-   ELLE COUVRE LES DEUX TAXONOMIES. Les libellés de séries sont d'abord
-   francisés (`libelleGenre` : « kids » → « Jeunesse ») puis ramenés au nom
-   canonique quand il existe (`genreCanon` : « sci-fi & fantasy » →
-   « Science-Fiction »), sans quoi « du sci-fi & fantasy » resterait possible.
-   L'ordre compte : on canonise d'abord, on francise ensuite ce qui reste. */
+   ELLE COUVRE LES DEUX TAXONOMIES, ET L'ORDRE COMPTE : on CANONISE d'abord
+   (`genreCanon` : « sci-fi & fantasy » → « Science-Fiction »), on FRANCISE
+   ensuite ce qui reste (`libelleGenre` : « kids » → « Jeunesse »). Sans ça,
+   « du sci-fi & fantasy » resterait possible.
+   (La première rédaction annonçait l'ordre inverse à la phrase précédente et le
+   bon à la suivante : le code était juste, le commentaire se contredisait.
+   Relevé en relecture.) */
 const GENRES_FEMININS_RECH = {
   'action':1, 'animation':1, 'aventure':1, 'comédie':1, 'guerre':1, 'histoire':1,
   'horreur':1, 'musique':1, 'romance':1, 'science-fiction':1, 'fantasy':1,

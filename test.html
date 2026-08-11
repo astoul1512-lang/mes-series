@@ -7007,10 +7007,64 @@ window.MODE_TEST = true;
   test('C1b — le sous-bloc « ia » existe dans la découpe de synchro', ()=>{
     vrai(Array.isArray(GOUT_BLOCS.ia) && GOUT_BLOCS.ia.indexOf('ia') >= 0,
          'sans lui, allumer l\'IA daterait TOUS les goûts et écraserait l\'autre appareil');
-    /* RETOUR-01 point 4 — le marqueur de passage voyage avec les interrupteurs,
-       sinon le second appareil rallume ce que le premier a coupé. */
-    vrai(GOUT_BLOCS.ia.indexOf('iaV') >= 0,
-         'le marqueur `iaV` ne voyage pas : la tablette rallumerait le téléphone');
+    /* RETOUR-01 point 4 — CORRECTION DE RELECTURE (11/08/2026). L'assertion est
+       RETOURNÉE : `iaV` ne doit PAS voyager. Le contrat de ce bloc est « le
+       distant gagne, y compris quand il n'a pas la clé » — un appareil resté en
+       v96 qui touche son interrupteur efface donc `iaV` chez le neuf, et le
+       passage se rejoue par-dessus un choix déjà exprimé. Le marqueur est
+       strictement local ; voir la note d'`app-01-noyau.js`. */
+    vrai(GOUT_BLOCS.ia.indexOf('iaV') < 0,
+         '`iaV` voyage : couper l\'IA sur le vieil appareil la rallumerait sur le neuf');
+  });
+
+  /* ===== RETOUR-01 point 4 — LES PREMIERS TESTS DE `fusionnerGouts` DU DÉPÔT.
+
+     Relevé en relecture : `grep fusionnerGouts test.html` rendait ZÉRO. Le seul
+     test du point portait sur une LISTE DE CHAÎNES (`GOUT_BLOCS.ia`), pas sur
+     ce que cette liste produit — et c'est très exactement ce qui a laissé
+     passer le défaut. Un test qui vérifie une déclaration n'éprouve pas ce que
+     la déclaration fait. ===== */
+
+  function goutsDistants(gouts, quand){
+    return { gouts: Object.assign({ maj: quand || 2000,
+                                    majBlocs: { ia: quand || 2000 } }, gouts) };
+  }
+
+  test('C1c — le scénario du trou : un pair v96 qui coupe l\'IA ne la rallume plus', ()=>{
+    baseVierge();
+    /* L'appareil À JOUR : passage fait, et la personne a COUPÉ l'IA. */
+    db.gouts.ia = { decouvrir:false, recherche:false };
+    db.gouts.iaV = 2;
+    db.gouts.maj = 1000;
+    db.gouts.majBlocs = { ia: 1000 };
+    /* Le pair resté en V96 touche son interrupteur : il écrit le bloc `ia`,
+       plus récent, et son bloc ne contient PAS `iaV` — cette version ne connaît
+       pas la clé. C'est le cas que la relecture a isolé. */
+    fusionnerGouts(goutsDistants({ ia:{ decouvrir:false, recherche:false } }, 2000));
+    egal(db.gouts.ia, { decouvrir:false, recherche:false },
+         'le choix exprimé a été retourné en allumage par la synchro');
+    /* Et le marqueur local n'a pas été emporté par la fusion. */
+    egal(db.gouts.iaV, 2, '`iaV` a été effacé par un pair qui ne le connaît pas');
+  });
+
+  test('C1d — la fusion transporte bien les interrupteurs quand le distant est plus récent', ()=>{
+    baseVierge();
+    db.gouts.ia = { decouvrir:true, recherche:true };
+    db.gouts.iaV = 2;
+    db.gouts.maj = 1000; db.gouts.majBlocs = { ia: 1000 };
+    fusionnerGouts(goutsDistants({ ia:{ decouvrir:false, recherche:true } }, 2000));
+    egal(db.gouts.ia, { decouvrir:false, recherche:true },
+         'le bloc `ia` ne voyage plus : couper sur un appareil ne coupe plus sur l\'autre');
+  });
+
+  test('C1e — à égalité de date, le local garde la main', ()=>{
+    baseVierge();
+    db.gouts.ia = { decouvrir:false, recherche:false };
+    db.gouts.iaV = 2;
+    db.gouts.maj = 2000; db.gouts.majBlocs = { ia: 2000 };
+    fusionnerGouts(goutsDistants({ ia:{ decouvrir:true, recherche:true } }, 2000));
+    egal(db.gouts.ia, { decouvrir:false, recherche:false },
+         'l\'égalité a été tranchée en faveur du distant : deux appareils oscilleraient');
   });
 
   test('C2 — IA éteinte : le hero garde sa ligne au cœur, même avec un cache plein', ()=>{
@@ -8435,8 +8489,18 @@ window.MODE_TEST = true;
     const c = codeDe(appliquerOrdreIARech);
     vrai(c.indexOf('scrollY') >= 0,
          'le classement s\'applique sans regarder si la grille est parcourue');
+    /* CORRECTION DE RELECTURE (11/08/2026) — le seuil doit être ZÉRO, pas
+       « pas beaucoup ». Un défilement inertiel à 30 px passait sous 40. */
+    vrai(/scrollY \|\| 0\) !== 0/.test(c),
+         'le seuil n\'est pas zéro : un défilement inertiel passe encore');
+    vrai(typeof window.IA_GRILLE_DEFIL === 'undefined',
+         'la constante de seuil traîne encore sans emploi');
     vrai(c.indexOf('signatureGrilleIA() !== sig') >= 0,
          'un classement arrivé en retard peut s\'appliquer à une autre grille');
+    /* Et la numérotation envoyée est celle qui sera reçue : on filtre les
+       lignes vides AVANT l'envoi, sinon le serveur renumérote sans nous. */
+    vrai(codeDe(classerGrilleIA).indexOf('filter(e => !!e.ligne)') >= 0,
+         'une ligne vide décalerait toute la numérotation, en silence');
   });
 
   test('le profil envoyé reste agrégé : des genres et des titres, rien d\'autre', ()=>{
@@ -8453,6 +8517,7 @@ window.MODE_TEST = true;
 
   test('✦ éteint : la recherche de titre d\'aujourd\'hui, strictement inchangée', ()=>{
     const r = rechNG('tout');
+    db.gouts.ia = { decouvrir:false, recherche:true };
     egal(r.envie, false, 'la Recherche s\'ouvre en mode envie');
     r.q = 'Dark';
     vrai(enRechercheTitre(), 'deux caractères ne déclenchent plus la recherche de titre');
@@ -8464,6 +8529,7 @@ window.MODE_TEST = true;
 
   test('✦ allumé : la barre se teint et la recherche de titre s\'endort', ()=>{
     const r = rechNG('tout');
+    db.gouts.ia = { decouvrir:false, recherche:true };
     r.q = 'un film d\'action drôle';
     r.envie = true;
     vrai(!enRechercheTitre(),
@@ -8519,6 +8585,21 @@ window.MODE_TEST = true;
          'Entrée ne passe plus par la validation');
     vrai(codeDe(validerRech).indexOf('lancerTitre(true)') >= 0,
          '✦ éteint, Entrée ne lance plus la recherche de titre validée');
+  });
+
+  test('✦ : IA de la Recherche coupée → pas de bouton, et le mode ne s\'allume pas', ()=>{
+    /* CORRECTION DE RELECTURE (11/08/2026) — une affordance qui ne fait rien
+       est pire qu'une affordance absente. */
+    const r = rechNG('tout');
+    db.gouts.ia = { decouvrir:false, recherche:false };
+    const h = champRech();
+    vrai(!/class="qia/.test(h), 'le ✦ est proposé alors qu\'il ne servira à rien');
+    vrai(/qnoia/.test(h), 'le champ ne récupère pas la place du bouton absent');
+    sansEcran(()=> basculerEnvieRech());
+    egal(r.envie, false, 'le mode envie s\'est allumé sans rien derrière');
+    r.envie = true; r.q = 'un film drôle';
+    vrai(enRechercheTitre(),
+         'l\'écran reste endormi alors que l\'IA est coupée : rien ne répond');
   });
 
   test('✦ : l\'état vide « Rien trouvé » dit qu\'il existe — une ligne, pas un écran', ()=>{

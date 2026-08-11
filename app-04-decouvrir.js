@@ -1346,8 +1346,14 @@ function apresRenduVitrine(){
    duel est mis en avant partout, et un lien qui envoie régler ses goûts à la
    main n'a plus sa place en tête de Découvrir. `lienAjusterGouts()` n'existe
    plus, son unique appelant (`vitrineBody`) non plus, et la règle `.d4lien`
-   quitte `app.css`. L'écran Mes goûts reste accessible par Mon profil, qui est
-   désormais son SEUL chemin — c'est voulu, pas un oubli.
+   quitte `app.css`. L'écran Mes goûts reste accessible par Mon profil (engrenage
+   → Mon compte et réglages → première ligne), et par les deux appels
+   CONTEXTUELS qui subsistent ailleurs : « Dire ce que j'aime → » dans le repli
+   de la carte de profil pauvre (plus bas dans ce fichier) et le bandeau du duel
+   (`app-16`). Ce que le point 2 retire, c'est le lien PERMANENT en tête de
+   Découvrir — pas tous les chemins. La première rédaction disait « son SEUL
+   chemin » : c'était faux, et une pierre tombale doit être la vérité durable du
+   dépôt. Relevé en relecture.
    Ce qu'il ne faut pas faire en le regrettant : le remettre ailleurs dans
    Découvrir. Il a déjà été déplacé une fois ; le point 2 ne demande pas un
    nouvel emplacement, il demande sa disparition.

@@ -35,14 +35,25 @@
 -- REJOUABLE. Passée une fois, le `is null` ne mord plus : la rejouer ne change
 -- rien. C'est la propriété qu'on demande à toutes les migrations de ce dépôt.
 --
--- LE SEMIS LUI-MÊME EST CORRIGÉ À LA SOURCE. L'`insert` ci-dessous porte
--- désormais les limites : une base NEUVE (nouveau projet Supabase, `INSTALL.md`
--- déroulé de zéro) n'aura jamais la fenêtre de vulnérabilité qu'a connue
--- celle-ci. Il garde son `on conflict do nothing` — sur la base existante il ne
--- fera rien, et c'est l'`update` qui travaille.
+-- CE QUE FAIT VRAIMENT L'`insert` CI-DESSOUS — rectification de relecture
+-- (11/08/2026). La première rédaction annonçait « LE SEMIS LUI-MÊME EST CORRIGÉ
+-- À LA SOURCE ». C'était trompeur, et le relecteur a eu raison de le relever :
+-- le semis d'origine, `014_relais_ia.sql:94-98`, pose TOUJOURS `null, null`, et
+-- il n'est pas modifié — on ne réécrit pas une migration déjà passée en
+-- production, c'est la règle de ce dépôt. L'`insert` ci-dessous est donc :
+--   · UTILE sur une base neuve — il s'exécute avant que 014 n'ait rien à faire ?
+--     Non : 014 tourne d'abord, l'`insert` de 015 tombe alors sur son
+--     `on conflict do nothing` et ne fait RIEN. Il est mort-né dans les deux cas.
+--   · GARDÉ quand même, parce qu'il documente l'état voulu de la table au même
+--     endroit que le rattrapage, et parce qu'il couvrirait une base où la table
+--     existerait sans avoir été semée.
+-- AUTREMENT DIT : c'est l'`update` qui travaille, toujours, base neuve comprise.
+-- ET LA CONSÉQUENCE À CONNAÎTRE : rejouer 014 SEULE, sur une base vide,
+-- réarmerait le défaut. Il faut alors rejouer 015 derrière — ce que fait
+-- n'importe quel dérouleur de migrations dans l'ordre.
 -- =============================================================================
 
--- --- 1. Le semis, corrigé à la source (base neuve) --------------------------
+-- --- 1. Le semis, pour mémoire (mort-né derrière 014 — voir l'en-tête) ------
 
 insert into public.ia_fournisseurs (nom, rang, modele, limite_minute, limite_jour, actif)
 values
@@ -53,19 +64,26 @@ on conflict (nom) do nothing;
 
 -- --- 2. Le rattrapage des lignes semées sans limites ------------------------
 --
--- Une seule instruction par étage, chacune bornée par `is null`. La contrainte
--- `ia_fournisseurs_limites_sous_plafond` (014) exige des valeurs strictement
--- sous un million : 10, 1000, 15 et 1500 la respectent très largement.
+-- UNE INSTRUCTION PAR COLONNE, et c'est une rectification de relecture
+-- (11/08/2026). La première rédaction faisait une instruction par étage, bornée
+-- par `(limite_minute is null OR limite_jour is null)` — donc un
+-- `limite_minute = 5` posé à la main SANS `limite_jour` était écrasé par le 10,
+-- alors que cette migration et `INSTALL.md` promettent tous les deux qu'un
+-- chiffre posé à la main n'est jamais défait. Colonne par colonne, la promesse
+-- redevient vraie : on ne remplit que les trous, un par un.
+--
+-- La contrainte `ia_fournisseurs_limites_sous_plafond` (014) exige des valeurs
+-- strictement sous un million : 10, 1000, 15 et 1500 la respectent largement.
 
-update public.ia_fournisseurs
-   set limite_minute = 10, limite_jour = 1000, maj = now()
- where nom = 'gemini-flash'
-   and (limite_minute is null or limite_jour is null);
+update public.ia_fournisseurs set limite_minute = 10, maj = now()
+ where nom = 'gemini-flash'      and limite_minute is null;
+update public.ia_fournisseurs set limite_jour = 1000, maj = now()
+ where nom = 'gemini-flash'      and limite_jour   is null;
 
-update public.ia_fournisseurs
-   set limite_minute = 15, limite_jour = 1500, maj = now()
- where nom = 'gemini-flash-lite'
-   and (limite_minute is null or limite_jour is null);
+update public.ia_fournisseurs set limite_minute = 15, maj = now()
+ where nom = 'gemini-flash-lite' and limite_minute is null;
+update public.ia_fournisseurs set limite_jour = 1500, maj = now()
+ where nom = 'gemini-flash-lite' and limite_jour   is null;
 
 -- --- 3. Le contrôle qui rend la correction vérifiable -----------------------
 --

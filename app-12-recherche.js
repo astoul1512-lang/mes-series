@@ -638,7 +638,14 @@ function rechTexte(){ return (etatRech().q || '').trim(); }
    n'est jamais en recherche de titre, donc l'état intermédiaire « Rien trouvé »
    qui décourageait ne peut plus apparaître — non pas parce qu'on l'a masqué,
    mais parce qu'on n'y entre plus. */
-function enRechercheTitre(){ return !etatRech().envie && rechTexte().length >= RECH_MIN; }
+function enRechercheTitre(){
+  const r = etatRech();
+  /* `envie` ne vaut que si l'IA de la Recherche est allumée : une base dont
+     l'interrupteur a été coupé pendant que le mode était actif retrouve la
+     recherche de titre, elle ne se retrouve pas devant un écran muet. */
+  const envie = !!r.envie && (typeof iaActive !== 'function' || iaActive('recherche'));
+  return !envie && rechTexte().length >= RECH_MIN;
+}
 
 /* ---------------- La phrase entre deux sessions (§4.8) ----------------
    REMISE À ZÉRO À CHAQUE OUVERTURE. Un filtre qu'on a oublié avoir posé est
@@ -2333,11 +2340,23 @@ function viewRecherche(){
    LA CROIX ET LE ✦ NE SE MARCHENT PAS DESSUS : le ✦ occupe le bord droit dans
    les DEUX modes — il ne doit ni apparaître ni disparaître, sans quoi la croix
    sauterait d'un cran au premier caractère tapé — et la croix se range à sa
-   gauche, une fois pour toutes. */
+   gauche, une fois pour toutes.
+
+   CORRECTION DE RELECTURE (11/08/2026) — LE ✦ N'EXISTE PAS SI L'IA DE LA
+   RECHERCHE EST COUPÉE. Il était affiché en toutes circonstances et
+   `champRech` n'interrogeait jamais l'interrupteur : couper l'IA de la
+   Recherche, taper une envie, appuyer sur ✦ → la barre virait au violet et
+   `routerEnvieIA` sortait à sa première ligne. Rien ne se passait, aucun
+   message, aucun repli. Une affordance qui ne fait rien est pire qu'une
+   affordance absente : elle apprend à ne plus faire confiance à l'écran.
+   L'interrupteur ne bougeant pas en cours de saisie, retirer le bouton ne fait
+   sauter aucune croix ; `.qnoia` rend simplement ses 34 px au champ. */
 function champRech(){
   const r = etatRech();
-  const on = !!r.envie;
-  return '<div class="qbar'+(on ? ' qiaon' : '')+'">'+(on ? '<span class="qetoile" aria-hidden="true">✦</span>' : I.search)+
+  const ia = (typeof iaActive === 'function') && iaActive('recherche');
+  const on = !!r.envie && ia;
+  return '<div class="qbar'+(on ? ' qiaon' : '')+(ia ? '' : ' qnoia')+'">'+
+    (on ? '<span class="qetoile" aria-hidden="true">✦</span>' : I.search)+
     '<input type="search" id="q" enterkeyhint="search" autocomplete="off" autocorrect="off" '+
       'placeholder="'+(on ? 'Décris ton envie…' : 'Un titre, une personne, une envie…')+'" '+
       'value="'+esc(r.q)+'" oninput="saisieRech(this.value)" '+
@@ -2347,9 +2366,9 @@ function champRech(){
       'onkeydown="if(event.key===\'Enter\'){this.blur();validerRech()}">'+
     '<button class="qclear'+(r.q?'':' masque')+'" onclick="saisieRech(\'\')" '+
       'aria-label="Effacer">'+I.close+'</button>'+
-    '<button class="qia'+(on ? ' on' : '')+'" onclick="basculerEnvieRech()" '+
+    (ia ? '<button class="qia'+(on ? ' on' : '')+'" onclick="basculerEnvieRech()" '+
       'aria-pressed="'+(on ? 'true' : 'false')+'" '+
-      'aria-label="Chercher par envie">✦</button></div>';
+      'aria-label="Chercher par envie">✦</button>' : '')+'</div>';
 }
 
 /* La validation, dans les deux modes. Elle existe pour que le `onkeydown` de la
@@ -2369,6 +2388,10 @@ function validerRech(){
    barre pleine et un écran qui parle d'autre chose. */
 function basculerEnvieRech(){
   const r = etatRech();
+  /* Le bouton n'est plus rendu quand l'IA de la Recherche est coupée ; la garde
+     est là pour le chemin programmatique (un test, un raccourci futur) et pour
+     que le mode ne puisse pas s'allumer sans que rien ne le serve. */
+  if(typeof iaActive === 'function' && !iaActive('recherche')){ r.envie = false; return; }
   r.envie = !r.envie;
   clearTimeout(rechTimer); avorterRech();
   r.qtitres = []; r.qgens = []; r.qloading = false; r.qerr = '';
@@ -2417,6 +2440,18 @@ function peindreRech(){
   if(puces) puces.outerHTML = puceFamillesRech();
   const c = document.querySelector('.qclear');
   if(c) c.classList.toggle('masque', !etatRech().q);
+  /* CORRECTION DE RELECTURE (11/08/2026) — LE CHAMP SUIT `r.q` QUAND ELLE EST
+     VIDÉE PAR L'APP. `peindreRech` ne réécrit jamais l'`<input>` — et c'est
+     volontaire, le réécrire pendant la frappe ferait sauter le curseur. Mais
+     `traduireEnvieIA` vide `r.q` après avoir routé une envie : le texte restait
+     alors affiché au-dessus de pilules qui, elles, avaient pris sa place, la
+     croix d'effacement disparaissait (elle suit `r.q`), et un second Entrée ne
+     faisait rien. Le défaut préexistait sur le chemin Entrée ; le mode ✦ en
+     fait le flux NOMINAL, donc systématiquement visible.
+     On ne recopie que dans ce sens-là — champ non vide, état vide — ce qui ne
+     peut arriver qu'après une écriture de l'app, jamais pendant une frappe. */
+  const q = document.getElementById('q');
+  if(q && !etatRech().q && q.value) q.value = '';
 }
 /* SPEC-05 §5 et §7 — L'ORDRE DE L'ÉCRAN A CHANGÉ, PAS LE MOTEUR.
    Hier : la grande phrase « Je veux… », les tuiles d'envie, la grille.

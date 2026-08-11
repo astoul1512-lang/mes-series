@@ -2346,6 +2346,17 @@ function top10Pour(cadre, humeur, viviers){
          titre vu. C'est la régression qu'on corrige, elle se garde deux fois. */
       if(typeof dejaChezMoi === 'function' && dejaChezMoi(x.media, x.id)) return;
       if(typeof estRefuseSugg === 'function' && estRefuseSugg(x.media, x.id)) return;
+      /* CORRECTION DE RELECTURE (11/08/2026) — LA GARDE DU 👎 REVIENT.
+         L'ancienne `top10Pour` portait `if(avisDe(...) === -1) return;` et la
+         réécriture l'a laissée tomber SANS LE DIRE — ni le commit, ni le compte
+         rendu ne la mentionnaient, et le test qui la couvrait a été remplacé.
+         C'est le pire genre de perte : silencieuse.
+         Elle n'est pas redondante avec `dejaChezMoi`. Le chemin d'atteinte est
+         réel : marquer vu → 👎 → « Retirer de ma liste » (`removeMovie` ne purge
+         pas `db.avis`). Le titre explicitement détesté ressortait alors EN TÊTE
+         du top, puisque son genre est celui qu'on regarde. Un 👎 n'est le top de
+         personne — c'était vrai avant le point 3, ça l'est toujours. */
+      if(typeof avisDe === 'function' && avisDe(x.media, x.id) === -1) return;
       if(!colle(x)) return;
       const k = x.media + ':' + x.id;
       const e = parCle[k] || (parCle[k] = { x:x, rang:0, aff:affiniteTop10(x, poids) });
@@ -3158,7 +3169,20 @@ function rangeesSuggerees(){
      pour toi » non plus (`sansRepli`) — ses titres sont déjà dans les rangées
      dont il les a repêchés, les remettre une troisième fois serait absurde. */
   const poserTop = ()=>{
-    const l = propre(s.top10 || []).slice(0, TOP10_TAILLE);
+    /* CORRECTION DE RELECTURE (11/08/2026) — « PLUS JAMAIS » VAUT AUSSI PENDANT
+       LA FENÊTRE DE RECALCUL. `propre` teste le hero et les titres écartés,
+       mais pas `dejaChezMoi` — et `suggCourantes()` rend son entrée de cache
+       même périmée. Scénario reproduit en relecture : ouvrir un titre depuis le
+       Top 10, le marquer vu, revenir sur Découvrir → il y était encore quelques
+       secondes. Le reste de l'écran vit avec cette péremption asynchrone depuis
+       toujours ; ici le critère d'acceptation dit « plus JAMAIS », et une
+       rangée qui promet des titres non vus doit tenir sa promesse à la seconde
+       près. La garde est posée ICI et pas dans `propre` : « Bientôt » montre
+       délibérément des titres de la bibliothèque (R7), la mettre en commun la
+       viderait. */
+    const frais = (s.top10 || []).filter(x =>
+      !(typeof dejaChezMoi === 'function' && dejaChezMoi(x.media, x.id)));
+    const l = propre(frais).slice(0, TOP10_TAILLE);
     if(l.length) brut.push({ cle:'top10', titre:'Top 10 pour toi', l:l,
                              top:true, sansRepli:true });
   };

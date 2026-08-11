@@ -389,6 +389,11 @@
     box-shadow:0 0 0 3px rgba(167,139,250,.15)}
   .qbar.qiaon input::placeholder{color:#8b7fb8}
   .qbar.qiaon .qclear{color:#a78bfa}
+  /* CORRECTION DE RELECTURE (11/08/2026) — IA de la Recherche coupée : pas de
+     bouton ✦, donc pas de place à lui réserver. Le champ récupère ses 34 px et
+     la croix reprend le bord. */
+  .qbar.qnoia input{padding-right:38px}
+  .qbar.qnoia .qclear{right:8px}
   .masque{visibility:hidden;pointer-events:none}
   .resume.masque{display:none}
 

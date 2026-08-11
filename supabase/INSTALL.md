@@ -407,6 +407,27 @@ select count(*) from public.ia_fournisseurs
  where actif and (limite_minute is null or limite_jour is null);
 ```
 
+### Hors dépôt — les fonctions déployées qui n'y sont pas
+
+Une fonction peut vivre sur le projet Supabase sans exister ici : le déploiement
+se fait par la CLI, le dépôt ne le sait pas. **`ia-controle-temporaire` est dans
+ce cas** — posée pendant le contrôle de bout en bout du 10/08/2026, jamais
+commitée, et restée déployée ensuite. `grep controle-temporaire` sur tout l'arbre
+rend zéro : rien ici ne pouvait le dire.
+
+**Elle doit être supprimée** (RETOUR-01 point 4) : Supabase → **Edge Functions**
+→ `ia-controle-temporaire` → **Delete**.
+
+La règle qui en découle, et qui vaut pour la suite : *toute fonction déployée sur
+le projet doit exister dans `supabase/functions/`.* Le contrôle, à la main :
+
+```
+supabase functions list
+```
+
+Tout nom qui n'a pas de dossier ici est soit à commiter, soit à supprimer. Un
+relais qu'on ne peut pas relire est un relais qu'on ne peut pas garder.
+
 ### Avant de changer le modèle OpenRouter — lire son catalogue
 
 Le premier modèle choisi ne déclarait pas `structured_outputs`, et l'étage 3
