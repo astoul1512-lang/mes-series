@@ -2305,6 +2305,20 @@ body.rphnette .rphrase{background:#15171e}
     padding:6px 13px;font-size:12.5px;font-weight:650;font-family:inherit}
   .fopt.on{background:var(--accent-dim);border-color:#3d8bff77;color:#9cc4ff;font-weight:800}
 
+  /* --- RETOUR-04 point 1 : « au moins un des N » / « les N » --- ---------
+     Un segment à deux positions, pas deux pilules : les deux choix sont
+     EXCLUSIFS et couvrent tout — la forme doit le dire d'un coup d'œil, sinon
+     on croit pouvoir décocher les deux. Maquette `27-genres-et-ou.html`. */
+  .fcombi{margin-top:11px;background:var(--surface);border:1px solid var(--line);
+    border-radius:12px;padding:10px 11px}
+  .fcombiq{font-size:12.5px;color:var(--muted);margin-bottom:8px}
+  .fcombiq b{color:var(--text)}
+  .fseg{display:flex;background:var(--surface2);border:1px solid var(--line);
+    border-radius:10px;padding:3px;gap:3px}
+  .fsegb{flex:1;text-align:center;font-size:12.5px;font-weight:700;color:var(--muted);
+    padding:7px 4px;border-radius:8px;background:none;border:0;font-family:inherit}
+  .fsegb.on{background:var(--accent);color:#fff}
+
   /* --- La carte du meilleur match (§5) --- */
   .rmatch{display:flex;gap:13px;align-items:center;margin:10px 16px 0;padding:12px;
     border-radius:16px;background:var(--surface);border:1px solid #ffffff14}

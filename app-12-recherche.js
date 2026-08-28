@@ -75,6 +75,28 @@ const RECH_PAGES_MAX = 3;        // jamais plus de 3 requêtes pour remplir
    delà, c'est le quota qu'on brûle pour du défilement. */
 const RECH_PAGES_TAMIS = 6;
 const RECH_VOTES_MINI = 80;      // plancher de votes de la grille
+/* RETOUR-04 POINT 3 (27/08/2026) — LES ANIMÉS ONT LEUR PROPRE PLANCHER, ET IL
+   EST BAS. Constat d'Adrien : filtres Animés + sport rendaient 25 titres, et
+   des animés connus manquaient. Diagnostic vérifié le 27/08 : Medalist
+   (id TMDB 237529) porte bien le mot-clé sport et sort bien de la requête —
+   mais il n'a que 58 votes, et le plancher de 80 le coupait. TMDB est une base
+   à dominante occidentale : un animé énorme en France y reste sous-voté, et le
+   plancher qui protège la grille du bruit sur l'océan TMDB entier ampute ici
+   un catalogue déjà étroit. Mesuré le 27/08 (relais, séries ja + genre
+   Animation) :
+
+     | Requête                        | 80  | 20    | sans plancher |
+     | sous-genre sport (mot-clé 6075)|  25 |    57 |           144 |
+     | famille Animés entière         | 733 | 1 835 |             — |
+
+   20 et non « rien » : sans plancher du tout, le sous-genre sport triple encore
+   et la grille se remplit de fiches à trois votes. */
+const RECH_VOTES_MINI_ANIME = 20;
+/* Et quand c'est la NOTE qui est demandée, le plancher reste — abaissé, pas
+   supprimé. Une moyenne portée par 4 votes ne veut rien dire ; à 30 elle
+   commence à en dire quelque chose. 30 au lieu des 100 des autres familles,
+   pour la même raison que ci-dessus. */
+const RECH_VOTES_NOTE_ANIME = 30;
 const RECH_JEU_STOCK = 6;        // en dessous, une source va chercher la suite
 /* Combien de flux on amorce en parallèle. Au-delà, on enchaîne par paquets :
    trois cent vingt-quatre requêtes simultanées, c'est une rafale de 429.
@@ -603,6 +625,12 @@ function etatRech(){
        restent uniques : un plancher ne se cumule pas, un binaire non plus. */
     amb:null, sans:[], genre:[], origine:[], epoque:[], duree:[], note:null,
     pasvu:null, plate:[],
+    /* RETOUR-04 POINT 1 — « AU MOINS UN DES N » (faux, le défaut) OU « LES N »
+       (vrai). Il vit AVEC les genres cochés et pas plus longtemps : retirer les
+       genres ou revenir à un seul le remet à faux (voir `poserMotRech`). Il ne
+       se synchronise pas et ne se retient pas d'une recherche à l'autre — comme
+       tout le reste de la phrase (§4.8). */
+    genreEt:false,
     /* SPEC-05 lot A — les trois critères neufs (§1) et l'ambiance ENREGISTRÉE.
        Attention au faux jumeau : `amb` ci-dessus est une TUILE D'ENVIE mesurée
        (`RECH_AMBIANCES`, données du dépôt) ; `ambiance` est l'identifiant d'une
@@ -731,11 +759,13 @@ function nouvelleOuvertureRech(){
     r.reprise = { texte:avant, fam:r.fam, amb:r.amb, sans:r.sans.slice(),
                   genre:listeRech('genre'), origine:listeRech('origine'),
                   epoque:listeRech('epoque'), duree:listeRech('duree'),
-                  plate:listeRech('plate'), note:r.note, pasvu:r.pasvu };
+                  plate:listeRech('plate'), note:r.note, pasvu:r.pasvu,
+                  genreEt:!!r.genreEt };
   r.q = ''; r.qtitres = []; r.qgens = []; r.qerr = '';
   r.envie = false;                     // RETOUR-01 point 6 : on rouvre en mode titre
   r.amb = null; r.sans = []; r.genre = []; r.origine = [];
   r.epoque = []; r.duree = []; r.note = null; r.pasvu = null; r.plate = [];
+  r.genreEt = false;                   // RETOUR-04 point 1 : il meurt avec les genres
   r.jeu = null;
   r.touche = false;
   /* POINT 1 DU CYCLE 3 — plus de proposition du jour : la phrase s'ouvre VIDE,
@@ -753,6 +783,10 @@ function reprendreRech(){
   r.genre = (v.genre||[]).slice(); r.origine = (v.origine||[]).slice();
   r.epoque = (v.epoque||[]).slice(); r.duree = (v.duree||[]).slice();
   r.plate = (v.plate||[]).slice(); r.note = v.note; r.pasvu = v.pasvu;
+  /* RETOUR-04 point 1 — « Reprendre » rend la recherche telle qu'elle était,
+     réglage ET/OU compris : la rendre en OU alors qu'on l'avait quittée en ET
+     donnerait une autre grille sous le même libellé. */
+  r.genreEt = !!v.genreEt;
   r.reprise = null;
   r.touche = true;
   relancerRech();
@@ -876,6 +910,12 @@ function poserMotRech(cle, val){
     if(a && (a.ing||[]).some(i => i.cle === cle)) r.sans.push(cle);
   }
   if(cle === 'genre' && val != null && listeRech('genre').length){ r.amb = null; r.sans = []; }
+  /* RETOUR-04 point 1 — LA PORTÉE DU RÉGLAGE, ÉCRITE ICI ET NULLE PART
+     AILLEURS : il vit avec les genres cochés. Décocher jusqu'à n'en garder
+     qu'un, ou tout retirer, le fait disparaître de l'écran ET le remet au
+     défaut — sans quoi un « les deux » oublié ressortirait tout seul au
+     prochain second genre coché, ce que personne n'aurait demandé. */
+  if(cle === 'genre' && listeRech('genre').length < 2) r.genreEt = false;
   /* Répondre ne laisse plus la question « libre » : on l'a remplie. */
   const iL = rechLibres.indexOf(cle);
   if(iL >= 0 && aMotRech(cle)) rechLibres.splice(iL, 1);
@@ -939,6 +979,7 @@ function viderRech(){
   r.q = ''; r.qtitres = []; r.qgens = [];
   r.amb = null; r.sans = []; r.genre = []; r.origine = [];
   r.epoque = []; r.duree = []; r.note = null; r.pasvu = null; r.plate = [];
+  r.genreEt = false;                   // RETOUR-04 point 1 : il meurt avec les genres
   r.statut = null; r.gore = null; r.avec = null;
   r.touche = true;
   relancerRech();
@@ -1369,7 +1410,18 @@ function estOccidentRech(x){
 function paramsSocleRech(media){
   const r = etatRech(), f = familleRech();
   const p = { include_adult:'false', page:'1', sort_by:'popularity.desc' };
-  p['vote_count.gte'] = String(RECH_VOTES_MINI);
+  /* LE PLANCHER DE LA GRILLE — l'ORDRE DES TROIS RÈGLES DE RETOUR-04, du plus
+     fort au plus faible :
+       ① un filtre plateforme est posé      → PAS de plancher (point 2, plus bas) ;
+       ② la famille est « Animés »          → 20 (point 3) ;
+       ③ sinon                              → 80, le socle historique.
+     La règle ① se joue à la FIN de cette fonction, quand les plateformes sont
+     connues : elle ne fait sauter QUE la valeur posée ici, jamais celle d'une
+     ambiance mesurée ni celle du critère de note, qui sont des choix
+     éditoriaux et non la protection de la grille. `socleVotes` est ce
+     témoin — il dit « la valeur en place est encore la mienne ». */
+  const socleVotes = String(f.anime ? RECH_VOTES_MINI_ANIME : RECH_VOTES_MINI);
+  p['vote_count.gte'] = socleVotes;
   const champDate = media === 'movie' ? 'primary_release_date' : 'first_air_date';
 
   /* 1. La famille. Pour les animés, la langue et le genre Animation sont la
@@ -1407,8 +1459,14 @@ function paramsSocleRech(media){
   if(no){
     p['vote_average.gte'] = String(no.v);
     /* Trier ou filtrer par la note EXIGE un plancher de votes, sinon un 10/10
-       à trois voix passe devant tout. C'est la même constante que Découvrir. */
-    p['vote_count.gte'] = String(Math.max(RECH_VOTES_MINI, DISC_VOTES_MINI));
+       à trois voix passe devant tout. C'est la même constante que Découvrir.
+       RETOUR-04 point 3 — sur les animés il descend à 30 : c'est le même
+       raisonnement que `RECH_VOTES_MINI_ANIME`, appliqué à la note. Ce
+       plancher-ci SURVIT au filtre plateforme (point 2, exception écrite) :
+       demander une note minimale, c'est demander une moyenne qui veuille dire
+       quelque chose, plateforme ou pas. */
+    p['vote_count.gte'] = String(f.anime ? RECH_VOTES_NOTE_ANIME
+                                         : Math.max(RECH_VOTES_MINI, DISC_VOTES_MINI));
   }
   /* SPEC-05 §1 — LES TROIS CRITÈRES NEUFS. Le statut ne veut rien dire sur un
      film : `with_status` n'existe pas sur `/discover/movie`, et l'envoyer
@@ -1435,6 +1493,23 @@ function paramsSocleRech(media){
     p.with_watch_providers = plates.join('|');
     p.watch_region = REGION_PLATO;
     p.with_watch_monetization_types = 'flatrate';
+    /* RETOUR-04 POINT 2 (27/08/2026) — FILTRE PLATEFORME POSÉ, LE PLANCHER DE
+       LA GRILLE SAUTE. Être au catalogue de Netflix, Prime, Disney+, Canal+,
+       Apple TV+, Max, Crunchyroll ou ADN est DÉJÀ une sélection éditoriale :
+       le plancher n'y protège de rien et ampute les deux tiers du catalogue.
+       Mesuré le 27/08 (relais, région FR) :
+
+         | Requête                          | plancher 80 | sans plancher | coupé |
+         | 8 grandes plateformes FR, films  |       6 312 |        16 680 |  −62 %|
+         | 8 grandes plateformes FR, séries |       2 606 |         8 755 |  −70 %|
+         | Crunchyroll + ADN (animés)       |         453 |         1 711 |  −73 %|
+
+       SANS filtre plateforme, rien ne change : les 80 (ou les 20 des animés)
+       restent le socle qui protège la grille du bruit de l'océan TMDB entier.
+       Et on ne retire QUE la valeur posée en tête de cette fonction — le test
+       d'égalité avec `socleVotes` est ce qui laisse en place le plancher d'une
+       ambiance mesurée et celui du critère de note (l'exception du point 2). */
+    if(p['vote_count.gte'] === socleVotes) delete p['vote_count.gte'];
   }
   return p;
 }
@@ -1463,9 +1538,58 @@ function ajouterSansRech(p, ids){
 function genresPosesRech(media){
   return critereRech('genre').map(nom => genreParNom(media, nom)).filter(id => id != null);
 }
+
+/* ===== RETOUR-04 POINT 1 — « AU MOINS UN DES N » OU « LES N » =====
+
+   Le OU reste le DÉFAUT, et il ne bouge pas : à un seul genre coché la question
+   n'existe pas, et à deux ou plus elle part sur « au moins un ».
+
+   Côté moteur, le ET se dit EN VIRGULES, et il SIMPLIFIE au lieu de compliquer :
+   `with_genres='28,12'`, UNE seule requête, aucun tri local. Mieux — le cas des
+   familles qui imposent déjà un genre (Animés → Animation) cesse d'être un cas :
+   `16,28,12` est valide tel quel et se demande en une fois. La décomposition en
+   autant de flux que de genres ne reste nécessaire qu'en mode OU, parce que
+   MÉLANGER la virgule et la barre fait ignorer en silence tout ce qui suit la
+   barre — le piège mesuré le 02/08 (`with_genres=18|878,16` rend NEUF titres,
+   exactement comme `18,16`) ne concerne QUE ce mélange, jamais les virgules
+   seules.
+
+   Conséquence heureuse et voulue : en mode ET le compteur redevient EXACT même
+   sur Animés, puisque `jeuxParamsRech` ne rend plus qu'un flux (voir `recoupe`
+   dans `etagesRech`). */
+function genreEtRech(){
+  return listeRech('genre').length >= 2 && !!etatRech().genreEt;
+}
+function basculerGenreEtRech(v){
+  const r = etatRech();
+  const veut = !!v;
+  if(r.genreEt === veut) return;
+  r.genreEt = veut;
+  r.touche = true;
+  relancerRech();
+}
+/* « les deux », « au moins un des trois » : le libellé s'accorde au nombre, et
+   au-delà de dix on écrit le chiffre — personne ne coche onze genres, mais une
+   phrase fausse coûterait plus cher que cette ligne. */
+const RECH_NOMBRES = ['zéro','un','deux','trois','quatre','cinq','six','sept',
+                      'huit','neuf','dix'];
+function nombreEnLettresRech(n){
+  return RECH_NOMBRES[n] || String(n);
+}
+/* « action ET aventure ». Le pendant de `ouRech` : la phrase doit dire ce que
+   la requête fait, sinon on devine au lieu de lire. */
+function etRech(l){
+  return l.join(' ET ');
+}
 function variantesGenreRech(media, socle){
   const ids = genresPosesRech(media);
   if(!ids.length) return [ {} ];
+  /* RETOUR-04 point 1 — « Les N » : tout tient en une virgule, y compris le
+     genre que la famille impose déjà. UNE requête, jamais deux. */
+  if(genreEtRech() && ids.length > 1){
+    const tous = (socle.with_genres ? [String(socle.with_genres)] : []).concat(ids);
+    return [ { with_genres: tous.join(',') } ];
+  }
   if(socle.with_genres){
     /* La famille impose déjà un genre : un flux par genre demandé, en ET. */
     return ids.map(id => ({ with_genres: socle.with_genres + ',' + id }));
@@ -2527,9 +2651,13 @@ function motsPhraseRech(){
     /* PLUSIEURS VALEURS SE LISENT AVEC « OU », pas avec une virgule : la
        phrase doit dire ce que la requête fait. « un film français ou
        américain » — c'est exactement le mot d'Adrien. */
-    if(m.cle === 'genre' && listeRech('genre').length)
-      out.push({ cle:'genre',
-                 mot: ouRech(listeRech('genre').map(g => String(libelleGenre(g)).toLowerCase())) });
+    /* RETOUR-04 point 1 — ET LA PHRASE DIT LEQUEL DES DEUX ON A DEMANDÉ.
+       « action ou aventure » en mode OU, « action ET aventure » en mode ET :
+       on ne devine pas le sens de la requête, on le lit. */
+    if(m.cle === 'genre' && listeRech('genre').length){
+      const lg = listeRech('genre').map(g => String(libelleGenre(g)).toLowerCase());
+      out.push({ cle:'genre', mot: genreEtRech() ? etRech(lg) : ouRech(lg) });
+    }
     if(m.cle === 'origine' && listeRech('origine').length){
       const l = listeRech('origine').map(id => { const o = origineRech(id); return o ? o.mot : null; }).filter(x=>x);
       if(l.length) out.push({ cle:'origine', mot: ouRech(l) });
