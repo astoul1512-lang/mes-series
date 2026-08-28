@@ -184,6 +184,19 @@ window.MODE_TEST = true;
     db.pseudo = ''; db.auth = null; db.v = 2;
   }
   const ep = (e, jour, st) => ({ e:e, n:'E'+e, d:jour, r:42, st:st||null });
+  /* SPEC-10 — LA CARTE RECO VA CHERCHER SON AFFICHE. `ficheReco` (app-07)
+     demande la fiche TMDB d'un titre qu'on n'a pas chez soi ; dans cette page
+     il n'y a pas de réseau, et la requête ressortait en erreur de console — que
+     le lanceur compte comme un échec, à juste titre. On coupe donc le relais
+     autour des cas qui dessinent une carte, et on vide le cache des deux côtés
+     pour qu'un cas ne se serve pas de ce qu'un autre a mis dedans. */
+  function sansTmdb(fn){
+    const vraiTmdb = window.tmdb;
+    window.tmdb = async ()=> { throw new Error('pas de réseau dans les tests'); };
+    fichesReco = {};
+    try{ return fn(); } finally { window.tmdb = vraiTmdb; fichesReco = {}; }
+  }
+
   function serie(id, eps, vus, extra){
     return Object.assign({ id:id, name:'S'+id, status:'Ended', seasons:{1:eps},
                            watched:vus||{}, addedAt:1, updated:1 }, extra||{});
@@ -345,7 +358,8 @@ window.MODE_TEST = true;
     try{
       await chargerConseils();
       egal(conseils.recues.map(x=>x.id), ['a'], 'le filtre d\'entrée laisse passer autre chose');
-      const html = blocConseilsRecus();
+      const html = sansTmdb(()=> conseils.recues.map(r=>
+        carteRecoCentre({ cle:'reco:'+r.id, reco:r })).join(''));
       vrai(html.indexOf('Type hors contrat') < 0 && html.indexOf('Identifiant douteux') < 0,
            'une ligne hors contrat s\'affiche encore');
       vrai(html.indexOf('Conforme') >= 0, 'la ligne conforme a disparu avec les autres');
@@ -981,12 +995,20 @@ window.MODE_TEST = true;
     try{ menuRecommander('tv', 1399); } finally { window.openSheet = vraiOpen; }
     const boite = document.createElement('div');
     boite.innerHTML = html;
-    const b = boite.querySelector('button[onclick*="recommander"]');
-    vrai(b, 'aucun bouton d\'envoi produit');
-    /* Le test qui compte : le gestionnaire doit être du JavaScript VALIDE. */
+    const b = boite.querySelector('button[onclick*="basculerAmiReco"]');
+    vrai(b, 'aucune tuile d\'ami produite');
+    /* Le test qui compte : TOUS les gestionnaires de la feuille doivent être du
+       JavaScript VALIDE, titre à apostrophe compris. SPEC-10 déplace le titre
+       hors des `onclick` (il est dans le `<h3>`, échappé par `esc`) : la feuille
+       ne peut donc plus être cassée par lui, et ce test le VÉRIFIE au lieu de
+       le supposer. */
+    const tous = [...boite.querySelectorAll('[onclick]')].map(e=>e.getAttribute('onclick'));
+    vrai(tous.length >= 2, 'la feuille ne porte presque aucun geste');
     let ok = true;
-    try{ new Function(b.getAttribute('onclick')); }catch(e){ ok = false; }
-    vrai(ok, 'le gestionnaire produit est du JavaScript invalide');
+    tous.forEach(g=>{ try{ new Function(g); }catch(e){ ok = false; } });
+    vrai(ok, 'un gestionnaire produit est du JavaScript invalide');
+    vrai(!tous.some(g=> g.indexOf("Grey") >= 0),
+         'le titre est recopié dans un gestionnaire : c\'est le bug B2 qui revient');
   });
 
   test('une recommandation déjà envoyée n\'est pas renvoyable', ()=>{
@@ -1000,45 +1022,67 @@ window.MODE_TEST = true;
     try{ menuRecommander('tv', 1399); } finally { window.openSheet = vraiOpen; }
     const boite = document.createElement('div');
     boite.innerHTML = html;
-    const lignes = [...boite.querySelectorAll('button[onclick*="recommander"]')];
+    const lignes = [...boite.querySelectorAll('.ami')];
     const camille = lignes.find(b=> b.textContent.indexOf('Camille') >= 0);
     vrai(camille && camille.hasAttribute('disabled'), 'Camille est encore proposée');
+    vrai(camille && /Déjà conseillé/.test(camille.textContent),
+         'la mention « Déjà conseillé » manque : le second envoi n\'aurait aucun effet visible');
     const alex = lignes.find(b=> b.textContent.indexOf('Alex') >= 0);
     vrai(alex && !alex.hasAttribute('disabled'), 'Alex a été désactivé à tort');
+    /* Et le bouton d'envoi reste inerte tant que personne n'est choisi (§3). */
+    const envoi = [...boite.querySelectorAll('button')].find(b=> /Choisis au moins un ami/.test(b.textContent));
+    vrai(envoi && envoi.hasAttribute('disabled'), 'on peut envoyer à personne');
   });
 
-  test('une recommandation au contenu truqué ne produit aucun gestionnaire', ()=>{
+  /* SPEC-10 — la carte du centre remplace le bloc de « Mes abonnements ». La
+     règle de sécurité, elle, ne change pas d'un mot : le contenu vient d'une
+     ligne écrite par UN AUTRE UTILISATEUR, et rien de ce qu'il écrit ne doit
+     devenir exécutable. */
+  test('une carte reco au contenu truqué ne produit aucun gestionnaire', ()=>{
     cercleFactice();
     baseVierge();
-    conseils.recues = [{ id:'r1', de:'u2', vers:'u1', type:'tv',
-                      tmdb_id:'99" onclick="alert(1)', titre:'Piege" onclick="alert(2)' }];
+    conseils.recues = [{ id:'r1', de:'u2', vers:'u1', type:'tv', cree:'2026-08-27T10:00:00Z',
+                      tmdb_id:'99" onclick="alert(1)', titre:'Piege" onclick="alert(2)',
+                      mot:'Coucou" onclick="alert(3)' }];
     const boite = document.createElement('div');
-    boite.innerHTML = blocConseilsRecus();
-    /* Seul « Non merci » subsiste : sans identifiant valide, « Voir » n'a nulle
-       part où aller. Et aucun gestionnaire ne doit venir du contenu reçu. */
+    boite.innerHTML = sansTmdb(()=> carteRecoCentre({ cle:'reco:r1', reco:conseils.recues[0] }));
     const gestionnaires = [...boite.querySelectorAll('[onclick]')]
       .map(e=> e.getAttribute('onclick'));
     vrai(gestionnaires.every(g=> g.indexOf('alert') < 0), 'du code reçu est devenu exécutable');
     vrai(!gestionnaires.some(g=> g.indexOf('ouvrirConseil') >= 0),
-         '« Voir » proposé sur un identifiant qui n\'en est pas un');
-    vrai(gestionnaires.some(g=> g.indexOf('ecarterConseil') >= 0), '« Non merci » a disparu');
+         '« Voir la fiche » proposé sur un identifiant qui n\'en est pas un');
+    /* Le mot personnel ressort en TEXTE, jamais en balise. */
+    vrai(boite.textContent.indexOf('onclick') >= 0, 'le mot truqué a disparu au lieu d\'être neutralisé');
+    /* Et « Non merci » n'existe plus : §0.6, rien ne disparaît du fil. */
+    vrai(!gestionnaires.some(g=> g.indexOf('ecarterConseil') >= 0),
+         '« Non merci » est revenu : le §0.6 dit que rien ne se supprime');
   });
 
-  test('une recommandation honnête propose « Voir » et dit de qui elle vient', ()=>{
+  test('une carte reco honnête montre le mot, la provenance et les trois boutons', ()=>{
     cercleFactice();
     baseVierge();
-    conseils.recues = [{ id:'r1', de:'u2', vers:'u1', type:'tv', tmdb_id:1399, titre:'Severance' }];
+    conseils.recues = [{ id:'r1', de:'u2', vers:'u1', type:'tv', tmdb_id:1399,
+                         titre:'Severance', cree:'2026-08-27T10:00:00Z',
+                         mot:'Le twist de la saison 1 va te retourner' }];
     const boite = document.createElement('div');
-    boite.innerHTML = blocConseilsRecus();
-    vrai(boite.textContent.indexOf('Camille te le conseille') >= 0,
-         'la provenance n\'est pas dite');
-    vrai(boite.querySelector('[onclick*="ouvrirConseil"]'), '« Voir » manque');
-    /* Et le badge « déjà chez toi » n'apparaît que si c'est vrai. */
-    vrai(boite.textContent.indexOf('déjà chez toi') < 0, 'mention posée à tort');
+    boite.innerHTML = sansTmdb(()=> carteRecoCentre({ cle:'reco:r1', reco:conseils.recues[0] }));
+    vrai(/Camille te recommande une série/.test(boite.textContent), 'la provenance n\'est pas dite');
+    vrai(/Severance/.test(boite.textContent), 'le titre manque');
+    vrai(/twist de la saison 1/.test(boite.textContent), 'le mot personnel n\'est pas affiché');
+    const g = [...boite.querySelectorAll('[onclick]')].map(e=> e.getAttribute('onclick'));
+    vrai(g.some(x=> x.indexOf('ajouterDepuisReco') >= 0), '« + À voir » manque');
+    vrai(g.some(x=> x.indexOf('ouvrirConseil') >= 0), '« Voir la fiche » manque');
+    vrai(g.some(x=> x.indexOf('plusTardReco') >= 0), '« Plus tard » manque');
+    /* CORRECTION DE RELECTURE C-4 — ce cas assérait l'INVERSE de la règle
+       d'aujourd'hui. Posséder déjà le titre ne replie plus la carte : le repli
+       appartient au geste (`ajoute`), pas à l'état de la bibliothèque. Seul
+       « + À voir » cède la place à un témoin. */
     db.shows[1399] = serie(1399, [ep(1,HIER)], {});
     const b2 = document.createElement('div');
-    b2.innerHTML = blocConseilsRecus();
-    vrai(b2.textContent.indexOf('déjà chez toi') >= 0, 'mention manquante');
+    b2.innerHTML = sansTmdb(()=> carteRecoCentre({ cle:'reco:r1', reco:conseils.recues[0] }));
+    vrai(/Déjà dans ta liste/.test(b2.textContent), 'le témoin « déjà dans ta liste » manque');
+    vrai(/Plus tard/.test(b2.textContent), '« Plus tard » a disparu sur un titre déjà possédé');
+    vrai(!/\+ À voir/.test(b2.textContent), '« + À voir » est proposé sur un titre déjà possédé');
   });
 
   /* ==================== LOT A — le signal d'appréciation ==================== */
@@ -9794,6 +9838,379 @@ window.MODE_TEST = true;
     /* Mais la note reprend la main même sous plateforme, à 30. */
     r.note = '7';
     egal(paramsSocleRech('tv')['vote_count.gte'], '30');
+  });
+
+  groupe('SPEC-10 — le centre de notifications, l\'envoi, les retours');
+
+  /* Un décor complet : un cercle, une reco reçue, une reco envoyée. */
+  function decorCentre(){
+    baseVierge();
+    db.auth = { token:'t', uid:'moi' };
+    db.notifLus = {};
+    partage.suivis  = [{ id:'u2', pseudo:'Camille' }];
+    partage.abonnes = [{ id:'u3', pseudo:'Alex' }];
+    conseils = { recues:[], envoyees:[], charge:true };
+  }
+  const ISO = j => new Date(Date.now() + j*86400000).toISOString();
+  const JOUR = j => ISO(j).slice(0,10);
+
+  /* ---- Les groupes du fil ---- */
+
+  test('§4 — Aujourd\'hui / Cette semaine / Plus ancien', ()=>{
+    egal(groupeCentre(ISO(0)),   "Aujourd'hui");
+    egal(groupeCentre(ISO(-3)),  'Cette semaine');
+    egal(groupeCentre(ISO(3)),   'Cette semaine', 'une sortie à venir doit être « cette semaine »');
+    egal(groupeCentre(ISO(-20)), 'Plus ancien');
+  });
+
+  test('§4 — le fil s\'arrête à 30 jours, et il est trié du plus récent au plus ancien', ()=>{
+    decorCentre();
+    conseils.recues = [
+      { id:'vieux', de:'u2', vers:'moi', type:'tv', tmdb_id:1, titre:'Trop vieux', cree:ISO(-40) },
+      { id:'hier',  de:'u2', vers:'moi', type:'tv', tmdb_id:2, titre:'Hier',       cree:ISO(-1) },
+      { id:'auj',   de:'u2', vers:'moi', type:'tv', tmdb_id:3, titre:'Aujourd hui',cree:ISO(0) }
+    ];
+    const l = entreesCentre();
+    egal(l.map(e=>e.cle), ['reco:auj','reco:hier'],
+         'la borne de 30 jours ou le tri ne tiennent pas');
+  });
+
+  test('§4 — les trois familles arrivent dans le même fil, avec des clés stables', ()=>{
+    decorCentre();
+    conseils.recues   = [{ id:'r1', de:'u2', vers:'moi', type:'tv', tmdb_id:1399,
+                           titre:'Severance', cree:ISO(0) }];
+    conseils.envoyees = [{ id:'e1', de:'moi', vers:'u3', type:'movie', tmdb_id:603,
+                           titre:'Matrix', cree:ISO(-2), ajoute:ISO(-1) }];
+    const cles = entreesCentre().map(e=>e.cle);
+    vrai(cles.indexOf('reco:r1') >= 0, 'la reco reçue manque');
+    vrai(cles.indexOf('retour:e1:ajoute') >= 0, 'le retour sur ma reco manque');
+    /* La clé ne bouge PAS d'un appel à l'autre : c'est elle qui porte le « lu ». */
+    egal(entreesCentre().map(e=>e.cle), cles, 'les clés ne sont pas stables');
+    const r = entreesCentre().find(e=>e.cle === 'retour:e1:ajoute');
+    vrai(/Alex a ajouté/.test(r.titre), 'le retour ne dit pas qui : '+r.titre);
+  });
+
+  test('§4 — une sortie d\'épisode entre dans le fil, une trop ancienne non', ()=>{
+    decorCentre();
+    /* Une série COMMENCÉE (un épisode coché) : depuis la correction C-3, une
+       série jamais ouverte n'annonce que sa première, et ce cas-ci veut éprouver
+       la FENÊTRE, pas la règle du démarrage. */
+    db.shows[1] = serie(1, [ep(1, JOUR(-30)), ep(2, JOUR(-1)), ep(3, JOUR(-20))],
+                        {'1x1':1}, { name:'Dark' });
+    /* Le cache d'une minute doit être neutralisé entre deux cas. */
+    sortiesCentreCache = { t:0, jour:'', l:[] };
+    const cles = entreesCentre().map(e=>e.cle);
+    vrai(cles.indexOf('sortie:tv:1:'+JOUR(-1)) >= 0, 'l\'épisode d\'hier manque');
+    vrai(cles.indexOf('sortie:tv:1:'+JOUR(-20)) < 0, 'un épisode d\'il y a 20 jours est entré');
+  });
+
+  /* ---- Lu / non-lu ---- */
+
+  test('§4 — la pastille compte le non-lu, « Tout marquer lu » la vide', ()=>{
+    decorCentre();
+    conseils.recues = [
+      { id:'a', de:'u2', vers:'moi', type:'tv', tmdb_id:1, titre:'A', cree:ISO(0) },
+      { id:'b', de:'u2', vers:'moi', type:'tv', tmdb_id:2, titre:'B', cree:ISO(-1) }
+    ];
+    sortiesCentreCache = { t:0, jour:'', l:[] };
+    egal(nbNonLusCentre(), 2);
+    marquerLuNotif('reco:a');
+    egal(nbNonLusCentre(), 1, 'marquer lu ne descend pas la pastille');
+    vrai(estLuNotif('reco:a') && !estLuNotif('reco:b'));
+    sansEcran(()=> toutMarquerLuCentre());
+    egal(nbNonLusCentre(), 0, '« Tout marquer lu » laisse du non-lu');
+  });
+
+  test('§0.6 — « Plus tard » marque lu et NE SUPPRIME RIEN', ()=>{
+    decorCentre();
+    conseils.recues = [{ id:'a', de:'u2', vers:'moi', type:'tv', tmdb_id:1,
+                         titre:'A', cree:ISO(0) }];
+    sortiesCentreCache = { t:0, jour:'', l:[] };
+    sansEcran(()=> plusTardReco('reco:a'));
+    vrai(estLuNotif('reco:a'), '« Plus tard » n\'a pas marqué lu');
+    egal(entreesCentre().length, 1, 'la reco a disparu du fil');
+    /* Et le bouton, lui, ne se repropose plus. */
+    const h = sansTmdb(()=> carteRecoCentre({ cle:'reco:a', reco:conseils.recues[0] }));
+    vrai(h.indexOf('plusTardReco') < 0, 'le bouton « Plus tard » est resté');
+  });
+
+  test('§4 — les clés lues de plus de 60 jours sont oubliées, les autres non', ()=>{
+    decorCentre();
+    db.notifLus = { vieux: Date.now() - 61*86400000, frais: Date.now() };
+    sansEcran(()=> nettoyerNotifLus());
+    vrai(!('vieux' in db.notifLus), 'une clé de 61 jours est restée');
+    vrai('frais' in db.notifLus, 'une clé fraîche a été jetée');
+  });
+
+  test('§4 — l\'état lu voyage par la synchro, et se fusionne au plus récent', ()=>{
+    decorCentre();
+    db.notifLus = { a:1000, b:5000 };
+    vrai(payload().notifLus && payload().notifLus.a === 1000,
+         '`notifLus` ne monte pas au serveur : l\'état ne suivrait pas le compte');
+    const bouge = fusionnerNotifLus({ notifLus:{ a:2000, b:3000, c:7000 } });
+    vrai(bouge);
+    egal(db.notifLus.a, 2000, 'la lecture distante plus récente n\'a pas gagné');
+    egal(db.notifLus.b, 5000, 'une lecture distante plus ANCIENNE a écrasé la locale');
+    egal(db.notifLus.c, 7000, 'une clé lue ailleurs n\'est pas arrivée');
+  });
+
+  /* ---- L'envoi ---- */
+
+  testAsync('§3 — une ligne par destinataire, le même mot, borné à 280', async ()=>{
+    decorCentre();
+    let envoye = null;
+    const vraiFetch = sbFetch;
+    sbFetch = async (chemin, opt)=>{
+      if(/recommandations/.test(chemin) && opt && opt.method === 'POST')
+        envoye = JSON.parse(opt.body);
+      return [];
+    };
+    try{
+      await envoyerRecos('tv', 1399, 'Severance', ['u2','u3'], 'x'.repeat(400));
+      vrai(Array.isArray(envoye) && envoye.length === 2, 'l\'envoi ne fait pas une ligne par personne');
+      egal(envoye.map(x=>x.vers), ['u2','u3']);
+      egal(envoye[0].mot.length, 280, 'le mot n\'est pas borné à 280 : la base refuserait la ligne');
+      egal(envoye[0].mot, envoye[1].mot, 'le mot n\'est pas le même pour les deux');
+      egal(envoye[0].tmdb_id, 1399);
+      egal(envoye[0].de, 'moi');
+    } finally { sbFetch = vraiFetch; }
+  });
+
+  test('§3 — « Déjà conseillé » se lit sur ce qui est parti, personne par personne', ()=>{
+    decorCentre();
+    conseils.envoyees = [{ id:'e1', vers:'u2', type:'tv', tmdb_id:1399, cree:ISO(0) }];
+    vrai(dejaConseilleA('tv', 1399, 'u2'), 'Camille est encore proposée');
+    vrai(!dejaConseilleA('tv', 1399, 'u3'), 'Alex a été écarté à tort');
+    vrai(!dejaConseilleA('movie', 1399, 'u2'), 'le type n\'est pas regardé');
+  });
+
+  test('§3 — le bandeau de la fiche dit à qui, et où ça en est', ()=>{
+    decorCentre();
+    conseils.envoyees = [{ id:'e1', vers:'u2', type:'tv', tmdb_id:1399, cree:ISO(0) }];
+    let h = bandeauRecoFiche('tv', 1399);
+    vrai(/Recommandée à Camille/.test(h), 'le bandeau ne dit pas à qui : '+h);
+    vrai(/pas encore vue/.test(h), 'l\'état initial n\'est pas dit');
+    conseils.envoyees[0].ajoute = ISO(0);
+    h = bandeauRecoFiche('tv', 1399);
+    vrai(/ajoutée/.test(h), 'le bandeau ne suit pas l\'ajout du destinataire : '+h);
+    /* Et rien du tout sur un titre jamais recommandé. */
+    egal(bandeauRecoFiche('tv', 2), '');
+  });
+
+  /* ---- Les retours opportunistes (§5) ---- */
+
+  testAsync('§5 — terminer un titre reçu pose `termine`, un 👍 pose `aime`', async ()=>{
+    decorCentre();
+    const patchs = [];
+    const vraiFetch = sbFetch;
+    sbFetch = async (chemin, opt)=>{
+      if(opt && opt.method === 'PATCH') patchs.push(JSON.parse(opt.body));
+      return [];
+    };
+    try{
+      db.movies[603] = { id:603, title:'Matrix', seen:true, watchedAt:Date.now(), addedAt:1 };
+      conseils.recues = [{ id:'r1', de:'u2', vers:'moi', type:'movie', tmdb_id:603,
+                           titre:'Matrix', cree:ISO(-1) }];
+      retoursRecosOpportunistes();
+      await new Promise(r=>setTimeout(r, 10));
+      vrai(patchs.some(p=> p.termine), 'un film vu ne remonte pas « terminé »');
+      /* Le 👍, ensuite — et une seule fois : la ligne porte déjà sa date. */
+      db.avis.movie[603] = { v:1, quand:Date.now() };
+      retoursRecosOpportunistes();
+      await new Promise(r=>setTimeout(r, 10));
+      vrai(patchs.some(p=> p.aime), 'un 👍 ne remonte pas « aimé »');
+      const avant = patchs.length;
+      retoursRecosOpportunistes();
+      await new Promise(r=>setTimeout(r, 10));
+      egal(patchs.length, avant, 'le retour repart à chaque enregistrement');
+    } finally { sbFetch = vraiFetch; }
+  });
+
+  testAsync('§5 — un 👎 ne remonte rien : ce n\'est pas une nouvelle qu\'on envoie', async ()=>{
+    decorCentre();
+    const patchs = [];
+    const vraiFetch = sbFetch;
+    sbFetch = async (chemin, opt)=>{ if(opt && opt.method === 'PATCH') patchs.push(JSON.parse(opt.body)); return []; };
+    try{
+      db.movies[603] = { id:603, title:'Matrix', seen:false, addedAt:1 };
+      db.avis.movie[603] = { v:-1, quand:Date.now() };
+      conseils.recues = [{ id:'r1', de:'u2', vers:'moi', type:'movie', tmdb_id:603,
+                           titre:'Matrix', cree:ISO(-1) }];
+      retoursRecosOpportunistes();
+      await new Promise(r=>setTimeout(r, 10));
+      egal(patchs.length, 0, 'un 👎 est remonté à l\'expéditeur');
+    } finally { sbFetch = vraiFetch; }
+  });
+
+  /* ---- L'écran ---- */
+
+  test('§4 — le fil vide le dit, et n\'offre pas « Tout marquer lu »', ()=>{
+    decorCentre();
+    sortiesCentreCache = { t:0, jour:'', l:[] };
+    const h = sansTmdb(()=> viewCentre());
+    vrai(/Rien pour l’instant|Rien pour l'instant/.test(h), 'le fil vide ne dit rien : '+h.slice(0,200));
+    vrai(h.indexOf('toutMarquerLuCentre') < 0, '« Tout marquer lu » proposé sur un fil vide');
+  });
+
+  test('§0.2 — la cloche porte le compte, et rien quand tout est lu', ()=>{
+    decorCentre();
+    conseils.recues = [{ id:'a', de:'u2', vers:'moi', type:'tv', tmdb_id:1, titre:'A', cree:ISO(0) }];
+    sortiesCentreCache = { t:0, jour:'', l:[] };
+    vrai(/cbadge/.test(clocheCentre()) && />1</.test(clocheCentre()), 'la pastille manque');
+    marquerLuNotif('reco:a');
+    vrai(clocheCentre().indexOf('cbadge') < 0, 'la pastille reste alors que tout est lu');
+  });
+
+  groupe('SPEC-10 — corrections de relecture (C-1 à C-4, ui.reco)');
+
+  /* LA LEÇON DE CETTE RELECTURE, ET ELLE VAUT POUR LES QUATRE CAS CI-DESSOUS :
+     les tests d'origine éprouvaient les CLASSIFICATEURS en isolement
+     (`groupeCentre` sur quatre dates, `envoyerRecos` avec un titre qu'on lui
+     passe) et jamais le RENDU ni le CHEMIN RÉEL. Un classificateur juste dans
+     une vue fausse reste une vue fausse. On éprouve donc ici ce qui sort à
+     l'écran, et ce qui part à la base depuis le geste réel. */
+
+  /* ---- C-1 : les groupes, dans l'ordre, une seule fois chacun ---- */
+
+  test('C-1 — trois groupes au plus, chacun rendu UNE fois, dans l\'ordre', ()=>{
+    decorCentre();
+    /* Le décor du constat : une sortie à venir (J+3), une entrée du jour, une
+       d'avant-hier, une vieille. Avant correction, « Cette semaine » sortait de
+       part et d'autre d'« Aujourd'hui ». */
+    conseils.recues = [
+      { id:'j0',  de:'u2', vers:'moi', type:'tv', tmdb_id:1, titre:'Aujourd hui', cree:ISO(0) },
+      { id:'j-2', de:'u2', vers:'moi', type:'tv', tmdb_id:2, titre:'Avant-hier',  cree:ISO(-2) },
+      { id:'j-20',de:'u2', vers:'moi', type:'tv', tmdb_id:3, titre:'Vieux',       cree:ISO(-20) }
+    ];
+    db.shows[9] = serie(9, [ep(1, JOUR(3))], {}, { name:'Bientot', first:JOUR(3) });
+    sortiesCentreCache = { t:0, jour:'', l:[] };
+    const h = sansTmdb(()=> viewCentre());
+    /* On relit le TEXTE rendu, apostrophes échappées comprises — c'est ce que
+       l'écran affiche, et le comparer autrement serait comparer autre chose. */
+    const boite = document.createElement('div'); boite.innerHTML = h;
+    const titres = [...boite.querySelectorAll('.sectitle')].map(e=>e.textContent);
+    egal(titres, ["Aujourd'hui", 'Cette semaine', 'Plus ancien'],
+         'les en-têtes ne sortent pas une seule fois chacun, dans l\'ordre : ' + titres.join(' | '));
+  });
+
+  test('C-1 — un groupe vide ne laisse pas d\'en-tête orphelin', ()=>{
+    decorCentre();
+    conseils.recues = [{ id:'a', de:'u2', vers:'moi', type:'tv', tmdb_id:1,
+                         titre:'A', cree:ISO(-20) }];
+    sortiesCentreCache = { t:0, jour:'', l:[] };
+    const h = sansTmdb(()=> viewCentre());
+    const boite = document.createElement('div'); boite.innerHTML = h;
+    const titres = [...boite.querySelectorAll('.sectitle')].map(e=>e.textContent);
+    egal(titres, ['Plus ancien'], 'un en-tête sans contenu est rendu');
+  });
+
+  /* ---- C-2 : le titre, depuis un aperçu ---- */
+
+  test('C-2 — depuis un aperçu, la feuille part AVEC le titre', ()=>{
+    decorCentre();
+    /* Le titre n'est PAS dans la bibliothèque : c'est tout le cas. Il est dans
+       `ui.preview.data`, sur laquelle l'aperçu est entièrement bâti. */
+    ui.preview = { id:1399, type:'tv', loading:false,
+                   data:{ id:1399, name:'Severance', poster_path:'/p.jpg' } };
+    vrai(!db.shows[1399], 'le décor est faux : le titre ne doit pas être chez soi');
+    let ouvert = '';
+    const vraiOpen = window.openSheet;
+    window.openSheet = h => { ouvert = h; };
+    try{ menuRecommander('tv', 1399); } finally { window.openSheet = vraiOpen; }
+    egal(ui.reco.titre, 'Severance',
+         'la reco partirait avec un titre vide : le destinataire verrait « Un titre »');
+    vrai(/Severance/.test(ouvert), 'la feuille ne dit pas quel titre on recommande');
+    ui.preview = null;
+  });
+
+  test('C-2 — la bibliothèque reste prioritaire, et l\'aperçu d\'un AUTRE titre ne déteint pas', ()=>{
+    decorCentre();
+    db.shows[1399] = serie(1399, [ep(1,HIER)], {}, { name:'Dark' });
+    ui.preview = { id:603, type:'movie', loading:false, data:{ id:603, title:'Matrix' } };
+    egal(titrePourReco('tv', 1399), 'Dark', 'la bibliothèque doit primer');
+    egal(titrePourReco('tv', 5000), '', 'un aperçu qui parle d\'autre chose a été lu quand même');
+    ui.preview = null;
+  });
+
+  test('C-2 — une carte arrivée sans titre se répare dès que la fiche est là', ()=>{
+    decorCentre();
+    conseils.recues = [{ id:'r1', de:'u2', vers:'moi', type:'tv', tmdb_id:1399,
+                         titre:'', cree:ISO(0) }];
+    /* Sans fiche : le repli honnête. */
+    let h = sansTmdb(()=> carteRecoCentre({ cle:'reco:r1', reco:conseils.recues[0] }));
+    vrai(/Un titre/.test(h), 'sans rien, la carte doit dire « Un titre »');
+    /* Avec la fiche en cache : le vrai nom. */
+    fichesReco['tv:1399'] = { d:{ poster:null, nom:'Severance', annee:'2022', note:8.4, saisons:2 } };
+    h = carteRecoCentre({ cle:'reco:r1', reco:conseils.recues[0] });
+    vrai(/Severance/.test(h), 'la carte reste bloquée sur « Un titre » : ' + h.slice(0,160));
+    fichesReco = {};
+  });
+
+  /* ---- C-3 : les sorties déjà vues ---- */
+
+  test('C-3 — un épisode DÉJÀ VU n\'est plus annoncé, et ne compte plus', ()=>{
+    decorCentre();
+    db.shows[1] = serie(1, [ep(1, JOUR(-3)), ep(2, JOUR(-2))], {'1x1':1}, { name:'Severance' });
+    sortiesCentreCache = { t:0, jour:'', l:[] };
+    const cles = entreesCentre().map(e=>e.cle);
+    vrai(cles.indexOf('sortie:tv:1:'+JOUR(-3)) < 0,
+         'un épisode coché vu est annoncé « est disponible »');
+    vrai(cles.indexOf('sortie:tv:1:'+JOUR(-2)) >= 0,
+         'l\'épisode non vu a disparu avec lui');
+    egal(nbNonLusCentre(), 1, 'la pastille compte encore l\'épisode déjà vu');
+  });
+
+  test('C-3 — une série jamais commencée n\'annonce que sa première', ()=>{
+    decorCentre();
+    /* Aucun épisode coché → statut « avoir ». Trois épisodes dans la fenêtre. */
+    db.shows[2] = serie(2, [ep(1, JOUR(1)), ep(2, JOUR(3)), ep(3, JOUR(5))], {},
+                        { name:'Jamais ouverte', first:JOUR(1) });
+    sortiesCentreCache = { t:0, jour:'', l:[] };
+    const cles = entreesCentre().map(e=>e.cle);
+    egal(cles.filter(c=>/^sortie:tv:2:/.test(c)), ['sortie:tv:2:'+JOUR(1)],
+         'une série non commencée déverse encore toute sa semaine');
+  });
+
+  test('C-3 — une série en pause reste muette, et une série suivie parle', ()=>{
+    decorCentre();
+    db.shows[3] = serie(3, [ep(1, JOUR(-1))], {}, { name:'En pause', pause:true });
+    db.shows[4] = serie(4, [ep(1, JOUR(-4)), ep(2, JOUR(-1))], {'1x1':1}, { name:'Suivie' });
+    sortiesCentreCache = { t:0, jour:'', l:[] };
+    const cles = entreesCentre().map(e=>e.cle);
+    vrai(!cles.some(c=>/^sortie:tv:3:/.test(c)), 'une série en pause parle');
+    vrai(cles.indexOf('sortie:tv:4:'+JOUR(-1)) >= 0, 'une série suivie s\'est tue');
+  });
+
+  /* ---- C-4 : la carte ne se replie que sur le geste ---- */
+
+  test('C-4 — un titre déjà chez soi garde « Voir la fiche » et « Plus tard »', ()=>{
+    decorCentre();
+    db.shows[1399] = serie(1399, [ep(1,HIER)], {}, { name:'Dark' });
+    conseils.recues = [{ id:'r1', de:'u2', vers:'moi', type:'tv', tmdb_id:1399,
+                         titre:'Dark', cree:ISO(0), mot:'Regarde ça' }];
+    const h = sansTmdb(()=> carteRecoCentre({ cle:'reco:r1', reco:conseils.recues[0] }));
+    vrai(/ouvrirConseil/.test(h), '« Voir la fiche » a disparu sur un titre déjà possédé');
+    vrai(/plusTardReco/.test(h), '« Plus tard » a disparu sur un titre déjà possédé');
+    vrai(/Déjà dans ta liste/.test(h), 'le témoin « déjà dans ta liste » manque');
+    vrai(!/ajouterDepuisReco/.test(h), '« + À voir » est proposé sur un titre déjà possédé');
+    vrai(/Regarde ça/.test(h), 'le mot personnel a été perdu');
+  });
+
+  test('C-4 — après « + À voir », la carte se replie pour de bon', ()=>{
+    decorCentre();
+    conseils.recues = [{ id:'r1', de:'u2', vers:'moi', type:'tv', tmdb_id:1399,
+                         titre:'Dark', cree:ISO(0), ajoute:ISO(0) }];
+    const h = sansTmdb(()=> carteRecoCentre({ cle:'reco:r1', reco:conseils.recues[0] }));
+    vrai(/Dans ta liste/.test(h) && /est notifié/.test(h), 'le repli ne dit plus que l\'expéditeur est prévenu');
+    vrai(!/plusTardReco/.test(h), 'les boutons sont restés sous la carte repliée');
+  });
+
+  /* ---- La convention `ui` ---- */
+
+  test('relecture — `ui.reco` est DÉCLARÉ dans le littéral `ui`, comme `ui.duelFam`', ()=>{
+    /* Le contrôle « état partagé » du lanceur surveille les globales, pas les
+       champs de `ui` : c'est donc ici que la convention se tient. */
+    vrai('reco' in ui, '`ui.reco` n\'est pas déclaré : app-07 écrit un champ qui n\'existe pas');
   });
 
   /* ==================== Bilan ====================

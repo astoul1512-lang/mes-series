@@ -878,6 +878,67 @@ function collisionsCss(src){
     souci += soucis.length;
   }
 
+  /* --- SPEC-10 — LES QUATRE INVARIANTS DE LA MIGRATION 016 ET DE `notifier` ---
+
+     Ces règles sont écrites dans la spec, elles tiennent à quelques lignes de
+     SQL et de TypeScript, et rien ne les surveillait :
+
+       ① la 016 n'AJOUTE que des colonnes — elle ne touche à AUCUNE policy de
+         009. Une migration qui « rafraîchit » une policy pour faire propre est
+         exactement la façon dont une porte s'ouvre sans que personne l'ait voulu ;
+       ② elle est REJOUABLE : `if not exists` sur les colonnes et l'index, et le
+         `check` du mot posé sous garde (`add constraint … if not exists`
+         n'existe pas en PostgreSQL) ;
+       ③ le mot est borné à 280 EN BASE, pas seulement à l'écran ;
+       ④ `notifie` n'est écrit QUE par la fonction `notifier`. Si l'app se met à
+         l'écrire, « un push par reco » ne tient plus — et c'est le genre de
+         ligne qu'on ajoute sans y penser, en copiant le PATCH d'à côté. */
+  {
+    const fs = require('fs'), chemin = require('path');
+    const racine = chemin.join(__dirname, '..');
+    const soucis = [];
+    const nu = t => t.replace(/--[^\n]*/g, '').toLowerCase();
+    const s16 = fs.readFileSync(
+      chemin.join(racine, 'supabase', 'migrations', '016_recos_centre.sql'), 'utf8');
+    const c16 = nu(s16);
+    // ① aucune policy touchée
+    if(/create\s+policy|drop\s+policy|alter\s+policy/.test(c16))
+      soucis.push('016 touche à une policy : les règles de 009 ne doivent pas bouger');
+    // ② rejouable
+    ['mot','ajoute','termine','aime','notifie'].forEach(col=>{
+      if(!new RegExp('add\\s+column\\s+if\\s+not\\s+exists\\s+'+col+'\\b').test(c16))
+        soucis.push('016 : la colonne `'+col+'` n\'est pas ajoutée sous `if not exists`');
+    });
+    if(/create\s+index\s+(?!if\s+not\s+exists)/.test(c16))
+      soucis.push('016 : un index créé sans `if not exists` — la migration n\'est plus rejouable');
+    if(!/from\s+pg_constraint/.test(c16))
+      soucis.push('016 : le `check` du mot n\'est pas posé sous garde de catalogue');
+    // ③ la borne
+    if(!/char_length\(mot\)\s*<=\s*280/.test(c16))
+      soucis.push('016 : le mot n\'est pas borné à 280 en base');
+    // ④ `notifie`, côté client
+    const CLIENT = FICHIERS.filter(f2 => /^app-/.test(f2));
+    CLIENT.forEach(f2=>{
+      const src = fs.readFileSync(chemin.join(racine, f2), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/[^\n]*$/gm, '');
+      if(/notifie\s*:/.test(src))
+        soucis.push(f2 + ' : l\'app écrit `notifie` — seule la fonction `notifier` en a le droit');
+    });
+    const notif = fs.readFileSync(
+      chemin.join(racine, 'supabase', 'functions', 'notifier', 'index.ts'), 'utf8');
+    if(!/\.is\('notifie', null\)[\s\S]{0,80}\.select\('id'\)/.test(notif))
+      soucis.push('notifier : la ligne n\'est pas RÉSERVÉE avant l\'envoi — deux pushs possibles');
+    if(!/demande\.quoi === 'recos'/.test(notif))
+      soucis.push('notifier : le mode `{quoi:\'recos\'}` a disparu');
+    if(/demande\.(user_id|vers|titre)\b/.test(notif))
+      soucis.push('notifier : le corps de l\'appel est lu — la fonction ne doit croire que la base');
+    console.log('SPEC-10       → ' + (soucis.length
+      ? soucis.length + ' invariant(s) rompu(s)'
+      : '016 rejouable, policies de 009 intactes, `notifie` au seul serveur'));
+    soucis.forEach(d => console.log('   ! ' + d));
+    souci += soucis.length;
+  }
+
   /* --- 9. SPEC-02, S3 — `esc` DANS UN GESTIONNAIRE D'ÉVÉNEMENT --- */
   {
     const fs = require('fs'), chemin = require('path');

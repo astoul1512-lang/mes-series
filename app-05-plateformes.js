@@ -478,7 +478,12 @@ function viewPreview(){
       ? '<button class="btn" onclick="go(\'show\',{id:'+d.id+', from:\''+(params.from||'discover')+'\'})">'+I.eye+' Ouvrir ma fiche</button>'+
         boutonPause
       : '<button class="btn" id="addbtn" onclick="addOrOpenShow('+d.id+')">'+I.plus+' Ajouter à ma liste</button>')
+      /* SPEC-10 §3 — le 💌 est sur la fiche d'un titre, suivi OU NON : on
+         recommande souvent ce qu'on vient de voir passer, pas seulement ce
+         qu'on a déjà rangé chez soi. */
+      + boutonRecoFiche('tv', d.id)
       +'</div>'+
+      bandeauRecoFiche('tv', d.id)+
       (enPause ? '<div class="wrap" style="padding:8px 16px 0"><div class="tiny muted center">'+
         'En pause : elle n\'apparaît ni dans « À rattraper » ni dans le calendrier.</div></div>' : '')+
       /* POINT 21 — une série ajoutée mais dont aucun épisode n'est coché est,
@@ -509,7 +514,9 @@ function viewPreview(){
           : m && statutFilm(m) === 'avoir'
             ? '<span class="btn ghost fi9dans" aria-disabled="true">'+I.bookmark+' Dans ma liste</span>'
             : '<button class="btn ghost" onclick="ajouterAVoir('+d.id+')">'+I.bookmark+' À voir</button>')+
+      boutonRecoFiche('movie', d.id)+
     '</div>'+
+    bandeauRecoFiche('movie', d.id)+
     blocAVoir('movie', d.id);
   }
 
@@ -713,8 +720,14 @@ function viewMovie(){
     '</div></div>';
   /* POINT 9 — la ligne pleine largeur, entre le bloc du titre et l'action. */
   html += zoneBande('movie', m.id, true);
-  html += '<div class="actions"><button class="btn block" style="'+(m.seen?'background:var(--ok);color:#08130d':'')+
-    '" onclick="toggleMovie('+m.id+')">'+I.check+(m.seen ? (dateVue(m.watchedAt) ? ' Vu le '+dateVue(m.watchedAt) : ' Vu') : ' Marquer comme vu')+'</button></div>';
+  /* SPEC-10 §3 — le 💌 à côté de l'action principale. `block` devient `btn`
+     quand il a un voisin : deux boutons pleine largeur l'un sous l'autre
+     feraient deux actions principales, ce qu'il n'y a pas. */
+  const recoF = boutonRecoFiche('movie', m.id);
+  html += '<div class="actions"><button class="'+(recoF ? 'btn' : 'btn block')+'" style="'+(m.seen?'background:var(--ok);color:#08130d':'')+
+    '" onclick="toggleMovie('+m.id+')">'+I.check+(m.seen ? (dateVue(m.watchedAt) ? ' Vu le '+dateVue(m.watchedAt) : ' Vu') : ' Marquer comme vu')+'</button>'+
+    recoF+'</div>'+
+    bandeauRecoFiche('movie', m.id);
   /* POINT 21 — un film de la bibliothèque qui n'est pas vu EST un film à voir.
      Sa fiche ne le disait pas davantage que l'aperçu, et le seul retrait passait
      par le menu ⋮. Le bloc dit l'état et porte « Retirer ». */

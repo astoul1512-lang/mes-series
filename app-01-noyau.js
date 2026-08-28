@@ -82,6 +82,13 @@ let db = { lang:'fr-FR', shows:{}, movies:{}, lastExport:null, onboarde:false,
            /* Notifications : ce qu'on veut recevoir, et pour quels titres.
               Le détail des champs et leur remise à niveau sont dans app-09. */
            notif:null,
+           /* SPEC-10 §4 — CE QUI A DÉJÀ ÉTÉ LU DANS LE CENTRE. Une clé stable
+              par entrée du fil (`reco:<id>`, `retour:<id>:<champ>`,
+              `sortie:<clé titre>:<date>`) vers la date de lecture. C'est dans
+              `db` et non en local parce que le §4 le demande explicitement :
+              même compte = même état sur tous les appareils, et c'est la
+              synchro existante qui le transporte, sans un octet de plus. */
+           notifLus:{},
            deleted:{shows:{},movies:{}}, syncedAt:null, v:1 };
 
 function idbOpen(){
@@ -135,6 +142,10 @@ async function loadDB(){
   if(!db.profil || typeof db.profil !== 'object') db.profil = profilVierge();
   if(!db.sync || !db.sync.url || !db.sync.key) db.sync = Object.assign({}, DEFAULT_SYNC);
   if(!db.deleted) db.deleted = {shows:{},movies:{}};
+  /* SPEC-10 §4 — une base d'avant ce lot n'a pas la clé : sans cette ligne, le
+     premier « marquer lu » écrirait dans `undefined`. Une base neuve la porte
+     déjà, c'est la même valeur des deux côtés. */
+  if(!db.notifLus || typeof db.notifLus !== 'object') db.notifLus = {};
   /* Bases d'avant le compte obligatoire : la bibliothèque existante appartient
      à la session en cours s'il y en a une, sinon au premier compte qui se
      connectera ici. Dans les deux cas, rien n'est perdu. */
@@ -149,7 +160,7 @@ async function loadDB(){
   }
 }
 
-let saveTimer = null, veilleTimer = null, dirty = false;
+let saveTimer = null, veilleTimer = null, retoursTimer = null, dirty = false;
 function saveDB(){
   dirty = true;
   if(typeof scheduleSync === 'function') scheduleSync();
@@ -163,6 +174,15 @@ function saveDB(){
      vitrine doit continuer d'y être surveillée. */
   clearTimeout(veilleTimer);
   veilleTimer = setTimeout(()=>{ if(typeof veilleBiblio === 'function') veilleBiblio(); }, 800);
+  /* SPEC-10 §5 — les retours opportunistes, sur le même passage obligé et avec
+     le même regroupement : cocher une saison entière ne les paye qu'une fois.
+     Minuteur séparé de `veilleTimer` pour que l'un ne masque pas l'autre en
+     cas de panne, et jamais en mode mémoire — les tests n'ont pas de réseau. */
+  clearTimeout(retoursTimer);
+  if(!memoryOnly)
+    retoursTimer = setTimeout(()=>{
+      if(typeof retoursRecosOpportunistes === 'function') retoursRecosOpportunistes();
+    }, 900);
   if(memoryOnly) return;
   clearTimeout(saveTimer);
   /* 150 ms était plus court que l'écriture elle-même (1,3 Mo sérialisés puis
@@ -875,6 +895,8 @@ function adopterCompte(uid){
     /* Les annonces « X t'a ajouté » écartées : un choix qui appartient à la
        personne, et qui monte au serveur (`payload`). */
     db.abosIgnores = {};
+    /* Ce qui a été lu appartient au compte qui l'a lu : on repart à zéro. */
+    db.notifLus = {};
     /* LES NOTIFICATIONS — RELECTURE DU 09/08, ET C'EST LE POINT QUI MANQUAIT.
        La première version n'effaçait que `titres` et `titresOff`, en tenant le
        reste du bloc pour de l'état d'appareil. C'était faux : `quand`,
@@ -1076,7 +1098,14 @@ function payload(){
               tablette est exactement le genre de détail qui apprend à ignorer
               les rappels. Fusionné à la réception — voir
               `fusionnerAbosIgnores`, jamais remplacé en bloc. */
-           abosIgnores: db.abosIgnores || {} };
+           abosIgnores: db.abosIgnores || {},
+           /* SPEC-10 §4 — ce qui a été LU dans le centre. Même raison que la
+              ligne au-dessus, et même mécanique : c'est un geste de la
+              PERSONNE, il suit le compte et pas l'appareil. Marquer lu sur le
+              téléphone puis retrouver la pastille pleine sur la tablette est
+              exactement ce qui apprend à ignorer une pastille. Fusionné à la
+              réception (`fusionnerNotifLus`), jamais remplacé en bloc. */
+           notifLus:    db.notifLus    || {} };
 }
 function mergeRemote(rem){
   if(!rem || typeof rem !== 'object') return false;
@@ -1149,6 +1178,7 @@ function mergeRemote(rem){
   if(fusionnerAvis(rem)) changed = true;
   if(fusionnerClassement(rem)) changed = true;
   if(fusionnerAbosIgnores(rem)) changed = true;
+  if(fusionnerNotifLus(rem)) changed = true;
   /* Les cloches arrivées d'un autre appareil : la liste côté serveur a été
      écrite par lui, elle ignore donc les nôtres. On la refait au complet. */
   if(typeof fusionnerNotif === 'function' && fusionnerNotif(rem.notif)){
@@ -1342,6 +1372,28 @@ function fusionnerAbosIgnores(rem){
     const t = Number(ra[id]) || 0;
     if(!t) return;                                  // entrée sans date : rien à arbitrer
     if(t > (Number(db.abosIgnores[id]) || 0)){ db.abosIgnores[id] = t; bouge = true; }
+  });
+  return bouge;
+}
+
+/* SPEC-10 §4 — CE QUI EST LU SE FUSIONNE COMME `abosIgnores`, ET POUR LA MÊME
+   RAISON : c'est une collection de gestes datés, pas un réglage. Deux appareils
+   qui lisent chacun trois entrées différentes doivent finir avec six entrées
+   lues, jamais avec les trois du dernier qui a parlé. La date la plus ancienne
+   ne gagne rien à revenir : on garde la plus récente, comme partout ailleurs.
+
+   Le NETTOYAGE (les clés de plus de 60 jours) est fait à la lecture du centre
+   (`nettoyerNotifLus`, app-07) et non ici : la fusion doit rester bête. */
+function fusionnerNotifLus(rem){
+  if(!rem || typeof rem !== 'object') return false;
+  const rn = rem.notifLus;
+  if(!rn || typeof rn !== 'object') return false;
+  if(!db.notifLus || typeof db.notifLus !== 'object') db.notifLus = {};
+  let bouge = false;
+  Object.keys(rn).forEach(cle=>{
+    const t = Number(rn[cle]) || 0;
+    if(!t) return;
+    if(t > (Number(db.notifLus[cle]) || 0)){ db.notifLus[cle] = t; bouge = true; }
   });
   return bouge;
 }
@@ -1927,8 +1979,14 @@ let conseils = { recues:[], envoyees:[], charge:false };
 async function chargerConseils(){
   if(!signedIn()) return;
   try{
+    /* SPEC-10 — cinq colonnes de plus (migration 016). `mot` nourrit la bulle
+       de la carte reçue ; `ajoute / termine / aime` nourrissent les lignes de
+       RETOUR sur ce que j'ai envoyé ; `notifie` n'est lu que pour le journal.
+       Le fil est borné à 30 jours à l'affichage — la lecture, elle, garde ses
+       100 lignes : c'est aussi ce qui alimente « Déjà conseillé ». */
     const r = await sbFetch('/rest/v1/recommandations'+
-      '?select=id,de,vers,type,tmdb_id,titre,cree,vu,ecarte&order=cree.desc&limit=100', {});
+      '?select=id,de,vers,type,tmdb_id,titre,cree,vu,ecarte,mot,ajoute,termine,aime,notifie'+
+      '&order=cree.desc&limit=100', {});
     const moi = db.auth.uid;
     /* S3 (09/08) — LE POINT D'ENTRÉE, et la même doctrine que
        `cercleDepuisBiblios` : ce qui vient d'une ligne écrite par un pair est
@@ -1958,39 +2016,112 @@ async function chargerConseils(){
   if(view === 'abos' || view === 'follow') render();
 }
 
-/* Le titre est recopié à l'envoi : sans lui, afficher la liste reçue
-   demanderait un appel TMDB par ligne avant même de savoir si ça intéresse. */
-async function recommander(type, id, titre, vers){
-  if(!signedIn()) return;
+/* SPEC-10 §3 — L'ENVOI, MULTI-DESTINATAIRES ET EN UNE SEULE INSERTION.
+
+   Le titre est recopié à l'envoi : sans lui, afficher la liste reçue
+   demanderait un appel TMDB par ligne avant même de savoir si ça intéresse.
+   Le `mot` est recopié à l'identique pour chacun — c'est le même message, on
+   ne l'écrit qu'une fois.
+
+   `on conflict do nothing` reste le filet : la contrainte `une_seule_fois` de
+   009 fait qu'une personne déjà conseillée ne reçoit rien de neuf, sans erreur
+   et sans doublon. L'écran l'annonce AVANT (« Déjà conseillé »), la base le
+   garantit APRÈS — les deux, pas l'un ou l'autre.
+
+   `ecarterConseil` a disparu avec ce lot : le §4 supprime le bouton « Non
+   merci » du centre, et plus aucun geste ne pose `ecarte`. La colonne, elle,
+   reste en base — les lignes écartées avant ce lot continuent d'être filtrées
+   à l'entrée, elles ne reviendront pas hanter le fil. */
+async function envoyerRecos(type, id, titre, vers, mot){
+  if(!signedIn()) return false;
+  const dest = (Array.isArray(vers) ? vers : [vers]).filter(x => x);
+  if(!dest.length) return false;
+  const texte = String(mot || '').slice(0, 280);
   try{
     await sbFetch('/rest/v1/recommandations', { method:'POST',
       headers:{ Prefer:'resolution=ignore-duplicates,return=minimal' },
-      body: JSON.stringify({ de: db.auth.uid, vers: vers, type: type,
-                             tmdb_id: Number(id), titre: String(titre||'').slice(0,200) }) });
+      body: JSON.stringify(dest.map(v => ({
+        de: db.auth.uid, vers: v, type: type,
+        tmdb_id: Number(id), titre: String(titre||'').slice(0,200), mot: texte }))) });
     await chargerConseils();
-    toast('Recommandation envoyée');
+    /* §6 — POUR NE PAS ATTENDRE LE CRON. La fonction ne lit RIEN de ce qu'on
+       lui envoie : elle relit les lignes non notifiées en base et décide
+       elle-même. L'appel est donc un simple « va voir maintenant », et son
+       échec ne coûte qu'un délai — le tour suivant du planificateur rattrape. */
+    reveillerNotifierRecos();
+    return true;
   }catch(e){
     console.warn('recommandation impossible', e);
     /* 403 : la personne n'est plus dans le cercle. C'est le serveur qui tranche,
        et le message doit dire la vraie raison plutôt qu'« échec ». */
     toast(e && e.status === 403 ? 'Cette personne n\'est plus dans ton cercle'
                                 : 'Envoi impossible');
+    return false;
   }
 }
 
-/* Écarter : le destinataire seul en a le droit, et la ligne reste en base pour
-   que la même recommandation ne revienne pas au prochain chargement. */
-async function ecarterConseil(idReco){
+/* Le coup de sonnette. Sans `await` du côté de l'appelant : la feuille se
+   referme et le bandeau s'affiche tout de suite, le push part quand il part. */
+async function reveillerNotifierRecos(){
   try{
-    await sbFetch('/rest/v1/recommandations?id=eq.'+encodeURIComponent(idReco),
+    await sbFetch('/functions/v1/notifier', { method:'POST',
+      body: JSON.stringify({ quoi:'recos' }) });
+  }catch(e){ console.warn('notifier (recos) injoignable', e); }
+}
+
+/* SPEC-10 §5 — LES TROIS RETOURS, TOUS BEST EFFORT.
+   « + À voir » pose `ajoute` tout de suite ; `termine` et `aime` arrivent plus
+   tard, opportunistes. Aucun des trois ne bloque quoi que ce soit à l'écran :
+   l'échec se log, comme `marquerConseilVu` le fait depuis I6. */
+async function marquerRetourReco(r, champ){
+  if(!r || r[champ]) return;
+  const quand = new Date().toISOString();
+  r[champ] = quand;                                  // optimiste : l'écran suit
+  try{
+    const corps = {}; corps[champ] = quand;
+    await sbFetch('/rest/v1/recommandations?id=eq.'+encodeURIComponent(r.id),
       { method:'PATCH', headers:{ Prefer:'return=minimal' },
-        body: JSON.stringify({ ecarte: new Date().toISOString() }) });
-    conseils.recues = conseils.recues.filter(x=> x.id !== idReco);
-    render();
-  }catch(e){
-    console.warn('impossible d\'écarter la recommandation', e);
-    toast('Échec');
-  }
+        body: JSON.stringify(corps) });
+  }catch(e){ console.warn('retour « '+champ+' » non enregistré', e); }
+}
+
+/* SPEC-10 §5 — « AU MOMENT DU GESTE, SILENCIEUSEMENT ».
+
+   Il n'y a pas d'écran neuf pour ça, et pas non plus dix crochets posés dans
+   les dix endroits qui marquent un titre terminé ou qui posent un pouce : ce
+   serait dix occasions d'en oublier un, et dix fichiers touchés hors périmètre.
+   UN SEUL point d'observation, ici, sur le passage obligé de toute écriture
+   (`saveDB`), regroupé par le même délai que la veille de la bibliothèque.
+
+   Le balayage est minuscule et borné : `conseils.recues` porte au plus cent
+   lignes, et on ne regarde que celles dont le retour n'est pas déjà parti.
+   Quand il n'y a rien à faire — le cas de presque tous les enregistrements —
+   la boucle sort au premier test. */
+function retoursRecosOpportunistes(){
+  const l = (conseils && conseils.recues) || [];
+  if(!l.length) return;
+  l.forEach(r=>{
+    if(!r || (r.termine && r.aime)) return;
+    const tv = r.type === 'tv';
+    const o = tv ? db.shows[r.tmdb_id] : db.movies[r.tmdb_id];
+    if(!o) return;
+    /* TERMINÉ : un film vu est terminé ; une série l'est quand son statut le
+       dit — c'est la même définition que la bibliothèque, on ne s'en invente
+       pas une seconde. */
+    if(!r.termine){
+      const fini = tv ? (typeof statutSerie === 'function' && statutSerie(o) === 'fini')
+                      : !!o.seen;
+      if(fini) marquerRetourReco(r, 'termine');
+    }
+    /* AIMÉ : le 👍, et lui seul. Un 👎 ne se renvoie pas à l'expéditeur — la
+       spec ne le demande pas, et ce serait une nouvelle qu'on n'a pas envie de
+       recevoir. */
+    if(!r.aime){
+      const a = (db.avis && db.avis[tv ? 'tv' : 'movie']) || {};
+      const v = a[r.tmdb_id];
+      if(v && v.v > 0) marquerRetourReco(r, 'aime');
+    }
+  });
 }
 
 /* Récupère la bibliothèque d'une personne suivie — lecture seule, gardée en mémoire */

@@ -2876,3 +2876,80 @@ body.rphnette .rphrase{background:#15171e}
     body .preset:active,body .fopt:active,body .rtb:active,
     body .poster:active,body .pcard:active .wrapimg{transform:none}
   }
+
+/* ===========================================================================
+   SPEC-10 — LE CENTRE DE NOTIFICATIONS 🔔
+
+   Rien de neuf en fond ni en bordure : le fil reprend `--surface` et `--line`
+   comme les cartes du reste de l'app. Ce qui est neuf, c'est le NON-LU, et il
+   se dit deux fois — un liséré d'accent et un point — parce qu'un seul des
+   deux se perd (le liséré sur un écran très lumineux, le point pour qui
+   distingue mal les couleurs).
+   Maquettes : `25-centre-notifs-complet.html` et `26-cloche-partout.html`.
+=========================================================================== */
+
+  /* La pastille de la cloche. Elle déborde du bouton — d'où `overflow:visible`
+     sur un `.iconbtn` qui n'en avait pas besoin jusqu'ici. */
+  .iconbtn.clochec{position:relative;overflow:visible}
+  .cbadge{position:absolute;top:-3px;right:-3px;background:var(--rose,#ff7a90);color:#2a0f14;
+    font-size:9.5px;font-weight:800;min-width:16px;height:16px;border-radius:8px;
+    display:grid;place-items:center;padding:0 4px;line-height:1;pointer-events:none}
+
+  /* Une entrée simple : un retour, une sortie. C'est un bouton pleine largeur —
+     toucher la ligne est le geste, il ne doit pas y avoir de zone morte. */
+  .notifl{display:flex;gap:11px;align-items:flex-start;width:100%;text-align:left;
+    background:var(--surface);border:1px solid var(--line);border-radius:13px;
+    padding:11px 12px;margin-bottom:9px;position:relative;color:var(--text);font-family:inherit}
+  .notifl.nonlu{border-color:#3d8bff55}
+  .notifl.nonlu::after{content:'';position:absolute;top:14px;right:12px;width:8px;height:8px;
+    border-radius:50%;background:var(--accent)}
+  .notifi{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;
+    font-size:15px;flex:none;background:var(--surface2);border:1px solid var(--line)}
+  .notift{flex:1;min-width:0;padding-right:14px}
+  .notift b{font-size:13px;display:block;line-height:1.35;font-weight:700}
+  .notift span{font-size:11.5px;color:var(--muted);display:block;margin-top:1px}
+
+  /* La carte reco : plus haute, plus dessinée qu'une ligne — c'est la seule
+     entrée du fil qui demande une réponse. */
+  .recoc{background:var(--surface);border:1px solid var(--line);border-radius:16px;
+    padding:14px;margin-bottom:9px}
+  .recoc.nonlu{border-color:#ff7a9055}
+  .recoct{display:flex;align-items:center;gap:10px}
+  .recoct b{font-size:13.5px;display:block;line-height:1.3}
+  .recoct span{font-size:11.5px;color:var(--muted)}
+  .recocc{display:flex;gap:13px;margin-top:12px}
+  .recocp{width:84px;height:126px;border-radius:10px;flex:none;object-fit:cover}
+  .recocx{flex:1;min-width:0}
+  .recocn{font-size:16px;font-weight:800;letter-spacing:-.3px}
+  .recocm{font-size:12px;color:var(--muted);margin-top:3px}
+  /* « Tout marquer lu » : un texte d'accent dans l'en-tête, pas un bouton. */
+  .toutlu{background:none;border:0;font-family:inherit;font-size:12.5px;font-weight:700;
+    color:var(--accent);padding:6px 2px;flex:none}
+  /* La bulle du mot personnel : coin haut-gauche coupé, comme une bulle de
+     conversation — c'est quelqu'un qui parle, pas l'app. */
+  .recocb{margin-top:9px;background:var(--surface2);border:1px solid var(--line);
+    border-radius:11px;border-top-left-radius:3px;padding:9px 11px;font-size:12.5px;
+    line-height:1.45}
+  .recocb2{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .recook{background:rgba(62,207,142,.08);border:1px solid rgba(62,207,142,.27);
+    border-radius:12px;padding:11px 13px;font-size:13px;color:#7fe0b4;margin-top:12px}
+  /* Le bandeau d'état sur la fiche : discret, il informe, il n'agit pas. */
+  .recoband{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+    padding:9px 12px;font-size:12.5px;color:var(--muted)}
+
+  /* La feuille d'envoi : les amis en tuiles, la coche en évidence. */
+  .amis{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+  .ami{flex:1 1 88px;min-width:88px;text-align:center;padding:12px 6px;border-radius:14px;
+    background:var(--surface2);border:1px solid var(--line);position:relative;
+    color:var(--text);font-family:inherit}
+  .ami.on{border-color:var(--accent);background:var(--accent-dim)}
+  .ami.deja{opacity:.5}
+  .ami b{font-size:12.5px;display:block;margin-top:7px}
+  .ami em{display:block;font-style:normal;font-size:10.5px;color:var(--muted);margin-top:2px}
+  .amicoche{position:absolute;top:8px;right:8px;width:20px;height:20px;border-radius:50%;
+    background:var(--accent);color:#fff;display:grid;place-items:center;font-size:11px;
+    font-weight:800}
+  .recomot{width:100%;margin-top:13px;background:var(--surface2);border:1px solid var(--line);
+    border-radius:12px;padding:11px 13px;font-size:13.5px;font-family:inherit;color:var(--text);
+    resize:none;outline:none}
+  .recomot:focus{border-color:var(--accent)}

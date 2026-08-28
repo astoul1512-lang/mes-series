@@ -47,17 +47,26 @@ function viewShow(){
        Il ne s'affiche que sur une série commencée : mettre en pause quelque
        chose qu'on n'a jamais ouvert ne veut rien dire, et c'est exactement ce
        qu'Adrien a pu faire par erreur sur une série à 0/26. */
+    /* SPEC-10 §3 — le 💌 rejoint la rangée d'actions : même gabarit que les
+       actions secondaires (`carre`), à côté de l'action principale. Il ne
+       s'affiche que si le cercle n'est pas vide, `boutonRecoFiche` s'en
+       charge — d'où la rangée à deux boutons même sans le bouton pause. */
+    const reco = boutonRecoFiche('tv', s.id);
+    const pause = peutSeMettreEnPause(s)
+      ? '<button class="btn ghost carre" onclick="basculerPause('+s.id+')" '+
+          'title="Mettre en pause" aria-label="Mettre en pause">'+I.pause+'</button>'
+      : '';
     html += '<div class="wrap" style="padding-bottom:0">'+
-      (peutSeMettreEnPause(s)
+      ((pause || reco)
         ? '<div class="actions" style="padding:0">'+
             '<button class="btn" onclick="quickWatch('+s.id+')">'+
               I.check+' Marquer '+codeEp(nx.s,nx.e)+' comme vu</button>'+
-            '<button class="btn ghost carre" onclick="basculerPause('+s.id+')" '+
-              'title="Mettre en pause" aria-label="Mettre en pause">'+I.pause+'</button>'+
+            pause + reco +
           '</div>'
         : '<button class="btn block" onclick="quickWatch('+s.id+')">'+
             I.check+' Marquer '+codeEp(nx.s,nx.e)+' comme vu</button>')+
-      '<div class="tiny muted center" style="margin-top:8px">'+esc(nx.n)+'</div></div>';
+      '<div class="tiny muted center" style="margin-top:8px">'+esc(nx.n)+'</div></div>'+
+      bandeauRecoFiche('tv', s.id);
   } else if(s.next){
     html += '<div class="wrap" style="padding-bottom:0"><div class="card" style="padding:14px;text-align:center">'+
       '<div class="small muted">Prochain épisode</div>'+

@@ -758,6 +758,12 @@ const ROUTES = {
   gouts:      { seg:'gouts',         partageable:true  },
   plates:     { seg:'plateformes',   partageable:true  },
   notifs:     { seg:'notifications', partageable:true  },
+  /* SPEC-10 — LE CENTRE DE NOTIFICATIONS, ET IL N'EST PAS `notifs`.
+     `notifs` est, depuis app-09, l'écran des RÉGLAGES de notification (les
+     cloches par titre, les interrupteurs de push) ; il garde son nom et son
+     adresse. Le fil du §4 en est un autre, il en prend un autre. La spec écrit
+     `go('notifs')` : c'est signalé à Adrien, la collision est réelle. */
+  centre:     { seg:'centre',        partageable:true  },
   clochettes: { seg:'cloches',       partageable:true  },
   rangee:     { seg:'rangee',        partageable:false },
   biblio:     { seg:'bibliotheque',  partageable:false },
@@ -874,6 +880,15 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
            /* « Quoi » démarre sur tout le catalogue : les sorties des 90 derniers
               jours sont un sous-ensemble étroit, mauvais point de départ pour
               découvrir quelque chose. */
+           /* SPEC-10 §3 — LA FEUILLE D'ENVOI EN COURS D'ÉCRITURE : le titre visé,
+              les amis cochés, le mot. Elle meurt avec la feuille, elle n'entre
+              jamais dans `db`.
+              CORRECTION DE RELECTURE (28/08/2026) — elle était écrite par
+              app-07 sans être DÉCLARÉE ici. La relecture de RETOUR-02 avait
+              corrigé très exactement ce point pour `ui.duelFam` ; la convention
+              vaut aussi pour celle-ci, et le contrôle « état partagé » ne
+              l'attrape pas (il surveille les globales, pas les champs de `ui`). */
+           reco:null,
            disc:{ type:'tout', genres:[],
                   /* SPEC-04 §0.2 — L'HUMEUR DU MOMENT, ou `null` au repos.
                      Une seule à la fois, et un second appui sur la même la
@@ -903,7 +918,7 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
               versé dans `disc` à sa fermeture, remis à null ensuite. */
            discBrouillon:null };
 
-const DEPTH = { bienvenue:0, motdepasse:0, avatar:0, discover:0, search:0, sorties:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, rangee:1, acteur:2, account:2, biblio:2, notifs:2, gouts:2, plates:2, clochettes:3 };
+const DEPTH = { bienvenue:0, motdepasse:0, avatar:0, discover:0, search:0, sorties:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, rangee:1, acteur:2, account:2, biblio:2, notifs:2, gouts:2, plates:2, clochettes:3, centre:1 };
 let navDir = 'none';
 /* Position de défilement mémorisée pour les écrans qui sont des listes.
    Quitter une liste puis y revenir doit rendre la page là où on l'avait laissée ;
@@ -911,7 +926,10 @@ let navDir = 'none';
 /* La filmographie d'un acteur en fait partie : elle compte parfois deux cents
    titres, et revenir d'une fiche pour retomber tout en haut est le reproche
    exact d'Adrien. */
-const LISTES = { discover:1, search:1, follow:1, profile:1, abos:1, biblio:1, acteur:1, rangee:1 };
+const LISTES = { discover:1, search:1, follow:1, profile:1, abos:1, biblio:1, acteur:1, rangee:1,
+                 /* SPEC-10 — le fil est une liste : ouvrir une fiche depuis une
+                    entrée puis revenir doit rendre le fil là où on l'avait laissé. */
+                 centre:1 };
 /* C2 — REVUE DU 07/08 : les fiches aussi retiennent leur position, mais avec
    une règle plus fine que les listes : la position n'est rendue QU'AU RETOUR
    (flèche, balayage, bouton du téléphone). Une fiche OUVERTE — depuis une
@@ -1260,6 +1278,10 @@ function currentBack(){
   if(view==='rangee') return params.from || 'discover';
   if(view==='biblio') return params.from || 'abos';
   if(view==='notifs') return params.from || 'settings';
+  /* SPEC-10 §7 — le fil s'ouvre depuis TROIS onglets : son retour se lit sur
+     `from`, jamais codé en dur. Le défaut n'est là que pour le cas où l'écran
+     est atteint par une adresse (`#/centre`), où il n'y a pas de « d'où ». */
+  if(view==='centre') return params.from || 'discover';
   if(view==='clochettes') return params.from || 'notifs';
   /* D3 — la branche `from === 'compte'` a disparu avec l'inscription en trois
      écrans : ces deux-là ne s'ouvrent plus que depuis les Réglages, la feuille
