@@ -50,6 +50,7 @@ function corpsDeVueBrut(){
   if(view==='rangee')   return viewRangee();
   if(view==='motdepasse') return viewMotDePasse();
   if(view==='notifs')   return viewNotifications();
+  if(view==='centre')   return viewCentre();
   if(view==='clochettes') return viewClochettes();
   if(view==='avatar')   return viewAvatar();
   if(view==='bienvenue') return viewBienvenue();
@@ -486,7 +487,13 @@ function viewFollow(){
   cal.sort((a,b)=>a.d.localeCompare(b.d));
   const agenda = cal.slice(0,80);
 
-  let html = header('En cours', {right:'<button class="iconbtn" onclick="go(\'discover\')">'+I.plus+'</button>'});
+  /* SPEC-10 §0.3 — LE ＋ EST SUPPRIMÉ, ET SEULEMENT LUI. Vérifié avant de le
+     retirer : il ne faisait que `go('discover')`, c'est-à-dire exactement
+     l'onglet Découvrir déjà à un pouce en bas de l'écran. Un doublon exact, et
+     le coin en haut à droite valait mieux. La cloche le prend, seule.
+     L'écran vide, lui, garde son bouton « Chercher une série » : celui-là sert
+     vraiment, il est le seul chemin depuis un écran sans rien. */
+  let html = header('En cours', {right: clocheCentre()});
   html += needKeyBanner();
 
   /* L'écran vide n'a de sens que si rien n'est suivi du tout : quelqu'un qui
@@ -1332,7 +1339,10 @@ function viewProfile(){
   let html = header('Mon profil', {
     /* Un engrenage plutôt que trois points : il mène à un écran, pas à un menu
        flottant, et son sens est immédiat. */
-    right:'<button class="iconbtn" onclick="go(\'settings\',{from:\'profile\'})" '+
+    /* SPEC-10 §0.4 — la cloche se glisse À GAUCHE du ⚙, sans rien pousser
+       d'autre : l'engrenage reste en bout de ligne, là où la main le cherche. */
+    right: clocheCentre()+
+      '<button class="iconbtn" onclick="go(\'settings\',{from:\'profile\'})" '+
       'aria-label="Réglages">'+I.cog+'</button>'
   });
 

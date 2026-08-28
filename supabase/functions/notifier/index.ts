@@ -296,6 +296,73 @@ async function envoyer(appareils: any[], corps: Annonce) {
   return unSucces;
 }
 
+// --- SPEC-10 : le push d'une reco -------------------------------------------
+// UNE règle, et tout en découle : LA FONCTION NE FAIT CONFIANCE QU'À LA BASE.
+// Le corps de l'appel ne dit QUE « va voir les recos » (`{quoi:'recos'}`) — il
+// ne dit jamais qui notifier, ni de quoi. On relit les lignes non notifiées et
+// on décide ici. Sans cette règle, un POST bien tourné arroserait n'importe qui
+// avec n'importe quel texte.
+//
+// « UN PUSH PAR RECO, JAMAIS DEUX » — et c'est la BASE qui le tient, pas nous.
+// On RÉSERVE la ligne avant d'envoyer : un `update … set notifie = now() where
+// id = … and notifie is null` qui rend la ligne s'il a mordu, rien s'il est
+// arrivé second. Deux tours qui se croisent (l'appel direct de l'expéditeur et
+// le cron, c'est exactement le cas nominal) ne peuvent donc pas envoyer deux
+// fois. Réserver AVANT plutôt qu'après veut dire qu'un push perdu en route ne
+// sera pas rattrapé : c'est le bon arbitrage, parce qu'une notification
+// dupliquée est ce qui fait couper les notifications d'une app pour de bon,
+// alors qu'une notification manquée laisse la reco visible dans le centre —
+// le chemin qui marche toujours.
+//
+// Sept jours : au-delà, la reco est encore dans le centre mais l'annoncer n'est
+// plus une nouvelle. La ligne est quand même marquée `notifie` pour ne pas être
+// relue à chaque tour jusqu'à la fin des temps.
+const RECOS_PAR_TOUR = 200;
+
+async function balayerRecos(bilan: { annonces: number; envois: number; erreurs: string[] }) {
+  const { data: lignes, error } = await sb.from('recommandations')
+    .select('id, de, vers, titre, type, tmdb_id, cree')
+    .is('notifie', null)
+    .order('cree', { ascending: false })
+    .limit(RECOS_PAR_TOUR);
+  if (error) { bilan.erreurs.push('recos illisibles → ' + error.message); return; }
+  if (!lignes?.length) return;
+
+  // Le pseudo de l'expéditeur : « Adrien te recommande Dark » ne veut rien dire
+  // sans lui. Une seule lecture pour tout le lot, et un repli honnête sur
+  // « Quelqu'un » si le profil manque — on n'invente pas de nom.
+  const expediteurs = [...new Set(lignes.map((l: any) => l.de))];
+  const noms = new Map<string, string>();
+  const { data: profils } = await sb.from('profils')
+    .select('user_id, pseudo').in('user_id', expediteurs);
+  for (const p of profils || []) if (p.pseudo) noms.set(p.user_id, p.pseudo);
+
+  for (const l of lignes as any[]) {
+    // 1. On RÉSERVE. `select('id')` rend la ligne seulement si le `where` a
+    //    mordu, c'est-à-dire si personne ne l'avait déjà réservée.
+    const { data: prise, error: e2 } = await sb.from('recommandations')
+      .update({ notifie: new Date().toISOString() })
+      .eq('id', l.id).is('notifie', null).select('id');
+    if (e2) { bilan.erreurs.push('reco ' + l.id + ' → ' + e2.message); continue; }
+    if (!prise?.length) continue;                       // quelqu'un d'autre l'a prise
+    // 2. Trop vieille : réservée (donc plus relue), mais pas annoncée.
+    if (String(l.cree).slice(0, 10) < ilYa(7)) continue;
+    const { data: app } = await sb.from('push_appareils')
+      .select('id, endpoint, p256dh, auth, echecs').eq('user_id', l.vers);
+    if (!app?.length) continue;         // pas d'appareil : le centre suffit
+    bilan.annonces++;
+    // Texte seul : sur iOS l'image n'est pas rendue (app-09), le texte est le
+    // seul levier. Le titre porte donc tout ce qui compte.
+    const ok = await envoyer(app, {
+      cle: `reco:${l.id}`,
+      titre: `${noms.get(l.de) || 'Quelqu\'un'} te recommande ${l.titre || 'un titre'}`,
+      corps: 'Ouvre tes notifications pour la voir',
+      url: `${APP}#/centre`
+    });
+    if (ok) bilan.envois++;
+  }
+}
+
 // Sans ces en-têtes, le navigateur refuse la réponse : la fonction est appelée
 // par le planificateur, mais on veut pouvoir la déclencher à la main pour un
 // essai depuis l'app.
@@ -340,6 +407,29 @@ Deno.serve(async (req) => {
       url: APP
     });
     return new Response(JSON.stringify({ essai: true, appareils: app.length, envoye: ok }),
+      { headers: { ...CORS, 'Content-Type': 'application/json' } });
+  }
+
+  // --- Mode « recos » (SPEC-10) ---------------------------------------------
+  // Appelé par l'app de l'EXPÉDITEUR juste après un envoi, pour ne pas attendre
+  // le prochain tour du planificateur. Il s'authentifie comme le mode essai —
+  // par le jeton d'une session ouverte — et NON par le secret du planificateur,
+  // qu'aucun client ne doit connaître.
+  //
+  // Ce que quelqu'un peut faire en abusant de cette porte : provoquer plus tôt
+  // des pushs qui seraient partis de toute façon au tour suivant. Rien de plus :
+  // le contenu vient de la base, chaque ligne n'est réservée qu'une fois, et
+  // rien dans le corps de la requête n'est lu.
+  if (demande.quoi === 'recos') {
+    const entete = req.headers.get('Authorization') || '';
+    const { data: qui, error } = await sb.auth.getUser(entete.replace(/^Bearer /i, ''));
+    if (error || !qui?.user) {
+      return new Response(JSON.stringify({ erreur: 'recos reserve a une session ouverte' }),
+        { status: 401, headers: { ...CORS, 'Content-Type': 'application/json' } });
+    }
+    const b = { annonces: 0, envois: 0, erreurs: [] as string[] };
+    await balayerRecos(b);
+    return new Response(JSON.stringify({ recos: true, ...b }),
       { headers: { ...CORS, 'Content-Type': 'application/json' } });
   }
 
@@ -447,6 +537,14 @@ Deno.serve(async (req) => {
                   tour: tour,
                   depuis: String(demande.apres || ''), jusqu: String(demande.apres || ''),
                   complet: true, suite: null as string | null };
+
+  // SPEC-10 — LE RATTRAPAGE. L'appel direct de l'expéditeur fait l'essentiel du
+  // travail ; ce passage-ci ramasse ce qu'il a raté (application fermée avant
+  // la fin de l'appel, réseau coupé, 401 sur un jeton expiré). Au PREMIER tour
+  // seulement : les ré-invocations paginent les CLOCHES, pas les recos, et
+  // repasser dessus à chaque tour n'ajouterait rien — les lignes sont déjà
+  // réservées.
+  if (tour === 1) await balayerRecos(bilan);
 
   // Une cloche d'une personne, du bout en bout. Elle ne rend rien : elle
   // renseigne le bilan, comme la boucle qu'elle remplace.
