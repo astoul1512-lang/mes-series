@@ -81,9 +81,10 @@ function viewAbos(){
      l'écran d'accueil. Ce bloc est le chemin qui marche toujours. */
   html += blocAnnonceAbo();
 
-  /* I6 — en tête, avant les listes de personnes : c'est la seule chose de cet
-     écran qui demande une réponse. */
-  html += blocConseilsRecus();
+  /* SPEC-10 §1 — « ON TE CONSEILLE » A QUITTÉ CET ÉCRAN. Le bloc était marqué
+     provisoire dans son propre commentaire dès I6 : les recos reçues vivent
+     désormais dans le centre de notifications, avec les sorties et les retours.
+     « Mes abonnements » redevient ce qu'il est, l'écran des personnes. */
 
   html += '<div class="sectitle">Mes abonnements'+
     (partage.suivis.length?'<span class="cnt">'+partage.suivis.length+'</span>':'')+'</div>';
@@ -281,74 +282,22 @@ function nomDuCercle(id){
   return (p && p.pseudo) || 'Quelqu\'un';
 }
 
-function menuRecommander(type, id){
-  /* Nom local distinct du cache global `gens` d'app-05 (les fiches de
-     personnes) : deux choses différentes portaient le même nom. Constat A4-2. */
-  const duCercle = cercle();
-  const titre = type === 'tv' ? (db.shows[id] && db.shows[id].name)
-                              : (db.movies[id] && db.movies[id].title);
-  if(!duCercle.length) return toast('Personne dans ton cercle pour l\'instant');
-  /* Déjà conseillé à cette personne : on le dit au lieu de laisser renvoyer
-     dans le vide — la contrainte d'unicité côté base ignore le doublon, donc
-     sans cette mention le second envoi n'aurait aucun effet visible. */
-  const dejaFait = p => (conseils.envoyees || []).some(r =>
-    String(r.vers) === String(p.id) && r.type === type && String(r.tmdb_id) === String(id));
-  openSheet('<h3>Recommander</h3>'+
-    '<p class="small muted" style="margin:0 0 6px">'+esc(titre || 'Ce titre')+'</p>'+
-    duCercle.map(p =>
-      '<button class="opt" style="display:flex;align-items:center;gap:12px"'+
-        (dejaFait(p) ? ' disabled' : '')+
-        /* S3 (09/08) — `escJs`, pas `esc` : la règle d'app-02:23 vaut pour
-           TOUTE chaîne glissée dans un `onclick`, sans exception au prétexte
-           que la valeur « ne peut être que tv ou movie ». Ici elle vient d'un
-           paramètre d'appel ; à trois lignes de là (`ouvrirConseil`) la même
-           valeur vient d'une ligne écrite par un autre utilisateur. */
-        ' onclick="closeSheet();recommander(\''+escJs(type)+'\','+Number(id)+
-          ',\''+escJs(titre||'')+'\',\''+escJs(p.id)+'\')">'+
-        avatarDe(p, 'moyen')+
-        '<span>'+esc(p.pseudo)+
-          (dejaFait(p) ? '<em style="display:block;font-style:normal;font-size:12px;color:var(--muted)">Déjà conseillé</em>' : '')+
-        '</span>'+
-      '</button>').join('')+
-    '<button class="opt annuler" onclick="closeSheet()">Annuler</button>');
-}
-
-/* Ce qu'on m'a conseillé. Une seule action franche — aller voir — et une
-   sortie — écarter. Pas de bouton « Ajouter » direct : ajouter sans avoir vu
-   de quoi il s'agit, c'est ce que personne ne fait. */
-function blocConseilsRecus(){
-  const l = (conseils.recues || []);
-  if(!l.length) return '';
-  return '<div class="sectitle">On te conseille<span class="cnt">'+l.length+'</span></div>'+
-    '<div class="list">'+l.map(r=>{
-      const idOk = estIdTmdb(r.tmdb_id) && (r.type === 'tv' || r.type === 'movie');
-      return '<div class="srow" style="align-items:center">'+
-        '<div class="sinfo">'+
-          '<div class="sname">'+esc(r.titre || 'Un titre')+'</div>'+
-          '<div class="tiny muted">'+esc(nomDuCercle(r.de))+' te le conseille'+
-            (dejaChezMoi(r.type === 'tv' ? 'tv' : 'movie', r.tmdb_id) ? ' · déjà chez toi' : '')+'</div>'+
-          '<div class="actions" style="padding:8px 0 0">'+
-            /* S3 (09/08) — `r.type` vient de la table `recommandations`,
-               c'est-à-dire d'une ligne écrite par UN AUTRE UTILISATEUR. Il
-               n'était retenu que par la contrainte SQL `check (type in
-               ('tv','movie'))` de 009 — une défense située dans une autre
-               couche, qu'un jour de migration ratée peut laisser tomber sans
-               que ce fichier le sache. `escJs` ici, filtrage à l'entrée dans
-               app-01 : les deux, pas l'un ou l'autre. */
-            (idOk ? '<button class="btn mini" onclick="ouvrirConseil(\''+escJs(r.id)+'\','+
-                      Number(r.tmdb_id)+',\''+escJs(r.type)+'\')">Voir</button>' : '')+
-            '<button class="btn mini ghost" onclick="ecarterConseil(\''+escJs(r.id)+'\')">Non merci</button>'+
-          '</div>'+
-        '</div>'+
-      '</div>';
-    }).join('')+'</div>';
-}
+/* SPEC-10 §3 — L'ANCIENNE FEUILLE « Recommander » A ÉTÉ REMPLACÉE, PAS
+   DOUBLÉE. Elle envoyait à UNE personne, sans mot, au premier appui : le §3
+   demande une multi-sélection et un mot facultatif, et surtout « un seul code
+   d'envoi » partagé avec le bouton 💌 de la fiche. La nouvelle feuille garde le
+   nom `menuRecommander` — c'est celui que le menu ⋯ d'app-06 appelle déjà — et
+   vit plus bas, avec le reste de SPEC-10. */
 
 /* Ouvrir vaut « vu » : la marque part sans qu'on attende sa réponse, elle ne
    décide de rien à l'écran. */
-function ouvrirConseil(idReco, id, type){
+/* SPEC-10 — `depuis` : la carte s'ouvre maintenant depuis le centre, et le
+   retour doit y revenir. `'abos'` reste le défaut pour tout appel resté à
+   l'ancienne forme — aucun n'existe, mais un paramètre optionnel se lit mieux
+   qu'une valeur obligatoire ajoutée après coup. */
+function ouvrirConseil(idReco, id, type, depuis){
   marquerConseilVu(idReco);
-  ouvrirTitre(id, type, 'abos');
+  ouvrirTitre(id, type, depuis || 'abos');
 }
 async function marquerConseilVu(idReco){
   const r = (conseils.recues || []).find(x => x.id === idReco);
@@ -1428,4 +1377,466 @@ async function doSignUp(){
     else toast(messageAuth(e));                      // B10 — plus de texte brut
   }
   finally{ rendre('auth'); verrouAuth(false); }
+}
+
+/* ===========================================================================
+   SPEC-10 — LES RECOS ENTRE AMIS ET LE CENTRE DE NOTIFICATIONS 🔔
+
+   Décision d'Adrien (25/08) : les recos ne vont NI dans « Mon profil » NI dans
+   « Mes abonnements ». Elles vivent dans un centre qui compile TOUT ce qui
+   arrive — les recos reçues, les retours sur mes recos, les sorties — derrière
+   une cloche posée sur trois onglets et pas un de plus.
+
+   L'ÉCRAN S'APPELLE `centre` ET NON `notifs`, ET CE N'EST PAS UN CAPRICE.
+   La spec écrit `go('notifs')` ; or `notifs` EXISTE DÉJÀ depuis app-09 — c'est
+   l'écran « Notifications » des Réglages, celui des cloches par titre et des
+   interrupteurs de push. Lui prendre son nom aurait remplacé un écran par un
+   autre en silence, cassé `currentBack` (`clochettes` revient sur `notifs`) et
+   l'adresse partageable `#/notifications`. Les deux écrans coexistent donc,
+   sous deux noms : `notifs` = les RÉGLAGES de notification, `centre` = le fil.
+   C'est signalé à Adrien dans le LIVRAISON.md.
+
+   Ce fichier porte tout ce qui est NEUF côté écran ; ce qui touche à la base
+   (`envoyerRecos`, `marquerRetourReco`, `notifLus`) vit dans app-01, avec le
+   reste de `conseils` — un seul fichier écrit dans cet objet.
+--------------------------------------------------------------------------- */
+
+/* ---------- Lu / non-lu ----------
+
+   Une clé stable par entrée, et elle ne doit JAMAIS dépendre de l'ordre du fil
+   ni de la date du jour : `reco:<id>`, `retour:<id>:<champ>`,
+   `sortie:<type>:<tmdbId>:<date>`. Les lues vivent dans `db.notifLus` et
+   voyagent par la synchro existante — même compte, même état partout. */
+function estLuNotif(cle){
+  return !!((db.notifLus || {})[cle]);
+}
+function marquerLuNotif(cle){
+  if(!cle || estLuNotif(cle)) return false;
+  if(!db.notifLus || typeof db.notifLus !== 'object') db.notifLus = {};
+  db.notifLus[cle] = Date.now();
+  saveDB();
+  return true;
+}
+/* Un ménage borné : au-delà de soixante jours, une clé lue ne peut plus
+   correspondre à rien (le fil s'arrête à trente). Sans lui, `notifLus`
+   grossirait indéfiniment et monterait au serveur à chaque synchro. */
+const NOTIF_OUBLI = 60 * 86400000;
+function nettoyerNotifLus(){
+  const n = db.notifLus;
+  if(!n || typeof n !== 'object') return;
+  const t = Date.now();
+  let bouge = false;
+  Object.keys(n).forEach(cle=>{
+    if(t - (Number(n[cle]) || 0) > NOTIF_OUBLI){ delete n[cle]; bouge = true; }
+  });
+  if(bouge) saveDB();
+}
+
+/* ---------- Le fil ----------
+
+   Trois familles d'entrées, une seule liste, triée du plus récent au plus
+   ancien et bornée à trente jours. Chaque entrée porte : sa clé, sa date, sa
+   famille, et de quoi se dessiner. */
+const CENTRE_JOURS = 30;          // au-delà, le fil ne montre plus rien
+const CENTRE_FENETRE_SORTIES = 7; // les sorties : 7 jours en arrière, 7 en avant
+/* En HEURE LOCALE, comme tout ce qui se compare à une date TMDB dans l'app
+   (`isoLocal`, app-02) : `isoIlYA` d'app-04 travaille en UTC, et entre minuit
+   et 2 h à Paris il rendrait la veille — une sortie du jour disparaîtrait du
+   fil une nuit sur deux. Le pendant vers l'AVANT n'existait nulle part : « la
+   semaine à venir » du §4 est la seule chose de l'app qui regarde devant elle
+   en jours. Une fonction pour les deux sens, signe compris. */
+function isoJoursCentre(n){
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  return isoLocal(d);
+}
+
+/* Le scan des épisodes coûte cher (la bibliothèque d'Adrien en porte plusieurs
+   milliers) et la pastille se recalcule au rendu de CHAQUE écran qui en porte
+   une. On garde donc le résultat une minute — au-delà, une sortie du jour
+   arriverait de toute façon avec le prochain chargement. C'est le même
+   arbitrage que le regroupement de `saveDB`, pour la même raison. */
+let sortiesCentreCache = { t:0, jour:'', l:[] };
+function sortiesCentre(){
+  const j = todayISO();
+  if(sortiesCentreCache.jour === j && Date.now() - sortiesCentreCache.t < 60000)
+    return sortiesCentreCache.l;
+  const debut = isoJoursCentre(-CENTRE_FENETRE_SORTIES);
+  const fin = isoJoursCentre(CENTRE_FENETRE_SORTIES);
+  const l = [];
+  /* Les épisodes : MÊMES SOURCES QU'« EN COURS » — les séries suivies, hors
+     pause. On ne recalcule rien de neuf, on relit ce qui existe. */
+  Object.values(db.shows || {}).forEach(s=>{
+    if(!s || (typeof statutSerie === 'function' && statutSerie(s) === 'pause')) return;
+    (allEpisodes(s, false) || []).forEach(ep=>{
+      if(!ep.d || ep.d < debut || ep.d > fin) return;
+      l.push({ cle:'sortie:tv:'+s.id+':'+ep.d, quand:ep.d, fam:'sortie', ic:'📅',
+               titre: s.name + ' · S'+ep.s+'E'+ep.e+' est disponible',
+               sous: ep.n ? '« '+ep.n+' »' : '',
+               type:'tv', id:s.id });
+    });
+  });
+  /* Les films : `filmsBientot` est déjà la source d'« En cours ». Elle ne rend
+     que des dates à venir — c'est sa fenêtre, on ne la force pas. */
+  ((typeof filmsBientot === 'function') ? filmsBientot() : []).forEach(f=>{
+    if(!f || !f.dfr || f.dfr < debut || f.dfr > fin) return;
+    l.push({ cle:'sortie:movie:'+f.id+':'+f.dfr, quand:f.dfr, fam:'sortie', ic:'🎬',
+             titre: f.titre + ' — ' + (f.mot || 'sort bientôt'),
+             sous: fmtDate(f.dfr), type:'movie', id:f.id });
+  });
+  sortiesCentreCache = { t:Date.now(), jour:j, l:l };
+  return l;
+}
+
+function entreesCentre(){
+  const borne = isoJoursCentre(-CENTRE_JOURS);
+  const l = [];
+  /* 1. LES RECOS REÇUES — la carte complète. */
+  ((conseils && conseils.recues) || []).forEach(r=>{
+    if(!r || !r.cree) return;
+    const j = String(r.cree).slice(0,10);
+    if(j < borne) return;
+    l.push({ cle:'reco:'+r.id, quand:String(r.cree), fam:'reco', reco:r });
+  });
+  /* 2. LES RETOURS SUR MES RECOS — dérivés de `ajoute / termine / aime` lus sur
+     ce que j'ai envoyé. Une ligne par champ posé : « il l'a ajoutée » et « il
+     l'a terminée » sont deux nouvelles, à deux moments. */
+  const RETOURS = [
+    { champ:'ajoute',  ic:'✓',  mot:qui => qui+' a ajouté « TITRE » à sa liste' },
+    { champ:'termine', ic:'👍', mot:qui => qui+' a terminé « TITRE »' },
+    { champ:'aime',    ic:'👍', mot:qui => qui+' a aimé « TITRE »' }
+  ];
+  ((conseils && conseils.envoyees) || []).forEach(r=>{
+    if(!r) return;
+    RETOURS.forEach(t=>{
+      const q = r[t.champ];
+      if(!q) return;
+      if(String(q).slice(0,10) < borne) return;
+      l.push({ cle:'retour:'+r.id+':'+t.champ, quand:String(q), fam:'retour', ic:t.ic,
+               titre: t.mot(nomDuCercle(r.vers)).replace('TITRE', r.titre || 'un titre'),
+               sous: 'ta reco du '+fmtDate(String(r.cree).slice(0,10)),
+               type: r.type, id: r.tmdb_id });
+    });
+  });
+  /* 3. LES SORTIES. */
+  sortiesCentre().forEach(x=>{ if(String(x.quand).slice(0,10) >= borne) l.push(x); });
+  /* Du plus récent au plus ancien. Les sorties à venir passent donc en tête,
+     ce qui est ce qu'on veut savoir : « qu'est-ce qui arrive ? » d'abord. */
+  l.sort((a,b)=> String(b.quand).localeCompare(String(a.quand)));
+  return l;
+}
+
+/* Les trois groupes du §4. Ils se lisent en distance au jour d'aujourd'hui, et
+   pas « avant / après » : une sortie de vendredi et un épisode de mardi sont
+   tous les deux « cette semaine ». */
+function groupeCentre(quand){
+  const j = String(quand).slice(0,10), auj = todayISO();
+  if(j === auj) return "Aujourd'hui";
+  return (j >= isoJoursCentre(-7) && j <= isoJoursCentre(7)) ? 'Cette semaine' : 'Plus ancien';
+}
+
+function nbNonLusCentre(){
+  return entreesCentre().filter(e => !estLuNotif(e.cle)).length;
+}
+
+/* ---------- La cloche ----------
+
+   Trois onglets, une seule fonction : Découvrir, En cours, Mon profil. PAS sur
+   Recherche — l'écran reste tout entier à la barre et au ✦ (§7, bloquant), et
+   pas non plus sur les fiches, où `boutonCloche` (app-09) occupe déjà le coin
+   avec un tout autre sens : « préviens-moi pour CE titre ». Deux cloches
+   côte à côte disant deux choses différentes, c'était le meilleur moyen de
+   rendre les deux illisibles. */
+function clocheCentre(){
+  const n = nbNonLusCentre();
+  return '<button class="iconbtn clochec" aria-label="Notifications'+
+      (n ? ' ('+n+' non lues)' : '')+'" onclick="ouvrirCentre()">'+I.cloche+
+    (n ? '<span class="cbadge">'+(n > 99 ? '99+' : n)+'</span>' : '')+'</button>';
+}
+function ouvrirCentre(){
+  /* `from` EXACT, jamais codé en dur (§7) : on revient d'où l'on vient, et le
+     fil s'ouvre depuis trois écrans différents. */
+  go('centre', { from: view });
+}
+
+/* ---------- L'écran ---------- */
+function viewCentre(){
+  nettoyerNotifLus();
+  const l = entreesCentre();
+  const reste = l.some(e => !estLuNotif(e.cle));
+  let html = header('Notifications', {
+    back: 'goBack()',
+    /* Un LIEN, pas un bouton plein : « Tout marquer lu » est une commodité, pas
+       l'action de l'écran — la maquette 25 le pose en texte d'accent, et un
+       gros bouton blanc à côté du titre volerait l'attention au fil. */
+    right: reste ? '<button class="toutlu" onclick="toutMarquerLuCentre()">Tout marquer lu</button>' : ''
+  });
+  if(!l.length)
+    return html + '<div class="empty"><h3>🔕 Rien pour l\'instant</h3>'+
+      '<p>Les sorties et les recos de ton cercle arriveront ici.</p></div>'+
+      '<div style="height:26px"></div>';
+  let groupe = '';
+  html += '<div class="wrap" style="padding-top:4px">';
+  l.forEach(e=>{
+    const g = groupeCentre(e.quand);
+    if(g !== groupe){ groupe = g; html += '<div class="sectitle" style="margin-left:0">'+esc(g)+'</div>'; }
+    html += (e.fam === 'reco') ? carteRecoCentre(e) : ligneCentre(e);
+  });
+  html += '</div><div style="height:26px"></div>';
+  return html;
+}
+
+/* Une ligne simple : un retour, une sortie. Toucher la ligne la marque lue et
+   ouvre ce qu'elle désigne — c'est le geste attendu, il n'y en a pas d'autre. */
+function ligneCentre(e){
+  const lu = estLuNotif(e.cle);
+  return '<button class="notifl'+(lu ? '' : ' nonlu')+'" onclick="toucherCentre(\''+
+      escJs(e.cle)+'\',\''+escJs(String(e.type||''))+'\','+Number(e.id||0)+')">'+
+    '<span class="notifi">'+esc(e.ic||'•')+'</span>'+
+    '<span class="notift"><b>'+esc(e.titre)+'</b>'+
+      (e.sous ? '<span>'+esc(e.sous)+'</span>' : '')+'</span>'+
+  '</button>';
+}
+function toucherCentre(cle, type, id){
+  marquerLuNotif(cle);
+  if(id && (type === 'tv' || type === 'movie')) return ouvrirTitre(id, type, 'centre');
+  render();
+}
+function toutMarquerLuCentre(){
+  entreesCentre().forEach(e=>{
+    if(!db.notifLus || typeof db.notifLus !== 'object') db.notifLus = {};
+    if(!db.notifLus[e.cle]) db.notifLus[e.cle] = Date.now();
+  });
+  saveDB();
+  render();
+}
+
+/* ---------- L'affiche et la méta d'une reco ----------
+
+   La maquette 25 montre la carte COMPLÈTE : affiche, titre, méta
+   (type · année · note · saisons). Or la ligne de `recommandations` ne porte
+   que le titre — c'est délibéré (§1 : sans lui, afficher la liste demanderait
+   un appel TMDB par ligne AVANT de savoir si ça intéresse). Les deux se
+   concilient sans rien renier :
+
+     · si le titre est DÉJÀ chez nous, on lit la bibliothèque, zéro requête ;
+     · sinon on demande la fiche UNE fois, à l'ouverture du centre, et on la
+       garde pour la session. C'est au plus une requête par reco des trente
+       derniers jours, et seulement quand on ouvre le fil — jamais au démarrage,
+       jamais pour la pastille.
+
+   Une fiche qui n'arrive pas ne casse rien : la carte s'affiche sans affiche et
+   sans méta, comme avant. On ne montre jamais un écran d'erreur pour une image. */
+let fichesReco = {};
+function ficheReco(type, id){
+  const cle = type+':'+id;
+  /* La bibliothèque d'abord : c'est gratuit et c'est à jour. */
+  const chezMoi = type === 'tv' ? db.shows[id] : db.movies[id];
+  if(chezMoi) return { poster: chezMoi.poster, nom: chezMoi.name || chezMoi.title,
+                       annee: (chezMoi.first || chezMoi.date || '').slice(0,4),
+                       note: chezMoi.note, saisons: chezMoi.seasons
+                             ? Object.keys(chezMoi.seasons).length : 0 };
+  const e = fichesReco[cle];
+  if(e && e.d) return e.d;
+  if(e) return null;                                  // demande en vol
+  fichesReco[cle] = { d:null };
+  tmdb('/'+type+'/'+id).then(x=>{
+    fichesReco[cle] = { d: { poster:x.poster_path, nom:x.name || x.title,
+                             annee: String(x.first_air_date || x.release_date || '').slice(0,4),
+                             note: x.vote_average, saisons: x.number_of_seasons || 0 } };
+    if(view === 'centre') render();
+  }).catch(()=>{ fichesReco[cle] = { d:null, rate:true }; });
+  return null;
+}
+/* « Série · 2017 · ★ 8,4 · 3 saisons ». On n'écrit que ce qu'on sait. */
+function metaReco(type, d){
+  const l = [ type === 'tv' ? 'Série' : 'Film' ];
+  if(d.annee) l.push(d.annee);
+  if(d.note) l.push('★ ' + String(Math.round(d.note*10)/10).replace('.', ','));
+  if(d.saisons) l.push(d.saisons + ' saison' + (d.saisons > 1 ? 's' : ''));
+  return l.join(' · ');
+}
+
+/* ---------- La carte reco ----------
+
+   Trois boutons, et PAS de « Non merci » : le §0.6 est explicite, rien ne
+   disparaît du fil sur un geste. « Plus tard » marque lu et retire son propre
+   bouton ; la carte, elle, reste consultable. */
+function carteRecoCentre(e){
+  const r = e.reco;
+  const lu = estLuNotif(e.cle);
+  const de = nomDuCercle(r.de);
+  const idOk = estIdTmdb(r.tmdb_id) && (r.type === 'tv' || r.type === 'movie');
+  const chezMoi = idOk && dejaChezMoi(r.type === 'tv' ? 'tv' : 'movie', r.tmdb_id);
+  /* L'affiche et la méta de la maquette 25 — nulles tant qu'on ne les a pas :
+     la carte se dessine quand même, elle se complètera au rendu suivant. */
+  const d = idOk ? ficheReco(r.type, r.tmdb_id) : null;
+  let h = '<div class="recoc'+(lu ? '' : ' nonlu')+'">'+
+    '<div class="recoct">'+
+      (typeof avatarDe === 'function'
+        ? avatarDe(cercle().find(p => String(p.id) === String(r.de)) || { pseudo:de }, 'moyen')
+        : '')+
+      '<div><b>'+esc(de)+' te recommande '+(r.type === 'tv' ? 'une série' : 'un film')+'</b>'+
+        '<span>'+esc(fmtDate(String(r.cree).slice(0,10)))+'</span></div>'+
+    '</div>'+
+    '<div class="recocc">'+
+      (d ? posterEl(d.poster, 'w185', 'recocp', r.titre || '') : '')+
+      '<div class="recocx">'+
+        '<div class="recocn">'+esc(r.titre || 'Un titre')+'</div>'+
+        (d ? '<div class="recocm">'+esc(metaReco(r.type, d))+'</div>' : '')+
+        (r.mot ? '<div class="recocb">'+esc(r.mot)+'</div>' : '')+
+      '</div>'+
+    '</div>';
+  /* Après « + À voir », la carte se replie : une seule ligne verte qui dit ce
+     qui s'est passé ET que l'expéditeur le sait. */
+  if(r.ajoute || chezMoi){
+    h += '<div class="recook">✓ Dans ta liste'+(r.ajoute ? ' — '+esc(de)+' est notifié' : '')+'</div>';
+  }else{
+    h += '<div class="recocb2">'+
+      (idOk ? '<button class="btn mini" onclick="ajouterDepuisReco(\''+escJs(r.id)+'\')">+ À voir</button>' : '')+
+      (idOk ? '<button class="btn mini ghost" onclick="ouvrirConseil(\''+escJs(r.id)+'\','+
+                Number(r.tmdb_id)+',\''+escJs(r.type)+'\',\'centre\')">Voir la fiche</button>' : '')+
+      (lu ? '' : '<button class="btn mini ghost" onclick="plusTardReco(\''+escJs(e.cle)+'\')">Plus tard</button>')+
+    '</div>';
+  }
+  return h + '</div>';
+}
+function plusTardReco(cle){
+  marquerLuNotif(cle);
+  render();
+}
+/* « + À voir » : on ajoute le titre à la liste ET on pose `ajoute` — dans cet
+   ordre, et sans attendre le second. L'ajout est le geste, le retour n'est
+   qu'une politesse envers l'expéditeur. */
+function ajouterDepuisReco(idReco){
+  const r = ((conseils && conseils.recues) || []).find(x => x.id === idReco);
+  if(!r) return;
+  marquerLuNotif('reco:'+r.id);
+  marquerRetourReco(r, 'ajoute');
+  if(r.type === 'tv'){
+    /* `true` = « ajoute mais n'ouvre pas la fiche » : le §4 veut que la carte
+       se replie SOUS LES YEUX, dans le fil. Sans ce drapeau, `addOrOpenShow`
+       nous téléporterait sur la fiche et le repli ne se verrait jamais. */
+    addOrOpenShow(Number(r.tmdb_id), true);
+  }else{
+    ajouterAVoir(Number(r.tmdb_id));
+  }
+  render();
+}
+
+/* ---------- L'envoi, depuis la fiche (§3) ---------- */
+
+/* Le bouton 💌 de la rangée d'actions. Visible seulement si le cercle n'est pas
+   vide : proposer « recommander » à qui ne suit personne, c'est ouvrir une
+   feuille vide — c'est déjà la règle du menu ⋯ (I6), on ne l'invente pas. */
+function boutonRecoFiche(type, id){
+  if(typeof cercle !== 'function' || !cercle().length) return '';
+  return '<button class="btn ghost carre reco" aria-label="Recommander à un ami" '+
+    'title="Recommander à un ami" onclick="menuRecommander(\''+escJs(type)+'\','+Number(id)+')">💌</button>';
+}
+/* Le bandeau d'état, sous la rangée d'actions : « à qui », et « où ça en est ».
+   Il ne se lit que sur ce que la base dit — pas sur un drapeau local qui
+   survivrait à un envoi raté. */
+function bandeauRecoFiche(type, id){
+  const l = ((conseils && conseils.envoyees) || [])
+    .filter(r => r.type === type && String(r.tmdb_id) === String(id));
+  if(!l.length) return '';
+  const noms = l.map(r => nomDuCercle(r.vers));
+  const ajoutee = l.filter(r => r.ajoute);
+  const etat = ajoutee.length === l.length
+    ? (l.length > 1 ? ' · ils l\'ont ajoutée ✓' : ' · il l\'a ajoutée ✓')
+    : ajoutee.length
+      ? ' · '+ajoutee.length+' sur '+l.length+' l\'ont ajoutée ✓'
+      : ' · pas encore vue';
+  return '<div class="wrap" style="padding:10px 16px 0"><div class="recoband">'+
+    '💌 Recommandée à '+esc(listeEtNoms(noms))+esc(etat)+'</div></div>';
+}
+/* « à Marie », « à Marie et Théo », « à Marie, Théo et Léa ». */
+function listeEtNoms(l){
+  if(!l.length) return '';
+  if(l.length === 1) return l[0];
+  return l.slice(0,-1).join(', ') + ' et ' + l[l.length-1];
+}
+
+/* LA FEUILLE D'ENVOI — UN SEUL CODE D'ENVOI (§3). Le bouton 💌 de la fiche et
+   l'entrée « Recommander à… » du menu ⋯ ouvrent exactement celle-ci ; c'est
+   pour ça qu'elle garde le nom `menuRecommander`, que le menu appelle déjà. */
+function menuRecommander(type, id){
+  const duCercle = cercle();
+  if(!duCercle.length) return toast('Personne dans ton cercle pour l\'instant');
+  const titre = type === 'tv' ? (db.shows[id] && db.shows[id].name)
+                              : (db.movies[id] && db.movies[id].title);
+  ui.reco = { type:type, id:Number(id), titre:titre || '', sel:{}, mot:'' };
+  peindreFeuilleReco();
+}
+/* Déjà conseillé à cette personne : on le dit AVANT, au lieu de laisser
+   renvoyer dans le vide — la contrainte d'unicité de 009 ignore le doublon,
+   donc sans cette mention le second envoi n'aurait aucun effet visible. */
+function dejaConseilleA(type, id, pid){
+  return ((conseils && conseils.envoyees) || []).some(r =>
+    String(r.vers) === String(pid) && r.type === type && String(r.tmdb_id) === String(id));
+}
+function peindreFeuilleReco(){
+  const e = ui.reco;
+  if(!e) return;
+  const duCercle = cercle();
+  const choisis = duCercle.filter(p => e.sel[p.id]);
+  const reste = 280 - String(e.mot || '').length;
+  const h = '<h3>💌 Recommander '+esc(e.titre || 'ce titre')+'</h3>'+
+    '<p class="small muted" style="margin:0 0 10px">À qui, dans ton cercle ? '+
+      'La reco arrivera dans ses notifications.</p>'+
+    '<div class="amis">'+ duCercle.map(p=>{
+      const deja = dejaConseilleA(e.type, e.id, p.id);
+      const on = !!e.sel[p.id];
+      return '<button class="ami'+(on ? ' on' : '')+(deja ? ' deja' : '')+'"'+
+        (deja ? ' disabled' : '')+
+        ' onclick="basculerAmiReco(\''+escJs(String(p.id))+'\')">'+
+        (on ? '<span class="amicoche">✓</span>' : '')+
+        avatarDe(p, 'moyen')+
+        '<b>'+esc(p.pseudo)+'</b>'+
+        (deja ? '<em>Déjà conseillé</em>' : '')+
+      '</button>';
+    }).join('') + '</div>'+
+    '<textarea id="recomot" class="recomot" maxlength="280" rows="2" '+
+      'placeholder="Un mot pour aller avec (facultatif)" '+
+      'oninput="motRecoSaisi(this.value)">'+esc(e.mot || '')+'</textarea>'+
+    /* Le compteur n'apparaît qu'au-delà de 200 : avant, il ne dit rien
+       d'utile et donne l'impression d'un formulaire. */
+    (String(e.mot||'').length > 200
+      ? '<div class="tiny muted" style="text-align:right">'+reste+' caractère'+
+          (reste > 1 ? 's' : '')+' restant'+(reste > 1 ? 's' : '')+'</div>'
+      : '')+
+    '<button class="btn block" style="margin-top:12px"'+(choisis.length ? '' : ' disabled')+
+      ' onclick="envoyerFeuilleReco()">'+
+      (choisis.length ? 'Envoyer à '+esc(listeEtNoms(choisis.map(p=>p.pseudo)))
+                      : 'Choisis au moins un ami')+'</button>'+
+    '<button class="opt annuler" onclick="closeSheet()">Annuler</button>';
+  openSheet(h, 'reco');
+}
+function basculerAmiReco(pid){
+  if(!ui.reco) return;
+  const s = ui.reco.sel;
+  if(s[pid]) delete s[pid]; else s[pid] = true;
+  peindreFeuilleReco();
+}
+/* La saisie ne redessine PAS la feuille — le champ perdrait le curseur à
+   chaque lettre. On garde la valeur, et on ne repeint que le compteur quand il
+   change d'état (au passage de 200). */
+function motRecoSaisi(v){
+  if(!ui.reco) return;
+  const avant = String(ui.reco.mot || '').length > 200;
+  ui.reco.mot = String(v || '').slice(0, 280);
+  if((String(ui.reco.mot).length > 200) !== avant) peindreFeuilleReco();
+}
+async function envoyerFeuilleReco(){
+  const e = ui.reco;
+  if(!e) return;
+  const dest = cercle().filter(p => e.sel[p.id]).map(p => p.id);
+  if(!dest.length) return;
+  const noms = cercle().filter(p => e.sel[p.id]).map(p => p.pseudo);
+  closeSheet();
+  const ok = await envoyerRecos(e.type, e.id, e.titre, dest, e.mot);
+  ui.reco = null;
+  if(ok) toast('💌 Envoyée à '+listeEtNoms(noms));
+  render();
 }

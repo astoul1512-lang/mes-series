@@ -81,8 +81,16 @@ function versLesSaisons(){
   }, 60);
 }
 
-async function addOrOpenShow(id){
-  if(db.shows[id]) return go('show',{id:id, from: params.from || 'discover'});
+/* SPEC-10 §4 — `sansOuvrir` : ajouter SANS partir sur la fiche.
+   La carte reco du centre doit se replier SOUS LES YEUX, dans le fil (« ✓ Dans
+   ta liste — X est notifié ») : téléporter sur la fiche ferait disparaître le
+   fil, la carte, et la démonstration que le geste a marché. Un paramètre
+   optionnel, faux par défaut, plutôt qu'un second chemin d'ajout : le premier
+   ne change rien pour les cinq appelants existants, le second aurait donné deux
+   fonctions à corriger le jour où l'ajout d'une série changera. */
+async function addOrOpenShow(id, sansOuvrir){
+  if(db.shows[id]) return sansOuvrir ? render()
+                                     : go('show',{id:id, from: params.from || 'discover'});
   if(!prendre('serie:'+id)) return;
   /* `fetchShowFull` enchaîne une requête plus une par paquet de vingt saisons :
      plusieurs secondes sur réseau mobile. Pendant ce temps l'utilisateur a pu
@@ -104,7 +112,7 @@ async function addOrOpenShow(id){
     db.shows[id] = s; saveDB();
     toast('« '+s.name+' » ajoutée');
     rendre('serie:'+id);
-    if(view !== ecranDepart){ render(); return; }
+    if(sansOuvrir || view !== ecranDepart){ render(); return; }
     go('show',{id:id, from: depuis});
     versLesSaisons();
   }catch(e){
@@ -1954,7 +1962,10 @@ function viewDiscover(){
      qu'on perd : elles ne sont plus collantes au défilement. Ce qu'on gagne :
      elles sont là où la maquette les met, et elles survivent aux repeints
      partiels. C'est l'arbitrage d'Adrien du 10/08. */
-  return header('Découvrir') + needKeyBanner() +
+  /* SPEC-10 §0.2 — la cloche, en haut à droite, la même que sur En cours et
+     Mon profil : même pastille, même compte. C'est la SEULE ligne que ce lot
+     ajoute à Découvrir (§7). */
+  return header('Découvrir', { right: clocheCentre() }) + needKeyBanner() +
     '<div id="dres">'+(vitrineVisible() ? vitrineBody() : (bandeChips() + discBody()))+'</div>' +
     '<div style="height:20px"></div>';
 }
