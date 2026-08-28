@@ -880,6 +880,15 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
            /* « Quoi » démarre sur tout le catalogue : les sorties des 90 derniers
               jours sont un sous-ensemble étroit, mauvais point de départ pour
               découvrir quelque chose. */
+           /* SPEC-10 §3 — LA FEUILLE D'ENVOI EN COURS D'ÉCRITURE : le titre visé,
+              les amis cochés, le mot. Elle meurt avec la feuille, elle n'entre
+              jamais dans `db`.
+              CORRECTION DE RELECTURE (28/08/2026) — elle était écrite par
+              app-07 sans être DÉCLARÉE ici. La relecture de RETOUR-02 avait
+              corrigé très exactement ce point pour `ui.duelFam` ; la convention
+              vaut aussi pour celle-ci, et le contrôle « état partagé » ne
+              l'attrape pas (il surveille les globales, pas les champs de `ui`). */
+           reco:null,
            disc:{ type:'tout', genres:[],
                   /* SPEC-04 §0.2 — L'HUMEUR DU MOMENT, ou `null` au repos.
                      Une seule à la fois, et un second appui sur la même la

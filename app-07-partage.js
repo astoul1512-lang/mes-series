@@ -1465,11 +1465,37 @@ function sortiesCentre(){
   const fin = isoJoursCentre(CENTRE_FENETRE_SORTIES);
   const l = [];
   /* Les épisodes : MÊMES SOURCES QU'« EN COURS » — les séries suivies, hors
-     pause. On ne recalcule rien de neuf, on relit ce qui existe. */
+     pause. On ne recalcule rien de neuf, on relit ce qui existe.
+
+     CORRECTION DE RELECTURE C-3 (28/08/2026) — MÊMES SOURCES NE VOULAIT PAS DIRE
+     MÊMES RÈGLES, ET ÇA SE VOYAIT DANS LA PASTILLE.
+
+     Le balayage retenait TOUT épisode daté dans la fenêtre, sans regarder ni
+     `s.watched` ni le statut de la série. Deux conséquences, toutes deux
+     reproduites par la relecture :
+
+       · un épisode DÉJÀ COCHÉ VU était annoncé « est disponible », et comptait
+         un non-lu de plus. Annoncer comme nouveau ce qui a déjà été regardé est
+         exactement ce qui apprend à ignorer une pastille — l'argument que ce
+         dépôt emploie déjà deux fois ailleurs ;
+       · une série AJOUTÉE MAIS JAMAIS COMMENCÉE déversait tous ses épisodes de
+         la semaine, alors qu'« En cours » n'en annonce que la première (le
+         point 2 du cycle 3 avait déjà tranché ce cas-là, pour le calendrier).
+
+     On aligne donc les DEUX règles sur `viewFollow`. La fenêtre, elle, reste
+     différente — le centre regarde sept jours en arrière, ce que « En cours » ne
+     fait pas : c'est le propre d'un fil, il dit aussi ce qui vient de sortir. */
   Object.values(db.shows || {}).forEach(s=>{
-    if(!s || (typeof statutSerie === 'function' && statutSerie(s) === 'pause')) return;
+    if(!s) return;
+    const st = (typeof statutSerie === 'function') ? statutSerie(s) : '';
+    if(st === 'pause') return;
+    /* Jamais commencée : sa PREMIÈRE, et rien d'autre — comme le calendrier. */
+    const pasCommencee = st === 'avoir';
     (allEpisodes(s, false) || []).forEach(ep=>{
       if(!ep.d || ep.d < debut || ep.d > fin) return;
+      /* Déjà vu : ce n'est plus une nouvelle. */
+      if(s.watched && s.watched[key(ep.s, ep.e)]) return;
+      if(pasCommencee && !(s.first && ep.d === s.first)) return;
       l.push({ cle:'sortie:tv:'+s.id+':'+ep.d, quand:ep.d, fam:'sortie', ic:'📅',
                titre: s.name + ' · S'+ep.s+'E'+ep.e+' est disponible',
                sous: ep.n ? '« '+ep.n+' »' : '',
@@ -1575,12 +1601,35 @@ function viewCentre(){
     return html + '<div class="empty"><h3>🔕 Rien pour l\'instant</h3>'+
       '<p>Les sorties et les recos de ton cercle arriveront ici.</p></div>'+
       '<div style="height:26px"></div>';
-  let groupe = '';
+  /* CORRECTION DE RELECTURE C-1 (28/08/2026) — « CETTE SEMAINE » S'AFFICHAIT DEUX
+     FOIS, DE PART ET D'AUTRE D'« AUJOURD'HUI ».
+
+     Le fil est trié du plus récent au plus ancien, SORTIES À VENIR COMPRISES
+     (jusqu'à J+7). L'en-tête n'était réémis que lorsqu'il CHANGEAIT du précédent.
+     Or une sortie de vendredi est « Cette semaine », un épisode d'avant-hier
+     aussi — et « Aujourd'hui » passe entre les deux :
+
+         Cette semaine   ← les sorties à venir
+         Aujourd'hui
+         Cette semaine   ← la même section, une seconde fois
+         Plus ancien
+
+     Le §4 et la maquette 25 donnent TROIS groupes, dans un ordre fixe. On ne
+     déduit donc plus le découpage de l'ordre d'arrivée : on RANGE les entrées
+     dans les trois seaux, et on rend les seaux dans leur ordre à eux. Le tri
+     à l'intérieur d'un groupe reste celui d'`entreesCentre` — du plus récent au
+     plus ancien, donc « ce qui arrive » avant « ce qui vient de se passer ». */
+  const SEAUX = ["Aujourd'hui", 'Cette semaine', 'Plus ancien'];
+  const seaux = {};
+  SEAUX.forEach(g => { seaux[g] = []; });
+  l.forEach(e => { (seaux[groupeCentre(e.quand)] || seaux['Plus ancien']).push(e); });
   html += '<div class="wrap" style="padding-top:4px">';
-  l.forEach(e=>{
-    const g = groupeCentre(e.quand);
-    if(g !== groupe){ groupe = g; html += '<div class="sectitle" style="margin-left:0">'+esc(g)+'</div>'; }
-    html += (e.fam === 'reco') ? carteRecoCentre(e) : ligneCentre(e);
+  SEAUX.forEach(g=>{
+    if(!seaux[g].length) return;
+    html += '<div class="sectitle" style="margin-left:0">'+esc(g)+'</div>';
+    seaux[g].forEach(e=>{
+      html += (e.fam === 'reco') ? carteRecoCentre(e) : ligneCentre(e);
+    });
   });
   html += '</div><div style="height:26px"></div>';
   return html;
@@ -1682,18 +1731,32 @@ function carteRecoCentre(e){
     '<div class="recocc">'+
       (d ? posterEl(d.poster, 'w185', 'recocp', r.titre || '') : '')+
       '<div class="recocx">'+
-        '<div class="recocn">'+esc(r.titre || 'Un titre')+'</div>'+
+        /* C-2 — un titre vide arrivé d'une version antérieure se répare ici dès
+         que la fiche TMDB est là : la carte lisait `r.titre` et rien d'autre,
+         donc « Un titre » restait « Un titre » pour toujours. */
+      '<div class="recocn">'+esc(r.titre || (d && d.nom) || 'Un titre')+'</div>'+
         (d ? '<div class="recocm">'+esc(metaReco(r.type, d))+'</div>' : '')+
         (r.mot ? '<div class="recocb">'+esc(r.mot)+'</div>' : '')+
       '</div>'+
     '</div>';
   /* Après « + À voir », la carte se replie : une seule ligne verte qui dit ce
-     qui s'est passé ET que l'expéditeur le sait. */
-  if(r.ajoute || chezMoi){
-    h += '<div class="recook">✓ Dans ta liste'+(r.ajoute ? ' — '+esc(de)+' est notifié' : '')+'</div>';
+     qui s'est passé ET que l'expéditeur le sait.
+
+     CORRECTION DE RELECTURE C-4 (28/08/2026) — ELLE SE REPLIAIT AUSSI SUR
+     `chezMoi`, c'est-à-dire sur un titre qu'on possédait DÉJÀ avant de recevoir
+     la reco. On perdait alors « Voir la fiche » et « Plus tard » sur une carte
+     à laquelle on n'avait pourtant pas répondu : l'action de LECTURE
+     disparaissait sans que personne l'ait demandé. Le repli appartient au geste
+     (`ajoute`), pas à l'état de la bibliothèque. Un titre déjà chez soi garde
+     donc ses boutons — « + À voir » cède seulement la place à un témoin, parce
+     que celui-là n'a effectivement plus rien à faire. */
+  if(r.ajoute){
+    h += '<div class="recook">✓ Dans ta liste — '+esc(de)+' est notifié</div>';
   }else{
     h += '<div class="recocb2">'+
-      (idOk ? '<button class="btn mini" onclick="ajouterDepuisReco(\''+escJs(r.id)+'\')">+ À voir</button>' : '')+
+      (idOk && chezMoi
+        ? '<span class="btn mini ghost" aria-disabled="true">✓ Déjà dans ta liste</span>'
+        : idOk ? '<button class="btn mini" onclick="ajouterDepuisReco(\''+escJs(r.id)+'\')">+ À voir</button>' : '')+
       (idOk ? '<button class="btn mini ghost" onclick="ouvrirConseil(\''+escJs(r.id)+'\','+
                 Number(r.tmdb_id)+',\''+escJs(r.type)+'\',\'centre\')">Voir la fiche</button>' : '')+
       (lu ? '' : '<button class="btn mini ghost" onclick="plusTardReco(\''+escJs(e.cle)+'\')">Plus tard</button>')+
@@ -1761,12 +1824,39 @@ function listeEtNoms(l){
 /* LA FEUILLE D'ENVOI — UN SEUL CODE D'ENVOI (§3). Le bouton 💌 de la fiche et
    l'entrée « Recommander à… » du menu ⋯ ouvrent exactement celle-ci ; c'est
    pour ça qu'elle garde le nom `menuRecommander`, que le menu appelle déjà. */
+/* CORRECTION DE RELECTURE C-2 (28/08/2026) — DEPUIS UN APERÇU, LA RECO PARTAIT
+   SANS TITRE.
+
+   `menuRecommander` ne lisait le titre que dans la BIBLIOTHÈQUE (`db.shows` /
+   `db.movies`). Or le §3 met le 💌 sur la fiche d'un titre « suivi OU NON », et
+   `boutonRecoFiche` est bien posé sur l'aperçu — l'écran d'un titre qu'on n'a
+   pas encore ajouté. Sur ce chemin la bibliothèque est vide : la feuille
+   s'ouvrait sur « Recommander ce titre » et la ligne partait avec `titre: ''`.
+
+   Ce n'était pas rattrapable en aval : la carte du destinataire lit `r.titre`
+   (« Un titre »), le push aussi (« X te recommande un titre »), et le bandeau de
+   l'expéditeur, lui, était juste — le défaut ne se voyait donc pas du côté de
+   celui qui l'avait causé. C'est exactement ce que la recopie du titre à l'envoi
+   (§1) existe pour éviter.
+
+   Trois sources, dans l'ordre du plus sûr au plus tardif — la bibliothèque, la
+   fiche que l'aperçu a DÉJÀ en main, puis le cache des fiches de recos. On ne va
+   pas au réseau : si le 💌 est à l'écran, c'est qu'une de ces trois sait déjà
+   comment le titre s'appelle. */
+function titrePourReco(type, id){
+  const chezMoi = type === 'tv' ? db.shows[id] : db.movies[id];
+  if(chezMoi) return chezMoi.name || chezMoi.title || '';
+  /* L'aperçu : tout son rendu est bâti sur `ui.preview.data`, elle est là. */
+  const p = (typeof ui === 'object' && ui.preview) ? ui.preview : null;
+  if(p && p.data && String(p.id) === String(id) && p.type === type)
+    return p.data.name || p.data.title || '';
+  const f = fichesReco[type+':'+id];
+  return (f && f.d && f.d.nom) ? f.d.nom : '';
+}
 function menuRecommander(type, id){
   const duCercle = cercle();
   if(!duCercle.length) return toast('Personne dans ton cercle pour l\'instant');
-  const titre = type === 'tv' ? (db.shows[id] && db.shows[id].name)
-                              : (db.movies[id] && db.movies[id].title);
-  ui.reco = { type:type, id:Number(id), titre:titre || '', sel:{}, mot:'' };
+  ui.reco = { type:type, id:Number(id), titre: titrePourReco(type, id), sel:{}, mot:'' };
   peindreFeuilleReco();
 }
 /* Déjà conseillé à cette personne : on le dit AVANT, au lieu de laisser
