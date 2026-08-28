@@ -781,6 +781,38 @@ function discParams(){
     p['vote_average.gte'] = String(d.noteMin);
     if(!p['vote_count.gte']) p['vote_count.gte'] = String(DISC_VOTES_MINI);
   }
+
+  /* RETOUR-04 POINT 2 (27/08/2026) — FILTRE PLATEFORME POSÉ, LE PLANCHER DE
+     VOTES SAUTE. La règle est la même des deux côtés de l'app, et elle est
+     écrite ici aussi parce que la Recherche et Découvrir composent leurs
+     requêtes séparément : la poser à un seul endroit la laisserait tomber à
+     l'autre au premier lot venu. Constat d'Adrien : « tous les films
+     Netflix/Prime/Disney+/Canal+/Apple TV+/Max/Crunchyroll/ADN doivent être
+     présents » — et la mesure lui donne raison (relais, région FR, 27/08) :
+
+       | Requête                          | plancher 80 | sans plancher | coupé |
+       | 8 grandes plateformes FR, films  |       6 312 |        16 680 |  −62 %|
+       | 8 grandes plateformes FR, séries |       2 606 |         8 755 |  −70 %|
+       | Crunchyroll + ADN (animés)       |         453 |         1 711 |  −73 %|
+
+     Être au catalogue d'une plateforme est déjà une sélection éditoriale : le
+     plancher n'y protège de rien et ampute les deux tiers du catalogue.
+
+     L'EXCEPTION, ET ELLE COMPTE : dès que la NOTE entre en jeu — tri par note
+     (`vote_average.desc`) ou note minimale — le plancher reste, plateforme ou
+     pas. Une moyenne portée par quatre votes ne veut rien dire, c'est la
+     mesure du 02/08 qui l'a montré ; `DISC_VOTES_MINI` s'applique alors comme
+     aujourd'hui. C'est pourquoi le test porte sur `vote_average` et non sur le
+     seul filtre plateforme.
+
+     Aujourd'hui, dans Découvrir, ce retrait ne trouve rien à retirer : le seul
+     `vote_count.gte` de cette fonction est justement celui de la note. C'est
+     voulu — la règle est posée AVANT qu'un plancher de grille n'arrive ici, pas
+     après avoir constaté qu'il coupe. */
+  if(p.with_watch_providers && !p['vote_average.gte']
+     && String(p.sort_by||'').indexOf('vote_average') < 0){
+    delete p['vote_count.gte'];
+  }
   return p;
 }
 

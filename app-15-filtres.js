@@ -469,7 +469,13 @@ function resumeSectionFiltre(id){
   if(id === 'genre'){
     const g = listeRech('genre').map(n => String(libelleGenre(n)).toLowerCase());
     const t = ambianceRech(r.amb);
-    return j((t ? [String(t.t || t.mot).toLowerCase()] : []).concat(g));
+    const resume = j((t ? [String(t.t || t.mot).toLowerCase()] : []).concat(g));
+    /* RETOUR-04 point 1 — section repliée, le résumé dit AUSSI le mode : sans
+       ça, « action, aventure » se lit pareil dans les deux réglages alors que
+       la grille, elle, n'est pas la même. */
+    return (resume && genreEtRech())
+      ? resume + ' (les '+nombreEnLettresRech(listeRech('genre').length)+' ensemble)'
+      : resume;
   }
   if(id === 'epoque')  return j(listeRech('epoque').map(id2 => { const e = RECH_EPOQUES.find(x=>x.id===id2); return e ? e.mot : null; }));
   if(id === 'duree')   return j(listeRech('duree').map(id2 => { const d = dureeRech(id2); return d ? d.mot : null; }));
@@ -510,6 +516,13 @@ function poserTuileFiltreRech(id){
   poserAmbianceRech(id);
   peindreFiltresRech();
 }
+/* RETOUR-04 point 1 — même protocole que `poserFiltreRech` : on pose l'état
+   dans app-12, on redessine la feuille ici. La section ouverte le reste, le
+   compteur suit tout seul (c'est `relancerRech` qui le nourrit). */
+function poserGenreEtFiltreRech(v){
+  basculerGenreEtRech(v);
+  peindreFiltresRech();
+}
 
 function optionsSectionFiltre(id){
   const r = etatRech(), fam = r.fam;
@@ -537,6 +550,25 @@ function optionsSectionFiltre(id){
           optFiltreRech(libelleGenre(x.nom), 'poserFiltreRech(\'genre\',\''+escJs(x.nom)+'\')',
                         poses('genre').indexOf(String(x.nom)) >= 0)
         ).join('')+'</div>';
+    }
+    /* RETOUR-04 POINT 1 — LA QUESTION N'EXISTE QU'À PARTIR DE DEUX GENRES.
+       Avec un seul genre coché, « au moins un des un » ne veut rien dire et
+       l'écran ne montre rien de plus qu'en v96 : c'est le premier critère
+       d'acceptation du point. Le libellé s'accorde au nombre, et le segment
+       part sur « au moins un » — le comportement d'aujourd'hui reste le
+       défaut, on ne le change pas, on l'explicite. */
+    const nGen = listeRech('genre').length;
+    if(nGen >= 2){
+      const mot = nombreEnLettresRech(nGen);
+      const et = genreEtRech();
+      h += '<div class="fcombi">'+
+        '<div class="fcombiq">Avec <b>'+nGen+' genres</b> cochés, montrer les titres qui ont…</div>'+
+        '<div class="fseg">'+
+          '<button class="fsegb'+(et ? '' : ' on')+'" onclick="poserGenreEtFiltreRech(false)">'+
+            esc('Au moins un des '+mot)+'</button>'+
+          '<button class="fsegb'+(et ? ' on' : '')+'" onclick="poserGenreEtFiltreRech(true)">'+
+            esc('Les '+mot)+'</button>'+
+        '</div></div>';
     }
     /* SPEC-05 §9 — les sous-genres animés n'apparaissent que sur Animés et sur
        Tout. Sur Animés, `ambiancesRech` les a DÉJÀ rendus ci-dessus (c'est sa

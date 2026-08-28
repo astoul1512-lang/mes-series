@@ -9607,6 +9607,195 @@ window.MODE_TEST = true;
     egal(rechActeur.q, '', 'le comportement en place a changé');
   });
 
+  groupe('RETOUR-04 — genres en ET, planchers de votes');
+
+  /* ---- Point 1 : « au moins un des N » / « les N » ---- */
+
+  test('point 1 — un seul genre : aucun réglage, requête identique à v96', ()=>{
+    const r = rechVierge('film');
+    r.genre = ['Action'];
+    avecGenresTMDB(()=>{
+      egal(genreEtRech(), false, 'le réglage se croit actif avec un seul genre');
+      egal(jeuxParamsRech('movie').length, 1);
+      egal(jeuxParamsRech('movie')[0].with_genres, '28', 'la requête a changé à un seul genre');
+      /* Et même en forçant l'état : la question n'existe pas, elle ne peut pas
+         agir. C'est la garde, pas l'écran, qui le tient. */
+      r.genreEt = true;
+      egal(genreEtRech(), false, 'un genre unique laisse le ET agir');
+      egal(jeuxParamsRech('movie')[0].with_genres, '28');
+    });
+  });
+
+  test('point 1 — deux genres, défaut : le OU d\'aujourd\'hui, à la barre', ()=>{
+    const r = rechVierge('film');
+    r.genre = ['Action','Aventure'];
+    avecGenresTMDB(()=>{
+      egal(genreEtRech(), false, 'le défaut n\'est plus « au moins un »');
+      const j = jeuxParamsRech('movie');
+      egal(j.length, 1, 'le OU ne tient plus en une requête');
+      egal(j[0].with_genres, '28|12');
+    });
+  });
+
+  test('point 1 — « les deux » : virgules, UNE requête, compteur exact', ()=>{
+    const r = rechVierge('film');
+    r.genre = ['Action','Aventure']; r.genreEt = true;
+    avecGenresTMDB(()=>{
+      const j = jeuxParamsRech('movie');
+      egal(j.length, 1, 'le ET s\'est décomposé en plusieurs flux');
+      egal(j[0].with_genres, '28,12', 'le ET ne se dit pas en virgules');
+      vrai(j[0].with_genres.indexOf('|') < 0,
+           'la barre et la virgule sont mélangées : TMDB ignorerait la suite en silence');
+      /* Le compteur reste EXACT : un seul flux, donc aucun recoupement. */
+      vrai(!etagesRech().some(e => e.recoupe), 'le compteur passe à « moins de » sans raison');
+    });
+  });
+
+  test('point 1 — sur Animés, le ET simplifie : 16 + les genres en UNE requête', ()=>{
+    const r = rechVierge('anime');
+    r.genre = ['Action & Adventure','Sci-Fi & Fantasy'];
+    avecGenresTMDB(()=>{
+      /* Le OU garde la décomposition d'aujourd'hui — c'est le piège virgule+barre
+         mesuré le 02/08, et il ne concerne QUE le mélange. */
+      egal(jeuxParamsRech('tv').length, 2, 'le mode OU ne décompose plus sur Animés');
+      r.genreEt = true;
+      const j = jeuxParamsRech('tv');
+      egal(j.length, 1, 'le ET décompose encore alors qu\'il n\'a plus besoin de le faire');
+      egal(j[0].with_genres, '16,10759,10765');
+    });
+  });
+
+  test('point 1 — la phrase dit « ET » quand on demande « les deux »', ()=>{
+    const r = rechVierge('film');
+    r.genre = ['Action','Aventure'];
+    avecGenresTMDB(()=>{
+      const ou = motsPhraseRech().find(m => m.cle === 'genre');
+      vrai(/ ou /.test(ou.mot), 'le mode OU ne se lit plus « ou » : ' + ou.mot);
+      r.genreEt = true;
+      const et = motsPhraseRech().find(m => m.cle === 'genre');
+      vrai(/ ET /.test(et.mot), 'le mode ET ne se lit pas « ET » : ' + et.mot);
+    });
+  });
+
+  test('point 1 — le libellé s\'accorde au nombre de genres', ()=>{
+    egal(nombreEnLettresRech(2), 'deux');
+    egal(nombreEnLettresRech(3), 'trois');
+    egal(nombreEnLettresRech(12), '12', 'au-delà de dix on doit écrire le chiffre');
+  });
+
+  test('point 1 — retirer un genre remet le réglage au défaut', ()=>{
+    const r = rechVierge('film');
+    r.genre = ['Action','Aventure']; r.genreEt = true;
+    sansEcran(()=> poserMotRech('genre', 'Aventure'));   // on décoche
+    egal(listeRech('genre').length, 1);
+    egal(r.genreEt, false, 'un « les deux » oublié ressortira au prochain genre coché');
+    /* Et « Tout effacer » / la nouvelle ouverture le remettent aussi à plat. */
+    r.genre = ['Action','Aventure']; r.genreEt = true;
+    sansEcran(()=> viderRech());
+    egal(r.genreEt, false, '« Tout effacer » laisse le réglage armé');
+  });
+
+  test('point 1 — « Reprendre » rend la recherche avec son réglage', ()=>{
+    const r = rechVierge('film');
+    r.genre = ['Action','Aventure']; r.genreEt = true; r.touche = true;
+    sansEcran(()=> nouvelleOuvertureRech());
+    egal(etatRech().genreEt, false, 'la nouvelle ouverture garde le réglage');
+    sansEcran(()=> reprendreRech());
+    egal(etatRech().genreEt, true, 'la reprise rend la recherche en OU alors qu\'elle était en ET');
+  });
+
+  /* ---- Point 2 : plateforme posée, le plancher saute ---- */
+
+  test('point 2 — sans plateforme, le socle est intact (80)', ()=>{
+    rechVierge('film');
+    egal(paramsSocleRech('movie')['vote_count.gte'], '80');
+  });
+
+  test('point 2 — plateforme posée : plus aucun vote_count.gte', ()=>{
+    const r = rechVierge('film');
+    db.gouts = db.gouts || {}; db.gouts.plates = [{ id:8, nom:'Netflix' }];
+    r.plate = ['8'];
+    const p = paramsSocleRech('movie');
+    egal(p.with_watch_providers, '8', 'la plateforme n\'est pas partie');
+    egal(p['vote_count.gte'], undefined,
+         'le plancher ampute encore les deux tiers du catalogue de la plateforme');
+  });
+
+  test('point 2 — l\'exception : note demandée, le plancher note reste', ()=>{
+    const r = rechVierge('film');
+    db.gouts = db.gouts || {}; db.gouts.plates = [{ id:8, nom:'Netflix' }];
+    r.plate = ['8']; r.note = '7';
+    const p = paramsSocleRech('movie');
+    egal(p['vote_average.gte'], '7');
+    egal(p['vote_count.gte'], '100',
+         'une moyenne à 4 votes peut passer en tête de grille');
+  });
+
+  test('point 2 — la règle est écrite côté Découvrir aussi', ()=>{
+    baseVierge();
+    const d = ui.disc;
+    d.type = 'movie'; d.plates = [{ id:8, nom:'Netflix' }]; d.tri = 'populaire';
+    d.noteMin = 0;
+    const p1 = discParams();
+    egal(p1.with_watch_providers, '8', 'la plateforme n\'est pas partie');
+    egal(p1['vote_count.gte'], undefined, 'un plancher est parti avec la plateforme');
+    /* L'exception : dès que la note entre en jeu, le plancher revient. */
+    d.tri = 'note';
+    egal(discParams()['vote_count.gte'], String(DISC_VOTES_MINI),
+         'tri par note + plateforme : le plancher note doit rester');
+    d.tri = 'populaire'; d.noteMin = 7;
+    egal(discParams()['vote_count.gte'], String(DISC_VOTES_MINI),
+         'note minimale + plateforme : le plancher note doit rester');
+    /* Et sans plateforme, rien ne bouge. */
+    d.plates = []; d.noteMin = 7;
+    egal(discParams()['vote_count.gte'], String(DISC_VOTES_MINI));
+  });
+
+  test('point 2 — une ambiance mesurée garde SON plancher malgré la plateforme', ()=>{
+    const r = rechVierge('film');
+    db.gouts = db.gouts || {}; db.gouts.plates = [{ id:8, nom:'Netflix' }];
+    r.amb = 'famille'; r.plate = ['8'];
+    egal(paramsSocleRech('movie')['vote_count.gte'], '500',
+         'le plancher d\'une recette mesurée a été emporté : ce n\'est pas le socle de la grille');
+  });
+
+  /* ---- Point 3 : le plancher des animés ---- */
+
+  test('point 3 — la famille Animés part à 20, les autres restent à 80', ()=>{
+    rechVierge('anime');
+    egal(paramsSocleRech('tv')['vote_count.gte'], '20');
+    rechVierge('serie');
+    egal(paramsSocleRech('tv')['vote_count.gte'], '80');
+    rechVierge('film');
+    egal(paramsSocleRech('movie')['vote_count.gte'], '80');
+    rechVierge('tout');
+    egal(paramsSocleRech('tv')['vote_count.gte'], '80');
+  });
+
+  test('point 3 — Medalist (58 votes) passe le plancher des animés, pas celui de v96', ()=>{
+    /* Le cas exact du constat : id TMDB 237529, mot-clé sport, 58 votes. */
+    vrai(58 >= RECH_VOTES_MINI_ANIME, 'Medalist reste coupé : le plancher animés est trop haut');
+    vrai(58 <  RECH_VOTES_MINI,       'le plancher de v96 ne coupait pas Medalist ?');
+  });
+
+  test('point 3 — tri/critère de note sur Animés : plancher abaissé à 30, pas supprimé', ()=>{
+    const r = rechVierge('anime');
+    r.note = '7';
+    egal(paramsSocleRech('tv')['vote_count.gte'], '30');
+    egal(RECH_VOTES_NOTE_ANIME, 30);
+  });
+
+  test('point 3 — l\'ordre des trois règles : plateforme > animés > 80', ()=>{
+    const r = rechVierge('anime');
+    db.gouts = db.gouts || {}; db.gouts.plates = [{ id:283, nom:'Crunchyroll' }];
+    r.plate = ['283'];                       // Crunchyroll
+    egal(paramsSocleRech('tv')['vote_count.gte'], undefined,
+         'sur Animés, la plateforme doit l\'emporter sur le plancher de 20');
+    /* Mais la note reprend la main même sous plateforme, à 30. */
+    r.note = '7';
+    egal(paramsSocleRech('tv')['vote_count.gte'], '30');
+  });
+
   /* ==================== Bilan ====================
      Écrit UNE FOIS, après la file asynchrone. `window.__testsFinis` est le
      signal que le lanceur attend : sans lui il lirait un bilan encore
