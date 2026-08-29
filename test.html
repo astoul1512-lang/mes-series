@@ -8625,35 +8625,51 @@ window.MODE_TEST = true;
   test('✦ : zéro appel IA pendant la frappe — l\'invariant SPEC-05 tient', ()=>{
     const r = rechNG('tout');
     r.envie = true;
-    let appels = 0;
+    let appels = 0, interp = 0;
     const vraiRouteur = window.routerEnvieIA;
+    const vraiInterp = window.interpreterRechercheIA;
     const vraiLancer = window.lancerTitre;
     let titres = 0;
     try{
       window.routerEnvieIA = ()=>{ appels++; };
+      window.interpreterRechercheIA = ()=>{ interp++; };
       window.lancerTitre = ()=>{ titres++; };
       sansEcran(()=>{ 'un film d\'action drôle'.split('').forEach((c, i)=>
         saisieRech('un film d\'action drôle'.slice(0, i + 1))); });
       egal(appels, 0, 'la frappe a réveillé le relais : le §0.1 l\'interdit');
+      egal(interp, 0, 'la frappe a réveillé l\'interprète : le §0.1 l\'interdit aussi');
       egal(titres, 0, 'la frappe a lancé une recherche de titre en mode envie');
-      /* La validation, elle, route — et sans repasser par l'heuristique. */
+      /* SPEC-11 (29/08/2026) — LA VALIDATION PASSE PAR L'INTERPRÈTE, PAS PAR LE
+         ROUTEUR D'ENVIE. C'est le même invariant qu'avant (la frappe ne réveille
+         rien, la validation part une fois) sur un chemin qui a changé de nom.
+         ET UNE SEULE REQUÊTE PART : `routerEnvieIA` ne doit PAS être appelé en
+         plus — le budget du lot est d'une requête IA par validation. */
       sansEcran(()=> validerRech());
-      egal(appels, 1, 'la validation ne route pas l\'envie');
-    }finally{ window.routerEnvieIA = vraiRouteur; window.lancerTitre = vraiLancer; }
+      egal(interp, 1, 'la validation n\'appelle plus l\'interprète de la barre ✦');
+      egal(appels, 0, 'la validation appelle DEUX tâches IA : le budget est d\'une');
+    }finally{ window.routerEnvieIA = vraiRouteur; window.lancerTitre = vraiLancer;
+              window.interpreterRechercheIA = vraiInterp; }
   });
 
-  test('✦ : la validation force le routeur, sans passer par l\'heuristique', ()=>{
+  test('✦ : la validation ne passe par aucune heuristique', ()=>{
     /* L'heuristique refuse un texte de moins de quatre mots. Appuyer sur ✦ est
-       une déclaration d'intention : elle doit primer. */
+       une déclaration d'intention : elle doit primer. Elle sert encore au mode
+       ⌕, où personne n'a rien déclaré — c'est là que `envie_phrase` vit
+       désormais, et c'est pour ça qu'elle reste sur la liste blanche. */
     egal(ressembleAUneEnvieIA('un braquage', 0, 0), false,
          'l\'heuristique a changé — le test qui suit ne prouve plus rien');
     vrai(codeDe(routerEnvieIA).indexOf('!force') >= 0,
-         'le mode ✦ repasse par l\'heuristique : une envie courte serait refusée');
-    vrai(codeDe(validerRech).indexOf('true') >= 0,
-         'la validation en mode envie ne force pas le routeur');
-    /* L'interrupteur, lui, n'est jamais court-circuité. */
+         'le mode ⌕ ne passe plus par l\'heuristique : elle est sa raison d\'être');
+    /* SPEC-11 — la validation ✦ appelle l'interprète, qui ne devine rien : la
+       phrase part telle quelle, quelle que soit sa longueur. */
+    vrai(codeDe(validerRech).indexOf('interpreterRechercheIA') >= 0,
+         'la validation en mode envie n\'appelle pas l\'interprète');
+    /* L'interrupteur, lui, n'est jamais court-circuité — ni par le routeur, ni
+       par l'interprète. */
     vrai(codeDe(routerEnvieIA).indexOf("iaActive('recherche')") >= 0,
          '✦ rendrait l\'IA obligatoire, interrupteur éteint compris');
+    vrai(codeDe(interpreterRechercheIA).indexOf("iaActive('recherche')") >= 0,
+         'l\'interprète part même quand l\'IA de la Recherche est coupée');
   });
 
   test('✦ : la touche Entrée garde son comportement dans les deux modes', ()=>{

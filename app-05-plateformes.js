@@ -705,7 +705,10 @@ function viewActeur(){
 function viewMovie(){
   const m = db.movies[params.id];
   const back = "goBack()";
-  if(!m) return header('Introuvable',{back:"go('profile')"});
+  /* RETOUR-08 — même correction que pour la fiche série (app-06) : on se replie
+     au lieu de laisser un écran de trois mots dont la flèche empile. */
+  if(!m) return ecranImpossible('movie', 'follow',
+    'Ce film n\'est plus dans ta bibliothèque.');
   let html = header(m.title,{back:back,
     right: boutonCloche('movie', m.id) +
            '<button class="iconbtn" onclick="movieMenu('+m.id+')">'+I.dots+'</button>'});

@@ -186,7 +186,20 @@ function viewSettings(){
      du pied : ce point ne déplace que des paragraphes, il n'en réécrit aucun.
      À noter pour un point ultérieur : les deux phrases se recouvrent
      largement, il y aura une fusion à trancher. */
-  html += '<div class="wrap tiny muted center" style="padding-top:6px;padding-bottom:30px">'+
+  /* SPEC-09 LOT 0 (29/08/2026) — LA SECTION DÉVELOPPEUR, ET ELLE N'EXISTE PAS
+     TANT QU'ON NE L'A PAS DEMANDÉE. Sept appuis sur le pied de page (voir
+     `toucherPiedReglages`, app-14) la font apparaître ; « Masquer les outils »,
+     dans le banc, la refait disparaître. Le déverrouillage vit en localStorage,
+     donc par appareil : ce n'est pas un réglage de compte, c'est un instrument
+     de mesure posé sur CE téléphone. */
+  if(typeof bancDevOuvert === 'function' && bancDevOuvert())
+    html += '<div class="sectitle">Développeur</div><div class="wrap" style="padding-top:0">'+
+      ligne('Banc d\'essai IA', 'Les rangées composées par l\'IA, face à celles d\'aujourd\'hui',
+            "go('banc',{from:'settings'})", I.eclair)+
+    '</div>';
+
+  html += '<div class="wrap tiny muted center" style="padding-top:6px;padding-bottom:30px" '+
+    'onclick="toucherPiedReglages()">'+
     'Mes Séries · tes données sont sur cet appareil et dans ton espace en ligne. '+
     'Personne d\'autre que toi et les proches que tu as invités n\'y a accès.<br>'+
     'Données films/séries fournies par TMDB.<br>'+

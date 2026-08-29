@@ -693,6 +693,13 @@ function etatRech(){
        (fournée suivante) plutôt que d'un chargement complet. */
     total:null, res:[], page:1, pages:1, loading:false, err:'', errSuite:false,
     charge:false,
+    /* RETOUR-07 §2 (29/08/2026) — `exact` VIT DÉSORMAIS DANS L'ÉTAT, PAS
+       SEULEMENT DANS LE MOTEUR. « moins de » se lisait sur `r.flux.exact` ; une
+       grille resservie du cache n'a PAS de moteur (`r.flux` est nul), et la
+       nuance disparaissait au resservice. Le cache mémorise donc `exact` avec
+       le total, et c'est cette valeur-ci que le compteur lit quand le moteur
+       n'est plus là. Tant que le moteur existe, il reste la source. */
+    exact:true,
     /* `touche` : la personne a-t-elle composé quelque chose elle-même ? La
        proposition du jour ne compte pas — voir `nouvelleOuvertureRech`. */
     touche:false, reprise:null,
@@ -703,6 +710,17 @@ function etatRech(){
        Il n'est PAS persisté : chaque ouverture de Recherche repart en mode
        titre, comme tout le reste de la phrase (§4.8). */
     envie:false,
+    /* SPEC-11 (29/08/2026) — LES PERSONNES POSÉES COMME UN FILTRE.
+       `[{id, nom}]`. Ce n'est PAS `qgens` (les personnes proposées sous le
+       champ, qui ouvrent une filmographie) : ici ce sont des noms RÉSOLUS sur
+       `/search/person` et posés dans la requête de la grille (`with_people`).
+       Ils vivent avec le reste de la phrase — remis à zéro à chaque ouverture,
+       retirables un par un, comptés dans la signature de cache. */
+    personnes:[],
+    /* SPEC-11 mode `titre` — les candidats que l'IA a nommés et que TMDB a
+       reconnus. Le premier s'affiche en carte « C'est celui-là ? », les autres
+       en petites affiches. Vidé dès qu'on repart sur autre chose. */
+    candIA:null,
     jeu:null
   };
   return ui.rech;
@@ -814,6 +832,9 @@ function nouvelleOuvertureRech(){
   r.amb = null; r.sans = []; r.genre = []; r.origine = [];
   r.epoque = []; r.duree = []; r.note = null; r.pasvu = null; r.plate = [];
   r.genreEt = false;                   // RETOUR-04 point 1 : il meurt avec les genres
+  /* SPEC-11 — les personnes et les candidats de l'IA font partie de la phrase :
+     ils ne survivent pas plus qu'un genre à une nouvelle ouverture (§4.8). */
+  r.personnes = []; r.candIA = null;
   r.jeu = null;
   r.touche = false;
   /* POINT 1 DU CYCLE 3 — plus de proposition du jour : la phrase s'ouvre VIDE,
@@ -1029,6 +1050,16 @@ function viderRech(){
   r.epoque = []; r.duree = []; r.note = null; r.pasvu = null; r.plate = [];
   r.genreEt = false;                   // RETOUR-04 point 1 : il meurt avec les genres
   r.statut = null; r.gore = null; r.avec = null;
+  r.personnes = [];                    // SPEC-11 : elles sont des mots comme les autres
+  r.candIA = null;
+  r.touche = true;
+  relancerRech();
+}
+/* SPEC-11 — LE ✕ D'UNE PILULE DE PERSONNE. Même geste que `peuImporteRech`
+   pour un mot : on retire, et c'est tout. */
+function retirerPersonneRech(id){
+  const r = etatRech();
+  r.personnes = (r.personnes || []).filter(x => String(x.id) !== String(id));
   r.touche = true;
   relancerRech();
 }
@@ -1047,7 +1078,7 @@ function relancerRech(){
      qui changent derrière la feuille ne coûte aucune requête supplémentaire.
      `charge` reste vrai : c'est lui qui empêche `viewRecherche` de relancer un
      chargement en croyant l'écran neuf. */
-  r.total = null; r.page = 1; r.pages = 1; r.err = ''; r.errSuite = false;
+  r.total = null; r.exact = true; r.page = 1; r.pages = 1; r.err = ''; r.errSuite = false;
   /* B5 — ON ABANDONNE AVANT DE JETER. `r.flux = null` suffisait à oublier le
      moteur précédent, pas à arrêter ce qu'il avait mis en vol : ses requêtes
      continuaient jusqu'au bout, dans le vide. L'ordre compte — abandonner
@@ -1547,6 +1578,14 @@ function paramsSocleRech(media){
     if(l.indexOf(RECH_SANS_GORE) < 0) l.push(RECH_SANS_GORE);
     p.without_keywords = l.join(',');
   }
+  /* SPEC-11 — LES PERSONNES, ELLES, PARTENT À TMDB. `with_people` accepte une
+     liste : en VIRGULES elle veut dire ET (tous au générique), en barres OU.
+     On prend le ET — « un film avec Will Smith et Margot Robbie » demande les
+     deux, et personne n'écrit deux noms pour en vouloir un seul.
+     Le champ vaut pour les films comme pour les séries (`with_people` est
+     accepté sur les deux points de terminaison de `/discover`). */
+  const gens = (r.personnes || []).map(x => x && x.id).filter(x => x != null);
+  if(gens.length) p.with_people = gens.join(',');
   /* « Avec {proche} » ne part PAS à TMDB : c'est un croisement de deux
      bibliothèques, il est 100 % local (§4). Il vit dans le score et dans les
      raisons, pas dans la requête. */
@@ -2058,7 +2097,7 @@ async function amorcerFondRech(F){
         .catch(()=>{ if(!abandonneRech(F)) f.echec = true; })));
       if(etatRech().flux !== F || abandonneRech(F)) return;
       const t = totaliserRech(F);
-      etatRech().total = t.total; F.exact = t.exact;
+      etatRech().total = t.total; F.exact = t.exact; etatRech().exact = t.exact;
       peindreCompteurRech();
     }
     if(etatRech().flux !== F) return;
@@ -2066,7 +2105,13 @@ async function amorcerFondRech(F){
        d'avant B5 — c'est la non-régression que l'acceptation demande. */
     F.amorce = false;
     const t = totaliserRech(F);
-    etatRech().total = t.total; F.exact = t.exact;
+    etatRech().total = t.total; F.exact = t.exact; etatRech().exact = t.exact;
+    /* RETOUR-07 §2 — LE CACHE APPREND LE TOTAL DÉFINITIF. L'entrée avait été
+       posée avec `total: null` au service (le chiffre n'était pas fini) ; c'est
+       ici, et seulement ici, qu'elle reçoit le vrai. La garde
+       `etatRech().flux === F` est celle du dessus : si la personne a relancé
+       une autre recherche, on n'écrit rien. */
+    majTotalCacheRech(F.sig, t.total, t.exact);
     peindreCompteurRech();
     /* Le jeu porte le même compteur, mais dans un écran que `peindreCompteurRech`
        ne sait pas retoucher (ses nœuds n'existent pas). Une seule peinture, à la
@@ -2106,13 +2151,62 @@ function signatureRech(){
   return JSON.stringify([ r.fam, r.q || '', r.amb || '', (r.sans || []).slice().sort(),
     listeRech('genre'), !!r.genreEt, listeRech('origine'), listeRech('epoque'),
     listeRech('duree'), listeRech('plate'), r.note, r.pasvu, r.statut, r.gore, r.avec,
+    /* SPEC-11 — les personnes posées font partie de la demande : sans elles
+       dans la clé, « avec Will Smith » resservirait la grille d'avant. */
+    (r.personnes || []).map(x => x.id),
     Object.keys(db.shows || {}).length + Object.keys(db.movies || {}).length ]);
 }
-function garderRech(sig, res, total){
+/* ===== RETOUR-07 §2 (29/08/2026) — LE CACHE NE RETIENT JAMAIS UN TOTAL
+   PROVISOIRE.
+
+   LE BUG, constaté en prod sur v101 (vidéo d'Adrien du 29/08) : sur Tout, Films
+   et Séries, le compteur annonçait « 0 titres » — ou « moins de 0 séries » —
+   au-dessus d'une grille pleine. Les animés, eux, comptaient juste.
+
+   LE CHEMIN EXACT, pour que personne n'ait à le retrouver :
+   1. `chargerGrilleRech` met la recherche en cache AU SERVICE DE LA FOURNÉE,
+      donc AVANT que `amorcerFondRech` ait fini de préciser le total.
+   2. Quand le classement par origine est actif (`rangsOrigineRech()` vrai, soit
+      Tout/Films/Séries sans mot « d'où »), le PREMIER étage amorcé est
+      « occident », dont `compte` est faux. `totaliserRech` ne compte que
+      l'étage « monde », pas encore lu : `r.total` vaut 0 à cet instant.
+   3. `reprendreDuCacheRech` resservait ce 0 figé, avec `r.flux = null` — donc
+      sans « … » (plus de moteur, plus d'`amorce`) et sans aucun recalcul.
+      Le zéro devenait définitif.
+   4. Les animés n'ont pas ce découpage : leur premier étage est celui qui
+      compte, leur total était juste dès le service. D'où l'asymétrie.
+
+   LA RÈGLE, une seule et elle est ici : ON NE MET EN CACHE QU'UN TOTAL FINI.
+   Tant que l'amorçage tourne, l'entrée porte `total: null` — jamais un chiffre
+   dont on sait qu'il est partiel. Quand l'amorçage TERMINE, il vient recoller
+   le total définitif sur son entrée (`majTotalCacheRech`). Un `null` resservi
+   s'affiche « Résultats » sans chiffre : c'est la seule chose honnête à dire.
+
+   `exact` voyage AVEC le total, sans quoi « moins de » disparaîtrait au
+   resservice et le même écran dirait deux choses différentes selon qu'il vient
+   du réseau ou de la mémoire. */
+function garderRech(sig, res, total, exact){
   if(!sig || !res || !res.length) return;
   rechCache = rechCache.filter(x => x.sig !== sig);
-  rechCache.push({ sig: sig, res: res.slice(), total: total });
+  rechCache.push({ sig: sig, res: res.slice(),
+                   total: (total == null ? null : total),
+                   exact: (total == null ? true : exact !== false) });
   if(rechCache.length > RECH_CACHE_MAX) rechCache.shift();
+}
+/* La deuxième moitié de la règle : l'amorçage de fond, quand il a fini, vient
+   poser le total définitif sur l'entrée qu'il avait laissée à `null`. On vise
+   la signature MÉMORISÉE AU SERVICE (`F.sig`) et pas `signatureRech()` : la
+   bibliothèque a pu grossir entre-temps, et c'est bien l'entrée de tout à
+   l'heure qu'on complète, pas celle d'un état qui n'est plus le même.
+   Si l'entrée a déjà été évincée du cache (huit recherches plus loin), il n'y
+   a rien à faire et c'est très bien. */
+function majTotalCacheRech(sig, total, exact){
+  if(!sig || total == null) return false;
+  const hit = rechCache.find(x => x.sig === sig);
+  if(!hit) return false;
+  hit.total = total;
+  hit.exact = exact !== false;
+  return true;
 }
 function reprendreDuCacheRech(){
   const sig = signatureRech();
@@ -2120,7 +2214,10 @@ function reprendreDuCacheRech(){
   if(!hit) return false;
   const r = etatRech();
   r.res = hit.res.slice();
-  r.total = hit.total;
+  /* Jamais de zéro figé : une entrée incomplète rend `null`, et `null` se lit
+     « Résultats » (grille) / « — » (barre), pas « 0 ». */
+  r.total = (hit.total == null ? null : hit.total);
+  r.exact = hit.exact !== false;
   r.loading = false; r.charge = true; r.err = ''; r.errSuite = false;
   r.matchI = 0;
   /* Le moteur n'est pas repris : `r.flux` est déjà à `null` (relancerRech), et
@@ -2153,7 +2250,7 @@ async function chargerGrilleRech(suite){
      d'un coup, plus bas, quand la fournée est prête. Vider d'abord faisait un
      trou noir à chaque mot posé — invisible sous un voile opaque, très visible
      dès qu'on regarde la grille changer derrière la feuille. */
-  if(!suite){ r.page = 1; r.total = null; r.flux = null; }
+  if(!suite){ r.page = 1; r.total = null; r.exact = true; r.flux = null; }
   r.loading = true; r.err = ''; r.errSuite = false;
   peindreRech();
   /* B5 — le moteur est déclaré ICI, hors du `try`, pour que le `catch` puisse
@@ -2165,7 +2262,9 @@ async function chargerGrilleRech(suite){
     if(seq !== grilleSeq) return;
 
     if(!r.flux){
-      r.flux = { etages: etagesRech(), i:0, exact:true, amorce:false, fond:false, reste:[], ctrl:null };
+      /* `sig` (RETOUR-07 §2) : la signature de cache posée au service, que
+         l'amorçage de fond retrouvera pour y recoller le total définitif. */
+      r.flux = { etages: etagesRech(), i:0, exact:true, amorce:false, fond:false, reste:[], ctrl:null, sig:null };
       /* B5 — un contrôleur par GÉNÉRATION de grille, posé sur le moteur : c'est
          lui que `relancerRech` abandonnera, et c'est son signal que chaque
          requête de flux emporte. `grilleAbort` en garde une poignée, parce que
@@ -2204,7 +2303,7 @@ async function chargerGrilleRech(suite){
       if(!(await amorcerFluxRech(premier, seq, F))) return;
       const t = totaliserRech(F);
       r.total = t.total;
-      F.exact = t.exact;
+      F.exact = t.exact; r.exact = t.exact;
       /* Le compteur est PROVISOIRE tant qu'il reste des étages à amorcer : il
          s'affiche « … » plutôt qu'un chiffre qu'on sait faux. */
       F.amorce = F.reste.length > 0;
@@ -2404,7 +2503,16 @@ async function chargerGrilleRech(suite){
     /* RETOUR-06 point 1 ③ — on ne garde que les chargements COMPLETS et
        réussis : une grille tronquée par une panne n'a rien à faire en mémoire,
        elle serait resservie telle quelle sans que rien ne la retente. */
-    if(!suite) garderRech(signatureRech(), r.res, r.total);
+    /* RETOUR-07 §2 — LE TOTAL N'ENTRE EN CACHE QUE S'IL EST FINI. `F.amorce`
+       vrai = les étages suivants n'ont pas encore été lus, le chiffre du moment
+       n'est qu'un morceau (et vaut même 0 quand le premier étage ne compte
+       pas). On garde alors la grille avec un total `null`, et `amorcerFondRech`
+       viendra poser le chiffre définitif sur cette entrée-là — d'où la
+       signature mémorisée sur le moteur. */
+    if(!suite){
+      F.sig = signatureRech();
+      garderRech(F.sig, r.res, F.amorce ? null : r.total, F.amorce ? null : F.exact);
+    }
 
     /* B5 — ET SEULEMENT MAINTENANT, LE RESTE DE L'AMORÇAGE. Les jaquettes sont
        à l'écran ; les étages suivants se font lire derrière, et le compteur se
@@ -2687,6 +2795,16 @@ function validerRech(){
   if(!r.envie) return lancerTitre(true);
   const q = rechTexte();
   if(!q) return;
+  /* SPEC-11 (29/08/2026) — LA VALIDATION EN MODE ✦ PASSE PAR L'INTERPRÈTE.
+     C'est lui qui sait les trois choses que le routeur d'envie ne savait pas :
+     les personnes, les descriptions d'intrigue, et le ET entre deux genres.
+     UNE SEULE REQUÊTE IA PART : l'interprète remplace `envie_phrase` sur ce
+     chemin-là, il ne s'y ajoute pas. `envie_phrase` garde son propre
+     déclencheur, le routeur AUTOMATIQUE du mode ⌕ (`lancerTitre`), où personne
+     n'a dit que c'était une envie et où l'heuristique doit deviner.
+     Absent (fichier plus ancien, IA coupée) → le comportement d'aujourd'hui,
+     à l'identique : le ✦ ne meurt jamais. */
+  if(typeof interpreterRechercheIA === 'function') return interpreterRechercheIA(q);
   if(typeof routerEnvieIA === 'function') routerEnvieIA(q, 0, 0, true);
 }
 
@@ -2777,8 +2895,8 @@ function corpsRech(){
      sinon on la demande une fois, en arrière-plan, et l'écran se repeint à
      l'arrivée. Jamais bloquant : sans elle, le duo n'ajoute simplement rien. */
   if(typeof amorcerDuoRech === 'function') amorcerDuoRech();
-  return rangeeAmbiancesRech() + blocPhraseRech() + carteMatchRech() +
-         barreTriRech() + grilleRech();
+  return rangeeAmbiancesRech() + blocPhraseRech() + carteCandidatsIARech() +
+         carteMatchRech() + barreTriRech() + grilleRech();
 }
 
 /* ------------------ Un nom tapé : titres, puis personnes ------------------ */
@@ -2811,6 +2929,47 @@ function corpsTitreRech(){
           '<div class="rgennom">'+esc(g.name)+'</div>'+
         '</button>').join('')+'</div>';
   return h;
+}
+
+/* ===== SPEC-11 (29/08/2026) — « C'EST CELUI-LÀ ? » =====
+
+   Le mode `titre` de l'interprète : la phrase décrivait UNE ŒUVRE (« le film où
+   Leonardo DiCaprio est courtier et se drogue »), l'IA a nommé de un à cinq
+   candidats de tête, et TMDB a dit lesquels existent. Le premier — le plus
+   probable — s'affiche en carte ; les autres en petites affiches, sous une
+   ligne qui dit ce qu'elles sont.
+
+   POURQUOI UNE CARTE ET PAS UNE GRILLE. Parce que la réponse à « c'est quoi ce
+   film ? » est UN film, pas une liste : afficher cinq affiches de même taille
+   rendrait à la personne le travail qu'elle venait de déléguer. La carte
+   affirme, les petites affiches corrigent.
+
+   AUCUN CANDIDAT TROUVÉ → cette fonction ne rend RIEN et la bascule sur la
+   recherche de texte normale a déjà eu lieu (voir `interpreterRechercheIA`,
+   app-14). L'écran ne parle jamais d'un échec de l'IA. */
+function carteCandidatsIARech(){
+  const c = etatRech().candIA;
+  if(!c || !c.liste || !c.liste.length) return '';
+  const t = c.liste[0];
+  const autres = c.liste.slice(1);
+  const an = String(t.date || '').slice(0, 4);
+  return '<div class="wrap rcia">'+
+    '<button class="rciac" onclick="ouvrirTitre('+Number(t.id)+',\''+escJs(t.media)+'\',\'search\')">'+
+      '<div class="rciaf">'+posterEl(t.affiche, 'w342', '', t.nom)+'</div>'+
+      '<div class="rciat">'+
+        '<div class="rciaq">C\'est celui-là ?</div>'+
+        '<b>'+esc(t.nom)+'</b>'+
+        '<em>'+esc([an, t.media === 'movie' ? 'film' : 'série'].filter(Boolean).join(' · '))+'</em>'+
+      '</div>'+
+    '</button>'+
+    (autres.length
+      ? '<div class="rciaa">Sinon, peut-être :</div>'+
+        '<div class="rcial" data-rail="cand-ia">'+autres.map(x=>
+          '<button class="rciap" onclick="ouvrirTitre('+Number(x.id)+',\''+escJs(x.media)+'\',\'search\')">'+
+            posterEl(x.affiche, 'w185', '', x.nom)+
+            '<span>'+esc(x.nom)+'</span></button>').join('')+'</div>'
+      : '')+
+  '</div>';
 }
 
 /* ====================== LA PHRASE, ET SON COMPTEUR ======================
@@ -2983,8 +3142,13 @@ function peindreCompteurRech(){
    On réutilise la convention qui existe déjà, et uniquement dans ce cas. La
    SÉQUENCE, elle, ne fausse rien : ses étages partitionnent le même ensemble. */
 function prefixeCompteurRech(){
-  const F = etatRech().flux;
-  return (tamisActifRech() || (F && F.exact === false)) ? 'moins de ' : '';
+  const r = etatRech(), F = r.flux;
+  /* RETOUR-07 §2 — le moteur reste la source tant qu'il vit ; une grille
+     resservie du cache n'en a plus, et c'est `r.exact` (mémorisé avec le
+     total) qui parle. Sans lui, « moins de 4 408 » devenait « 4 408 » au
+     simple fait de revenir sur l'écran. */
+  const exact = F ? F.exact : r.exact;
+  return (tamisActifRech() || exact === false) ? 'moins de ' : '';
 }
 
 /* La feuille d'un mot. Une courte liste, et « peu importe » toujours en bas :

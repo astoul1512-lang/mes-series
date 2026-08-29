@@ -1341,3 +1341,691 @@ function appliquerOrdreIARech(sig){
   r.matchI = 0;
   if(typeof peindreRech === 'function') peindreRech();
 }
+
+/* ===========================================================================
+   SPEC-09 LOT 0 (29/08/2026) — LE BANC D'ESSAI IA, ET RIEN D'AUTRE
+
+   LA VISION, ACTÉE PAR ADRIEN : l'IA ne se contente plus d'habiller Découvrir
+   (pitchs, intitulés) — elle CHOISIT les titres, au service du profil. Elle ne
+   remplace RIEN aujourd'hui : ce lot livre le banc d'essai qui permet d'en
+   juger, et rien de ce qu'il affiche n'atteint l'écran Découvrir réel.
+
+   CE QUE LE BANC MONTRE, PAR FAMILLE ET CÔTE À CÔTE :
+     · à gauche, les rangées proposées par l'IA (tâche `suggestions_famille`) ;
+     · à droite, les rangées que Découvrir affiche AUJOURD'HUI, calculées par le
+       vrai moteur (`rangeesActuellesDe`, app-11).
+
+   LA CHAÎNE DE CONFIANCE, ET ELLE EST LE CŒUR DU LOT. Le modèle propose des
+   NOMS, de tête. Un nom n'est pas un titre :
+     1. il est cherché sur TMDB (`/search/movie` ou `/search/tv`) ;
+     2. introuvable → JETÉ ; ambigu (deux résultats aussi plausibles, et aucune
+        année pour trancher) → JETÉ. On ne devine pas ;
+     3. ce qui reste passe le TAMIS EXISTANT — `tamiser` (app-11) : déjà chez
+        soi, « pas pour moi », genres écartés, cadre de la famille.
+   Les jetés sont COMPTÉS et LISTÉS : un banc qui cache son taux de déchet ne
+   sert à rien pour décider.
+
+   BORNES DURES DU LOT (elles sont dans l'ordre de mission, pas dans mon
+   jugement) : le lot 1 de SPEC-09 — remplacer les rangées de Découvrir,
+   réordonner, signaux forts — N'EST PAS ICI et ne doit pas être commencé. La
+   Recherche ne change pas d'un octet. L'écran Découvrir réel est identique au
+   pixel : ce fichier n'écrit rien dans `db`, rien dans `cacheSugg` qui ne soit
+   ce que Découvrir aurait calculé lui-même, et remet la puce où il l'a trouvée.
+   =========================================================================== */
+
+/* L'accès. L'écran est CACHÉ : il n'existe pas dans les Réglages tant qu'on ne
+   l'a pas déverrouillé, en touchant sept fois le pied de page. Pourquoi pas un
+   simple bouton : ce n'est pas une fonctionnalité, c'est un instrument de
+   mesure, et il montrerait à quelqu'un d'autre qu'Adrien un écran qui ne lui
+   promet rien. Le déverrouillage vit en localStorage — donc PAR APPAREIL, hors
+   synchro : c'est un réglage d'atelier, il n'a rien à faire dans `db.gouts`
+   qui voyage d'un téléphone à l'autre. */
+const BANC_DEV_CLE = 'ms.dev.v1';
+const BANC_DEV_TOUCHES = 7;
+let bancDevCompte = 0;
+function bancDevOuvert(){
+  try{ return localStorage.getItem(BANC_DEV_CLE) === '1'; }catch(e){ return false; }
+}
+function toucherPiedReglages(){
+  if(bancDevOuvert()) return;
+  bancDevCompte++;
+  if(bancDevCompte < BANC_DEV_TOUCHES){
+    /* On ne dit rien avant la cinquième : un compteur qui s'annonce dès le
+       premier appui transforme un pied de page en devinette pour tout le monde. */
+    if(bancDevCompte >= 5 && typeof toast === 'function')
+      toast((BANC_DEV_TOUCHES - bancDevCompte) + ' de plus…');
+    return;
+  }
+  try{ localStorage.setItem(BANC_DEV_CLE, '1'); }catch(e){}
+  bancDevCompte = 0;
+  if(typeof toast === 'function') toast('Outils de développement affichés');
+  if(typeof render === 'function') render();
+}
+function fermerDevBanc(){
+  try{ localStorage.removeItem(BANC_DEV_CLE); }catch(e){}
+  bancDevCompte = 0;
+  if(typeof toast === 'function') toast('Outils masqués');
+  /* RETOUR-08 — ON REVIENT EN ARRIÈRE, ON N'EMPILE PAS. `go('settings', …)`
+     poussait une entrée : le retour suivant ramenait sur un banc qu'on venait
+     de rendre inatteignable autrement. `goBack` rend l'écran précédent, qui est
+     précisément les Réglages d'où l'on est venu. */
+  if(typeof goBack === 'function') goBack();
+  else if(typeof render === 'function') render();
+}
+
+/* Les quatre familles du banc. `cle` est ce qui part au relais (le vocabulaire
+   fermé de `CRITERES_PERMIS.fam`), `puce` est l'identifiant de la puce de
+   Découvrir (`ui.disc.type`), `media` dit à quel point de terminaison TMDB il
+   faut demander la vérification d'un titre de cette famille. */
+const BANC_FAMILLES = [
+  { cle:'tout',  puce:'tout',  nom:'Tout' },
+  { cle:'film',  puce:'movie', nom:'Films' },
+  { cle:'serie', puce:'tv',    nom:'Séries' },
+  { cle:'anime', puce:'anime', nom:'Animés' }
+];
+/* L'état du banc. En mémoire seulement : un banc ne se restaure pas, il se
+   relance. Les VOTES, eux, survivent (localStorage) — c'est tout leur intérêt. */
+let bancEtat = { encours:false, fait:false, err:'', fams:{}, mesures:null };
+
+/* Le profil de goûts AGRÉGÉ. Le minimum, comme les tâches IA existantes : des
+   genres, quelques titres, des noms de plateformes. Jamais d'identité, jamais
+   l'historique brut, jamais une date de visionnage. */
+function profilBancIA(){
+  const bouts = [];
+  try{
+    const g = (typeof profilGoutsRech === 'function') ? profilGoutsRech() : null;
+    if(g){
+      const forts = Object.keys(g).sort((a, b)=> g[b] - g[a]).slice(0, 6);
+      if(forts.length) bouts.push('genres les plus regardés : ' + forts.join(', '));
+    }
+  }catch(e){}
+  const gAimes = genresAimesIA(5);
+  if(gAimes.length) bouts.push('genres des titres notés en positif : ' + gAimes.join(', '));
+  const n = bancNombreAvis();
+  if(n.pouce || n.pouceBas)
+    bouts.push(n.pouce + ' titres approuvés, ' + n.pouceBas + ' refusés');
+  return bouts.join(' ; ').slice(0, 400);
+}
+/* Combien de 👍 et de 👎, sans dire lesquels : un ordre de grandeur aide le
+   modèle à savoir s'il parle à quelqu'un qui a beaucoup noté ou non. */
+function bancNombreAvis(){
+  let pouce = 0, pouceBas = 0;
+  try{
+    const avis = db.avis || {};
+    ['tv', 'movie'].forEach(m=>{
+      Object.keys(avis[m] || {}).forEach(id=>{
+        const v = avis[m][id] && avis[m][id].v;
+        if(v === 1) pouce++; else if(v === -1) pouceBas++;
+      });
+    });
+  }catch(e){}
+  return { pouce: pouce, pouceBas: pouceBas };
+}
+/* Le podium des duels, en NOMS. C'est le jugement le plus fort qu'on ait :
+   la personne a comparé deux titres et tranché, plusieurs fois. */
+function podiumBancIA(fam){
+  const out = [];
+  try{
+    const fams = fam === 'tout' ? ['film','serie','anime'] : [fam];
+    fams.forEach(f=>{
+      (((db.podium || {})[f]) || []).slice(0, 3).forEach(id=>{
+        const o = db.shows[id] || db.movies[id];
+        const nom = o && (o.name || o.title);
+        if(nom && out.indexOf(nom) < 0) out.push(nom);
+      });
+    });
+  }catch(e){}
+  return out.slice(0, 5);
+}
+function plateformesBancIA(){
+  try{ return (typeof mesPlates === 'function' ? mesPlates() : [])
+                .map(p => String(p.nom || '')).filter(Boolean).slice(0, 8); }
+  catch(e){ return []; }
+}
+function genresEcartesBancIA(){
+  try{ return ((db.gouts && db.gouts.exclus) || []).map(String).slice(0, 8); }
+  catch(e){ return []; }
+}
+
+/* --------------------- LA VÉRIFICATION SUR TMDB --------------------- */
+
+/* Deux noms se comparent SANS accents, sans casse et sans ponctuation : « Le
+   Loup de Wall Street » et « le loup de wall street » sont le même titre, et un
+   modèle n'a aucune raison de rendre la typographie exacte de TMDB.
+   Écrite pour le banc d'essai (SPEC-09), reprise telle quelle par l'interprète
+   de la barre ✦ (SPEC-11) : c'est la MÊME question posée aux deux endroits —
+   « le nom que le modèle a écrit désigne-t-il bien ce que TMDB me rend ? ». */
+function normNomIA(s){
+  let v = String(s == null ? '' : s).toLowerCase();
+  /* `normalize` manque sur de très vieux moteurs : sans lui on compare les
+     accents tels quels, ce qui est moins tolérant mais jamais faux. */
+  if(v.normalize) v = v.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return v.replace(/[^a-z0-9]+/g, ' ').trim();
+}
+/* La règle d'ambiguïté, écrite une fois : on garde un résultat s'il est SEUL à
+   porter le nom demandé, ou si l'année tranche. Deux « Dune » sans année, on
+   jette — proposer le mauvais serait pire que ne rien proposer, parce que
+   personne ne verrait l'erreur.
+   `annee` peut manquer : le modèle n'est pas obligé de la donner. */
+function bancChoisirResultat(res, nom, annee, media){
+  const cible = normNomIA(nom);
+  const cands = (res || []).filter(r => r && r.id && r.poster_path).map(r=>{
+    const t = media === 'movie' ? r.title : r.name;
+    const orig = media === 'movie' ? r.original_title : r.original_name;
+    const d = (media === 'movie' ? r.release_date : r.first_air_date) || '';
+    return { r:r, exact: normNomIA(t) === cible || normNomIA(orig) === cible,
+             an: Number(d.slice(0, 4)) || 0 };
+  });
+  const exacts = cands.filter(c => c.exact);
+  if(!exacts.length) return { pris:null, raison:'introuvable' };
+  if(exacts.length === 1) return { pris:exacts[0].r, raison:'' };
+  if(annee){
+    /* Une année à un an près : TMDB date un film à sa première projection, le
+       modèle le date de sa sortie en salles. Un an d'écart n'est pas une
+       erreur, c'est la même œuvre. */
+    const parAn = exacts.filter(c => Math.abs(c.an - annee) <= 1);
+    if(parAn.length === 1) return { pris:parAn[0].r, raison:'' };
+  }
+  return { pris:null, raison:'ambigu' };
+}
+/* Une vérification = une requête TMDB. Rend le titre NORMALISÉ (le format du
+   moteur de suggestions, `normaliser` d'app-11) ou la raison du rejet. */
+async function bancVerifierTitre(t, mesures){
+  const media = t.media === 'film' ? 'movie' : 'tv';
+  /* `envoi` et pas `params` : `params` est l'état de navigation global (app-02),
+     et un `const` local du même nom ferait tomber le contrôle « état partagé »
+     des tests — à raison, puisqu'on ne peut plus lire l'un sans se demander si
+     l'autre a bougé. */
+  const envoi = { query: t.nom, include_adult:'false' };
+  if(t.annee) envoi[media === 'movie' ? 'primary_release_year' : 'first_air_date_year'] = String(t.annee);
+  let d = null;
+  try{
+    mesures.tmdb++;
+    d = await tmdb('/search/' + media, envoi);
+  }catch(e){ return { jete:{ nom:t.nom, raison:'réseau' } }; }
+  let choix = bancChoisirResultat(d && d.results, t.nom, t.annee, media);
+  /* L'année filtrait peut-être trop dur : TMDB range parfois une série sous son
+     année de PREMIÈRE diffusion dans un autre pays. Une seconde chance, sans
+     l'année, avant de jeter — et elle est comptée comme une requête de plus,
+     parce qu'elle en est une. */
+  if(!choix.pris && t.annee && choix.raison === 'introuvable'){
+    try{
+      mesures.tmdb++;
+      d = await tmdb('/search/' + media, { query:t.nom, include_adult:'false' });
+      choix = bancChoisirResultat(d && d.results, t.nom, t.annee, media);
+    }catch(e){}
+  }
+  if(!choix.pris) return { jete:{ nom:t.nom, raison:choix.raison || 'introuvable' } };
+  const x = (typeof normaliser === 'function') ? normaliser(choix.pris, media) : null;
+  if(!x) return { jete:{ nom:t.nom, raison:'sans affiche' } };
+  return { titre:x };
+}
+
+/* --------------------------- LA GÉNÉRATION --------------------------- */
+
+/* Une famille : une requête IA, puis autant de requêtes TMDB que de titres
+   proposés, par paquets de six — le même plafond que l'amorçage de la
+   Recherche, et pour la même raison : une rafale de vingt requêtes simultanées
+   sur le relais TMDB finit en 429. */
+const BANC_VERIF_PAR_FOIS = 6;
+async function bancFamilleIA(f, mesures){
+  const envoi = {
+    famille: f.cle,
+    profil: profilBancIA(),
+    aimes: titresAimesIA(12),
+    podium: podiumBancIA(f.cle),
+    genres: genresAimesIA(5),
+    ecartes: genresEcartesBancIA(),
+    plateformes: plateformesBancIA()
+  };
+  const d = await appelIA('suggestions_famille', envoi);
+  if(d) noterRequeteIA();
+  if(!d || !Array.isArray(d.rangees) || !d.rangees.length)
+    return { err:'L\'IA n\'a rien rendu (coupée, saturée, ou réponse refusée).', rangees:[], jetes:[] };
+
+  const jetes = [];
+  const rangees = [];
+  /* Le tamis est PARTAGÉ par toutes les rangées d'une même famille : c'est ce
+     qui empêche le même titre d'apparaître dans trois rangées — exactement
+     comme dans la vitrine réelle. */
+  const vus = {};
+  const cadre = (typeof cadreSugg === 'function') ? cadreSugg(f.puce)
+                                                  : { medias:['tv','movie'], origine:'mixte' };
+  for(const r of d.rangees){
+    const bruts = [];
+    const liste = (r.titres || []);
+    for(let k = 0; k < liste.length; k += BANC_VERIF_PAR_FOIS){
+      const paquet = liste.slice(k, k + BANC_VERIF_PAR_FOIS);
+      const rep = await Promise.all(paquet.map(t => bancVerifierTitre(t, mesures)));
+      rep.forEach(o=>{
+        mesures.proposes++;
+        if(o.jete){ jetes.push(o.jete); return; }
+        bruts.push(o.titre);
+      });
+    }
+    const avantTamis = bruts.length;
+    const gardes = (typeof tamiser === 'function') ? tamiser(bruts, vus, cadre, false) : bruts;
+    /* Ce que le tamis retire est COMPTÉ À PART de ce que TMDB n'a pas trouvé :
+       ce ne sont pas les mêmes reproches. Un titre introuvable est une erreur
+       du modèle ; un titre tamisé est une proposition juste mais déjà vue,
+       écartée, ou hors cadre — et c'est une information sur la consigne, pas
+       sur la mémoire du modèle. */
+    mesures.tamises += (avantTamis - gardes.length);
+    if(gardes.length) rangees.push({ titre:String(r.titre || ''), l:gardes });
+  }
+  return { err:'', rangees:rangees, jetes:jetes };
+}
+
+async function bancGenererIA(){
+  if(bancEtat.encours) return;
+  bancEtat = { encours:true, fait:false, err:'', fams:{}, mesures:null };
+  if(typeof render === 'function') render();
+  const t0 = Date.now();
+  const mesures = { tmdb:0, proposes:0, tamises:0, ms:0 };
+  try{
+    for(const f of BANC_FAMILLES){
+      /* L'IA d'abord, la vitrine ensuite : si le relais est coupé, on le sait
+         avant d'avoir dépensé trente requêtes TMDB pour la colonne de droite. */
+      const ia = iaActive('decouvrir')
+        ? await bancFamilleIA(f, mesures)
+        : { err:'L\'IA de Découvrir est coupée dans les Réglages.', rangees:[], jetes:[] };
+      const actuelles = (typeof rangeesActuellesDe === 'function')
+        ? await rangeesActuellesDe(f.puce) : [];
+      bancEtat.fams[f.cle] = { ia:ia, actuelles:actuelles };
+      /* On repeint à chaque famille finie : quatre familles, c'est long, et un
+         écran qui n'affiche rien pendant une minute a l'air cassé. */
+      if(view === 'banc' && typeof render === 'function') render();
+    }
+  }catch(e){
+    bancEtat.err = 'Le banc s\'est arrêté : ' + ((e && e.message) || 'erreur inconnue');
+  }
+  mesures.ms = Date.now() - t0;
+  bancEtat.mesures = mesures;
+  bancEtat.encours = false; bancEtat.fait = true;
+  if(typeof render === 'function') render();
+}
+
+/* ------------------------------ LES VOTES ------------------------------ */
+
+/* Un vote porte sur une RANGÉE — c'est la maille que la spec demande, et c'est
+   la bonne : ce qu'on juge, c'est l'idée de la rangée et la cohérence de ce
+   qu'elle rassemble, pas un titre isolé.
+   La clé est (famille, intitulé de la rangée) : elle survit à une seconde
+   génération qui reproposerait la même idée, ce qui est exactement ce qu'on
+   veut mesurer sur plusieurs jours. */
+const BANC_VOTES_CLE = 'ms.banc.v1';
+function bancVotes(){
+  try{
+    const o = JSON.parse(localStorage.getItem(BANC_VOTES_CLE) || '{}');
+    return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+  }catch(e){ return {}; }
+}
+function bancCleVote(fam, titre){ return fam + '|' + String(titre || '').slice(0, 80); }
+function bancVoteDe(fam, titre){
+  const v = bancVotes()[bancCleVote(fam, titre)];
+  return (v && v.v) || 0;
+}
+function bancVoter(fam, titre, v){
+  const o = bancVotes();
+  const k = bancCleVote(fam, titre);
+  /* Re-toucher le même pouce l'annule : un vote qu'on ne peut pas retirer est
+     un vote qu'on hésite à donner. */
+  if(o[k] && o[k].v === v) delete o[k];
+  else o[k] = { v:v, fam:fam, titre:String(titre || '').slice(0, 80), quand:Date.now() };
+  try{ localStorage.setItem(BANC_VOTES_CLE, JSON.stringify(o)); }catch(e){}
+  if(typeof render === 'function') render();
+}
+function bancNbVotes(){ return Object.keys(bancVotes()).length; }
+/* L'export : un fichier JSON, comme la sauvegarde de l'app. Il contient les
+   votes ET les rangées qui étaient à l'écran au moment de l'export, sans quoi
+   un pouce en bas six semaines plus tard ne dirait plus sur quoi il portait. */
+function bancExporterVotes(){
+  const paquet = { app:'mes-series', quoi:'banc-essai-ia', quand:new Date().toISOString(),
+                   votes:bancVotes(), mesures:bancEtat.mesures || null, familles:{} };
+  BANC_FAMILLES.forEach(f=>{
+    const e = bancEtat.fams[f.cle];
+    if(!e) return;
+    paquet.familles[f.cle] = {
+      rangees: (e.ia.rangees || []).map(r => ({ titre:r.titre, titres:r.l.map(x => x.nom) })),
+      jetes: e.ia.jetes || []
+    };
+  });
+  try{
+    const b = new Blob([JSON.stringify(paquet, null, 2)], { type:'application/json' });
+    const u = URL.createObjectURL(b);
+    const a = document.createElement('a');
+    a.href = u; a.download = 'banc-ia-' + new Date().toISOString().slice(0, 10) + '.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(u), 1000);
+    if(typeof toast === 'function') toast('Votes exportés');
+  }catch(e){ if(typeof toast === 'function') toast('Export impossible ici'); }
+}
+
+/* ------------------------------- L'ÉCRAN ------------------------------- */
+
+function bancVignette(x){
+  const img = x.affiche ? '<img loading="lazy" src="'+IMG(x.affiche, 'w185')+'" alt="">'
+                        : '<div class="bncvide"></div>';
+  return '<div class="bncv" title="'+esc(x.nom)+'">'+img+
+    '<span>'+esc(x.nom)+'</span></div>';
+}
+function bancColonneIA(fam, e){
+  if(e.ia.err) return '<div class="bncnote">'+esc(e.ia.err)+'</div>';
+  if(!e.ia.rangees.length) return '<div class="bncnote">Aucune rangée n\'a survécu à la vérification.</div>';
+  return e.ia.rangees.map(r=>{
+    const v = bancVoteDe(fam, r.titre);
+    return '<div class="bncr"><div class="bnch">'+
+      '<b>'+esc(r.titre)+'</b>'+
+      '<span class="bncvotes">'+
+        '<button class="bncp'+(v === 1 ? ' on' : '')+'" '+
+          'onclick="bancVoter(\''+escJs(fam)+'\',\''+escJs(r.titre)+'\',1)">👍</button>'+
+        '<button class="bncp'+(v === -1 ? ' on' : '')+'" '+
+          'onclick="bancVoter(\''+escJs(fam)+'\',\''+escJs(r.titre)+'\',-1)">👎</button>'+
+      '</span></div>'+
+      '<div class="bncl">'+r.l.map(bancVignette).join('')+'</div></div>';
+  }).join('');
+}
+function bancColonneActuelle(e){
+  if(!e.actuelles.length) return '<div class="bncnote">Découvrir n\'a rien à afficher pour cette puce.</div>';
+  return e.actuelles.map(r=>
+    '<div class="bncr"><div class="bnch"><b>'+esc(r.titre)+'</b></div>'+
+    '<div class="bncl">'+r.l.map(bancVignette).join('')+'</div></div>').join('');
+}
+function bancJetes(e){
+  const l = e.ia.jetes || [];
+  if(!l.length) return '';
+  return '<div class="bncjetes"><b>'+l.length+' titre'+(l.length > 1 ? 's' : '')+
+    ' jeté'+(l.length > 1 ? 's' : '')+' avant affichage</b> — '+
+    l.map(j => esc(j.nom) + ' (' + esc(j.raison) + ')').join(' · ')+'</div>';
+}
+function bancMesures(){
+  const m = bancEtat.mesures;
+  if(!m) return '';
+  const jetes = jetesTotalBanc();
+  const taux = m.proposes ? Math.round(jetes / m.proposes * 100) : 0;
+  return '<div class="bncmes">'+
+    '<span><b>'+jetes+' / '+m.proposes+'</b> titres jetés ('+taux+' %)</span>'+
+    '<span><b>'+m.tamises+'</b> retirés par le tamis</span>'+
+    '<span><b>'+m.tmdb+'</b> requêtes TMDB de vérification</span>'+
+    '<span><b>'+(m.ms / 1000).toFixed(1).replace('.', ',')+' s</b> au total</span>'+
+  '</div>';
+}
+function jetesTotalBanc(){
+  let n = 0;
+  BANC_FAMILLES.forEach(f=>{ const e = bancEtat.fams[f.cle]; if(e) n += (e.ia.jetes || []).length; });
+  return n;
+}
+
+function viewBancIA(){
+  let html = header('Banc d\'essai IA', { back:"goBack()" });
+  html += '<div class="wrap bnctete">'+
+    '<p class="tiny muted">L\'IA compose les rangées elle-même, au service de ton profil. '+
+    'Chaque titre proposé est vérifié sur TMDB avant d\'être affiché, puis passe le tamis '+
+    'habituel (déjà vu, écarté, « pas pour moi », genres exclus). '+
+    '<b>Rien de ce que tu vois ici n\'atteint l\'écran Découvrir.</b> '+
+    'Vote par rangée : ce sont ces votes qui décideront de la suite.</p>';
+  if(!iaActive('decouvrir'))
+    html += '<div class="banner">L\'IA de Découvrir est coupée dans les Réglages : '+
+      'le banc ne peut rien demander. Rien d\'autre ne change.</div>';
+  html += '<div class="bncbar">'+
+    '<button class="btn" onclick="bancGenererIA()"'+(bancEtat.encours ? ' disabled' : '')+'>'+
+      (bancEtat.encours ? 'Génération…' : (bancEtat.fait ? 'Regénérer' : 'Générer'))+'</button>'+
+    '<button class="btn ghost" onclick="bancExporterVotes()">Exporter les votes ('+bancNbVotes()+')</button>'+
+    '<button class="btn ghost" onclick="fermerDevBanc()">Masquer les outils</button>'+
+  '</div>';
+  if(bancEtat.err) html += '<div class="banner">'+esc(bancEtat.err)+'</div>';
+  html += bancMesures();
+  html += '</div>';
+
+  BANC_FAMILLES.forEach(f=>{
+    const e = bancEtat.fams[f.cle];
+    if(!e) return;
+    html += '<div class="sectitle">'+esc(f.nom)+'</div>'+
+      '<div class="bnc2">'+
+        '<div class="bncc"><div class="bncct">Proposé par l\'IA</div>'+bancColonneIA(f.cle, e)+'</div>'+
+        '<div class="bncc"><div class="bncct">Découvrir aujourd\'hui</div>'+bancColonneActuelle(e)+'</div>'+
+      '</div>'+ bancJetes(e);
+  });
+  if(!bancEtat.fait && !bancEtat.encours)
+    html += '<div class="wrap tiny muted">Touche « Générer » : quatre requêtes IA et '+
+            'quelques dizaines de vérifications TMDB. Compte une minute.</div>';
+  return html;
+}
+
+/* ===========================================================================
+   SPEC-11 (29/08/2026) — LA BARRE ✦ DEVIENT UN VRAI INTERPRÈTE
+
+   LA DEMANDE D'ADRIEN, mot pour mot : « je veux pouvoir taper "je cherche un
+   film d'action avec Will Smith" comme "je cherche le film où Leonardo DiCaprio
+   est courtier et se drogue" (pour trouver Le Loup de Wall Street), et "je veux
+   un film d'action et d'aventure" ».
+
+   TROIS CAPACITÉS MANQUAIENT au routeur d'envie, et une seule tâche les apporte
+   toutes les trois :
+     · LES PERSONNES — un nom au générique n'est pas une dimension de filtre ;
+       il se résout sur `/search/person` et devient `with_people` ;
+     · LES DESCRIPTIONS — « le film où un courtier se drogue » ne décrit pas des
+       critères, il décrit UNE ŒUVRE. C'est le mode `titre` ;
+     · LE ET DE GENRES — « action ET aventure » posait deux genres en OU, ce qui
+       n'est pas ce qui a été demandé. Le réglage du RETOUR-04 existe déjà ; il
+       manquait quelqu'un pour le basculer.
+
+   CE QUI NE CHANGE PAS, ET C'EST LA MOITIÉ DU LOT : la grille, son cache, ses
+   planchers, le mode ⌕ normal. Le ✦ éteint reste la recherche de titre
+   d'aujourd'hui. IA indisponible ou réponse invalide → le comportement
+   d'aujourd'hui, à l'identique. Le ✦ ne meurt jamais.
+
+   BUDGET : UNE requête IA par validation, jamais pendant la frappe (RB-1 tient,
+   et elle est même renforcée : c'est `validerRech` qui appelle, pas
+   `saisieRech`), cache par phrase EXACTE pour la session, plus les quelques
+   requêtes TMDB de résolution — une par personne, une par candidat. */
+
+const IA_PHRASE_CACHE_MAX = 20;
+/* Phrase exacte (minuscules) → réponse validée, ou `null` pour « on a demandé,
+   ça n'a rien donné ». Le `null` compte : re-valider deux fois la même phrase
+   incomprise ne doit pas repayer la requête. En mémoire, comme le cache de
+   grille — une session, pas plus. */
+let iaPhraseCache = {};
+let interpEnCoursIA = false;
+
+function oublierCachePhraseIA(){ iaPhraseCache = {}; }
+
+async function interpreterRechercheIA(phrase){
+  const q = String(phrase == null ? '' : phrase).trim();
+  if(!q) return;
+  /* Le mode ✦ ne s'allume pas sans l'interrupteur, mais le chemin
+     programmatique existe : on rend alors la recherche de texte, pas un écran
+     muet. */
+  if(typeof iaActive !== 'function' || !iaActive('recherche')) return repliTexteIA(q);
+  if(interpEnCoursIA) return;
+  interpEnCoursIA = true;
+  try{
+    const cle = q.toLowerCase();
+    let d;
+    if(Object.prototype.hasOwnProperty.call(iaPhraseCache, cle)){
+      d = iaPhraseCache[cle];
+    }else{
+      d = await appelIA('interpreter_recherche', { phrase: q.slice(0, 300) });
+      if(d) noterRequeteIA();
+      const cles = Object.keys(iaPhraseCache);
+      if(cles.length >= IA_PHRASE_CACHE_MAX) delete iaPhraseCache[cles[0]];
+      iaPhraseCache[cle] = d || null;
+    }
+    if(!d || (d.mode !== 'filtres' && d.mode !== 'titre')){
+      /* LE COMPORTEMENT D'AUJOURD'HUI, À L'IDENTIQUE : c'est mot pour mot ce
+         que `traduireEnvieIA` dit quand le relais ne rend rien d'exploitable.
+         Aucune pilule fantôme, aucun résultat modifié. */
+      toast('✦ Pas compris — décris un genre, une époque, une durée…');
+      return;
+    }
+    if(d.mode === 'titre') return await poserCandidatsIA(q, d.titres || []);
+    return await poserFiltresIA(d.filtres || {});
+  }catch(e){
+    toast('✦ Pas compris — décris un genre, une époque, une durée…');
+  }finally{
+    interpEnCoursIA = false;
+  }
+}
+
+/* La bascule silencieuse : on éteint le ✦ et on cherche la phrase comme un
+   titre. « Silencieuse » veut dire SANS message d'échec — la personne voit une
+   recherche de texte normale, pas un rapport d'erreur d'IA. La couleur de la
+   barre change, et c'est la seule chose qui le dit : elle annonce honnêtement
+   ce que l'écran fait maintenant. */
+function repliTexteIA(q){
+  const r = etatRech();
+  r.envie = false;
+  r.q = q;
+  r.candIA = null;
+  if(typeof render === 'function') render();
+  if(typeof lancerTitre === 'function') lancerTitre(true);
+}
+
+/* ---------------------- MODE `filtres` ---------------------- */
+
+/* Les noms d'usage des plateformes, par clé du vocabulaire fermé du relais.
+   On ne pose QUE ce que la personne a déclaré : `mesPlates()` est la liste de
+   référence, et un nom qui n'y correspond pas tombe — comme un critère
+   inventé. Plusieurs écritures par clé, parce que TMDB nomme « Amazon Prime
+   Video » ce que tout le monde appelle « Prime ». */
+const IA_PLATES_NOMS = {
+  netflix:['netflix'],
+  prime:['amazon prime video','prime video','amazon video','prime'],
+  disney:['disney plus','disney+'],
+  canal:['canal+','canal plus','mycanal'],
+  appletv:['apple tv plus','apple tv+','apple tv'],
+  max:['max','hbo max'],
+  crunchyroll:['crunchyroll'],
+  adn:['animation digital network','adn']
+};
+function plateDeCleIA(cle){
+  const noms = IA_PLATES_NOMS[cle];
+  if(!noms) return null;
+  const mes = (typeof mesPlates === 'function') ? mesPlates() : [];
+  const trouve = mes.find(p => noms.indexOf(normNomIA(p.nom)) >= 0);
+  return trouve ? trouve.id : null;
+}
+
+async function poserFiltresIA(f){
+  const r = etatRech();
+  /* Les personnes d'abord, parce que ce sont les seules qui coûtent du réseau :
+     si aucune ne se résout et que rien d'autre n'a été compris, on le dira
+     avant d'avoir touché à l'écran. */
+  const gens = [];
+  for(const nom of (f.personnes || []).slice(0, 3)){
+    const p = await resoudrePersonneIA(nom);
+    if(p && !gens.some(x => String(x.id) === String(p.id))) gens.push(p);
+  }
+  /* Le vocabulaire du relais, traduit dans celui de l'app — on réutilise
+     `appliquerCriteresIA` (lot B), qui sait poser un mot par la mécanique de
+     l'écran plutôt qu'en écrivant l'état à la main. */
+  const criteres = [];
+  if(f.famille) criteres.push({ cle:'fam', val:f.famille });
+  (f.genres || []).forEach(g => criteres.push({ cle:'genre', val:g }));
+  if(f.origine) criteres.push({ cle:'origine', val:f.origine });
+  if(f.epoque) criteres.push({ cle:'epoque', val:f.epoque });
+  if(f.duree) criteres.push({ cle:'duree', val:f.duree });
+  if(f.note_mini) criteres.push({ cle:'note', val:f.note_mini });
+
+  /* La phrase du haut redevient des pilules : la garder dans la barre
+     laisserait l'écran en mode « recherche de titre » par-dessus. */
+  r.q = ''; r.qtitres = []; r.qgens = []; r.qerr = '';
+  r.candIA = null;
+  let n = appliquerCriteresIA(criteres);
+  /* Les plateformes : posées par la mécanique de l'écran, comme le reste. */
+  (f.plateformes || []).forEach(cle=>{
+    const id = plateDeCleIA(cle);
+    if(id == null) return;
+    if(listeRech('plate').map(String).indexOf(String(id)) < 0){
+      poserMotRech('plate', id); n++;
+    }
+  });
+  if(gens.length){ r.personnes = gens; n += gens.length; }
+  /* LE ET DE GENRES, POSÉ APRÈS LES GENRES ET PAS AVANT : `poserMotRech` remet
+     `genreEt` à faux dès qu'il reste moins de deux genres cochés (RETOUR-04
+     point 1), donc le poser d'abord reviendrait à ne rien poser du tout. */
+  if(f.genres_et === true && listeRech('genre').length >= 2){ r.genreEt = true; n++; }
+  if(!n){
+    toast('✦ Pas compris — décris un genre, une époque, une durée…');
+    return;
+  }
+  if(typeof relancerRech === 'function') relancerRech();
+  toast('✦ Compris — 1 requête');
+}
+
+/* « le premier résultat NET », et la définition de « net » est ici, une fois.
+   TMDB rend ses personnes par popularité décroissante. On garde la première
+   dont le NOM correspond exactement à ce qui a été demandé — et seulement si
+   aucune autre correspondance exacte n'est de popularité comparable. Deux
+   homonymes également connus, on ne devine pas : on ignore. Poser le mauvais
+   acteur donnerait une grille fausse que personne ne verrait comme fausse. */
+const IA_PERSONNE_ECART = 2;
+async function resoudrePersonneIA(nom){
+  const cible = normNomIA(nom);
+  if(!cible) return null;
+  let d = null;
+  try{ d = await tmdb('/search/person', { query: String(nom).slice(0, 60), include_adult:'false' }); }
+  catch(e){ return null; }
+  const exacts = ((d && d.results) || [])
+    .filter(p => p && p.id && normNomIA(p.name) === cible);
+  if(!exacts.length) return null;
+  if(exacts.length > 1){
+    const a = Number(exacts[0].popularity) || 0, b = Number(exacts[1].popularity) || 0;
+    if(!(a >= b * IA_PERSONNE_ECART)) return null;      // ambigu : on ne devine pas
+  }
+  return { id: exacts[0].id, nom: exacts[0].name };
+}
+
+/* ---------------------- MODE `titre` ---------------------- */
+
+/* Chaque candidat est confronté à `/search/multi` — le point de terminaison que
+   la barre interroge déjà, donc rien de neuf à autoriser côté relais. Le média
+   annoncé par le modèle sert de FILTRE, pas de vérité : il se trompe parfois de
+   film/série, et un titre juste ne doit pas tomber pour ça. */
+async function verifierCandidatIA(t){
+  const attendu = t.media === 'film' ? 'movie' : 'tv';
+  let d = null;
+  try{ d = await tmdb('/search/multi', { query: String(t.nom).slice(0, 80), include_adult:'false' }); }
+  catch(e){ return null; }
+  const cible = normNomIA(t.nom);
+  const l = ((d && d.results) || []).filter(x =>
+    x && x.id && x.poster_path && (x.media_type === 'movie' || x.media_type === 'tv'));
+  const nomDe = x => x.media_type === 'movie' ? x.title : x.name;
+  const origDe = x => x.media_type === 'movie' ? x.original_title : x.original_name;
+  const dateDe = x => (x.media_type === 'movie' ? x.release_date : x.first_air_date) || '';
+  const exacts = l.filter(x => normNomIA(nomDe(x)) === cible || normNomIA(origDe(x)) === cible);
+  if(!exacts.length) return null;
+  /* Le média annoncé départage quand plusieurs titres portent le même nom (un
+     film et sa série) ; l'année aussi, quand elle est là. */
+  let choix = exacts.filter(x => x.media_type === attendu);
+  if(!choix.length) choix = exacts;
+  if(t.annee && choix.length > 1){
+    const parAn = choix.filter(x => Math.abs((Number(dateDe(x).slice(0, 4)) || 0) - t.annee) <= 1);
+    if(parAn.length) choix = parAn;
+  }
+  const x = choix[0];
+  return { id:x.id, media:x.media_type, nom:nomDe(x) || origDe(x),
+           affiche:x.poster_path, date:dateDe(x) };
+}
+
+async function poserCandidatsIA(q, titres){
+  const trouves = [];
+  for(const t of (titres || []).slice(0, 5)){
+    const x = await verifierCandidatIA(t);
+    if(x && !trouves.some(y => y.media === x.media && String(y.id) === String(x.id)))
+      trouves.push(x);
+  }
+  /* AUCUN CANDIDAT TROUVÉ → bascule silencieuse sur la recherche de texte.
+     Le modèle a peut-être nommé une œuvre qui n'existe pas, ou la personne
+     tapait finalement un titre : dans les deux cas, chercher le texte est la
+     chose la plus utile qu'on puisse faire, et elle ne demande rien. */
+  if(!trouves.length) return repliTexteIA(q);
+  const r = etatRech();
+  r.candIA = { phrase:q, liste:trouves };
+  /* Le champ se vide, comme en mode `filtres` : sans ça l'écran resterait en
+     recherche de titre et la carte ne serait jamais rendue. La grille, elle,
+     ne bouge PAS — on n'a rien filtré, on a répondu à une question. */
+  r.q = ''; r.qtitres = []; r.qgens = []; r.qerr = '';
+  if(typeof peindreRech === 'function') peindreRech();
+  else if(typeof render === 'function') render();
+}

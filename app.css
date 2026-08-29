@@ -2961,3 +2961,81 @@ body.rphnette .rphrase{background:#15171e}
   .recocj{padding:0;border:0;background:none;display:block;flex:none;font:inherit}
   .recocn.recocnb{padding:0;border:0;background:none;display:block;width:100%;
     text-align:left;font-family:inherit;color:var(--text);cursor:pointer}
+
+  /* =========================================================================
+     SPEC-09 LOT 0 (29/08/2026) — LE BANC D'ESSAI IA
+
+     Un écran d'atelier, pas un écran de l'app : il n'emprunte au design premium
+     que ses jetons de couleur et de rayon, et n'ajoute AUCUNE variable. Toutes
+     ses classes portent le préfixe `bnc` — c'est la règle du lot R1 (un nom de
+     classe nu ne se reprend pas d'une section à l'autre), et ici elle a une
+     seconde vertu : on voit d'un coup d'œil, dans la feuille comme dans le HTML,
+     ce qui appartient à un écran qu'aucun utilisateur ne verra jamais.
+
+     DEUX COLONNES QUI DÉFILENT CHACUNE À L'HORIZONTALE : c'est la seule forme
+     qui permette de comparer deux jeux de rangées sur 390 px sans réduire les
+     affiches à des timbres. On ne cherche pas la beauté, on cherche la
+     comparabilité. ======================================================== */
+  .bnctete{padding-bottom:6px}
+  .bncbar{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 4px}
+  .bncmes{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:10px;font-size:11.5px;
+    color:var(--muted);background:var(--surface2);border:1px solid var(--line);
+    border-radius:12px;padding:9px 11px}
+  .bncmes b{color:var(--text)}
+  .bnc2{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:0 12px}
+  .bncc{min-width:0;background:var(--surface2);border:1px solid var(--line);
+    border-radius:14px;padding:8px 0 10px}
+  .bncct{font-size:11px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;
+    color:var(--muted);padding:0 10px 6px}
+  .bncr{padding:6px 0 2px}
+  .bnch{display:flex;align-items:center;gap:6px;padding:0 10px 5px}
+  .bnch b{font-size:12px;line-height:1.25;flex:1;min-width:0}
+  .bncvotes{display:flex;gap:4px;flex:none}
+  .bncp{border:1px solid var(--line);background:transparent;border-radius:8px;
+    padding:1px 5px;font-size:12px;line-height:1.4;cursor:pointer}
+  .bncp.on{border-color:var(--accent);background:var(--accent-dim)}
+  .bncl{display:flex;gap:6px;overflow-x:auto;padding:0 10px 2px;
+    scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .bncl::-webkit-scrollbar{display:none}
+  .bncv{flex:none;width:62px}
+  .bncv img{width:62px;height:93px;object-fit:cover;border-radius:7px;display:block;
+    background:var(--surface)}
+  .bncvide{width:62px;height:93px;border-radius:7px;background:var(--surface)}
+  .bncv span{display:block;font-size:9.5px;line-height:1.2;color:var(--muted);margin-top:3px;
+    overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .bncnote{font-size:11.5px;color:var(--muted);padding:2px 10px 4px}
+  .bncjetes{margin:6px 12px 2px;font-size:10.5px;line-height:1.45;color:var(--muted);
+    border-left:2px solid var(--line);padding-left:8px}
+  .bncjetes b{color:var(--text)}
+
+  /* =========================================================================
+     SPEC-11 (29/08/2026) — LA BARRE ✦ QUI COMPREND
+
+     Deux ajouts, et pas un de plus : la pilule d'une PERSONNE posée (elle
+     reprend `.rmot`, avec le ton du bijou pour dire qu'elle vient du ✦), et la
+     carte « C'est celui-là ? » du mode `titre`.
+     La carte affirme — grande affiche, question en tête, nom en gras — et les
+     petites affiches en dessous corrigent. C'est la hiérarchie qui porte le
+     sens : cinq affiches de même taille rendraient à la personne le tri qu'elle
+     venait de déléguer. ==================================================== */
+  .rmot.gens{border-color:var(--accent);color:var(--text)}
+  .rcia{padding-top:6px;padding-bottom:2px}
+  .rciac{display:flex;gap:12px;width:100%;text-align:left;padding:10px;border-radius:16px;
+    border:1px solid var(--line);background:var(--surface2);color:var(--text);
+    font-family:inherit;cursor:pointer}
+  .rciaf{flex:none;width:74px}
+  .rciaf img{width:74px;height:111px;object-fit:cover;border-radius:9px;display:block}
+  .rciat{min-width:0;display:flex;flex-direction:column;justify-content:center;gap:3px}
+  .rciaq{font-size:11px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;
+    color:var(--accent)}
+  .rciat b{font-size:16px;line-height:1.2}
+  .rciat em{font-style:normal;font-size:12px;color:var(--muted)}
+  .rciaa{font-size:11.5px;color:var(--muted);margin:10px 0 6px}
+  .rcial{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;
+    -webkit-overflow-scrolling:touch}
+  .rcial::-webkit-scrollbar{display:none}
+  .rciap{flex:none;width:72px;padding:0;border:0;background:none;color:var(--text);
+    font-family:inherit;cursor:pointer;text-align:left}
+  .rciap img{width:72px;height:108px;object-fit:cover;border-radius:8px;display:block}
+  .rciap span{display:block;font-size:10px;line-height:1.2;color:var(--muted);margin-top:4px;
+    overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}

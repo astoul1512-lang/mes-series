@@ -354,6 +354,15 @@ function pilulesRech(){
     h += '<button class="rmot'+ton+'" onclick="peuImporteRech(\''+escJs(m.cle)+'\')">'+
       esc(m.mot)+'<span class="rpx">✕</span></button>';
   });
+  /* 2 bis. SPEC-11 — LES PERSONNES POSÉES, retirables comme les autres mots.
+        Elles ne viennent pas de `RECH_MOTS` (ce ne sont pas des critères d'une
+        table fermée mais des identifiants TMDB résolus), donc elles ont leur
+        propre boucle et leur propre retrait — mais exactement la même forme à
+        l'écran : ce que l'IA pose se retire d'un doigt, comme le reste. */
+  (r.personnes || []).forEach(g=>{
+    h += '<button class="rmot gens" onclick="retirerPersonneRech('+Number(g.id)+')">'+
+      esc('avec '+g.nom)+'<span class="rpx">✕</span></button>';
+  });
   /* 3. La porte vers la feuille. Elle ne dit plus « + préciser » (une question
         après l'autre) mais « ＋ affiner » (tout d'un coup) — c'est le
         changement de forme du §4. */
@@ -367,6 +376,9 @@ function pilulesRech(){
 function selectionActiveRech(){
   const r = etatRech();
   if(r.ambiance) return true;
+  /* SPEC-11 — une personne posée EST une sélection : sans cette ligne, « avec
+     Will Smith » seul n'aurait pas droit à la carte du meilleur match. */
+  if((r.personnes || []).length) return true;
   if(r.amb || r.note || r.pasvu || r.statut || r.gore || r.avec) return true;
   return ['genre','origine','epoque','duree','plate'].some(c => listeRech(c).length > 0);
 }
