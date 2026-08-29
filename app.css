@@ -2953,3 +2953,11 @@ body.rphnette .rphrase{background:#15171e}
     border-radius:12px;padding:11px 13px;font-size:13.5px;font-family:inherit;color:var(--text);
     resize:none;outline:none}
   .recomot:focus{border-color:var(--accent)}
+
+  /* RETOUR-06 point 2 — la jaquette et le titre d'une carte reco sont des
+     boutons. Ils ne doivent pas EN AVOIR L'AIR : ce sont l'affiche et le titre,
+     pas des actions ; la carte porte déjà ses trois boutons plus bas. On retire
+     donc tout ce qu'un bouton apporte par défaut, et on ne garde que le geste. */
+  .recocj{padding:0;border:0;background:none;display:block;flex:none;font:inherit}
+  .recocn.recocnb{padding:0;border:0;background:none;display:block;width:100%;
+    text-align:left;font-family:inherit;color:var(--text);cursor:pointer}
