@@ -1824,11 +1824,25 @@ function ajouterDepuisReco(idReco){
 
 /* Le bouton 💌 de la rangée d'actions. Visible seulement si le cercle n'est pas
    vide : proposer « recommander » à qui ne suit personne, c'est ouvrir une
-   feuille vide — c'est déjà la règle du menu ⋯ (I6), on ne l'invente pas. */
-function boutonRecoFiche(type, id){
+   feuille vide — c'est déjà la règle du menu ⋯ (I6), on ne l'invente pas.
+
+   RETOUR-08 §1 (29/08/2026) — DEUX FORMES, UN SEUL CODE.
+   Le carré à côté d'une action principale, comme depuis SPEC-10 §3 ; et un
+   bouton pleine largeur QUAND IL N'Y A PAS D'ACTION PRINCIPALE — une série
+   terminée, en pause, ou pas encore commencée. Un carré à icône seule, posé
+   tout seul au milieu d'un écran, ne se lit pas : il ressemble à un reste de
+   rangée. Le libellé n'apparaît donc que là où il est nécessaire.
+   Deux formes, mais UNE fonction : l'appelant ne choisit que la place, jamais
+   le texte, jamais l'action. Deux fonctions auraient divergé au premier
+   changement de libellé — c'est le reproche « cherche le jumeau ». */
+function boutonRecoFiche(type, id, bloc){
   if(typeof cercle !== 'function' || !cercle().length) return '';
+  const act = 'menuRecommander(\''+escJs(type)+'\','+Number(id)+')';
+  if(bloc)
+    return '<button class="btn ghost block reco" onclick="'+act+'">'+
+      '💌 Recommander à un ami</button>';
   return '<button class="btn ghost carre reco" aria-label="Recommander à un ami" '+
-    'title="Recommander à un ami" onclick="menuRecommander(\''+escJs(type)+'\','+Number(id)+')">💌</button>';
+    'title="Recommander à un ami" onclick="'+act+'">💌</button>';
 }
 /* Le bandeau d'état, sous la rangée d'actions : « à qui », et « où ça en est ».
    Il ne se lit que sur ce que la base dit — pas sur un drapeau local qui

@@ -40,6 +40,30 @@ function viewShow(){
       '<button class="btn ghost" onclick="basculerPause('+s.id+')">Reprendre</button></div></div>';
   }
 
+  /* ===========================================================================
+     RETOUR-08 §1 (29/08/2026) — LE 💌 N'EST PLUS ACCROCHÉ À L'ÉPISODE SUIVANT.
+
+     Le défaut, relevé par Adrien sur Blacklist (218/218) : le bouton et le
+     bandeau vivaient DANS la branche « il reste un épisode à voir ». Trois
+     états les perdaient donc entièrement — série TERMINÉE, série EN PAUSE,
+     série pas encore commencée — et le premier est justement celui où l'on a le
+     plus envie de recommander : on vient de la finir. Le bandeau
+     « Recommandée à X · il l'a ajoutée ✓ » disparaissait avec, si bien qu'une
+     série déjà recommandée ne le disait nulle part une fois terminée.
+
+     La cause était mécanique et non voulue : « recommander » avait été rangé
+     dans la rangée d'actions de « marquer l'épisode suivant comme vu » parce
+     que c'était la seule rangée qui existait. Or recommander ne dépend NI de la
+     progression, NI de la pause, NI du statut — la fiche film ne l'a jamais
+     conditionné, et l'aperçu non plus. La série était la seule des trois fiches
+     à le faire.
+
+     Le bouton et le bandeau sortent donc de la branche. Ils sont rendus une
+     fois, toujours, quel que soit l'état — c'est la règle de la fiche film,
+     appliquée ici sans exception. Quand il y a une action principale, le 💌 la
+     rejoint en carré, exactement comme avant ; quand il n'y en a pas, il prend
+     la pleine largeur avec son libellé. */
+  const reco = boutonRecoFiche('tv', s.id);
   if(nx && !s.pause){
     /* Le bouton de pause accompagne l'action principale au lieu de dormir dans
        le menu ⋮ : trois appuis pour mettre une série de côté, c'était deux de
@@ -51,7 +75,6 @@ function viewShow(){
        actions secondaires (`carre`), à côté de l'action principale. Il ne
        s'affiche que si le cercle n'est pas vide, `boutonRecoFiche` s'en
        charge — d'où la rangée à deux boutons même sans le bouton pause. */
-    const reco = boutonRecoFiche('tv', s.id);
     const pause = peutSeMettreEnPause(s)
       ? '<button class="btn ghost carre" onclick="basculerPause('+s.id+')" '+
           'title="Mettre en pause" aria-label="Mettre en pause">'+I.pause+'</button>'
@@ -65,9 +88,20 @@ function viewShow(){
           '</div>'
         : '<button class="btn block" onclick="quickWatch('+s.id+')">'+
             I.check+' Marquer '+codeEp(nx.s,nx.e)+' comme vu</button>')+
-      '<div class="tiny muted center" style="margin-top:8px">'+esc(nx.n)+'</div></div>'+
-      bandeauRecoFiche('tv', s.id);
-  } else if(s.next){
+      '<div class="tiny muted center" style="margin-top:8px">'+esc(nx.n)+'</div></div>';
+  } else if(reco){
+    /* Terminée, en pause, ou pas encore commencée : pas d'action principale,
+       donc le 💌 prend la pleine largeur. La rangée existe pour lui seul, ce
+       qui est exactement le cas qu'Adrien décrit. */
+    html += '<div class="wrap" style="padding-bottom:0">'+
+      boutonRecoFiche('tv', s.id, true)+'</div>';
+  }
+  /* Le bandeau suit le bouton : hors de la branche, lui aussi. Il ne dit rien
+     quand rien n'a été envoyé (`bandeauRecoFiche` rend une chaîne vide), donc
+     le rendre toujours ne coûte rien et répare le cas « série terminée déjà
+     recommandée » d'un seul geste. */
+  html += bandeauRecoFiche('tv', s.id);
+  if(!(nx && !s.pause) && s.next){
     html += '<div class="wrap" style="padding-bottom:0"><div class="card" style="padding:14px;text-align:center">'+
       '<div class="small muted">Prochain épisode</div>'+
       '<div style="font-weight:700;margin-top:2px">'+codeEp(s.next.s,s.next.e)+' · '+esc(s.next.n||'')+'</div>'+
