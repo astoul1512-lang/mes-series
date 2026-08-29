@@ -766,6 +766,11 @@ const ROUTES = {
   centre:     { seg:'centre',        partageable:true  },
   clochettes: { seg:'cloches',       partageable:true  },
   rangee:     { seg:'rangee',        partageable:false },
+  /* SPEC-09 lot 0 — LE BANC D'ESSAI IA. Non partageable, et ce n'est pas un
+     oubli : c'est un écran d'atelier déverrouillé par appareil (sept appuis sur
+     le pied des Réglages). Une adresse partageable en ferait une porte que
+     n'importe quel lien ouvrirait. */
+  banc:       { seg:'banc-ia',       partageable:false },
   biblio:     { seg:'bibliotheque',  partageable:false },
   account:    { seg:'compte',        partageable:false },
   avatar:     { seg:'avatar',        partageable:false },
@@ -918,7 +923,7 @@ let ui = { profTab:'series', editServer:false, searchQ:'', searchRes:null, searc
               versé dans `disc` à sa fermeture, remis à null ensuite. */
            discBrouillon:null };
 
-const DEPTH = { bienvenue:0, motdepasse:0, avatar:0, discover:0, search:0, sorties:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, rangee:1, acteur:2, account:2, biblio:2, notifs:2, gouts:2, plates:2, clochettes:3, centre:1 };
+const DEPTH = { bienvenue:0, motdepasse:0, avatar:0, discover:0, search:0, sorties:0, follow:0, profile:0, preview:1, show:1, movie:1, settings:1, abos:1, moi:1, rangee:1, acteur:2, account:2, biblio:2, notifs:2, gouts:2, plates:2, clochettes:3, centre:1, banc:2 };
 let navDir = 'none';
 /* Position de défilement mémorisée pour les écrans qui sont des listes.
    Quitter une liste puis y revenir doit rendre la page là où on l'avait laissée ;
@@ -1104,9 +1109,24 @@ function amorcerHistorique(){
    Tout le reste empile. En cas de doute, empiler : le pire d'une entrée en
    trop est un appui de retour supplémentaire ; le pire d'une entrée manquante
    est un écran qu'on ne peut plus atteindre en revenant. */
-function substitue(avant, apres){
+/* RETOUR-08 (29/08/2026) — LA SECONDE SUBSTITUTION NE REGARDAIT PAS DE QUEL
+   TITRE ON PARLAIT, et le commentaire ci-dessus disait pourtant « du MÊME
+   titre » depuis le premier jour.
+
+   L'ÉCART, reproduit : Découvrir → aperçu de A → « Dans le même esprit » →
+   fiche de B (B est déjà dans la bibliothèque, donc `ouvrirTitre` ouvre sa
+   FICHE, pas son aperçu). `avant` valait `preview`, `apres` valait `show` : on
+   remplaçait. L'aperçu de A disparaissait de la pile, et le retour rendait
+   Découvrir — l'écran qu'on lisait s'était volatilisé.
+
+   La justification de la substitution ne tient QUE pour le même titre : « il
+   n'y a plus rien à faire sur l'aperçu qu'on vient de quitter » est vrai de
+   l'aperçu de A quand on ajoute A, faux quand on part sur B. On compare donc
+   les identifiants — c'est-à-dire qu'on fait enfin ce que la phrase promet. */
+function substitue(avant, apres, pAvant, pApres){
   if(ONGLETS_BARRE.indexOf(avant) >= 0 && ONGLETS_BARRE.indexOf(apres) >= 0) return true;
-  if(avant === 'preview' && (apres === 'show' || apres === 'movie')) return true;
+  if(avant === 'preview' && (apres === 'show' || apres === 'movie'))
+    return String((pAvant || {}).id) === String((pApres || {}).id);
   return false;
 }
 
@@ -1144,6 +1164,28 @@ function go(v, p, dir, opts){
     /* C3 : et rend orphelines les entrées-gardes encore posées — voir le
        commentaire des gardes, plus haut. */
     for(const k in gardesHisto) gardesHisto[k] = false;
+    /* RETOUR-08 (29/08/2026) — LA FEUILLE NE SURVIT PLUS AU CHANGEMENT D'ÉCRAN.
+
+       L'ÉCART, reproduit : Découvrir → ouvrir une feuille → onglet Mon profil.
+       La feuille RESTAIT là, par-dessus un écran qui n'est pas le sien, et le
+       premier appui sur retour la fermait au lieu de revenir — un geste perdu,
+       et le sentiment exact que décrit Adrien.
+
+       C'est le §6 de la carte de navigation appliqué à la lettre : `go()` est
+       le seul point de fermeture d'écran de l'app, et une feuille EST une
+       ressource d'écran. Elle rejoint donc le duel, la barre « Tu as aimé ? »
+       et le minuteur de frappe.
+
+       ON NE TOUCHE PAS À L'HISTORIQUE ICI : la ligne du dessus vient de rendre
+       la garde orpheline, donc `retirerGarde` (dans `closeSheet`) sort tout de
+       suite sans appeler `history.back()`. C'est ce qu'il faut — un
+       `history.back()` en vol pendant qu'on s'apprête à pousser une entrée
+       annulerait la navigation qu'on est en train de faire. L'entrée-garde
+       restée derrière décrit l'écran courant : elle sera remplacée par la
+       navigation qui suit, ou absorbée par le retour. */
+    const feuilleOuverte = document.getElementById('sheet');
+    if(feuilleOuverte && feuilleOuverte.classList.contains('show') &&
+       typeof closeSheet === 'function') closeSheet();
   }
   if(view===v && JSON.stringify(params)===JSON.stringify(p||{})){
     /* Réappuyer sur l'onglet où l'on est déjà remonte en haut : c'est voulu.
@@ -1153,7 +1195,7 @@ function go(v, p, dir, opts){
     if(!opts.depuisHistorique) window.scrollTo(0,0);
     render(); return;
   }
-  const ancienneVue = view;
+  const ancienneVue = view, anciensParams = params;
   if(LISTES[view] || FICHES[view]) memDefil[cleDefil(view)] = window.scrollY || 0;
   memoriserRails();
   /* En revenant sur Découvrir sans recherche en cours, le champ se referme :
@@ -1225,8 +1267,53 @@ function go(v, p, dir, opts){
      en pousser une autre empilerait un cran à chaque retour et l'historique ne
      se viderait jamais. C'est le piège n°1 du lot. */
   if(!opts.depuisHistorique && iHisto >= 0){
-    inscrireHistorique(view, params, opts.remplacer || substitue(ancienneVue, view));
+    inscrireHistorique(view, params,
+      opts.remplacer || substitue(ancienneVue, view, anciensParams, params));
   }
+}
+
+/* ===========================================================================
+   RETOUR-08 (29/08/2026) — UN ÉCRAN DEVENU IMPOSSIBLE SE REPLIE, IL NE BOUCLE
+   PAS.
+
+   L'ÉCART, reproduit : En cours → fiche d'une série → acteur → la série
+   disparaît (suppression depuis un autre appareil, puis synchro) → retour.
+   On arrivait sur un écran « Introuvable » de trois mots, dont la flèche
+   appelait `go('follow')` — un EMPILEMENT. Le retour suivant ramenait donc sur
+   « Introuvable », et ainsi de suite : une boucle, en plus du quasi-écran vide.
+
+   L'ordre de mission le dit en une phrase : « un écran devenu impossible replie
+   proprement vers son onglet — jamais d'écran blanc ». C'est ce que fait cette
+   fonction, et elle le fait pour LES DEUX GESTES puisqu'elle vit dans le rendu,
+   en aval d'eux.
+
+   LE CONTRÔLE `view !== vue` N'EST PAS DÉCORATIF. `htmlDeLaVue` fabrique aussi
+   l'écran d'ARRIVÉE du geste de retour, en posant `view` le temps du rendu :
+   sans ce contrôle, la couche dessinée sous le doigt déclencherait une
+   navigation au milieu de l'animation. Le rendu de la couche est synchrone et
+   remet `view` en place avant que le minuteur ne s'exécute — la garde suffit
+   donc, et elle est le seul point qui distingue les deux cas. */
+let repliEnVol = false;
+function ecranImpossible(vue, onglet, phrase){
+  if(!repliEnVol){
+    repliEnVol = true;
+    setTimeout(()=>{
+      repliEnVol = false;
+      if(view !== vue) return;
+      /* L'historique fait foi, ici comme ailleurs : on rend l'écran précédent,
+         pas l'onglet, quand il y en a un. L'onglet n'est le repli que d'une
+         entrée directe (un lien, une notification). */
+      if(historiqueInterne() > 0 && miroirJuste()){
+        try{ history.back(); return; }catch(e){}
+      }
+      go(onglet, {}, 'back', { remplacer:true });
+    }, 0);
+  }
+  /* Ce qui s'affiche le temps d'une image : une phrase qui dit ce qui s'est
+     passé, et une flèche qui MARCHE (`goBack`, pas un onglet en dur) au cas où
+     le repli n'aboutirait pas. */
+  return header('Ce titre n\'est plus là', { back:"goBack()" })+
+    '<div class="wrap muted" style="padding-top:20px">'+esc(phrase)+'</div>';
 }
 
 /* Une liste qui repart de zéro (nouvelle recherche, filtre changé) oublie sa position. */
@@ -1288,6 +1375,9 @@ function currentBack(){
      de filtres ou la carte d'invitation, et ont donc toujours un retour. */
   if(view==='gouts') return params.from || 'settings';
   if(view==='plates') return params.from || 'settings';
+  /* SPEC-09 lot 0 — le banc ne s'ouvre que depuis les Réglages ; le défaut ne
+     sert donc qu'au cas où l'adresse est tapée à la main. */
+  if(view==='banc') return params.from || 'settings';
   return null;
 }
 function goBack(){
@@ -1300,7 +1390,17 @@ function goBack(){
      il referme d'abord le lecteur ou un panneau. Sans ça, un geste de retour
      lancé pendant une partie faisait sortir de Mes goûts et perdait la session
      — et l'écran d'arrivée dessiné sous le doigt aurait été le mauvais. */
-  if(typeof duel !== 'undefined' && duel && duel.actif) return fermerDuel();
+  /* RETOUR-08 — L'ARÈNE OUVERTE D'AILLEURS REND CET AILLEURS. Ouverte sur
+     place (bouton « Départager » de Mes goûts), le retour la ferme et on RESTE
+     sur Mes goûts : c'est l'écran précédent, la personne l'a sous les yeux.
+     Ouverte depuis Découvrir ou Mon profil, `ouvrirDuel` a navigué pour poser
+     son arène : refermer sans quitter l'écran découvrirait Mes goûts, que la
+     personne n'a jamais vu. On ferme ET on continue le retour. */
+  if(typeof duel !== 'undefined' && duel && duel.actif){
+    const venuDAilleurs = !!duel.venuDe;
+    fermerDuel();
+    if(!venuDAilleurs) return;
+  }
   /* C3/S1 — REVUE DU 07/08 : le jeu de Recherche et la recherche plein écran
      du profil se ferment comme le duel, au lieu d'être ignorés (la partie ou
      la saisie se perdait, ou le geste ne faisait rien du tout). Les fermetures
@@ -1381,9 +1481,17 @@ window.addEventListener('popstate', function(e){
      d'Android le referme au lieu de quitter Mes goûts, et on repousse l'entrée
      qu'on vient de consommer. */
   if(typeof duel !== 'undefined' && duel && duel.actif){
+    const venuDAilleurs = !!duel.venuDe;
     fermerDuel();
-    try{ history.pushState(etatHisto(view, params, iHisto), '', adresseCourante()); }catch(err){}
-    return;
+    /* RETOUR-08 — même règle qu'à la flèche, et c'est tout l'objet du lot : les
+       deux gestes racontent la même histoire. Arène ouverte sur place, on
+       repousse l'entrée consommée et on reste ; ouverte depuis un autre écran,
+       on LAISSE le `popstate` faire son travail — l'entrée qu'il consomme est
+       celle de Mes goûts, et l'écran d'arrivée est celui d'où l'on venait. */
+    if(!venuDAilleurs){
+      try{ history.pushState(etatHisto(view, params, iHisto), '', adresseCourante()); }catch(err){}
+      return;
+    }
   }
   /* C3 — REVUE DU 07/08 : le jeu de Recherche et la recherche plein écran du
      profil reçoivent les mêmes droits que la feuille et le duel. Avant, aucun

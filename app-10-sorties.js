@@ -261,7 +261,7 @@ async function chargerSorties(force){
 
 function carteSortie(f){
   const note = f.vote_average ? Math.round(f.vote_average * 10) / 10 : null;
-  return '<div class="pcard sortiecarte" onclick="openPreview(' + f.id + ',\'movie\',\'sorties\')">' +
+  return '<div class="pcard sortiecarte" onclick="openPreview(' + f.id + ',\'movie\', view)">' +
     '<div class="wrapimg">' + posterEl(f.poster_path, 'w342', '', f.title) + '</div>' +
     '<div class="pname">' + esc(f.title) + '</div>' +
     (note ? '<div class="psub">' + I.star + ' ' + note + '</div>' : '') +
@@ -272,7 +272,7 @@ function lignesSorties(films, mot){
   let cur = '', html = '<div class="day">';
   films.forEach(f => {
     if(f.dfr !== cur){ cur = f.dfr; html += '<div class="daylbl">' + fmtDayLabel(f.dfr) + '</div>'; }
-    html += '<div class="crow" onclick="openPreview(' + f.id + ',\'movie\',\'sorties\')">' +
+    html += '<div class="crow" onclick="openPreview(' + f.id + ',\'movie\', view)">' +
       (f.backdrop_path || f.poster_path
         ? '<img class="cthumb" loading="lazy" src="' + srcImage(f.backdrop_path || f.poster_path, 'w300') + '" alt="">'
         : '<div class="cthumb"></div>') +
