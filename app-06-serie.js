@@ -2,7 +2,11 @@
 /* ---------- Vue : détail série ---------- */
 function viewShow(){
   const s = db.shows[params.id];
-  if(!s) return header('Introuvable',{back:"go('follow')"});
+  /* RETOUR-08 — plus de cul-de-sac : `ecranImpossible` (app-02) replie sur
+     l'écran précédent, et sur l'onglet seulement s'il n'y en a pas. La flèche
+     en dur `go('follow')` EMPILAIT, donc le retour suivant revenait ici. */
+  if(!s) return ecranImpossible('show', 'follow',
+    'Cette série n\'est plus dans ta bibliothèque.');
   const back = "goBack()";
   const p = progress(s);
   const nx = nextToWatch(s);

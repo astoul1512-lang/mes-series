@@ -30,7 +30,7 @@
    Étage 1 :
        preview · show · movie · settings · abos · moi · rangee · centre
    Étage 2 :
-       acteur · account · biblio · notifs · gouts · plates
+       acteur · account · biblio · notifs · gouts · plates · banc
    Étage 3 :
        clochettes
 
@@ -64,9 +64,14 @@
      b. onglet du bas → onglet du bas (`substitue`). Sinon dix allers-retours
         entre Découvrir et Mon profil font dix entrées, et le retour devient un
         labyrinthe.
-     c. aperçu → fiche du même titre (`substitue`). Ajouter une série remplace
+     c. aperçu → fiche DU MÊME TITRE (`substitue`). Ajouter une série remplace
         l'aperçu par sa fiche ; empiler renverrait sur un aperçu qu'on vient de
         quitter et où il n'y a plus rien à faire.
+        RETOUR-08 (29/08/2026) — « du même titre » est enfin VÉRIFIÉ : les
+        identifiants sont comparés. La règle était écrite ici depuis le premier
+        jour et le code ne la tenait pas — un aperçu de A quitté pour la fiche
+        de B (« Dans le même esprit ») était remplacé lui aussi, et le retour
+        rendait l'onglet au lieu de l'aperçu qu'on lisait.
 
    ET DEUX CAS QUI N'ÉCRIVENT RIEN DU TOUT :
      · `opts.depuisHistorique` — l'appel vient de `popstate`, l'entrée existe
@@ -110,6 +115,7 @@
             centre        → from | discover     (le fil s'ouvre depuis 3 onglets)
             clochettes    → from | notifs
             gouts, plates → from | settings
+            banc          → from | settings   (écran caché, SPEC-09 lot 0)
         Tout le reste rend `null` : la flèche ne s'affiche pas, et `goBack()`
         ne fait rien. `from` N'EST PAS sérialisé dans l'adresse — ce n'est pas
         l'identité d'un écran, et deux adresses ne doivent pas désigner le même.
@@ -123,6 +129,14 @@
         cartes du jeu et du duel ne s'y arme pas)
      ③ le bouton matériel d'Android → `popstate`
      ④ le geste système d'iOS       → `popstate`
+
+   L'ARÈNE DU DUEL EST UN CAS À PART, ET LE SEUL (RETOUR-08). `ouvrirDuel`
+   NAVIGUE vers `gouts` quand on la lance depuis Découvrir ou Mon profil : la
+   refermer sans quitter l'écran découvrirait Mes goûts, que la personne n'a
+   jamais vu. `duel.venuDe` retient cet ailleurs ; les deux chemins de retour le
+   lisent et, quand il est posé, ferment l'arène ET continuent le retour.
+   Lancée depuis Mes goûts (bouton « Départager »), `venuDe` est nul et le
+   premier retour se contente de fermer l'arène — l'écran dessous a été vu.
 
    ① et ② passent par `goBack()`, qui joue l'animation puis recule dans
    l'historique ; ③ et ④ arrivent directement dans l'écouteur `popstate`. LES
@@ -174,9 +188,15 @@
    Un seul point de fermeture d'écran dans toute l'app, et c'est `go()` :
    la session de duel (qui occupe l'écran de Mes goûts sans être une vue), la
    barre « Tu as aimé ? », le minuteur de frappe de la Recherche et sa requête
-   en vol, un retour de geste encore en vol, et les gardes orphelines. Ajouter
-   une ressource d'écran qui survit à un changement d'onglet, c'est l'ajouter
-   ici — pas dans l'écran qui la crée.
+   en vol, un retour de geste encore en vol, les gardes orphelines, et — depuis
+   RETOUR-08 — LA FEUILLE MODALE. Elle manquait : une feuille ouverte sur
+   Découvrir restait affichée par-dessus Mon profil, et le premier appui sur
+   retour la fermait au lieu de revenir. Elle est fermée SANS toucher à
+   l'historique (la garde vient d'être rendue orpheline juste au-dessus, donc
+   `retirerGarde` ne recule pas) : un `history.back()` en vol pendant qu'on
+   pousse une entrée annulerait la navigation en cours.
+   Ajouter une ressource d'écran qui survit à un changement d'onglet, c'est
+   l'ajouter ici — pas dans l'écran qui la crée.
 
    ---------------------------------------------------------------------------
    7. LA POSITION DE DÉFILEMENT
@@ -213,8 +233,23 @@
    en faveur de deux noms distincts.
 
    ---------------------------------------------------------------------------
+   9 bis. LES ÉCRANS DEVENUS IMPOSSIBLES (RETOUR-08)
+
+   Une fiche dont le titre a été supprimé — depuis un autre appareil, puis
+   synchro — n'a plus rien à montrer. Elle ne reste PAS à l'écran : `viewShow`
+   et `viewMovie` rendent `ecranImpossible(vue, onglet, phrase)` (app-02), qui
+   affiche une phrase le temps d'une image puis se replie — sur l'écran
+   précédent si l'historique en a un, sur l'onglet sinon, et TOUJOURS en
+   REMPLAÇANT l'entrée courante. Avant, la flèche de l'écran « Introuvable »
+   appelait `go('follow')`, qui EMPILE : le retour suivant y revenait, en
+   boucle. Une surface plein écran qui peut devenir impossible s'ajoute ici.
+
+   ---------------------------------------------------------------------------
    9. CE QUI ÉPROUVE TOUT ÇA
 
+   `tests/nav-retour-08.js` (L'AUDIT : chaque écart trouvé le 29/08 y a son §,
+   avec le parcours exact, et CHAQUE cas est joué deux fois — à la flèche et au
+   balayage — parce que les deux gestes doivent raconter la même histoire),
    `tests/nav-cycle3.js` (le cycle complet et les retardataires),
    `tests/nav-centre-spec10.js` (fil → fiche → retour → onglet, depuis les trois
    écrans à cloche), `tests/retour-05.js`, `tests/retour-06.js` (jaquette et
@@ -279,6 +314,10 @@ function corpsDeVueBrut(){
   if(view==='bienvenue') return viewBienvenue();
   if(view==='gouts')    return viewGouts();
   if(view==='plates')   return viewPlates();
+  /* SPEC-09 lot 0 — l'écran caché du banc d'essai IA (app-14). Il ne s'atteint
+     que par les Réglages, section « Développeur », elle-même déverrouillée par
+     sept appuis sur le pied de page. */
+  if(view==='banc')     return viewBancIA();
   /* Lot C — les quatre écrans du parcours d'inscription. Ils vivent dans
      app-13 et ne s'atteignent que par `finirAvatar`, ou par la reprise d'une
      inscription abandonnée (`reprendreInscription`, appelée par `boot`). */

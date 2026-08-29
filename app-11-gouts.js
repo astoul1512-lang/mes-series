@@ -3094,6 +3094,37 @@ async function chargerSuggestions(force){
      typeof peindreDisc === 'function') peindreDisc();
 }
 
+/* SPEC-09 LOT 0 (29/08/2026) — LES RANGÉES ACTUELLES D'UNE PUCE, POUR LE BANC.
+
+   Le banc d'essai (app-14) montre côte à côte ce que l'IA propose et CE QUE
+   DÉCOUVRIR AFFICHE AUJOURD'HUI. La seconde moitié ne se recalcule pas : c'est
+   exactement le moteur de la vitrine, appelé sur la puce demandée.
+
+   POURQUOI CETTE FONCTION VIT ICI ET PAS DANS APP-14. Elle écrit `ui.disc.type`
+   le temps du calcul, et `ui` n'est pas ouvert à app-14 (voir `ETAT_PARTAGE`,
+   `tests/lance-tests.js`). Ce n'est pas une formalité : la puce est l'état de
+   l'écran Découvrir, et c'est le fichier qui possède cet écran qui doit être le
+   seul à la poser.
+
+   ELLE NE CHANGE RIEN À DÉCOUVRIR : la puce est remise dans l'état exact où on
+   l'a trouvée, `finally` compris, et le cache est indexé PAR PUCE — ce que ce
+   calcul remplit est ce que Découvrir aurait calculé de toute façon. Les
+   repeints sont gardés par `view === 'discover'` chez leurs appelants ; depuis
+   le banc, ils ne font rien. */
+async function rangeesActuellesDe(puce){
+  const avant = (ui.disc && ui.disc.type) || 'tout';
+  if(!ui.disc) return [];
+  ui.disc.type = puce;
+  try{
+    await chargerSuggestions();
+    return rangeesSuggerees().map(r => ({ cle:r.cle, titre:r.titre, l:(r.l || []).slice(0, 10) }));
+  }catch(e){ return []; }
+  finally{
+    ui.disc.type = avant;
+    suggCourantes();
+  }
+}
+
 /* Les rangées de la vitrine, dans l'ordre où elles s'affichent. L'ordre des
    sections est fixe — choix d'Adrien : « toujours le même ordre », pour savoir
    où regarder sans réfléchir. */
@@ -3885,7 +3916,15 @@ const DUEL_VIDE = { actif:false, famille:null, paquet:[], scores:{}, joues:{},
                     /* POINT 1 — combien de lignes de classement sont ouvertes
                        sous le podium. Posé par `terminerDuel`, pas ici : la
                        valeur se déduit de `CL_JUSQUA`, déclaré plus bas. */
-                    montre:0 };
+                    montre:0,
+                    /* RETOUR-08 (29/08/2026) — D'OÙ L'ARÈNE A ÉTÉ OUVERTE, quand
+                       ce n'est pas depuis Mes goûts. `ouvrirDuel` navigue vers
+                       `gouts` pour poser son arène : sans cette mémoire, le
+                       retour ne fermait que l'arène et laissait à l'écran Mes
+                       goûts — un écran que la personne n'avait JAMAIS vu, et un
+                       appui de retour de plus pour en sortir. Voir `goBack` et
+                       l'écouteur `popstate` (app-02). */
+                    venuDe:null };
 let duel = Object.assign({}, DUEL_VIDE);
 
 /* QUI ENTRE DANS LE JEU. Un titre vu y entre, qu'il porte un 👍 ou rien du
@@ -3955,7 +3994,12 @@ function ouvrirDuel(famille){
   paquet.forEach(t=>{ scores[cleDuel(t)] = scoreClassement(famille, t.id); });
   duel = Object.assign({}, DUEL_VIDE,
     { actif:true, famille:famille, paquet:paquet, scores:scores, joues:{},
-      faits:0, ecran:'jeu', classe:[], sugg:null, rattrapage:[], vus:[], neufs:0 });
+      faits:0, ecran:'jeu', classe:[], sugg:null, rattrapage:[], vus:[], neufs:0,
+      /* RETOUR-08 — l'arène est-elle ouverte SUR PLACE (bouton « Départager »
+         de Mes goûts) ou DEPUIS AILLEURS (bandeau de Découvrir, carte duel de
+         Mon profil) ? Dans le second cas, le retour doit rendre l'écran d'où
+         l'on vient, et pas Mes goûts au passage. */
+      venuDe: (view !== 'gouts') ? view : null });
   duelSuivant();
   if(view !== 'gouts') go('gouts', { from: view });
   else render();

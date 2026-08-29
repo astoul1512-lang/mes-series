@@ -231,6 +231,60 @@ export const TACHES: Record<string, Tache> = {
   // 100 premiers d'un pré-classement local ne l'est pas. Une requête par
   // grille, cache par signature côté client.
   classer_grille:    { etage_depart: 1, maxlong: 60,  maxtitres: 100 },
+
+  // ---- SPEC-09 LOT 0 (29/08/2026) — L'IA COMPOSE DES RANGÉES, POUR LE BANC ----
+  //
+  // `suggestions_famille` reçoit une FAMILLE (tout / film / serie / anime) et un
+  // profil de goûts AGRÉGÉ — genres aimés, genres écartés, quelques titres 👍,
+  // le podium des duels, les plateformes. Elle rend des RANGÉES : un intitulé et
+  // une liste de titres, choisis de tête.
+  //
+  // CE QU'ELLE N'EST PAS : une source de vérité. Aucun titre rendu ici n'est
+  // affiché sans avoir été retrouvé sur TMDB par le client, puis passé au tamis
+  // habituel (déjà vu, écarté, « pas pour moi », genres exclus). Le modèle
+  // PROPOSE des noms ; TMDB décide s'ils existent. C'est ce qui rend la tâche
+  // sûre malgré une sortie beaucoup plus libre que les autres.
+  //
+  // `maxtitres` vaut 12 et borne ce que le CLIENT fait voyager (les titres
+  // aimés). Le nombre de rangées et de titres RENDUS est borné séparément par
+  // le schéma et par `valider` — les deux bornes ne parlent pas de la même
+  // chose, et les confondre laisserait passer une réponse de mille lignes.
+  //
+  // `maxlong` = 60 : c'est la longueur d'un intitulé de rangée, la même que
+  // `intitules_rangees`. Le nom d'un titre a sa propre borne dans `valider`.
+  //
+  // BORNE DURE DU LOT : cette tâche ne sert QUE l'écran caché « Banc d'essai
+  // IA ». Rien de ce qu'elle rend n'atteint l'écran Découvrir réel tant
+  // qu'Adrien n'a pas tranché sur les votes du banc.
+  suggestions_famille: { etage_depart: 1, maxlong: 60, maxtitres: 12 },
+
+  // ---- SPEC-11 (29/08/2026) — LA BARRE ✦ DEVIENT UN VRAI INTERPRÈTE ----
+  //
+  // « Je veux pouvoir taper "je cherche un film d'action avec Will Smith" comme
+  // "je cherche le film où Leonardo DiCaprio est courtier et se drogue" » —
+  // Adrien, 29/08. `envie_phrase` ne savait traduire une envie que vers les
+  // dimensions de filtres existantes : ni personnes, ni description d'intrigue,
+  // ni « et » entre deux genres.
+  //
+  // `interpreter_recherche` prend la phrase TELLE QUELLE et rend UN SEUL des
+  // deux modes :
+  //   · `filtres` — la phrase décrit des CRITÈRES. Même vocabulaire fermé que
+  //     `envie_phrase` (`CRITERES_PERMIS`), plus trois choses neuves : des NOMS
+  //     de personnes (résolus par le client sur `/search/person`), un booléen
+  //     `genres_et`, et des noms de plateformes.
+  //   · `titre` — la phrase DÉCRIT UN FILM PRÉCIS. Le modèle nomme 1 à 5
+  //     candidats de tête, du plus probable au moins probable ; le client les
+  //     vérifie sur `/search/multi` et jette ce qui n'existe pas.
+  //
+  // POURQUOI `envie_phrase` RESTE. Les deux tâches ne partent pas au même
+  // moment : `envie_phrase` sert le routeur AUTOMATIQUE du mode ⌕ (heuristique
+  // « plus de trois mots et aucun titre trouvé »), `interpreter_recherche` sert
+  // la VALIDATION EXPLICITE en mode ✦. Une seule requête part par validation,
+  // jamais les deux.
+  //
+  // `maxtitres` vaut 5 : c'est le plafond de candidats du mode `titre`, et
+  // `maxlong` 80, la longueur d'un nom d'œuvre.
+  interpreter_recherche: { etage_depart: 1, maxlong: 80, maxtitres: 5 },
 };
 
 // ---------------------------------------------------------------------------

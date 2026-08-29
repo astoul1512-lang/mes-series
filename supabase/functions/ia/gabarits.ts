@@ -169,6 +169,47 @@ const SCHEMA_LISTE = {
    `maxItems` vaut 100, le plafond de `maxtitres` pour cette tâche : c'est la
    seule qui dépasse 12, et le §8 du RETOUR l'impose (« les ~100 premiers
    candidats »). */
+/* SPEC-09 lot 0 — DES RANGÉES. La sortie la plus libre du relais, et donc celle
+   dont les bornes comptent le plus : six rangées au plus, dix titres par rangée
+   au plus, et rien d'autre que des chaînes et un entier.
+
+   LES CLÉS SONT SANS ACCENT (`titre`, `titres`, `nom`, `annee`, `media`) alors
+   que la spec écrit « titre_de_rangée » et « année ». Ce n'est pas une
+   désinvolture : une clé accentuée dans un schéma de sortie structurée revient
+   mal chez au moins un des trois fournisseurs (échappement Unicode dans le nom
+   de propriété), et une clé qu'on doit deviner à la réception n'est plus une
+   sortie stricte. Le SENS est celui de la spec, mot pour mot. */
+const SCHEMA_RANGEES = {
+  type: "object",
+  properties: {
+    rangees: {
+      type: "array",
+      maxItems: 6,
+      items: {
+        type: "object",
+        properties: {
+          titre: { type: "string" },
+          titres: {
+            type: "array",
+            maxItems: 10,
+            items: {
+              type: "object",
+              properties: {
+                nom: { type: "string" },
+                annee: { type: "integer" },
+                media: { type: "string" },
+              },
+              required: ["nom", "media"],
+            },
+          },
+        },
+        required: ["titre", "titres"],
+      },
+    },
+  },
+  required: ["rangees"],
+};
+
 const SCHEMA_ORDRE = {
   type: "object",
   properties: { ordre: { type: "array", items: { type: "integer" }, maxItems: 100 } },
@@ -237,6 +278,51 @@ const SCHEMA_CRITERES = {
   },
   required: ["criteres"],
 };
+/* SPEC-11 — LES PLATEFORMES, VOCABULAIRE FERMÉ LUI AUSSI. Le client ne pose un
+   filtre plateforme que sur celles que la PERSONNE a déclarées : un nom rendu
+   ici qui ne correspond à aucune des siennes tombe, exactement comme un critère
+   inventé. Les clés sont stables, les noms d'usage sont côté client. */
+export const PLATEFORMES_PERMISES: string[] = [
+  "netflix", "prime", "disney", "canal", "appletv", "max", "crunchyroll", "adn",
+];
+
+/* SPEC-11 — L'INTERPRÈTE DE LA BARRE ✦. UN SEUL objet, un discriminant `mode`,
+   et les deux moitiés côte à côte plutôt qu'une union de schémas : mesuré sur
+   les trois étages, `oneOf` au premier niveau d'une sortie structurée n'est pas
+   également supporté, alors qu'un champ de plus qui reste vide l'est partout.
+   `valider` n'en garde qu'une moitié, celle que `mode` annonce. */
+const SCHEMA_INTERPRETE = {
+  type: "object",
+  properties: {
+    mode: { type: "string" },
+    filtres: {
+      type: "object",
+      properties: {
+        famille:     { type: "string" },
+        genres:      { type: "array", items: { type: "string" }, maxItems: 5 },
+        genres_et:   { type: "boolean" },
+        personnes:   { type: "array", items: { type: "string" }, maxItems: 3 },
+        origine:     { type: "string" },
+        epoque:      { type: "string" },
+        duree:       { type: "string" },
+        note_mini:   { type: "string" },
+        plateformes: { type: "array", items: { type: "string" }, maxItems: 4 },
+      },
+    },
+    titres: {
+      type: "array",
+      maxItems: 5,
+      items: {
+        type: "object",
+        properties: { nom: { type: "string" }, annee: { type: "integer" },
+                      media: { type: "string" } },
+        required: ["nom", "media"],
+      },
+    },
+  },
+  required: ["mode"],
+};
+
 const SCHEMA_AMBIANCE = {
   type: "object",
   properties: {
@@ -337,6 +423,108 @@ export function construire(tache: string, params: unknown): Gabarit | null {
     };
   }
 
+  if (tache === "interpreter_recherche") {
+    const phrase = texte(p.phrase, 300);
+    if (!phrase) return null;
+    return {
+      consigne: [
+        CONSIGNE_COMMUNE,
+        "",
+        "Quelqu'un a écrit une demande dans la barre de recherche d'une",
+        "application de films et de séries. Comprends-la, et rends UN SEUL des",
+        "deux modes ci-dessous.",
+        "",
+        "MODE 1 — mode = \"filtres\". Quand la phrase décrit des CRITÈRES : un",
+        "genre, une époque, une durée, un pays, une note, une personne au",
+        "générique. Remplis `filtres`, et RIEN d'autre.",
+        "  · `genres` : de zéro à cinq clés de la liste autorisée.",
+        "  · `genres_et` : VRAI si la phrase demande les genres ENSEMBLE",
+        "    (« d'action ET d'aventure »), FAUX si elle les demande au choix",
+        "    (« d'action OU d'aventure »). Faux par défaut.",
+        "  · `personnes` : les noms propres de personnes citées comme étant AU",
+        "    GÉNÉRIQUE (acteur, actrice, réalisateur). Trois au plus, écrits",
+        "    normalement (« Will Smith »). Si la personne est citée pour décrire",
+        "    un PERSONNAGE qu'elle joue dans un film précis, ce n'est PAS ce",
+        "    mode — c'est le mode 2.",
+        "  · `famille`, `origine`, `epoque`, `duree`, `note_mini`,",
+        "    `plateformes` : uniquement les valeurs des listes autorisées.",
+        "",
+        "MODE 2 — mode = \"titre\". Quand la phrase DÉCRIT UNE ŒUVRE PRÉCISE",
+        "sans la nommer : une intrigue, une scène, un personnage (« le film où",
+        "un courtier se drogue »). Remplis `titres` : de UN à CINQ candidats, du",
+        "PLUS PROBABLE au moins probable, chacun avec son nom exact, son année",
+        "et son média (« film » ou « serie »). N'invente rien : un titre dont tu",
+        "n'es pas sûr sera vérifié et jeté.",
+        "",
+        "CHOISIR ENTRE LES DEUX : la phrase décrit-elle CE QU'ON VEUT (mode 1)",
+        "ou UNE ŒUVRE QU'ON CHERCHE (mode 2) ? Dans le doute, mode 1.",
+        "Si tu ne comprends rien, rends mode = \"filtres\" avec des filtres vides.",
+        "",
+        VOCABULAIRE_CRITERES,
+        "  plateformes : " + PLATEFORMES_PERMISES.join(" | "),
+        "(`famille` prend les valeurs de `fam`, `note_mini` celles de `note`.)",
+        "",
+        "LA DEMANDE : " + phrase,
+      ].join("\n"),
+      schema: SCHEMA_INTERPRETE,
+    };
+  }
+
+  if (tache === "suggestions_famille") {
+    /* SPEC-09 lot 0 — L'IA NE DÉCORE PLUS, ELLE CHOISIT. Jusqu'ici elle
+       n'écrivait que des habillages (pitchs, intitulés) au-dessus de rangées
+       composées localement. Ici elle compose les rangées elles-mêmes.
+
+       CE QUI PART, ET RIEN DE PLUS (§4.1) : une famille, des genres, quelques
+       titres, des noms de plateformes. Pas d'identité, pas d'historique brut,
+       pas de dates de visionnage — le profil est AGRÉGÉ avant de partir, côté
+       client, et re-borné ici. */
+    const famille = texte(p.famille, 12).toLowerCase();
+    if (["tout", "film", "serie", "anime"].indexOf(famille) < 0) return null;
+    const profil = texte(p.profil, 400);
+    const ecartes = liste(p.ecartes, 8, 40);
+    const plateformes = liste(p.plateformes, 8, 30);
+    const podium = liste(p.podium, 5, 80);
+    const nomFamille = famille === "film" ? "des films"
+                     : famille === "serie" ? "des séries (hors animation asiatique)"
+                     : famille === "anime" ? "des animés (animation japonaise, chinoise ou coréenne)"
+                     : "des films ET des séries";
+    return {
+      consigne: [
+        CONSIGNE_COMMUNE,
+        "",
+        "Compose des RANGÉES de suggestions pour un écran de découverte.",
+        "Tu choisis " + nomFamille + " toi-même, de tête, AU SERVICE DE CETTE",
+        "PERSONNE — pas au service de la popularité.",
+        "",
+        "RÈGLES, et elles ne se négocient pas :",
+        "— Entre 3 et 6 rangées. Entre 5 et 10 titres par rangée.",
+        "— INTERDIT, le remplissage générique. Aucune rangée intitulée",
+        "  « populaire en ce moment », « les plus regardés », « tendances » ou",
+        "  « incontournables ». Chaque rangée doit dire une IDÉE, et cette idée",
+        "  doit se justifier par le profil ci-dessous. Si tu n'as pas d'idée",
+        "  pour une sixième rangée, rends-en cinq.",
+        "— L'intitulé d'une rangée fait 60 caractères au plus et n'affirme rien",
+        "  sur ce que la personne a ressenti.",
+        "— Chaque titre porte son NOM EXACT tel qu'il est connu, son ANNÉE de",
+        "  sortie et son média : « film » ou « serie ». Un animé est une",
+        "  « serie » s'il s'agit d'une série, un « film » s'il s'agit d'un film.",
+        "— N'invente aucun titre. Un titre que tu n'es pas sûr de connaître ne",
+        "  doit pas figurer : il sera de toute façon vérifié et jeté.",
+        "— Ne propose aucun titre de la liste des titres déjà aimés ci-dessous.",
+        "— Ne propose rien qui relève des genres écartés.",
+        "",
+        profil ? "PROFIL DE LA PERSONNE : " + profil : "",
+        aimes.length ? "TITRES DÉJÀ AIMÉS (à NE PAS reproposer) : " + aimes.join(", ") : "",
+        podium.length ? "SON PODIUM, DU MEILLEUR AU MOINS BON : " + podium.join(", ") : "",
+        genres ? "GENRES LES PLUS PRÉSENTS : " + genres : "",
+        ecartes.length ? "GENRES ÉCARTÉS (interdits) : " + ecartes.join(", ") : "",
+        plateformes.length ? "PLATEFORMES DISPONIBLES : " + plateformes.join(", ") : "",
+      ].filter(Boolean).join("\n"),
+      schema: SCHEMA_RANGEES,
+    };
+  }
+
   if (tache === "intitules_rangees") {
     const base = liste(p.intitules, t.maxtitres, 60);
     if (!base.length) return null;
@@ -427,8 +615,17 @@ export function construire(tache: string, params: unknown): Gabarit | null {
 // une phrase coupée au milieu sous les yeux de quelqu'un.
 // ---------------------------------------------------------------------------
 export type Critere = { cle: string; val: string };
+export type TitreIA = { nom: string; annee?: number; media: string };
+export type RangeeIA = { titre: string; titres: TitreIA[] };
+export type FiltresIA = {
+  famille?: string; genres?: string[]; genres_et?: boolean; personnes?: string[];
+  origine?: string; epoque?: string; duree?: string; note_mini?: string;
+  plateformes?: string[];
+};
 export type Rendu = { texte?: string; textes?: string[]; criteres?: Critere[];
-                      nom?: string; emoji?: string; ordre?: number[] };
+                      nom?: string; emoji?: string; ordre?: number[];
+                      rangees?: RangeeIA[];
+                      mode?: string; filtres?: FiltresIA; titres?: TitreIA[] };
 
 export function valider(tache: string, brut: unknown): Rendu | null {
   if (!tacheConnue(tache)) return null;
@@ -474,6 +671,142 @@ export function valider(tache: string, brut: unknown): Rendu | null {
       l.push(i);
     }
     return l.length ? { ordre: l } : null;
+  }
+
+  if (tache === "interpreter_recherche") {
+    const mode = typeof o.mode === "string" ? o.mode.trim().toLowerCase() : "";
+    if (mode !== "filtres" && mode !== "titre") return null;
+
+    if (mode === "titre") {
+      /* Mêmes bornes que `suggestions_famille`, et pour la même raison : ce
+         sont des NOMS D'ŒUVRES, pas des phrases — ils n'ont donc pas à passer
+         le motif §0.4, qui refuserait « Tu ne tueras point ». Le client les
+         vérifie sur `/search/multi` avant d'en afficher un seul. */
+      if (!Array.isArray(o.titres)) return null;
+      if (o.titres.length > t.maxtitres) return null;
+      const titres: TitreIA[] = [];
+      const vus: Record<string, boolean> = {};
+      for (const x of o.titres) {
+        if (!x || typeof x !== "object" || Array.isArray(x)) continue;
+        const to = x as Record<string, unknown>;
+        const nom = typeof to.nom === "string"
+          ? to.nom.replace(/\s+/g, " ").trim().slice(0, t.maxlong) : "";
+        if (!nom) continue;
+        const media = typeof to.media === "string" ? to.media.trim().toLowerCase() : "";
+        if (media !== "film" && media !== "serie") continue;
+        const cle = media + ":" + nom.toLowerCase();
+        if (vus[cle]) continue;
+        vus[cle] = true;
+        const out: TitreIA = { nom, media };
+        const an = typeof to.annee === "number" ? Math.trunc(to.annee) : NaN;
+        if (isFinite(an) && an >= 1900 && an <= 2100) out.annee = an;
+        titres.push(out);
+      }
+      return titres.length ? { mode: "titre", titres } : null;
+    }
+
+    /* Mode `filtres`. Chaque champ est confronté à son vocabulaire fermé ; ce
+       qui n'y est pas TOMBE, sans faire tomber le reste — c'est l'arbitrage
+       d'`envie_phrase`, et il vaut ici pour la même raison : un critère faux en
+       moins laisse une recherche plus large, un rejet total laisse la personne
+       devant un écran muet alors que la requête est payée. */
+    const f = (o.filtres && typeof o.filtres === "object" && !Array.isArray(o.filtres))
+      ? o.filtres as Record<string, unknown> : {};
+    const out: FiltresIA = {};
+    const un = (v: unknown, permis: string[]): string | null => {
+      const s2 = typeof v === "string" ? v.trim().toLowerCase() : "";
+      return permis.indexOf(s2) >= 0 ? s2 : null;
+    };
+    const famille = un(f.famille, CRITERES_PERMIS.fam);
+    if (famille) out.famille = famille;
+    const origine = un(f.origine, CRITERES_PERMIS.origine);
+    if (origine) out.origine = origine;
+    const epoque = un(f.epoque, CRITERES_PERMIS.epoque);
+    if (epoque) out.epoque = epoque;
+    const duree = un(f.duree, CRITERES_PERMIS.duree);
+    if (duree) out.duree = duree;
+    const note = un(f.note_mini, CRITERES_PERMIS.note);
+    if (note) out.note_mini = note;
+
+    if (Array.isArray(f.genres)) {
+      const g: string[] = [];
+      for (const x of f.genres.slice(0, 20)) {
+        const v = un(x, CRITERES_PERMIS.genre);
+        if (v && g.indexOf(v) < 0) g.push(v);
+        if (g.length >= 5) break;
+      }
+      if (g.length) out.genres = g;
+    }
+    if (Array.isArray(f.plateformes)) {
+      const pl: string[] = [];
+      for (const x of f.plateformes.slice(0, 20)) {
+        const v = un(x, PLATEFORMES_PERMISES);
+        if (v && pl.indexOf(v) < 0) pl.push(v);
+        if (pl.length >= 4) break;
+      }
+      if (pl.length) out.plateformes = pl;
+    }
+    if (Array.isArray(f.personnes)) {
+      /* Un nom de personne est du TEXTE LIBRE — le seul de toute cette liste
+         blanche. Il ne peut pas être borné par un vocabulaire, alors il l'est
+         par la longueur et par `texte()`, qui retire adresses, URL et
+         identifiants. Le client, lui, ne garde que ce que `/search/person`
+         reconnaît sans ambiguïté : c'est là qu'est la vraie barrière. */
+      const gens = liste(f.personnes, 3, 60);
+      if (gens.length) out.personnes = gens;
+    }
+    if (f.genres_et === true && (out.genres || []).length >= 2) out.genres_et = true;
+
+    /* `genres_et` seul ne veut rien dire : si rien d'autre n'a été reconnu, la
+       réponse est vide, et vide veut dire « je n'ai pas compris ». */
+    const utiles = ["famille", "genres", "personnes", "origine", "epoque", "duree",
+                    "note_mini", "plateformes"];
+    if (!utiles.some((k) => (out as Record<string, unknown>)[k] !== undefined)) return null;
+    return { mode: "filtres", filtres: out };
+  }
+
+  if (tache === "suggestions_famille") {
+    /* SPEC-09 lot 0 — ON JETTE L'ENTRÉE FAUTIVE, PAS LA RÉPONSE. C'est
+       l'arbitrage des critères d'envie et non celui des intitulés : ici une
+       rangée en moins laisse un banc un peu plus court, alors qu'un rejet
+       total ferait payer la requête pour rien. Et le client re-vérifie CHAQUE
+       titre sur TMDB derrière — ce qui passe ici n'est pas encore affiché. */
+    if (!Array.isArray(o.rangees)) return null;
+    if (o.rangees.length > 6) return null;
+    const rangees: RangeeIA[] = [];
+    for (const r of o.rangees) {
+      if (!r || typeof r !== "object" || Array.isArray(r)) continue;
+      const ro = r as Record<string, unknown>;
+      const titre = propre(ro.titre);          // 60 car. + §0.4, comme un intitulé
+      if (!titre) continue;
+      if (!Array.isArray(ro.titres)) continue;
+      if (ro.titres.length > 10) continue;
+      const titres: TitreIA[] = [];
+      const vus: Record<string, boolean> = {};
+      for (const t2 of ro.titres) {
+        if (!t2 || typeof t2 !== "object" || Array.isArray(t2)) continue;
+        const to = t2 as Record<string, unknown>;
+        /* Le nom d'un titre a SA borne, plus large que celle d'un intitulé :
+           « Le Seigneur des anneaux : la Communauté de l'anneau » fait 52
+           caractères, et il en existe de plus longs. Il ne passe PAS par
+           `propre` — le §0.4 parle de phrases écrites, pas de noms d'œuvres,
+           et « Tu ne tueras point » se ferait refuser par le motif. */
+        const nom = typeof to.nom === "string"
+          ? to.nom.replace(/\s+/g, " ").trim().slice(0, 80) : "";
+        if (!nom) continue;
+        const media = typeof to.media === "string" ? to.media.trim().toLowerCase() : "";
+        if (media !== "film" && media !== "serie") continue;
+        const cle = media + ":" + nom.toLowerCase();
+        if (vus[cle]) continue;                // deux fois le même dans la rangée
+        vus[cle] = true;
+        const out: TitreIA = { nom, media };
+        const an = typeof to.annee === "number" ? Math.trunc(to.annee) : NaN;
+        if (isFinite(an) && an >= 1900 && an <= 2100) out.annee = an;
+        titres.push(out);
+      }
+      if (titres.length) rangees.push({ titre, titres });
+    }
+    return rangees.length ? { rangees } : null;
   }
 
   if (tache === "intitules_rangees") {

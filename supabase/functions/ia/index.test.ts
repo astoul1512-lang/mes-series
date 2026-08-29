@@ -1442,14 +1442,21 @@ Deno.test("SPEC-05 — les nouvelles tâches n'échappent pas au jeton ni à l'o
    Le pendant côté front est le contrôle n° 15 de `tests/lance-tests.js` : il
    relit les `appelIA('…')` des fichiers d'écran et les recoupe avec cette
    liste. Les deux ensemble ferment la boucle ; l'un sans l'autre ne dit rien. */
-Deno.test("la liste blanche compte SEPT tâches, exactement celles qui ont un appelant", () => {
+Deno.test("la liste blanche compte NEUF tâches, exactement celles qui ont un appelant", () => {
   /* RETOUR-01 POINT 8 (11/08/2026) — `classer_grille` entre, AVEC son appelant :
      le tri « ✦ mes goûts » de la Recherche (`toucherClassementIA`, app-14). Le
      seuil passe de six à sept, et il reste écrit en dur pour la raison dite
-     ci-dessus. */
+     ci-dessus.
+     SPEC-09 LOT 0 (29/08/2026) — `suggestions_famille` entre à son tour, avec
+     son appelant : le banc d'essai IA (`bancGenererIA`, app-14). Sept → huit.
+     SPEC-11 (29/08/2026) — `interpreter_recherche` entre avec le sien : la
+     validation en mode ✦ de la barre de Recherche (`interpreterRechercheIA`,
+     app-14). Huit → neuf. `envie_phrase` RESTE : elle sert l'autre déclencheur,
+     le routeur automatique du mode ⌕, et les deux ne partent jamais ensemble. */
   const attendues = ["pitch_jour", "pitch_humeur", "intitules_rangees",
                      "envie_phrase", "ambiance_desc", "pourquoi_lui",
-                     "classer_grille"].sort();
+                     "classer_grille", "suggestions_famille",
+                     "interpreter_recherche"].sort();
   assertEquals(JSON.stringify(Object.keys(TACHES).sort()), JSON.stringify(attendues),
     "la liste blanche ne correspond plus aux tâches appelées — ajoute l'appelant, " +
     "ou retire la tâche, mais pas les deux à moitié");
@@ -1502,4 +1509,194 @@ Deno.test("classer_grille : la validation garde les indices valides et jette le 
   /* Le nombre d'éléments est borné comme partout ailleurs (`maxtitres`). */
   const trop = Array.from({ length: 101 }, (_, i) => i);
   assertEquals(valider("classer_grille", { ordre: trop }), null);
+});
+
+/* ===========================================================================
+   SPEC-09 LOT 0 — `suggestions_famille` : L'IA COMPOSE, LE CLIENT VÉRIFIE
+
+   Ce que ces cas tiennent : la sortie la plus LIBRE du relais reste bornée.
+   Six rangées au plus, dix titres par rangée au plus, deux médias et deux
+   seulement, une année plausible ou rien, et pas un mot qui prête un sentiment
+   à quelqu'un dans un intitulé.
+   Ce qu'ils ne tiennent PAS, et c'est volontaire : l'existence des titres. Elle
+   ne se prouve pas ici — elle se prouve sur TMDB, chez le client, avant
+   affichage. Voir `tests/spec09-banc.js`.
+   =========================================================================== */
+
+Deno.test("suggestions_famille : le gabarit refuse une famille inconnue", () => {
+  assertEquals(construire("suggestions_famille", { famille: "documentaires" }), null);
+  assertEquals(construire("suggestions_famille", {}), null);
+  assert(construire("suggestions_famille", { famille: "anime" }) !== null);
+});
+
+Deno.test("suggestions_famille : le gabarit interdit le remplissage générique", () => {
+  const g = construire("suggestions_famille", {
+    famille: "film", profil: "genres les plus regardés : thriller, drame",
+    aimes: ["Whiplash"], ecartes: ["Horreur"], plateformes: ["Netflix"],
+    podium: ["Whiplash"],
+  })!;
+  assert(/populaire en ce moment/.test(g.consigne),
+    "le prompt doit NOMMER le remplissage générique pour l'interdire");
+  assert(/INTERDIT/.test(g.consigne));
+  assert(/Whiplash/.test(g.consigne), "les titres aimés partent bien");
+  assert(/Horreur/.test(g.consigne), "les genres écartés partent bien");
+  assert(/Netflix/.test(g.consigne), "les plateformes partent bien");
+  assert(g.consigne.indexOf(CONSIGNE_COMMUNE) === 0, "la règle §0.4 est en tête");
+});
+
+Deno.test("suggestions_famille : rien d'identifiant ne part, même dans les cases connues", () => {
+  const g = construire("suggestions_famille", {
+    famille: "serie",
+    profil: "contact adrien@exemple.fr uid=8f3c1122-4b21-aa02-9000-000000000000",
+    aimes: ["Dark", "adrien@exemple.fr"],
+  })!;
+  assert(!/adrien@exemple\.fr/.test(g.consigne), "une adresse ne doit jamais partir");
+  assert(!/8f3c1122-4b21/.test(g.consigne), "un identifiant ne doit jamais partir");
+});
+
+Deno.test("suggestions_famille : la validation borne tout ce qui revient", () => {
+  const bon = valider("suggestions_famille", {
+    rangees: [
+      { titre: "Des huis clos tendus",
+        titres: [ { nom: "Le Locataire", annee: 1976, media: "film" },
+                  { nom: "Prisoners", annee: 2013, media: "film" } ] },
+    ],
+  });
+  assertEquals(JSON.stringify(bon), JSON.stringify({
+    rangees: [ { titre: "Des huis clos tendus",
+                 titres: [ { nom: "Le Locataire", media: "film", annee: 1976 },
+                           { nom: "Prisoners", media: "film", annee: 2013 } ] } ],
+  }));
+
+  // Sept rangées : au-delà de six, on ne trie pas, on refuse.
+  assertEquals(valider("suggestions_famille", {
+    rangees: Array.from({ length: 7 }, () => ({
+      titre: "Une idée", titres: [{ nom: "X", media: "film" }] })),
+  }), null);
+
+  // Onze titres dans une rangée : la rangée tombe, pas la réponse.
+  const trop = valider("suggestions_famille", {
+    rangees: [
+      { titre: "Trop longue", titres: Array.from({ length: 11 },
+        (_, i) => ({ nom: "T" + i, media: "film" })) },
+      { titre: "Celle-ci va bien", titres: [{ nom: "Heat", annee: 1995, media: "film" }] },
+    ],
+  });
+  assertEquals(trop!.rangees!.length, 1);
+  assertEquals(trop!.rangees![0].titre, "Celle-ci va bien");
+
+  // Un média inventé, une année folle, un doublon : jetés un par un.
+  const sale = valider("suggestions_famille", {
+    rangees: [ { titre: "Mélange", titres: [
+      { nom: "Heat", annee: 1995, media: "film" },
+      { nom: "heat", annee: 1995, media: "film" },        // doublon (casse ignorée)
+      { nom: "Arcane", annee: 3050, media: "serie" },      // année folle → sans année
+      { nom: "Autre", media: "documentaire" },             // média inconnu → jeté
+      { nom: "   ", media: "film" },                       // nom vide → jeté
+    ] } ],
+  });
+  assertEquals(sale!.rangees![0].titres.length, 2);
+  assertEquals(sale!.rangees![0].titres[1].nom, "Arcane");
+  assertEquals(sale!.rangees![0].titres[1].annee, undefined);
+
+  // §0.4 sur l'intitulé : une rangée qui prête un sentiment tombe.
+  assertEquals(valider("suggestions_famille", {
+    rangees: [{ titre: "Dans la veine de ton coup de cœur",
+                titres: [{ nom: "Heat", media: "film" }] }],
+  }), null);
+
+  // Rien d'exploitable = rien du tout.
+  assertEquals(valider("suggestions_famille", { rangees: [] }), null);
+  assertEquals(valider("suggestions_famille", { rangees: "non" }), null);
+  assertEquals(valider("suggestions_famille", {}), null);
+});
+
+Deno.test("suggestions_famille : un nom d'œuvre n'est pas une phrase — il échappe au motif §0.4", () => {
+  const r = valider("suggestions_famille", {
+    rangees: [{ titre: "Des drames de procès",
+                titres: [{ nom: "Tu ne tueras point", annee: 2016, media: "film" }] }],
+  });
+  assertEquals(r!.rangees![0].titres[0].nom, "Tu ne tueras point");
+});
+
+/* ===========================================================================
+   SPEC-11 — `interpreter_recherche` : DEUX MODES, ET UN SEUL À LA FOIS
+
+   Les trois phrases d'Adrien sont éprouvées de bout en bout par
+   `tests/spec11-barre-ia.js` (l'app, avec un vrai écran). Ici on tient ce qui
+   ne se voit pas : le prompt qui part, et le tamis de ce qui revient.
+   =========================================================================== */
+
+Deno.test("interpreter_recherche : le gabarit part avec la phrase et les deux modes", () => {
+  assertEquals(construire("interpreter_recherche", {}), null);
+  assertEquals(construire("interpreter_recherche", { phrase: "   " }), null);
+  const g = construire("interpreter_recherche",
+    { phrase: "je cherche un film d'action avec Will Smith" })!;
+  assert(/MODE 1/.test(g.consigne) && /MODE 2/.test(g.consigne),
+    "les deux modes doivent être décrits");
+  assert(/genres_et/.test(g.consigne), "le ET de genres doit être expliqué");
+  assert(/personnes/.test(g.consigne), "les personnes doivent être demandées");
+  assert(/Will Smith/.test(g.consigne), "la phrase part telle quelle");
+  assert(/plateformes : netflix/.test(g.consigne), "le vocabulaire des plateformes part");
+  assert(g.consigne.indexOf(CONSIGNE_COMMUNE) === 0, "la règle §0.4 est en tête");
+});
+
+Deno.test("interpreter_recherche : mode filtres — le vocabulaire fermé tient", () => {
+  const r = valider("interpreter_recherche", { mode: "filtres", filtres: {
+    famille: "film", genres: ["action", "aventure", "licorne"], genres_et: true,
+    personnes: ["Will Smith"], origine: "us", epoque: "2010s", duree: "moyen",
+    note_mini: "7", plateformes: ["netflix", "canal+", "adn"],
+  } })!;
+  assertEquals(r.mode, "filtres");
+  assertEquals(JSON.stringify(r.filtres!.genres), JSON.stringify(["action", "aventure"]));
+  assertEquals(r.filtres!.genres_et, true);
+  assertEquals(JSON.stringify(r.filtres!.personnes), JSON.stringify(["Will Smith"]));
+  assertEquals(JSON.stringify(r.filtres!.plateformes), JSON.stringify(["netflix", "adn"]));
+  assertEquals(r.filtres!.famille, "film");
+  assertEquals(r.filtres!.note_mini, "7");
+  assertEquals(r.titres, undefined, "le mode filtres ne rend jamais de titres");
+});
+
+Deno.test("interpreter_recherche : un `genres_et` seul ne veut rien dire", () => {
+  assertEquals(valider("interpreter_recherche",
+    { mode: "filtres", filtres: { genres_et: true } }), null);
+  assertEquals(valider("interpreter_recherche", { mode: "filtres", filtres: {} }), null);
+  assertEquals(valider("interpreter_recherche", { mode: "filtres" }), null);
+  /* Un seul genre : le ET n'a pas d'objet, il tombe — mais le genre reste. */
+  const r = valider("interpreter_recherche",
+    { mode: "filtres", filtres: { genres: ["action"], genres_et: true } })!;
+  assertEquals(r.filtres!.genres_et, undefined);
+  assertEquals(JSON.stringify(r.filtres!.genres), JSON.stringify(["action"]));
+});
+
+Deno.test("interpreter_recherche : mode titre — 1 à 5 candidats, bornés", () => {
+  const r = valider("interpreter_recherche", { mode: "titre", titres: [
+    { nom: "Le Loup de Wall Street", annee: 2013, media: "film" },
+    { nom: "Blow", annee: 2001, media: "film" },
+    { nom: "le loup de wall street", annee: 2013, media: "film" },  // doublon
+    { nom: "Truc", media: "documentaire" },                          // média inconnu
+  ] })!;
+  assertEquals(r.mode, "titre");
+  assertEquals(r.titres!.length, 2);
+  assertEquals(r.titres![0].nom, "Le Loup de Wall Street");
+  assertEquals(r.filtres, undefined, "le mode titre ne rend jamais de filtres");
+  // Six candidats : au-delà de cinq, on refuse.
+  assertEquals(valider("interpreter_recherche", { mode: "titre",
+    titres: Array.from({ length: 6 }, (_, i) => ({ nom: "T" + i, media: "film" })) }), null);
+  assertEquals(valider("interpreter_recherche", { mode: "titre", titres: [] }), null);
+});
+
+Deno.test("interpreter_recherche : un mode inconnu ne passe pas", () => {
+  assertEquals(valider("interpreter_recherche", { mode: "libre", titres: [
+    { nom: "Heat", media: "film" } ] }), null);
+  assertEquals(valider("interpreter_recherche", {}), null);
+});
+
+Deno.test("interpreter_recherche : un nom de personne ne fait pas voyager d'identité", () => {
+  const r = valider("interpreter_recherche", { mode: "filtres", filtres: {
+    personnes: ["Will Smith adrien@exemple.fr", "https://exemple.fr/x", "Zoe Saldana"] } })!;
+  const gens = r.filtres!.personnes!.join(" | ");
+  assert(!/adrien@exemple\.fr/.test(gens), "une adresse ne survit pas : " + gens);
+  assert(!/https?:/.test(gens), "une URL non plus : " + gens);
+  assert(/Zoe Saldana/.test(gens), "le nom honnête, lui, passe");
 });

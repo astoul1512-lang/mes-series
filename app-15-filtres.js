@@ -354,6 +354,15 @@ function pilulesRech(){
     h += '<button class="rmot'+ton+'" onclick="peuImporteRech(\''+escJs(m.cle)+'\')">'+
       esc(m.mot)+'<span class="rpx">✕</span></button>';
   });
+  /* 2 bis. SPEC-11 — LES PERSONNES POSÉES, retirables comme les autres mots.
+        Elles ne viennent pas de `RECH_MOTS` (ce ne sont pas des critères d'une
+        table fermée mais des identifiants TMDB résolus), donc elles ont leur
+        propre boucle et leur propre retrait — mais exactement la même forme à
+        l'écran : ce que l'IA pose se retire d'un doigt, comme le reste. */
+  personnesRech().forEach(g=>{
+    h += '<button class="rmot gens" onclick="retirerPersonneRech('+Number(g.id)+')">'+
+      esc('avec '+g.nom)+'<span class="rpx">✕</span></button>';
+  });
   /* 3. La porte vers la feuille. Elle ne dit plus « + préciser » (une question
         après l'autre) mais « ＋ affiner » (tout d'un coup) — c'est le
         changement de forme du §4. */
@@ -367,6 +376,11 @@ function pilulesRech(){
 function selectionActiveRech(){
   const r = etatRech();
   if(r.ambiance) return true;
+  /* SPEC-11 — une personne posée EST une sélection : sans cette ligne, « avec
+     Will Smith » seul n'aurait pas droit à la carte du meilleur match.
+     `personnesRech()` et pas `r.personnes` : une personne qui ne filtre rien
+     (B3) n'est pas une sélection. */
+  if(personnesRech().length) return true;
   if(r.amb || r.note || r.pasvu || r.statut || r.gore || r.avec) return true;
   return ['genre','origine','epoque','duree','plate'].some(c => listeRech(c).length > 0);
 }
@@ -402,6 +416,15 @@ function sectionsFiltresRech(){
     { id:'plate',   titre:'Plateforme' },
     { id:'note',    titre:'Note minimale' }
   ];
+  /* SPEC-11, RÉSERVE DE RELECTURE (29/08) — LA FEUILLE MONTRE AUSSI LES
+     PERSONNES. Le §13 demande que « la phrase du haut ET la feuille Filtres
+     reflètent ce qui a été compris » ; la phrase le faisait, la feuille non.
+     La section n'apparaît QUE s'il y a quelqu'un : une personne ne se choisit
+     pas dans une liste fermée, elle arrive par la barre ✦ — la feuille sert
+     donc à la VOIR et à la retirer, pas à en ajouter. Et elle n'existe que sous
+     la famille Films, seule à savoir l'honorer (B3). */
+  if(typeof personnesRech === 'function' && personnesRech().length)
+    s.unshift({ id:'gens', titre:'Personnes' });
   /* « Série / animé » n'a aucun sens sur les films, et TMDB refuserait le
      paramètre : la section n'existe pas dans cette famille. */
   if(fam !== 'film') s.push({ id:'statut', titre:'Série / animé' });
@@ -480,6 +503,7 @@ function resumeSectionFiltre(id){
   if(id === 'epoque')  return j(listeRech('epoque').map(id2 => { const e = RECH_EPOQUES.find(x=>x.id===id2); return e ? e.mot : null; }));
   if(id === 'duree')   return j(listeRech('duree').map(id2 => { const d = dureeRech(id2); return d ? d.mot : null; }));
   if(id === 'origine') return j(listeRech('origine').map(id2 => { const o = origineRech(id2); return o ? o.mot : null; }));
+  if(id === 'gens')    return j(personnesRech().map(g => g.nom));
   if(id === 'plate')   return listeRech('plate').length ? libellePlateRech() : '';
   if(id === 'note'){ const n = RECH_NOTES.find(x => x.id === r.note); return n ? n.mot : ''; }
   if(id === 'statut'){ const s = statutRech(r.statut); return s ? s.mot : ''; }
@@ -512,6 +536,13 @@ function poserFiltreRech(cle, val){
   poserMotRech(cle, val);
   peindreFiltresRech();
 }
+/* SPEC-11 — retirer une personne DEPUIS la feuille. Même fonction d'état que
+   la pilule du haut (`retirerPersonneRech`, app-12), plus le redessin de la
+   feuille — exactement le couple `poserFiltreRech` / `poserMotRech`. */
+function retirerPersonneFiltreRech(id){
+  retirerPersonneRech(id);
+  peindreFiltresRech();
+}
 function poserTuileFiltreRech(id){
   poserAmbianceRech(id);
   peindreFiltresRech();
@@ -528,6 +559,24 @@ function optionsSectionFiltre(id){
   const r = etatRech(), fam = r.fam;
   const poses = c => listeRech(c).map(String);
   let h = '';
+
+  /* SPEC-11 — les personnes comprises par la barre ✦. On ne PROPOSE rien ici :
+     il n'existe pas de liste fermée des gens du cinéma, et en inventer une
+     serait un champ de saisie de plus. On MONTRE ce qui a été compris, et on
+     laisse le retirer — le même geste que la pilule du haut, au même endroit
+     que les autres filtres. */
+  if(id === 'gens'){
+    const gens = personnesRech();
+    if(!gens.length) return '<div class="tiny muted">Aucune personne posée.</div>';
+    h += '<div class="fopts">'+ gens.map(g=>
+      optFiltreRech(g.nom + ' ✕', 'retirerPersonneFiltreRech('+Number(g.id)+')', true)
+    ).join('')+'</div>'+
+      '<div class="tiny muted" style="margin-top:8px">'+
+        'Une personne se demande dans la barre ✦ (« un film d\'action avec Will '+
+        'Smith »). TMDB ne sait la filtrer que sur les films : c\'est pour ça que '+
+        'cette section n\'existe que sous la puce Films.</div>';
+    return h;
+  }
 
   if(id === 'genre'){
     /* Les tuiles d'envie MESURÉES d'abord (§7 : « conservées comme données »),
