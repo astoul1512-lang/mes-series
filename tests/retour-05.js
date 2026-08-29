@@ -37,12 +37,13 @@ async function decor(page){
     window.tmdb = async ()=> ({ results:[], total_pages:1, total_results:0 });
     window.sbFetch = async ()=> ([]);
     db.auth = { token:'x', uid:'moi' };
-    db.notifLus = {}; db.invitPush = 0;
+    db.notifLus = {};
     partage.suivis = [{ id:'u2', pseudo:'Camille' }];
     partage.abonnes = []; partage.charge = true;
     conseils = { recues:[], envoyees:[], charge:true };
     migrerNotif();
     db.notif.abo = null; db.notif.erreur = null; db.notif.titres = {};
+    db.notif.invitPush = 0;
     window.monde = (o)=>{
       const v = { p:notifPossibles, q:permissionNotif, i:estIOS, a:surEcranAccueil };
       notifPossibles  = ()=> o.possible !== false;
@@ -137,18 +138,18 @@ async function decor(page){
       go('centre', { from:'discover' });
       await new Promise(x=>setTimeout(x, 60));
       let h = document.getElementById('app').innerHTML;
-      out.videAvecCarte = /invitpush/.test(h);
+      out.videAvecCarte = /data-invit="carte"/.test(h);
       out.videDitVide   = /Rien pour l/.test(h);
-      out.avantGroupe   = h.indexOf('invitpush');
+      out.avantGroupe   = h.indexOf('data-invit');
       /* Avec du contenu : la carte doit rester en TÊTE, avant le premier groupe. */
       conseils.recues = [{ id:'r1', de:'u2', vers:'moi', type:'tv', tmdb_id:1399,
                            titre:'Severance', cree:new Date().toISOString(), mot:'' }];
       render();
       await new Promise(x=>setTimeout(x, 60));
       h = document.getElementById('app').innerHTML;
-      out.pleinAvecCarte = /invitpush/.test(h);
-      out.enTete = h.indexOf('invitpush') > 0 && h.indexOf('sectitle') > 0 &&
-                   h.indexOf('invitpush') < h.indexOf('sectitle');
+      out.pleinAvecCarte = /data-invit="carte"/.test(h);
+      out.enTete = h.indexOf('data-invit') > 0 && h.indexOf('sectitle') > 0 &&
+                   h.indexOf('data-invit') < h.indexOf('sectitle');
       /* La pastille ne la compte JAMAIS : elle n'est pas une notification. */
       out.nonLus = nbNonLusCentre();
       db.notifLus['reco:r1'] = Date.now();
@@ -188,21 +189,24 @@ async function decor(page){
   {
     const r = await page.evaluate(()=>{
       const fin = monde({ permission:'default' });
-      db.invitPush = 0;
+      db.notif.invitPush = 0;
       const out = { avant:invitPushEtat() };
       plusTardInvitPush();
-      out.date = db.invitPush > 0;
+      out.date = db.notif.invitPush > 0;
       out.apres = invitPushEtat();
-      db.invitPush = Date.now() - 29*86400000; out.j29 = invitPushEtat();
-      db.invitPush = Date.now() - 31*86400000; out.j31 = invitPushEtat();
-      /* La synchro : il monte, il se fusionne au plus récent, il ne recule pas. */
+      db.notif.invitPush = Date.now() - 29*86400000; out.j29 = invitPushEtat();
+      db.notif.invitPush = Date.now() - 31*86400000; out.j31 = invitPushEtat();
+      /* La synchro : il monte par le bloc `notif`, il se fusionne au plus
+         récent, et il ne recule pas. */
       const t = Date.now();
-      db.invitPush = t;
-      out.monte = payload().invitPush === t;
-      out.avance = fusionnerInvitPush({ invitPush: t + 1000 }) && db.invitPush === t + 1000;
-      out.reculePas = !fusionnerInvitPush({ invitPush: t }) &&
-                      !fusionnerInvitPush({}) && db.invitPush === t + 1000;
-      db.invitPush = 0;
+      db.notif.invitPush = t;
+      out.monte = payload().notif.invitPush === t;
+      fusionnerNotif({ invitPush: t + 1000 });
+      out.avance = db.notif.invitPush === t + 1000;
+      fusionnerNotif({ invitPush: t });
+      fusionnerNotif({});
+      out.reculePas = db.notif.invitPush === t + 1000;
+      db.notif.invitPush = 0;
       fin();
       return out;
     });

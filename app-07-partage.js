@@ -1597,6 +1597,14 @@ function viewCentre(){
        gros bouton blanc à côté du titre volerait l'attention au fil. */
     right: reste ? '<button class="toutlu" onclick="toutMarquerLuCentre()">Tout marquer lu</button>' : ''
   });
+  /* RETOUR-05 §2 — LA CARTE D'INVITATION, EN TÊTE DU FIL ET NULLE PART AILLEURS.
+     C'est le SEUL ajout de ce lot au centre : le fil, le lu/non-lu et les cartes
+     reco ne bougent pas. Elle est posée AVANT le test du fil vide, et c'est le
+     cas qui compte le plus : quelqu'un qui n'a encore rien reçu est très
+     exactement quelqu'un dont le push n'est pas actif. `carteInvitPush` (app-09,
+     avec le reste de ce qui parle au push) rend une chaîne vide dès qu'il n'y a
+     rien à proposer — le centre n'a donc aucune condition à connaître. */
+  html += carteInvitPush();
   if(!l.length)
     return html + '<div class="empty"><h3>🔕 Rien pour l\'instant</h3>'+
       '<p>Les sorties et les recos de ton cercle arriveront ici.</p></div>'+
