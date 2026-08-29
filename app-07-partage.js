@@ -1714,6 +1714,15 @@ function metaReco(type, d){
   return l.join(' · ');
 }
 
+/* RETOUR-06 point 2 — le geste d'ouverture, écrit une seule fois : la jaquette,
+   le titre et « Voir la fiche » doivent rester d'accord, et trois recopies d'un
+   `onclick` sont trois occasions d'en oublier une. `escJs` partout : `r.id` et
+   `r.type` viennent d'une ligne écrite par quelqu'un d'autre (règle S3). */
+function ouvrirRecoJs(r){
+  return 'ouvrirConseil(\''+escJs(r.id)+'\','+Number(r.tmdb_id)+
+         ',\''+escJs(r.type)+'\',\'centre\')';
+}
+
 /* ---------- La carte reco ----------
 
    Trois boutons, et PAS de « Non merci » : le §0.6 est explicite, rien ne
@@ -1737,12 +1746,28 @@ function carteRecoCentre(e){
         '<span>'+esc(fmtDate(String(r.cree).slice(0,10)))+'</span></div>'+
     '</div>'+
     '<div class="recocc">'+
-      (d ? posterEl(d.poster, 'w185', 'recocp', r.titre || '') : '')+
+      /* RETOUR-06 POINT 2 (29/08/2026) — LA JAQUETTE ET LE TITRE OUVRENT LA
+         FICHE. Constat d'Adrien : « dans les notifications on ne peut pas
+         toucher la jaquette pour ouvrir la fiche ». Seuls les boutons
+         répondaient — c'est-à-dire tout sauf ce qu'on touche d'instinct.
+         Ils appellent `ouvrirConseil`, la MÊME fonction que « Voir la fiche » :
+         le §2 le demande explicitement, et ça garantit qu'ils marquent la reco
+         « vue » et posent le même `from:` que lui. Pas de second chemin.
+         Sans identifiant utilisable (`idOk`), on ne rend rien de cliquable
+         plutôt qu'un geste qui échouerait en silence. */
+      (d ? (idOk ? '<button class="recocj" aria-label="Ouvrir la fiche de '+
+                     esc(r.titre || 'ce titre')+'" onclick="'+ouvrirRecoJs(r)+'">'+
+                     posterEl(d.poster, 'w185', 'recocp', r.titre || '')+'</button>'
+                 : posterEl(d.poster, 'w185', 'recocp', r.titre || ''))
+         : '')+
       '<div class="recocx">'+
         /* C-2 — un titre vide arrivé d'une version antérieure se répare ici dès
          que la fiche TMDB est là : la carte lisait `r.titre` et rien d'autre,
          donc « Un titre » restait « Un titre » pour toujours. */
-      '<div class="recocn">'+esc(r.titre || (d && d.nom) || 'Un titre')+'</div>'+
+      (idOk
+        ? '<button class="recocn recocnb" onclick="'+ouvrirRecoJs(r)+'">'+
+            esc(r.titre || (d && d.nom) || 'Un titre')+'</button>'
+        : '<div class="recocn">'+esc(r.titre || (d && d.nom) || 'Un titre')+'</div>')+
         (d ? '<div class="recocm">'+esc(metaReco(r.type, d))+'</div>' : '')+
         (r.mot ? '<div class="recocb">'+esc(r.mot)+'</div>' : '')+
       '</div>'+
@@ -1765,8 +1790,8 @@ function carteRecoCentre(e){
       (idOk && chezMoi
         ? '<span class="btn mini ghost" aria-disabled="true">✓ Déjà dans ta liste</span>'
         : idOk ? '<button class="btn mini" onclick="ajouterDepuisReco(\''+escJs(r.id)+'\')">+ À voir</button>' : '')+
-      (idOk ? '<button class="btn mini ghost" onclick="ouvrirConseil(\''+escJs(r.id)+'\','+
-                Number(r.tmdb_id)+',\''+escJs(r.type)+'\',\'centre\')">Voir la fiche</button>' : '')+
+      (idOk ? '<button class="btn mini ghost" onclick="'+ouvrirRecoJs(r)+
+                '">Voir la fiche</button>' : '')+
       (lu ? '' : '<button class="btn mini ghost" onclick="plusTardReco(\''+escJs(e.cle)+'\')">Plus tard</button>')+
     '</div>';
   }

@@ -2458,11 +2458,20 @@ window.MODE_TEST = true;
 
   test('les dix recettes tiennent les trois règles du §4.6', ()=>{
     RECH_AMBIANCES.forEach(a=>{
+      /* RETOUR-06 point 3 — LE PLANCHER DE VOTES NE COMPTE PLUS COMME UN
+         INGRÉDIENT, et il n'aurait jamais dû : `vote_count.gte` protégeait la
+         grille du bruit, il ne DÉCRIVAIT pas l'envie. Il gonflait le compte —
+         « Une mini-série qui se finit » n'atteignait trois qu'en s'appuyant sur
+         lui. On compte donc les vrais ingrédients, et on en exige deux : une
+         recette doit dire au moins deux choses, sinon c'est un filtre. */
       const clés = {};
       (a.ing||[]).forEach(i => Object.keys(i.p).forEach(k => { clés[k] = 1; }));
-      Object.keys(a.fond||{}).forEach(k => { clés[k] = 1; });
-      vrai(Object.keys(clés).length >= 3, a.id+' : moins de trois ingrédients');
-      vrai(a.mesure >= 50 && a.mesure <= 500, a.id+' : mesuré hors de la fourchette 50–500');
+      vrai(Object.keys(clés).length >= 2, a.id+' : moins de deux ingrédients');
+      /* La fourchette haute a sauté avec les planchers (RETOUR-06 point 3) :
+         « Ça fait peur » rend 4 408 titres et c'est voulu. Le plancher BAS
+         reste, et c'est lui qui compte — une recette qui ne rend presque rien
+         est une promesse vide. */
+      vrai(a.mesure >= 100, a.id+' : mesuré sous les 100 titres ('+a.mesure+')');
     });
     /* Règle 3 : « Pour regarder à deux » a été écartée, elle ne doit pas
        réapparaître par la petite porte. */
@@ -2493,7 +2502,10 @@ window.MODE_TEST = true;
     egal(p.without_genres, '27,53,80,18', 'genres écartés');
     egal(p['with_runtime.lte'], '115', 'durée');
     egal(p['vote_average.gte'], '6.3', 'note');
-    egal(p['vote_count.gte'], '500', 'plancher de votes');
+    /* RETOUR-06 point 3 — ce qui reste de la recette, c'est ce qui la DÉCRIT :
+       le genre, les refus, la durée, la note. Le plancher de votes n'était pas
+       une description, c'était une protection ; il est retourné au socle. */
+    egal(p['vote_count.gte'], '80', 'le socle des films');
     /* Rien à décomposer : le socle EST la requête, et il n'y en a qu'une. */
     egal(jeuxParamsRech('movie').length, 1, 'une recette nue part en plusieurs requêtes');
   });
@@ -2504,7 +2516,9 @@ window.MODE_TEST = true;
     const p = paramsSocleRech('movie');
     vrai(p['with_runtime.lte'] === undefined, 'la durée est restée');
     egal(p.with_genres, '10751', 'le genre a été emporté avec la durée');
-    egal(p['vote_count.gte'], '500', 'le plancher invisible a bougé');
+    /* RETOUR-06 point 3 — la recette n'a plus de plancher à elle : c'est le
+       socle des films qu'on doit lire ici, et lui seul. */
+    egal(p['vote_count.gte'], '80', 'le socle a bougé sous la recette');
   });
 
   test('un mot posé à la main l\'emporte sur l\'ingrédient qu\'il recouvre', ()=>{
@@ -3516,12 +3530,16 @@ window.MODE_TEST = true;
   test('les huit recettes tiennent les trois règles du §4.6', ()=>{
     egal(RECH_AMBIANCES_TV.length, 8);
     RECH_AMBIANCES_TV.forEach(a=>{
+      /* RETOUR-06 point 3 — LE PLANCHER DE VOTES NE COMPTE PLUS COMME UN
+         INGRÉDIENT, et il n'aurait jamais dû : `vote_count.gte` protégeait la
+         grille du bruit, il ne DÉCRIVAIT pas l'envie. Il gonflait le compte —
+         « Une mini-série qui se finit » n'atteignait trois qu'en s'appuyant sur
+         lui. On compte donc les vrais ingrédients, et on en exige deux : une
+         recette doit dire au moins deux choses, sinon c'est un filtre. */
       const clés = {};
       (a.ing||[]).forEach(i => Object.keys(i.p).forEach(k => { clés[k] = 1; }));
-      Object.keys(a.fond||{}).forEach(k => { clés[k] = 1; });
-      vrai(Object.keys(clés).length >= 3, a.id+' : moins de trois ingrédients');
-      vrai(a.mesure >= 50 && a.mesure <= 500,
-           a.id+' : mesuré hors de la fourchette 50–500 ('+a.mesure+')');
+      vrai(Object.keys(clés).length >= 2, a.id+' : moins de deux ingrédients');
+      vrai(a.mesure >= 100, a.id+' : mesuré sous les 100 titres ('+a.mesure+')');
       /* Le `without_genres=16` a été RETIRÉ — décision du point 16. La famille
          s'occupe de l'exclusion, et plus finement. Le garder ferait disparaître
          Rick et Morty des ambiances alors qu'il reste dans la grille : les deux
@@ -3557,7 +3575,9 @@ window.MODE_TEST = true;
     vrai(String(p['first_air_date.lte']||'').indexOf(attendu) === 0,
          'la recette est écrite en date fixe : elle vieillira toute seule');
     egal(p['vote_average.gte'], '8');
-    egal(p['vote_count.gte'], '800', 'le plancher invisible de la recette a bougé');
+    /* RETOUR-06 point 3 — plus de plancher de recette ; les séries sont au
+       socle 20, comme les animés. */
+    egal(p['vote_count.gte'], '20', 'le socle des séries a bougé sous la recette');
     vrai(sansVusDemandeRech(), 'le classique des séries n\'exclut pas la bibliothèque');
   });
 
@@ -7959,11 +7979,20 @@ window.MODE_TEST = true;
     egal(triRech(), 'note', 'le tri par goûts s\'applique tout seul : c\'est le point 13 qui revient');
   });
 
+  /* RETOUR-06 point 1 ① — la mise en forme d'une fournée a été EXTRAITE dans
+     `servirRech`, parce qu'elle s'applique désormais à deux services : le
+     premier jet, puis le reste. Le cas garde son intention mot pour mot et
+     change de fenêtre : le tri s'applique au LOT servi, jamais à `r.res`. Il
+     surveille aussi les deux appelants, sans quoi extraire la fonction aurait
+     suffi à faire passer un test qui ne regarde plus rien. */
   test('RA16 — une page qui arrive ne réordonne pas ce qui est à l\'écran', ()=>{
+    const s = codeDe(servirRech);
+    vrai(s.indexOf('ordonnerParGoutRech(lot)') >= 0,
+         'le tri ne s\'applique plus au lot servi');
     const c = codeDe(chargerGrilleRech);
-    vrai(c.indexOf('ordonnerParGoutRech(fournee)') >= 0,
-         'le tri ne s\'applique plus à la fournée');
-    vrai(c.indexOf('ordonnerParGoutRech(r.res)') < 0,
+    vrai(c.indexOf('servirRech(') >= 0, 'la fournée ne passe plus par la mise en forme');
+    vrai(c.indexOf('ordonnerParGoutRech(r.res)') < 0 &&
+         s.indexOf('ordonnerParGoutRech(r.res)') < 0,
          'le tri réordonne toute la grille à chaque « Voir plus » — règle « jamais sous le doigt »');
     vrai(codeDe(basculerTriRech).indexOf('ordonnerParGoutRech(r.res)') >= 0,
          'basculer le tri ne réordonne pas ce qui est déjà chargé');
@@ -8145,11 +8174,15 @@ window.MODE_TEST = true;
   });
 
   test('RA26 — l\'ordre d\'arrivée est estampillé à l\'arrivée', ()=>{
-    const c = codeDe(chargerGrilleRech);
-    vrai(c.indexOf('__rang') >= 0,
+    vrai(codeDe(servirRech).indexOf('__rang') >= 0,
          'rien ne mémorise l\'ordre d\'arrivée : « note » n\'a plus rien à restituer');
-    vrai(c.indexOf('const depart = suite ? r.res.length : 0') >= 0,
-         'la numérotation ne continue pas d\'une fournée à l\'autre');
+    /* RETOUR-06 point 1 ① — la numérotation continue maintenant d'un SERVICE à
+       l'autre, et pas seulement d'une fournée à l'autre : le premier jet occupe
+       les premiers rangs, le reste prend la suite. C'est ce que dit `ajoute`. */
+    const c = codeDe(chargerGrilleRech);
+    vrai(c.indexOf('const ajoute = suite || premierJet') >= 0 &&
+         c.indexOf('const depart = ajoute ? r.res.length : 0') >= 0,
+         'la numérotation ne continue pas d\'un service à l\'autre');
   });
 
   test('RA27 — en tri « note », la carte montre le mieux noté', ()=>{
@@ -9795,25 +9828,35 @@ window.MODE_TEST = true;
     egal(discParams()['vote_count.gte'], String(DISC_VOTES_MINI));
   });
 
-  test('point 2 — une ambiance mesurée garde SON plancher malgré la plateforme', ()=>{
+  /* RETOUR-06 point 3 (29/08) — CE CAS A CHANGÉ DE SENS, ET C'EST VOULU.
+     Il vérifiait qu'une plateforme n'emportait PAS le plancher d'une recette.
+     Les recettes n'en ont plus : il ne reste que le socle, et le socle, la
+     plateforme l'emporte — c'est très exactement ce que promet la règle ① de
+     RETOUR-04. Le cas est donc retourné plutôt que supprimé : il continue de
+     surveiller la même ligne de code, dans l'autre sens. */
+  test('point 2 — sous plateforme, une ambiance n\'a plus de plancher du tout', ()=>{
     const r = rechVierge('film');
     db.gouts = db.gouts || {}; db.gouts.plates = [{ id:8, nom:'Netflix' }];
     r.amb = 'famille'; r.plate = ['8'];
-    egal(paramsSocleRech('movie')['vote_count.gte'], '500',
-         'le plancher d\'une recette mesurée a été emporté : ce n\'est pas le socle de la grille');
+    egal(paramsSocleRech('movie')['vote_count.gte'], undefined,
+         'un plancher survit à la plateforme');
   });
 
   /* ---- Point 3 : le plancher des animés ---- */
 
-  test('point 3 — la famille Animés part à 20, les autres restent à 80', ()=>{
+  /* RETOUR-06 point 3 — les séries ont rejoint les animés à 20 (décision
+     d'Adrien du 29/08). Les films gardent 80 : leur catalogue est l'océan. */
+  test('point 3 — animés ET séries à 20, films à 80', ()=>{
     rechVierge('anime');
     egal(paramsSocleRech('tv')['vote_count.gte'], '20');
     rechVierge('serie');
-    egal(paramsSocleRech('tv')['vote_count.gte'], '80');
+    egal(paramsSocleRech('tv')['vote_count.gte'], '20');
     rechVierge('film');
     egal(paramsSocleRech('movie')['vote_count.gte'], '80');
+    /* « Tout » : chaque média garde son échelle. */
     rechVierge('tout');
-    egal(paramsSocleRech('tv')['vote_count.gte'], '80');
+    egal(paramsSocleRech('tv')['vote_count.gte'], '20');
+    egal(paramsSocleRech('movie')['vote_count.gte'], '80');
   });
 
   test('point 3 — Medalist (58 votes) passe le plancher des animés, pas celui de v96', ()=>{
@@ -10211,6 +10254,77 @@ window.MODE_TEST = true;
     /* Le contrôle « état partagé » du lanceur surveille les globales, pas les
        champs de `ui` : c'est donc ici que la convention se tient. */
     vrai('reco' in ui, '`ui.reco` n\'est pas déclaré : app-07 écrit un champ qui n\'existe pas');
+  });
+
+  groupe('RETOUR-06 point 3 — les planchers de votes, partout');
+
+  test('§3 — plus AUCUNE recette ne porte son propre plancher', ()=>{
+    const toutes = [].concat(RECH_AMBIANCES, RECH_AMBIANCES_TV);
+    egal(toutes.length, 18, 'le nombre de recettes a changé : la mesure du 29/08 ne vaut plus');
+    const restantes = toutes.filter(a => a.fond && a.fond['vote_count.gte']);
+    egal(restantes.map(a=>a.id), [],
+         'une recette garde un plancher écrit en dur : ' +
+         restantes.map(a=>a.id+'='+a.fond['vote_count.gte']).join(', '));
+    /* Les sous-genres d'animés n'en ont jamais eu : ils passent par des
+       mots-clés et prennent le socle. On le vérifie pour que l'ajout d'un
+       plancher là-bas se voie tout de suite. */
+    egal(RECH_ANIMES.filter(a => a.fond).map(a=>a.id), []);
+  });
+
+  test('§3 — l\'échelle du socle : films 80, séries 20, animés 20', ()=>{
+    rechVierge('film');  egal(paramsSocleRech('movie')['vote_count.gte'], '80');
+    rechVierge('serie'); egal(paramsSocleRech('tv')['vote_count.gte'], '20',
+      'les séries sont restées au plancher des films');
+    rechVierge('anime'); egal(paramsSocleRech('tv')['vote_count.gte'], '20');
+    /* « Tout » interroge les deux : chaque média garde SON échelle. C'est
+       pourquoi le choix se lit sur le média et non sur la famille. */
+    rechVierge('tout');
+    egal(paramsSocleRech('movie')['vote_count.gte'], '80');
+    egal(paramsSocleRech('tv')['vote_count.gte'], '20');
+  });
+
+  test('§3 — une ambiance prend le socle, et rien de plus', ()=>{
+    const r = rechVierge('film');
+    r.amb = 'classique';
+    egal(paramsSocleRech('movie')['vote_count.gte'], '80',
+         'la recette « Un classique que j\'ai raté » réimpose un plancher');
+    const t = rechVierge('serie');
+    t.amb = 'tv-action';
+    egal(paramsSocleRech('tv')['vote_count.gte'], '20');
+  });
+
+  test('§3 — sous filtre plateforme, l\'ambiance n\'a plus de plancher non plus', ()=>{
+    /* C'est la conséquence VOULUE du retrait : le témoin `socleVotes` de
+       RETOUR-04 épargnait le plancher d'une recette ; il n'y en a plus. */
+    const r = rechVierge('film');
+    db.gouts = db.gouts || {}; db.gouts.plates = [{ id:8, nom:'Netflix' }];
+    r.amb = 'action'; r.plate = ['8'];
+    egal(paramsSocleRech('movie')['vote_count.gte'], undefined,
+         'la plateforme ne l\'emporte plus sur l\'ambiance');
+  });
+
+  test('§3 — le plancher de la NOTE ne bouge pas (100, 30 sur animés)', ()=>{
+    const r = rechVierge('film'); r.note = '7';
+    egal(paramsSocleRech('movie')['vote_count.gte'], '100');
+    const t = rechVierge('serie'); t.note = '7';
+    egal(paramsSocleRech('tv')['vote_count.gte'], '100',
+         'une moyenne à quatre votes ne veut rien dire, série ou pas');
+    const a = rechVierge('anime'); a.note = '7';
+    egal(paramsSocleRech('tv')['vote_count.gte'], '30');
+  });
+
+  test('§3 — les chiffres `mesure` sont ceux du socle, pas ceux d\'avant', ()=>{
+    /* Trois témoins de la mesure du 29/08. Si quelqu'un remet un plancher, ces
+       nombres deviennent faux — et c'est le test au-dessus qui le dira. */
+    const par = {};
+    [].concat(RECH_AMBIANCES, RECH_AMBIANCES_TV).forEach(a=>{ par[a.id] = a; });
+    egal(par['classique'].mesure, 1317); egal(par['classique'].mesureAvant, 204);
+    egal(par['peur'].mesure, 4408);      egal(par['peur'].mesureAvant, 469);
+    egal(par['tv-action'].mesure, 407);  egal(par['tv-action'].mesureAvant, 136);
+    /* Et chaque recette a bien gagné du choix, aucune n'en a perdu. */
+    const perdantes = [].concat(RECH_AMBIANCES, RECH_AMBIANCES_TV)
+      .filter(a => a.mesureAvant && a.mesure <= a.mesureAvant).map(a=>a.id);
+    egal(perdantes, [], 'une recette rend MOINS qu\'avant : ' + perdantes.join(', '));
   });
 
   /* ==================== Bilan ====================

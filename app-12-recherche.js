@@ -92,6 +92,17 @@ const RECH_VOTES_MINI = 80;      // plancher de votes de la grille
    20 et non « rien » : sans plancher du tout, le sous-genre sport triple encore
    et la grille se remplit de fiches à trois votes. */
 const RECH_VOTES_MINI_ANIME = 20;
+/* RETOUR-06 POINT 3 (29/08/2026) — LES SÉRIES AUSSI, ET POUR LA MÊME RAISON.
+   Le raisonnement de RETOUR-04 sur les animés — « un catalogue étroit et
+   sous-voté, que le plancher de l'océan TMDB ampute » — vaut tel quel pour les
+   séries : TMDB en compte des dizaines de fois moins que de films, et une série
+   très suivie en France y reste sous-votée. Mesuré le 29/08, à travers le
+   relais, sur les huit recettes de séries : à 80 elles rendaient de 134 à 473
+   titres ; à 20, de 407 à 1 673 — entre deux fois et quatre fois et demie plus.
+   Décision d'Adrien du 29/08 : « pareil pour film et série, pas que animé ».
+   Les FILMS gardent 80 : leur catalogue est l'océan, et c'est là que le
+   plancher protège encore la grille du bruit (26 806 films passent déjà 80). */
+const RECH_VOTES_MINI_SERIE = 20;
 /* Et quand c'est la NOTE qui est demandée, le plancher reste — abaissé, pas
    supprimé. Une moyenne portée par 4 votes ne veut rien dire ; à 30 elle
    commence à en dire quelque chose. 30 au lieu des 100 des autres familles,
@@ -102,6 +113,16 @@ const RECH_JEU_STOCK = 6;        // en dessous, une source va chercher la suite
    trois cent vingt-quatre requêtes simultanées, c'est une rafale de 429.
    Relecture du 02/08, défaut 2.5. */
 const RECH_AMORCE_PAR_FOIS = 6;
+/* RETOUR-06 POINT 1 ① (29/08/2026) — COMBIEN DE TITRES SUFFISENT POUR ARRÊTER
+   D'ATTENDRE. Une fournée en vaut 42 (`RECH_CIBLE`), et c'est bien ce qu'il
+   faut pour remplir la grille. Mais mesuré le 29/08, CPU bridé, relais bouchonné
+   à 180 ms : avec deux flux, les quarante titres des premières pages sont en
+   mémoire à t+182 ms — et l'écran restait vide jusqu'à t+567, le temps d'aller
+   chercher les deux qui manquaient, un flux après l'autre. Une demi-seconde de
+   blanc devant quarante affiches déjà là.
+   Douze, c'est un écran de téléphone rempli. Au-delà, on ne fait plus attendre
+   pour ce qui se voit : on fait attendre pour ce qui se défile. */
+const RECH_PREMIER_JET = 12;
 
 /* B5 (09/08/2026) — `grilleAbort` porte le signal d'abandon de la GÉNÉRATION de
    grille en cours, exactement comme `rechAbort` le fait depuis toujours pour la
@@ -234,17 +255,45 @@ function mediaRech(){ return mediasRech()[0]; }
    EFFET DE BORD À SIGNALER, pas à corriger seul : « Ça fait peur » accueille
    désormais des thrillers sans horreur (Seven, Prisoners). Si ça ne convient
    pas, le correctif sera un refus de plus, pas un retour au ET. */
+/* ===== RETOUR-06 POINT 3 (29/08/2026) — LES RECETTES N'ONT PLUS DE PLANCHER
+   DE VOTES À ELLES, ET C'EST UNE DÉCISION D'ADRIEN.
+
+   Constat : « tu as baissé les critères de nombre de notes mais pas pour toutes
+   les catégories ». Exact. RETOUR-04 avait réglé le SOCLE (plateforme → aucun,
+   Animés → 20, sinon → 80) ; les dix-huit recettes, elles, portaient chacune le
+   sien, écrit en dur et jamais retouché depuis le 31/07 — jusqu'à 5 000 votes
+   pour « Un classique que j'ai raté », 3 500 pour « Ça fait peur ».
+
+   MESURÉ AVANT DE TRANCHER, le 29/08, à travers le vrai relais. Le champ
+   `mesure` de chaque recette porte désormais le nombre de titres AVEC le socle
+   seul, `mesureAvant` celui qu'elle rendait avec son plancher à elle. Le
+   déplacement va de ×1,9 (documentaire) à ×9,4 (« Ça fait peur », 469 → 4 408).
+
+   La règle du §3 de la spec — « descendre par paliers tant qu'une recette ne
+   rend pas 100 titres » — n'aurait RIEN changé : toutes rendaient déjà entre
+   134 et 606. Ce n'est donc pas la famine qui gênait Adrien, c'est l'exigence
+   elle-même. D'où le retrait pur et simple, plutôt qu'un palier.
+
+   CE QU'ON PERD, ET QUI A ÉTÉ POSÉ AVANT DE DÉCIDER : « Un classique que j'ai
+   raté » promet un film CONNU. À 5 000 votes elle en rendait 204, tous connus ;
+   au socle elle en rend 1 317, dont beaucoup de confidentiels. La question a
+   été posée à Adrien le 29/08 avec ces chiffres, et il a tranché : tout au
+   socle, sans exception. C'est écrit ici pour que le jour où quelqu'un trouve
+   la recette trop large, il sache que ce n'est pas un oubli.
+
+   Ce qui NE bouge pas : le plancher du critère de note (100, 30 sur animés) —
+   une moyenne portée par quatre votes ne veut toujours rien dire. ===== */
 const RECH_AMBIANCES = [
-  { id:'famille', t:'Un film en famille', mesure:491, mesureAvant:490, anim:'garde',
+  { id:'famille', t:'Un film en famille', mesure:1161, mesureAvant:490, anim:'garde',
     /* LA SEULE ambiance où l'animation est la promesse même. Aucun refus,
        aucune relégation : Shrek et Kuzco y sont chez eux. Exception demandée
        explicitement par Adrien le 02/08. */
     ing:[ { cle:'genre', mot:'familial', p:{ with_genres:'10751', without_genres:'27,53,80,18' } },
           { cle:'duree', mot:'de moins de 2 h', p:{ 'with_runtime.lte':'115' } },
           { cle:'note',  mot:'bien noté', p:{ 'vote_average.gte':'6.3' } } ],
-    fond:{ 'vote_count.gte':'500' }, genresProfil:['Familial','Aventure','Animation'] },
+    genresProfil:['Familial','Aventure','Animation'] },
 
-  { id:'rigoler', t:'Envie de rigoler', mesure:351, mesureAvant:456, anim:'relegue',
+  { id:'rigoler', t:'Envie de rigoler', mesure:2112, mesureAvant:358, anim:'relegue',
     /* La comédie dramatique est écartée : sans ça elle remonte en masse, et
        ce n'est pas ce qu'on demande quand on veut rigoler.
        LE CAS KILL BILL. Le genre principal NOMME, il ne retire rien : un titre
@@ -255,9 +304,9 @@ const RECH_AMBIANCES = [
           { cle:'refus', mot:'rien de sombre', p:{ __sans:'80,53,27' } },
           { cle:'duree', mot:'de moins de 2 h 05', p:{ 'with_runtime.lte':'125' } },
           { cle:'note',  mot:'bien noté', p:{ 'vote_average.gte':'6.5' } } ],
-    fond:{ 'vote_count.gte':'1500' }, genresProfil:['Comédie'] },
+    genresProfil:['Comédie'] },
 
-  { id:'action', t:"De l'action sans prise de tête", mesure:473, mesureAvant:334,
+  { id:'action', t:"De l'action sans prise de tête", mesure:4506, mesureAvant:606,
     /* SEUL CAS SANS CONTRAINTE DE NOTE, et c'est délibéré : demander un film
        sans prise de tête en exigeant 7,5 de moyenne est contradictoire. Ici le
        critère de qualité, c'est la notoriété — et c'est donc lui, et lui seul,
@@ -267,15 +316,15 @@ const RECH_AMBIANCES = [
     ing:[ { cle:'genre', mot:"plein d'action", p:{ with_genres:'28|12' } },
           { cle:'refus', mot:'rien de lourd', p:{ __sans:'18,10752,36' } },
           { cle:'duree', mot:'de moins de 2 h 05', p:{ 'with_runtime.lte':'125' } } ],
-    fond:{ 'vote_count.gte':'3000' }, genresProfil:['Action','Aventure'] },
+    genresProfil:['Action','Aventure'] },
 
-  { id:'peur', t:'Ça fait peur', mesure:464, mesureAvant:365,
+  { id:'peur', t:'Ça fait peur', mesure:4408, mesureAvant:469,
     ing:[ { cle:'genre', mot:'qui fait peur', p:{ with_genres:'27|53' } },
           { cle:'refus', mot:'pas pour rire', p:{ __sans:'35' } },
           { cle:'note',  mot:'bien noté', p:{ 'vote_average.gte':'6' } } ],
-    fond:{ 'vote_count.gte':'3500' }, genresProfil:['Horreur','Thriller'] },
+    genresProfil:['Horreur','Thriller'] },
 
-  { id:'classique', t:"Un classique que j'ai raté", mesure:195, sansVus:true, anim:'relegue',
+  { id:'classique', t:"Un classique que j'ai raté", mesure:1317, mesureAvant:204, sansVus:true, anim:'relegue',
     /* En années glissantes, jamais en date fixe : sinon la recette vieillit
        toute seule. `dateMoins` est calculée à l'appel.
        LOT R2 — point 15a : `sansVus` EXCLUT LA BIBLIOTHÈQUE. La règle générale
@@ -284,42 +333,41 @@ const RECH_AMBIANCES = [
        son nom, et un écran ne doit pas contredire son propre libellé. */
     ing:[ { cle:'epoque', mot:'sorti il y a plus de 15 ans', p:{ __ansAvant:15 } },
           { cle:'note',   mot:'très bien noté', p:{ 'vote_average.gte':'7.5' } } ],
-    fond:{ 'vote_count.gte':'5000' }, genresProfil:[] },
+    genresProfil:[] },
 
-  { id:'long', t:'Long et prenant', mesure:255, mesureAvant:256, anim:'relegue',
+  { id:'long', t:'Long et prenant', mesure:522, mesureAvant:258, anim:'relegue',
     ing:[ { cle:'duree', mot:'de plus de 2 h 15', p:{ 'with_runtime.gte':'135' } },
           { cle:'note',  mot:'très bien noté', p:{ 'vote_average.gte':'7.5' } } ],
-    fond:{ 'vote_count.gte':'1000' }, genresProfil:[] },
+    genresProfil:[] },
 
-  { id:'court', t:"Court, moins d'1 h 35", mesure:278, mesureAvant:433,
+  { id:'court', t:"Court, moins d'1 h 35", mesure:2882, mesureAvant:433,
     /* Le documentaire squatte le créneau court. Et l'animation est refusée
        comme partout ailleurs sous Films : presque tous les dessins animés font
        moins de 95 minutes, c'est ce qui rendait cette tuile monochrome. */
     ing:[ { cle:'duree', mot:"de moins d'1 h 35", p:{ 'with_runtime.gte':'60', 'with_runtime.lte':'95' } },
           { cle:'refus', mot:'pas un docu', p:{ __sans:'99' } },
           { cle:'note',  mot:'bien noté', p:{ 'vote_average.gte':'6.8' } } ],
-    fond:{ 'vote_count.gte':'1500' }, genresProfil:[] },
+    genresProfil:[] },
 
-  { id:'reflechir', t:'Ça fait réfléchir', mesure:285, mesureAvant:327, anim:'relegue',
+  { id:'reflechir', t:'Ça fait réfléchir', mesure:1268, mesureAvant:289, anim:'relegue',
     /* Reléguée et non refusée : sans ça, cette ambiance perdrait Ghibli et
        Your Name, qui en sont la promesse même. Ils passent en fin de
        catalogue, ils ne disparaissent pas. */
     ing:[ { cle:'genre', mot:'qui fait réfléchir', p:{ with_genres:'18|878' } },
           { cle:'refus', mot:'pas une comédie', p:{ __sans:'35' } },
           { cle:'note',  mot:'très bien noté', p:{ 'vote_average.gte':'7.5' } } ],
-    fond:{ 'vote_count.gte':'3000' }, genresProfil:['Drame','Science-Fiction'] },
+    genresProfil:['Drame','Science-Fiction'] },
 
-  { id:'vraie', t:'Une histoire vraie', mesure:278, anim:'relegue',
+  { id:'vraie', t:'Une histoire vraie', mesure:618, mesureAvant:281, anim:'relegue',
     /* Reléguée, surtout pas refusée : Persépolis et Valse avec Bachir sont des
        histoires vraies animées. */
     ing:[ { cle:'genre', mot:'tiré du réel', p:{ with_keywords:'9672' } },
           { cle:'note',  mot:'bien noté', p:{ 'vote_average.gte':'6.8' } } ],
-    fond:{ 'vote_count.gte':'800' }, genresProfil:['Histoire','Drame'] },
+    genresProfil:['Histoire','Drame'] },
 
-  { id:'docu', t:'Du vrai (documentaire)', mesure:302, genresProfil:['Documentaire'],
+  { id:'docu', t:'Du vrai (documentaire)', mesure:583, mesureAvant:310, genresProfil:['Documentaire'],
     ing:[ { cle:'genre', mot:'documentaire', p:{ with_genres:'99' } },
-          { cle:'note',  mot:'bien noté', p:{ 'vote_average.gte':'7' } } ],
-    fond:{ 'vote_count.gte':'150' } }
+          { cle:'note',  mot:'bien noté', p:{ 'vote_average.gte':'7' } } ], }
 ];
 
 /* ============ LOT R2, POINT 17 — LES HUIT AMBIANCES DE SÉRIES ============
@@ -350,29 +398,29 @@ const RECH_AMBIANCES = [
    Séries en changeant de recette en silence, ce qui est exactement le genre de
    glissement qu'on ne voit jamais. */
 const RECH_AMBIANCES_TV = [
-  { id:'tv-mini', t:'Une mini-série qui se finit', mesure:436,
+  { id:'tv-mini', t:'Une mini-série qui se finit', mesure:1262, mesureAvant:445,
     /* La plus utile des huit, et la seule qui n'existe qu'en séries :
        `with_type=2` est le seul ingrédient de tout le catalogue qui réponde à
        « je ne veux pas m'engager sur huit saisons ». */
     ing:[ { cle:'genre', mot:'qui se finit en une saison', p:{ with_type:'2' } },
           { cle:'note',  mot:'bien notée', p:{ 'vote_average.gte':'7' } } ],
-    fond:{ 'vote_count.gte':'100' }, genresProfil:[] },
+    genresProfil:[] },
 
-  { id:'tv-reflechir', t:'Ça fait réfléchir', mesure:307, mesureAvant:311,
+  { id:'tv-reflechir', t:'Ça fait réfléchir', mesure:1225, mesureAvant:309,
     /* Point 4 — « pas pour les enfants » écarte Kids (10762), et garde Arcane
        et Bojack, qui sont la promesse même. L'animation, elle, RESTE : sur
        Séries elle est chez elle. */
     ing:[ { cle:'genre', mot:'qui fait réfléchir', p:{ with_genres:'18' } },
           { cle:'refus', mot:'pas pour les enfants', p:{ __sans:'10762' } },
           { cle:'note',  mot:'excellente', p:{ 'vote_average.gte':'8' } } ],
-    fond:{ 'vote_count.gte':'500' }, genresProfil:['Drame'] },
+    genresProfil:['Drame'] },
 
-  { id:'tv-docu', t:'Du vrai (documentaire)', mesure:246,
+  { id:'tv-docu', t:'Du vrai (documentaire)', mesure:623, mesureAvant:251,
     ing:[ { cle:'genre', mot:'documentaire', p:{ with_genres:'99' } },
           { cle:'note',  mot:'bien notée', p:{ 'vote_average.gte':'7' } } ],
-    fond:{ 'vote_count.gte':'50' }, genresProfil:['Documentaire'] },
+    genresProfil:['Documentaire'] },
 
-  { id:'tv-rigoler', t:'Envie de rigoler', mesure:469, mesureAvant:487,
+  { id:'tv-rigoler', t:'Envie de rigoler', mesure:1673, mesureAvant:473,
     /* Comme côté films, la comédie dramatique est écartée : sans ça elle
        remonte en masse, et ce n'est pas ce qu'on demande quand on veut rire.
        L'ANIMATION RESTE, et c'est écrit noir sur blanc dans le point 4 : Rick
@@ -382,16 +430,16 @@ const RECH_AMBIANCES_TV = [
     ing:[ { cle:'genre', mot:'comique', p:{ with_genres:'35', without_genres:'18' } },
           { cle:'refus', mot:'rien de sombre', p:{ __sans:'80' } },
           { cle:'note',  mot:'bien notée', p:{ 'vote_average.gte':'7' } } ],
-    fond:{ 'vote_count.gte':'200' }, genresProfil:['Comédie'] },
+    genresProfil:['Comédie'] },
 
-  { id:'tv-imaginaire', t:"De l'imaginaire", mesure:371,
+  { id:'tv-imaginaire', t:"De l'imaginaire", mesure:1111, mesureAvant:374,
     /* 10765 = Sci-Fi & Fantasy ; 10762 = Kids, écarté parce que la moitié du
        genre est du dessin animé pour enfants et que ce n'est pas la demande. */
     ing:[ { cle:'genre', mot:"d'imaginaire", p:{ with_genres:'10765', without_genres:'10762' } },
           { cle:'note',  mot:'très bien notée', p:{ 'vote_average.gte':'7.5' } } ],
-    fond:{ 'vote_count.gte':'400' }, genresProfil:['Science-Fiction','Fantastique'] },
+    genresProfil:['Science-Fiction','Fantastique'] },
 
-  { id:'tv-enquete', t:'Une enquête', mesure:432, mesureAvant:183,
+  { id:'tv-enquete', t:'Une enquête', mesure:1450, mesureAvant:436,
     /* POINT 18 — la virgule (ET) devient la barre (OU), à la demande d'Adrien :
        crime OU mystère. C'était le ET qui distinguait l'enquête du polar
        d'action ; ce garde-fou-là disparaît, et ce sont les refus et les
@@ -403,9 +451,9 @@ const RECH_AMBIANCES_TV = [
     ing:[ { cle:'genre', mot:"d'enquête", p:{ with_genres:'80|9648' } },
           { cle:'refus', mot:'pas pour rire', p:{ __sans:'16,35' } },
           { cle:'note',  mot:'bien notée', p:{ 'vote_average.gte':'7' } } ],
-    fond:{ 'vote_count.gte':'250' }, genresProfil:['Crime','Mystère'] },
+    genresProfil:['Crime','Mystère'] },
 
-  { id:'tv-action', t:"De l'action", mesure:136, mesureAvant:335,
+  { id:'tv-action', t:"De l'action", mesure:407, mesureAvant:136,
     /* LE SEUL REFUS D'ANIMATION CÔTÉ SÉRIES, et il est demandé par Adrien.
        Il est conservé ici alors qu'il a été retiré des recettes de films :
        « Séries » garde l'animation occidentale, « Films » ne la contient plus.
@@ -413,14 +461,14 @@ const RECH_AMBIANCES_TV = [
     ing:[ { cle:'genre', mot:"d'action", p:{ with_genres:'10759' } },
           { cle:'refus', mot:"rien d'animé", p:{ __sans:'16,10762' } },
           { cle:'note',  mot:'très bien notée', p:{ 'vote_average.gte':'7.5' } } ],
-    fond:{ 'vote_count.gte':'400' }, genresProfil:['Action','Aventure'] },
+    genresProfil:['Action','Aventure'] },
 
-  { id:'tv-classique', t:"Un classique que j'ai raté", mesure:133, sansVus:true,
+  { id:'tv-classique', t:"Un classique que j'ai raté", mesure:615, mesureAvant:134, sansVus:true,
     /* En années glissantes comme son homologue films, jamais en date fixe. Et
        elle applique la règle 3a du point 15 : elle exclut la bibliothèque. */
     ing:[ { cle:'epoque', mot:'commencée il y a plus de 15 ans', p:{ __ansAvant:15 } },
           { cle:'note',   mot:'excellente', p:{ 'vote_average.gte':'8' } } ],
-    fond:{ 'vote_count.gte':'800' }, genresProfil:[] }
+    genresProfil:[] }
 ];
 
 /* Les sous-genres d'animé, mesurés le 31/07 eux aussi. `recettes.md` les avait
@@ -437,15 +485,15 @@ const RECH_AMBIANCES_TV = [
    La famille Animés ajoute par-dessus le genre Animation (c'est sa
    définition) : les nombres réels sont donc un peu plus bas. */
 const RECH_ANIMES = [
-  { id:'shonen',   mot:'shōnen',         mots:'207826|378884', mesure:542 },
-  { id:'seinen',   mot:'seinen',         mots:'195668',        mesure:389 },
-  { id:'shoujo',   mot:'shōjo',          mots:'206437',        mesure:194 },
-  { id:'isekai',   mot:'isekai',         mots:'237451',        mesure:188 },
-  { id:'mecha',    mot:'mecha',          mots:'10046',         mesure:376 },
-  { id:'tranche',  mot:'tranche de vie', mots:'9914',          mesure:841 },
-  { id:'psy',      mot:'psychologique',  mots:'272553|12565',  mesure:190 },
-  { id:'dark',     mot:'dark fantasy',   mots:'177895',        mesure:66  },
-  { id:'sport',    mot:'sport',          mots:'6075',          mesure:174 }
+  { id:'shonen',   mot:'shōnen',         mots:'207826|378884', mesure:369 },
+  { id:'seinen',   mot:'seinen',         mots:'195668',        mesure:257 },
+  { id:'shoujo',   mot:'shōjo',          mots:'206437',        mesure:99 },
+  { id:'isekai',   mot:'isekai',         mots:'237451',        mesure:143 },
+  { id:'mecha',    mot:'mecha',          mots:'10046',         mesure:112 },
+  { id:'tranche',  mot:'tranche de vie', mots:'9914',          mesure:450 },
+  { id:'psy',      mot:'psychologique',  mots:'272553|12565',  mesure:144 },
+  { id:'dark',     mot:'dark fantasy',   mots:'177895',        mesure:56  },
+  { id:'sport',    mot:'sport',          mots:'6075',          mesure:70 }
 ];
 
 /* ========================= LES MOTS DE LA PHRASE =========================
@@ -1023,11 +1071,17 @@ function relancerRech(){
     tirerCarteRech();
     return;
   }
+  /* RETOUR-06 point 1 ③ — DÉJÀ VUE DANS CETTE SESSION : on la remet à l'écran
+     sans un seul appel. Posé ICI et pas dans `chargerGrilleRech` : c'est
+     `relancerRech` qui décide qu'une nouvelle demande commence, et c'est donc
+     le seul endroit où « la même que tout à l'heure » veut dire quelque chose.
+     « Voir plus » passe par `chargerGrilleRech(true)` et n'est pas concerné. */
+  const duCache = reprendreDuCacheRech();
   /* La feuille est peut-être ouverte : on repeint la ZONE des résultats plutôt
      que l'écran entier, sans quoi le rendu la refermerait sous les doigts. */
   if(document.getElementById('rres')) peindreRech();
   else render();
-  chargerGrilleRech();
+  if(!duCache) chargerGrilleRech();
 }
 
 /* ====================== Le champ : titres ET personnes ======================
@@ -1416,11 +1470,21 @@ function paramsSocleRech(media){
        ② la famille est « Animés »          → 20 (point 3) ;
        ③ sinon                              → 80, le socle historique.
      La règle ① se joue à la FIN de cette fonction, quand les plateformes sont
-     connues : elle ne fait sauter QUE la valeur posée ici, jamais celle d'une
-     ambiance mesurée ni celle du critère de note, qui sont des choix
-     éditoriaux et non la protection de la grille. `socleVotes` est ce
-     témoin — il dit « la valeur en place est encore la mienne ». */
-  const socleVotes = String(f.anime ? RECH_VOTES_MINI_ANIME : RECH_VOTES_MINI);
+     connues : elle ne fait sauter QUE la valeur posée ici, jamais celle du
+     critère de note, qui est un choix éditorial et non la protection de la
+     grille. `socleVotes` est ce témoin — il dit « la valeur en place est encore
+     la mienne ».
+     RETOUR-06 point 3 — la mention « ni celle d'une ambiance mesurée » a été
+     retirée d'ici, et ce n'est pas un oubli : les recettes n'ont PLUS de
+     plancher à elles (voir le pavé au-dessus de `RECH_AMBIANCES`). Une ambiance
+     posée sous filtre plateforme se retrouve donc, elle aussi, sans plancher —
+     ce qui est très exactement ce que la règle ① promet. */
+  /* RETOUR-06 point 3 — l'échelle se lit sur le MÉDIA, pas sur la famille : la
+     famille « Tout » interroge les deux, et une série n'a pas à être jugée au
+     plancher des films parce qu'elle a été demandée depuis « Tout ». */
+  const socleVotes = String(f.anime ? RECH_VOTES_MINI_ANIME
+                          : media === 'tv' ? RECH_VOTES_MINI_SERIE
+                          : RECH_VOTES_MINI);
   p['vote_count.gte'] = socleVotes;
   const champDate = media === 'movie' ? 'primary_release_date' : 'first_air_date';
 
@@ -2014,6 +2078,69 @@ async function amorcerFondRech(F){
 }
 
 /* ===== LA FOURNÉE ===== */
+/* ===== RETOUR-06 POINT 1 ③ (29/08/2026) — LA MÊME RECHERCHE NE SE REDEMANDE
+   PAS AU RÉSEAU.
+
+   Mesuré le 29/08 : revalider exactement la même recherche refaisait les quatre
+   requêtes et remettait une demi-seconde d'attente devant une grille qu'on
+   venait de quitter. Le cas est courant — on ouvre une fiche, on revient, on
+   retire un mot puis on le remet.
+
+   CE QUI FAIT LA CLÉ, et pourquoi elle est bâtie sur l'ÉTAT et non sur les
+   paramètres TMDB : les paramètres dépendent des tables de genres, qui ne sont
+   pas encore chargées à la toute première recherche — deux demandes différentes
+   auraient alors la même clé. L'état posé, lui, est complet dès la frappe.
+
+   La taille de la bibliothèque en fait partie, et ce n'est pas une coquetterie :
+   « pas déjà vu » se juge contre elle. Ajouter un titre puis refaire la même
+   recherche doit rendre une grille qui en tient compte, pas celle d'avant.
+
+   Ce que le cache NE fait pas : durer au-delà de la session (il est en mémoire,
+   comme la grille elle-même), ni servir « Voir plus » — le moteur de flux, lui,
+   n'est pas conservé. Au pire, « Voir plus » relit une page déjà lue et ses
+   doublons sont écartés comme d'habitude. ===== */
+const RECH_CACHE_MAX = 8;
+let rechCache = [];
+function signatureRech(){
+  const r = etatRech();
+  return JSON.stringify([ r.fam, r.q || '', r.amb || '', (r.sans || []).slice().sort(),
+    listeRech('genre'), !!r.genreEt, listeRech('origine'), listeRech('epoque'),
+    listeRech('duree'), listeRech('plate'), r.note, r.pasvu, r.statut, r.gore, r.avec,
+    Object.keys(db.shows || {}).length + Object.keys(db.movies || {}).length ]);
+}
+function garderRech(sig, res, total){
+  if(!sig || !res || !res.length) return;
+  rechCache = rechCache.filter(x => x.sig !== sig);
+  rechCache.push({ sig: sig, res: res.slice(), total: total });
+  if(rechCache.length > RECH_CACHE_MAX) rechCache.shift();
+}
+function reprendreDuCacheRech(){
+  const sig = signatureRech();
+  const hit = rechCache.find(x => x.sig === sig);
+  if(!hit) return false;
+  const r = etatRech();
+  r.res = hit.res.slice();
+  r.total = hit.total;
+  r.loading = false; r.charge = true; r.err = ''; r.errSuite = false;
+  r.matchI = 0;
+  /* Le moteur n'est pas repris : `r.flux` est déjà à `null` (relancerRech), et
+     c'est très bien — une grille servie de mémoire n'a rien en vol. */
+  return true;
+}
+
+/* RETOUR-06 point 1 ① — LA MISE EN FORME D'UNE FOURNÉE, EXTRAITE POUR ÊTRE
+   FAITE DEUX FOIS. Le tirage, l'anti-monotonie, le rang d'arrivée et le tri des
+   goûts s'appliquaient une fois, à la fin. Depuis qu'on sert en deux temps, ils
+   s'appliquent à CHAQUE service — et surtout à chaque service SÉPARÉMENT, ce
+   qui est la seule façon de ne pas réordonner sous le doigt ce qui est déjà à
+   l'écran. Le rang continue la numérotation d'un service à l'autre : c'est lui
+   que « note » restitue (RA-4). */
+function servirRech(lot, depart){
+  lot = espacerGenresRech(melangerRech(lot));
+  lot.forEach((x, i)=>{ x.__rang = depart + i; });
+  return (typeof ordonnerParGoutRech === 'function') ? ordonnerParGoutRech(lot) : lot;
+}
+
 async function chargerGrilleRech(suite){
   const r = etatRech();
   /* B5 — un rechargement COMPLET ouvre une nouvelle génération : celle d'avant
@@ -2109,9 +2236,47 @@ async function chargerGrilleRech(suite){
     let luesOk = 0, luesEchec = 0;
 
     let fournee = [], tours = 0;
+    /* RETOUR-06 point 1 ① — a-t-on déjà servi le premier jet, et combien de
+       titres sont partis avec ?
+       `servis` N'EST PAS DÉCORATIF : le premier service VIDE `fournee`, et la
+       condition de boucle compte les titres de la fournée. Sans ce compteur,
+       elle repartait de zéro et redemandait une fournée ENTIÈRE par-dessus le
+       premier jet — 54 titres chargés au lieu de 42, donc des requêtes en plus
+       là où ce lot est censé en enlever. Attrapé par les cas B5 du dépôt, qui
+       comptent la taille exacte d'une fournée. */
+    let premierJet = false, servis = 0;
     const budget = ()=> toursMax * Math.max(1, F.etages[F.i].flux.length);
-    while(fournee.length < RECH_CIBLE && F.i < F.etages.length && tours < budget()){
+    while(servis + fournee.length < RECH_CIBLE && F.i < F.etages.length && tours < budget()){
       const e = F.etages[F.i];
+      /* RETOUR-06 POINT 1 ② (29/08/2026) — LES PAGES QUI MANQUENT SE LISENT
+         ENSEMBLE, PAS L'UNE APRÈS L'AUTRE.
+
+         La boucle d'entrelacement ci-dessous lit la page d'un flux, l'attend,
+         passe au suivant, l'attend. Mesuré : sur « deux genres + deux origines »,
+         les deux secondes pages partaient à t+182 et t+362 — une latence
+         réseau ENTIÈRE de perdue, et rien à l'écran pendant ce temps. Avec
+         quatre flux ce serait trois latences, avec huit ce serait sept.
+
+         On lit donc d'un coup, par paquet borné, tout ce qui manque à l'étage
+         courant. BORNÉ est le mot : `RECH_AMORCE_PAR_FOIS` est la même limite
+         que l'amorçage, et pour la même raison — un `Promise.all` plat sur tous
+         les flux, c'est la rafale de 429 mesurée le 02/08. Ce qui déborde du
+         paquet sera lu au tour suivant, par le chemin séquentiel d'en dessous,
+         qui ne bouge pas d'une ligne.
+
+         La comptabilité du budget et des compteurs de panne est recopiée à
+         l'identique de ce chemin-là : une page lue ici coûte exactement ce
+         qu'elle coûtait là-bas, sinon la boucle ne saurait plus quand sortir. */
+      const aLire = e.flux.filter(f => !f.tampon.length && !fluxEpuiseRech(f))
+                          .slice(0, RECH_AMORCE_PAR_FOIS);
+      if(aLire.length > 1){
+        aLire.forEach(f => { if(!(f.page === 0 && !f.echec)) tours++; });
+        const rendu = await Promise.all(aLire.map(f =>
+          lirePageFluxRech(f, seq, F)
+            .catch(()=>{ if(!abandonneRech(F)) f.echec = true; return false; })));
+        if(seq !== grilleSeq || abandonneRech(F)) return;
+        rendu.forEach((ok, i)=>{ if(ok) luesOk++; else if(aLire[i].echec) luesEchec++; });
+      }
       /* Entrelacement : un titre pris à chaque flux, à tour de rôle. Sans ça,
          « français ou américain » rendrait deux cents français puis deux cents
          américains. */
@@ -2160,13 +2325,28 @@ async function chargerGrilleRech(suite){
         if(!tamiserRech([x]).length) continue;
         dejaVus[cle] = 1;
         fournee.push(x);
-        if(fournee.length >= RECH_CIBLE) break;
+        if(servis + fournee.length >= RECH_CIBLE) break;
       }
       /* DÉFAUT 2.4 — UNE SEULE PAGE IMPRODUCTIVE SUFFISAIT À AFFICHER « RIEN ».
          La boucle sortait au premier tour sans résultat utilisable, sans avoir
          dépensé son budget — alors qu'il restait tout le catalogue derrière.
          On ne sort que si l'étage est fini, ou si plus rien n'a été LU (donc
          plus rien à espérer de ce tour). */
+      /* RETOUR-06 POINT 1 ① — ON SERT CE QU'ON A, SANS ATTENDRE LE RESTE.
+         Un écran de titres suffit à faire disparaître le blanc ; la suite de la
+         fournée arrive derrière et s'AJOUTE, elle ne remplace rien. `r.loading`
+         reste vrai : le chargement n'est pas fini, et l'écran continue de le
+         dire là où il le disait déjà.
+         Seulement sur un chargement COMPLET : « Voir plus » ajoute déjà à une
+         grille visible, il n'a rien à désenclaver. */
+      if(!suite && !premierJet && fournee.length >= RECH_PREMIER_JET){
+        premierJet = true;
+        servis = fournee.length;
+        r.res = servirRech(fournee.splice(0, fournee.length), 0);
+        r.matchI = 0;
+        r.charge = true;
+        peindreRech();
+      }
       if(etageFiniRech(e)){ F.i++; continue; }
       if(!pris && !lu) break;
     }
@@ -2187,7 +2367,7 @@ async function chargerGrilleRech(suite){
 
     /* LE TIRAGE, une fois par fournée, à l'intérieur du rang courant. Puis la
        règle anti-monotonie : elle réordonne, elle ne retire rien. */
-    fournee = espacerGenresRech(melangerRech(fournee));
+
 
     /* SPEC-05 §5 — LE TRI « MES GOÛTS » S'APPLIQUE À LA FOURNÉE, PAS À L'ÉCRAN.
        Il ordonne ce qui ARRIVE, et il ne retouche jamais ce qui est déjà
@@ -2200,12 +2380,12 @@ async function chargerGrilleRech(suite){
        porte la pertinence TMDB et l'anti-monotonie ; sans lui, revenir à
        « note » ne savait plus quoi restituer, et la bascule était à sens
        unique. Le rang continue la numérotation d'une fournée à l'autre. */
-    const depart = suite ? r.res.length : 0;
-    fournee.forEach((x, i)=>{ x.__rang = depart + i; });
-
-    if(typeof ordonnerParGoutRech === 'function') fournee = ordonnerParGoutRech(fournee);
-
-    r.res = suite ? r.res.concat(fournee) : fournee;
+    /* RETOUR-06 point 1 ① — `premierJet` compte comme `suite` : dans les deux
+       cas une grille est DÉJÀ à l'écran, et ce qui arrive s'ajoute derrière. */
+    const ajoute = suite || premierJet;
+    const depart = ajoute ? r.res.length : 0;
+    const lot = servirRech(fournee, depart);
+    r.res = ajoute ? r.res.concat(lot) : lot;
     /* Une sélection qui change remet la carte « meilleur match » sur son n° 1 :
        « Suivant → » ne se souvient pas d'une recherche qui n'existe plus. */
     if(!suite) r.matchI = 0;
@@ -2220,6 +2400,11 @@ async function chargerGrilleRech(suite){
        tri « mes goûts » et avec l'IA de la Recherche allumée — sinon il ne fait
        rien du tout, et le tri d'aujourd'hui reste le tri d'aujourd'hui. */
     if(typeof toucherClassementIA === 'function') toucherClassementIA();
+
+    /* RETOUR-06 point 1 ③ — on ne garde que les chargements COMPLETS et
+       réussis : une grille tronquée par une panne n'a rien à faire en mémoire,
+       elle serait resservie telle quelle sans que rien ne la retente. */
+    if(!suite) garderRech(signatureRech(), r.res, r.total);
 
     /* B5 — ET SEULEMENT MAINTENANT, LE RESTE DE L'AMORÇAGE. Les jaquettes sont
        à l'écran ; les étages suivants se font lire derrière, et le compteur se
