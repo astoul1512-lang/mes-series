@@ -33,11 +33,19 @@ function viewShow(){
      rangée d'actions. Le troisième argument demande cette variante. */
   html += zoneBande('tv', s.id, true);
 
+  /* RETOUR-08 §2 (29/08/2026) — LE 💌 REJOINT « REPRENDRE » PLUTÔT QUE DE VIVRE
+     SEUL. Choix d'Adrien (« je veux le même bouton que sur le film ») : sur la
+     fiche film, le carré n'est JAMAIS seul — il est posé à droite d'un élément
+     qui dit l'état (la barre verte « ✓ Vu le … »). Sur une série en pause, cet
+     élément existe déjà, c'est « Reprendre » : on met le carré à côté plutôt
+     que d'ouvrir une rangée pour lui tout seul, ce qui aurait répété
+     l'information « en pause » deux fois de suite. */
   if(s.pause){
     html += '<div class="wrap" style="padding-bottom:0"><div class="card enpause">'+
       '<div><b>Série en pause</b><div class="tiny muted" style="margin-top:2px">'+
       'Elle n\'apparaît ni dans « À rattraper » ni dans le calendrier.</div></div>'+
-      '<button class="btn ghost" onclick="basculerPause('+s.id+')">Reprendre</button></div></div>';
+      '<button class="btn ghost" onclick="basculerPause('+s.id+')">Reprendre</button>'+
+      boutonRecoFiche('tv', s.id)+'</div></div>';
   }
 
   /* ===========================================================================
@@ -89,12 +97,40 @@ function viewShow(){
         : '<button class="btn block" onclick="quickWatch('+s.id+')">'+
             I.check+' Marquer '+codeEp(nx.s,nx.e)+' comme vu</button>')+
       '<div class="tiny muted center" style="margin-top:8px">'+esc(nx.n)+'</div></div>';
-  } else if(reco){
-    /* Terminée, en pause, ou pas encore commencée : pas d'action principale,
-       donc le 💌 prend la pleine largeur. La rangée existe pour lui seul, ce
-       qui est exactement le cas qu'Adrien décrit. */
-    html += '<div class="wrap" style="padding-bottom:0">'+
-      boutonRecoFiche('tv', s.id, true)+'</div>';
+  } else if(reco && !s.pause){
+    /* RETOUR-08 §2 — LA FORME « A », CHOISIE PAR ADRIEN LE 29/08 SUR MAQUETTE.
+       v103 posait ici un bouton pleine largeur libellé. Il se lisait, mais il
+       ne ressemblait à aucun autre écran : sur la fiche film, la ligne est un
+       TÉMOIN D'ÉTAT + le carré 💌 à sa droite. C'est cette ligne-là qu'on
+       reprend, à l'identique.
+
+       LE TÉMOIN N'EST PAS UN BOUTON — `<span aria-disabled>`, le motif déjà
+       employé par « ✓ Dans ma liste » (app-05, point 21). Sur le film, la barre
+       verte est cliquable et annule « vu » ; son équivalent série existe
+       (`toggleToutVu`) mais décocherait DEUX CENT DIX-HUIT épisodes sous un
+       bouton bien visible et sans confirmation. Le geste garde donc son seul
+       chemin nommé, « Tout décocher », en tête de la liste des épisodes.
+       Deux états, deux témoins, et le même carré à droite dans les deux cas. */
+    /* TROIS TÉMOINS, PAS DEUX — et le troisième vient d'une erreur d'écriture
+       attrapée par un cas AVANT la livraison. « Plus d'épisode à voir » ne veut
+       pas dire « série finie » : quelqu'un À JOUR sur une série qui continue est
+       exactement dans le même état côté `nextToWatch` (`null`) et côté
+       `progress` (`watched === total`, puisque `progress` ne compte QUE les
+       épisodes diffusés — c'est écrit dans app-02, je l'avais lu de travers).
+       Les distinguer demande `isFinished`, qui regarde le statut TMDB et
+       l'absence d'épisode annoncé. Sans lui, une série encore en cours se
+       serait annoncée « Série vue » à quelqu'un qui attend la suite. */
+    const p2 = progress(s);
+    const vert = t => '<span class="btn" aria-disabled="true" '+
+      'style="background:var(--ok);color:#08130d">'+I.check+' '+t+'</span>';
+    const temoin = ((typeof isFinished === 'function') && isFinished(s))
+      ? vert('Série vue')
+      : p2.watched > 0
+        ? vert('À jour')
+        : '<span class="btn ghost" aria-disabled="true">⏳ Pas encore diffusée</span>';
+    html += '<div class="wrap" style="padding-bottom:0"><div class="actions" style="padding:0">'+
+      temoin + reco +
+    '</div></div>';
   }
   /* Le bandeau suit le bouton : hors de la branche, lui aussi. Il ne dit rien
      quand rien n'a été envoyé (`bandeauRecoFiche` rend une chaîne vide), donc

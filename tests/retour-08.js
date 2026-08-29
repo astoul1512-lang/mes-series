@@ -73,11 +73,26 @@ async function decor(page){
       const app = document.getElementById('app');
       const b = [...app.querySelectorAll('button.reco')];
       const band = app.querySelector('.recoband');
+      /* Le VOISIN du 💌 : l'élément qui le précède dans sa rangée. C'est lui
+         qu'Adrien a choisi en retenant la forme A — le carré n'est jamais seul. */
+      const boite = b.length ? b[0].parentElement : null;
+      /* Le voisin qu'on cherche est celui qui porte l'ÉTAT ou l'ACTION, pas le
+         texte d'une carte : on ne garde donc que les `.btn` de la rangée, et on
+         prend le premier. Deux pièges tombés dans à l'écriture, et gardés ici
+         parce qu'ils reviendront : prendre le DERNIER donnait le bouton pause,
+         à icône seule et sans texte ; ne pas filtrer donnait, sur la carte
+         « en pause », le paragraphe d'explication. */
+      const voisins = boite
+        ? [...boite.children].filter(x => x !== b[0] && x.classList.contains('btn'))
+        : [];
+      const v = voisins.length ? voisins[0] : null;
       return {
         combien: b.length,
         carre: b.some(x => x.classList.contains('carre')),
         bloc:  b.some(x => x.classList.contains('block')),
         agit:  b.every(x => /menuRecommander\(/.test(x.getAttribute('onclick') || '')),
+        voisin: v ? v.textContent.replace(/\s+/g,' ').trim() : '',
+        voisinCliquable: !!(v && v.tagName === 'BUTTON'),
         bandeau: band ? band.textContent.trim() : ''
       };
     };
@@ -105,14 +120,45 @@ async function decor(page){
       ok(r[nom].combien === 1,
          nom + ' : exactement un bouton 💌 (obtenu : ' + r[nom].combien + ')');
     });
-    ok(r['En cours'].carre && !r['En cours'].bloc,
-       'en cours : le carré, à côté de « Marquer comme vu » — l\'écran d\'avant ne bouge pas');
-    ok(r['Terminée'].bloc && !r['Terminée'].carre,
-       'TERMINÉE : le bouton pleine largeur — le cas Blacklist, qui n\'avait rien du tout');
-    ok(r['En pause'].bloc, 'en pause : le bouton pleine largeur');
-    ok(r['Pas commencée'].bloc, 'pas commencée : le bouton pleine largeur');
+    ok(Object.keys(r).every(n => r[n].carre) && !Object.keys(r).some(n => r[n].bloc),
+       'UNE SEULE FORME partout : le carré, jamais un bouton pleine largeur (forme A, choix du 29/08)');
+    ok(Object.keys(r).every(n => r[n].voisin),
+       'et il n\'est JAMAIS seul : chaque état lui donne un voisin, comme sur la fiche film');
+    ok(/Marquer/.test(r['En cours'].voisin) && r['En cours'].voisinCliquable,
+       'en cours : le voisin est « Marquer … comme vu » — l\'écran d\'avant ne bouge pas');
+    ok(/Série vue/.test(r['Terminée'].voisin),
+       'TERMINÉE : le témoin vert « Série vue » (obtenu : ' + r['Terminée'].voisin + ')');
+    ok(!r['Terminée'].voisinCliquable,
+       'et ce témoin N\'EST PAS un bouton : le toucher ne décoche pas 218 épisodes');
+    ok(/Reprendre/.test(r['En pause'].voisin) && r['En pause'].voisinCliquable,
+       'en pause : le carré rejoint « Reprendre » au lieu d\'ouvrir une rangée pour lui seul');
+    ok(/diffus/i.test(r['Pas commencée'].voisin),
+       'pas commencée : le témoin « Pas encore diffusée » (obtenu : ' + r['Pas commencée'].voisin + ')');
     ok(Object.keys(r).every(n => r[n].agit),
        'les quatre ouvrent bien la feuille d\'envoi, et pas autre chose');
+  }
+
+  /* ===== Le piège du témoin ================================================ */
+  titre('« À jour » n\'est pas « pas encore diffusée » — le piège du témoin');
+  {
+    const r = await page.evaluate(()=>{
+      poserSeries();
+      /* Série en cours, tout ce qui est SORTI est vu, mais la saison continue :
+         `nextToWatch` rend null et `progress` compte les épisodes à venir. */
+      const demain = new Date(Date.now() + 5*86400000).toISOString().slice(0,10);
+      const hier = new Date(Date.now() - 5*86400000).toISOString().slice(0,10);
+      db.shows[5] = { id:5, name:'À jour', status:'Returning', genres:['Drame'],
+                      seasons:{ 1:[{e:1,n:'E1',d:hier,r:42},{e:2,n:'E2',d:hier,r:42},
+                                   {e:3,n:'E3',d:demain,r:42}] },
+                      watched:{ '1x1':1, '1x2':1 }, addedAt:1, updated:1 };
+      if(typeof viderMemo === 'function') viderMemo();
+      go('show', { id:'5' });
+      return lireFiche();
+    });
+    ok(r.combien === 1 && r.carre, 'le 💌 est là, sous sa forme unique');
+    ok(/jour/i.test(r.voisin) && !/diffus/i.test(r.voisin),
+       'le témoin dit « À jour » et surtout PAS « pas encore diffusée » (obtenu : ' + r.voisin + ')');
+    ok(!r.voisinCliquable, 'témoin, pas bouton');
   }
 
   /* ===== Le bandeau, qui partait avec le bouton ============================ */
