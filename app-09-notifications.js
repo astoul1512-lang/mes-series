@@ -81,6 +81,17 @@ function migrerNotif(){
   /* Pourquoi la dernière inscription a échoué. Sans cette trace, un appareil
      qui n'arrive pas à s'abonner reste muet et l'app prétend le contraire. */
   if(n.erreur === undefined) n.erreur = null;
+  /* RETOUR-05 §2 — QUAND LA CARTE « Active les notifications » A ÉTÉ FAITE
+     TAIRE. Une seule date, celle du dernier « Plus tard » ; zéro = jamais
+     repoussée. Elle vit dans `db.notif` et pas ailleurs : c'est un réglage de
+     notification, il appartient au bloc que ce fichier possède, il part par le
+     chemin de synchro que ce bloc a déjà, et `adopterCompte` le remet à zéro
+     sans une ligne de plus — il ne GARDE que `abo`, `actif`, `erreur` et
+     `clocheVue`, et laisse cette fonction reformer le reste.
+     Le type est vérifié parce que `Date.now() - undefined` vaut `NaN`, et que
+     TOUTE comparaison avec `NaN` est fausse : sans cette ligne la carte ne
+     serait ni affichée ni tue, mais les deux à la fois selon le sens du test. */
+  if(typeof n.invitPush !== 'number' || !isFinite(n.invitPush)) n.invitPush = 0;
 }
 
 /* I8 — « Dispo en streaming » et « Sortie en VOD » étaient deux étiquettes pour
@@ -599,7 +610,11 @@ function notifPourSynchro(){
   if(!db.notif) return null;
   const n = db.notif;
   return { quand:n.quand, quandChoisi:!!n.quandChoisi, films:n.films,
-           titres:n.titres, titresOff:n.titresOff, maj:n.maj || 0 };
+           titres:n.titres, titresOff:n.titresOff, maj:n.maj || 0,
+           /* RETOUR-05 §2 — le « Plus tard » suit le COMPTE, pas l'appareil :
+              le repousser sur le téléphone puis revoir la même carte sur la
+              tablette, c'est la carte qu'on apprend à ignorer. */
+           invitPush:n.invitPush || 0 };
 }
 
 /* Pour chaque titre, le geste le plus récent l'emporte — allumer comme
@@ -647,6 +662,17 @@ function fusionnerNotif(rem){
     }
     n.maj = rem.maj; change = true;
   }
+  /* RETOUR-05 §2 — LE « PLUS TARD » SE FUSIONNE À PART, ET PAS SOUS `maj`.
+     `maj` arbitre le RÉGLAGE pris comme un tout — « on prend celui de
+     l'appareil qui a tranché en dernier ». Repousser une carte n'est pas un
+     réglage : c'est un geste daté, comme une cloche éteinte, et il se fusionne
+     comme elles — la date la plus récente gagne, indépendamment du reste.
+     Et on ne RECULE jamais : un appareil resté en v98 n'envoie pas la clé du
+     tout, et sans cette garde il ferait revenir la carte sur un choix déjà
+     exprimé ici. C'est le défaut corrigé sur `iaV` en RETOUR-01, à l'identique. */
+  const ip = Number(rem.invitPush) || 0;
+  if(ip > (Number(n.invitPush) || 0)){ n.invitPush = ip; change = true; }
+
   n.actif = Object.keys(n.titres).length > 0;
   return change;
 }
@@ -715,31 +741,43 @@ async function basculerCloche(type, id){
 
 /* ---------- L'écran Notifications ---------- */
 
+/* RETOUR-05 §1 — CHAQUE ÉTAT PORTE UNE CLÉ, ET C'EST ELLE QU'ON TESTE.
+   L'écran doit décider s'il pose un bouton d'activation, et le seul état qui en
+   veut un est « Pas encore autorisées ». Le reconnaître à son libellé aurait
+   marché… jusqu'à la première reformulation, qui ne se serait vue nulle part —
+   ni à l'écran, où le bouton aurait simplement disparu, ni dans un test qui
+   compare la même chaîne des deux côtés. La clé ne se reformule pas. */
 function etatNotif(){
   if(!notifPossibles()){
     return estIOS() && !surEcranAccueil()
-      ? { ton:'attente', titre:'À installer sur l\'écran d\'accueil',
+      ? { cle:'accueil', ton:'attente', titre:'À installer sur l\'écran d\'accueil',
           sous:'Sur iPhone, les notifications n\'existent que pour une app installée.' }
-      : { ton:'attente', titre:'Non disponible ici',
+      : { cle:'impossible', ton:'attente', titre:'Non disponible ici',
           sous:'Ce navigateur ne gère pas les notifications.' };
   }
   if(permissionNotif() === 'denied')
-    return { ton:'refus', titre:'Notifications refusées',
+    return { cle:'refus', ton:'refus', titre:'Notifications refusées',
              sous:'Réactive-les dans Réglages › Notifications › Mes séries.' };
   if(!notifAutorisees())
-    return { ton:'attente', titre:'Pas encore autorisées',
-             sous:'Allume la cloche sur une série : iOS te demandera confirmation.' };
+    /* RETOUR-05 §1 — LE SOUS-TITRE NE RENVOIE PLUS À LA CHASSE AU TRÉSOR.
+       « Allume la cloche sur une série » restait vrai, mais c'était le SEUL
+       chemin écrit, et la mesure du 28/08 dit ce qu'il valait : sur cinq
+       comptes, un seul avait trouvé. Le bouton est juste en dessous ; le
+       sous-titre dit maintenant ce qu'on y gagne, pas où chercher. */
+    return { cle:'jamais', ton:'attente', titre:'Pas encore autorisées',
+             sous:'Tu seras prévenu des sorties et des recommandations de tes proches.' };
   const nb = compterCloches('tv') + compterCloches('movie');
-  if(!nb) return { ton:'attente', titre:'Autorisées, mais aucun titre surveillé',
+  if(!nb) return { cle:'zerotitre', ton:'attente',
+                   titre:'Autorisées, mais aucun titre surveillé',
                    sous:'Allume la cloche sur une série ou un film.' };
   /* Autorisé et des cloches allumées, mais le serveur ne sait pas où envoyer :
      c'est le cas qu'il ne faut surtout pas taire. */
   if(!db.notif.abo)
-    return { ton:'refus', titre:'Cet appareil n\'est pas inscrit',
+    return { cle:'noninscrit', ton:'refus', titre:'Cet appareil n\'est pas inscrit',
              sous: db.notif.erreur
                ? ('Dernière tentative : ' + db.notif.erreur)
                : 'Touche « Inscrire cet appareil » ci-dessous.' };
-  return { ton:'ok', titre:'Notifications autorisées', sous:'Sur cet appareil' };
+  return { cle:'ok', ton:'ok', titre:'Notifications autorisées', sous:'Sur cet appareil' };
 }
 
 /* Le sous-titre de la ligne des réglages : l'état tient en quelques mots. */
@@ -807,6 +845,23 @@ function viewNotifications(){
       '</div></div>';
   }
 
+  /* RETOUR-05 §1 — LE BOUTON QUI MANQUAIT. L'écran annonçait « Pas encore
+     autorisées » et ne proposait rien : la question d'iOS ne se posait qu'en
+     allumant la cloche d'un TITRE (`basculerCloche`), c'est-à-dire ailleurs, et
+     personne ne l'a trouvé. Il ne s'affiche que sur cet état-là — voir les trois
+     autres, qui n'en veulent pas : « À installer sur l'écran d'accueil » (rien à
+     activer tant qu'on est dans Safari), « Notifications refusées » (iOS ne
+     repose JAMAIS la question, un bouton qui ne peut pas marcher est pire que
+     pas de bouton), « Cet appareil n'est pas inscrit » (qui a déjà le sien,
+     juste en dessous). */
+  if(e.cle === 'jamais'){
+    html += '<div class="wrap" style="padding-top:0">'+
+      '<button class="btn block" '+(occupe('cloches') ? 'disabled ' : '')+
+        'onclick="activerNotifications()">Activer les notifications</button>'+
+      '<div class="tiny muted" style="margin-top:8px">Ton téléphone va demander '+
+      'confirmation. Tu pourras toujours revenir ici pour choisir les titres.</div></div>';
+  }
+
   if(notifPossibles() && notifAutorisees() && !db.notif.abo){
     html += '<div class="wrap" style="padding-top:0">'+
       '<button class="btn block" onclick="reinscrire()">Inscrire cet appareil</button>'+
@@ -849,6 +904,106 @@ function basculerEvenementFilm(v){
   if(!EVENEMENTS_FILM.some(f=>db.notif.films[f.v])) db.notif.films.cine = true;
   db.notif.maj = Date.now();
   saveDB(); render(); poussserPlusTard(); scheduleSync();
+}
+
+/* ===========================================================================
+   RETOUR-05 — ACTIVER LES NOTIFICATIONS SANS CHASSE AU TRÉSOR
+
+   Constat d'Adrien du 28/08, sur le téléphone d'un proche : l'écran annonçait
+   « Pas encore autorisées » sans le moindre bouton pour autoriser. Sur cinq
+   comptes, un seul avait le push actif — les autres n'avaient jamais trouvé le
+   chemin, qui passait par la cloche d'un titre.
+
+   UN SEUL CHEMIN D'ACTIVATION, et le voici. Le bouton de l'écran Notifications
+   et celui de la carte du centre appellent tous deux `activerNotifications` ;
+   elle-même n'invente rien, elle enchaîne ce qui existait déjà et qui marchait :
+   la question d'iOS (`demanderPermissionNotif`, la même que `basculerCloche`)
+   puis l'inscription de l'appareil (`reinscrire`, le bouton « Inscrire cet
+   appareil »). Aucun second chemin d'inscription — c'était la consigne, et
+   c'est aussi la prudence : `reinscrire` porte le verrou `prendre('cloches')`
+   qui empêche deux `abonnerAppareil` concurrents, et le doubler l'aurait perdu.
+=========================================================================== */
+
+async function activerNotifications(){
+  const ok = await demanderPermissionNotif();   // refus : elle toaste déjà la raison
+  if(!ok){ render(); return false; }
+  /* Accordée. `reinscrire` pose l'abonnement, pousse les cloches, rend l'écran
+     et dit ce qui s'est passé — on ne redouble ni son rendu ni son toast. */
+  await reinscrire();
+  return true;
+}
+
+/* Le push est-il VRAIMENT actif sur CET appareil ? L'autorisation ne suffit
+   pas : sans ligne dans `push_appareils`, le serveur ne sait pas où envoyer.
+   C'est la même paire que lit `etatNotif` pour son état « pas inscrit ». */
+function pushActifIci(){
+  return notifAutorisees() && !!(db.notif && db.notif.abo);
+}
+
+/* RETOUR-05 §2 — LA CARTE D'INVITATION EN TÊTE DU CENTRE.
+
+   Trois sorties possibles, et la discrétion est la règle, pas l'exception :
+
+     'rien'    — on ne propose rien. Le push est déjà actif (le §2 l'exige :
+                 « un compte déjà inscrit ne voit NI le bouton NI la carte ») ;
+                 ou l'autorisation a été REFUSÉE, et iOS ne repose jamais la
+                 question ; ou le navigateur n'a pas de push du tout ; ou la
+                 carte a été repoussée il y a moins de trente jours.
+     'accueil' — iPhone, mais dans un onglet Safari : proposer « Activer »
+                 serait promettre ce qui ne peut pas arriver. Une ligne sobre
+                 dit la seule chose à faire, et elle ne se repousse pas — il n'y
+                 a pas de « Plus tard » sur un constat.
+     'carte'   — le cas qui vaut le déplacement.
+
+   `db.notif` peut être nul avant `migrerNotif` (premier démarrage) : on ne
+   suppose rien, ici comme ailleurs. */
+const INVIT_PUSH_SILENCE = 30 * 86400000;
+function invitPushEtat(){
+  if(!db.notif) return 'rien';
+  if(pushActifIci()) return 'rien';
+  if(permissionNotif() === 'denied') return 'rien';
+  if(estIOS() && !surEcranAccueil()) return 'accueil';
+  if(!notifPossibles()) return 'rien';
+  if(Date.now() - (Number(db.notif.invitPush) || 0) < INVIT_PUSH_SILENCE) return 'rien';
+  return 'carte';
+}
+/* Elle N'EST PAS une notification : elle ne porte pas de clé, elle n'entre pas
+   dans `entreesCentre`, et la pastille ne la compte donc jamais. C'est voulu —
+   une pastille qui se réclame elle-même n'annonce plus rien. */
+/* ELLE N'INTRODUIT AUCUNE CLASSE NEUVE, et c'est délibéré : `.card`, `.actions`
+   et `.btn mini` disent déjà « un bloc, un texte secondaire, deux actions
+   discrètes » partout ailleurs dans l'app. Inventer cinq classes pour une seule
+   carte aurait ajouté une cinquième façon de dessiner la même chose — le
+   reproche exact du point 5+7 de RETOUR-02. Le seul écart au thème est le
+   liséré d'accent, qui est justement ce qui distingue une proposition d'une
+   simple carte, et il tient en une déclaration. */
+function carteInvitPush(){
+  const e = invitPushEtat();
+  if(e === 'rien') return '';
+  if(e === 'accueil')
+    return '<div class="wrap" style="padding:4px 16px 0" data-invit="accueil">'+
+      '<div class="card" style="padding:11px 13px"><div class="small muted">'+
+        'Installe l\'app sur ton écran d\'accueil pour recevoir les notifications.'+
+      '</div></div></div>';
+  return '<div class="wrap" style="padding:4px 16px 0" data-invit="carte">'+
+    '<div class="card" style="padding:13px 14px;border-color:#3d8bff55">'+
+      '<b>🔔 Active les notifications</b>'+
+      '<div class="small muted" style="margin-top:4px">Tu seras prévenu des sorties '+
+        'et des recos de ton cercle, même quand l\'app est fermée.</div>'+
+      '<div class="actions" style="padding:12px 0 0">'+
+        '<button class="btn mini" '+(occupe('cloches') ? 'disabled ' : '')+
+          'onclick="activerNotifications()">Activer</button>'+
+        '<button class="btn mini ghost" onclick="plusTardInvitPush()">Plus tard</button>'+
+      '</div>'+
+    '</div></div>';
+}
+/* « Plus tard » : trente jours de silence, datés, et qui voyagent avec la
+   synchro. Pas de disparition locale qui reviendrait au prochain appareil. */
+function plusTardInvitPush(){
+  if(!db.notif) return;
+  db.notif.invitPush = Date.now();
+  saveDB();
+  render();
 }
 
 /* ---------- La liste des titres où la cloche est allumée ---------- */
