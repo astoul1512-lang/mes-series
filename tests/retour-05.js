@@ -71,8 +71,16 @@ async function decor(page){
   const page = await nav.newPage({ viewport:{width:390,height:844}, hasTouch:true });
   await decor(page);
 
-  /* ===== §1 — le bouton, et le seul état qui en veut un ==================== */
-  titre('§1 — le bouton « Activer les notifications », et lui seul');
+  /* ===== §1 — RENVERSÉ PAR RETOUR-07 (29/08/2026) ==========================
+     Ce bloc éprouvait « le bouton ne s'affiche QUE sur l'état jamais ». Adrien
+     a tranché l'inverse : il veut un interrupteur, visible en permanence, qui
+     coupe autant qu'il active. Le cas n'est pas SUPPRIMÉ — il est retourné,
+     comme l'a été le cas plateforme/ambiance de RETOUR-04 au lot 06 : ce qu'il
+     surveillait garde sa valeur (les trois états où RIEN ne peut être activé ne
+     doivent pas proposer une action qui échouerait), seule la forme change —
+     bouton absent hier, interrupteur grisé aujourd'hui. Un cas retourné dit
+     l'histoire ; un cas effacé la perd. */
+  titre('§1 — l\'interrupteur est là dans tous les états, et n\'agit que quand il peut');
   {
     const r = await page.evaluate(()=>{
       const lu = {};
@@ -87,22 +95,28 @@ async function decor(page){
         db.notif.titres = (nom === 'noninscrit') ? { 'tv:1':Date.now() } : {};
         go('notifs', { from:'settings' });
         const h = document.getElementById('app').innerHTML;
+        const it = document.querySelector('#app .reg .inter');
+        const bt = it ? it.closest('.reg') : null;
         lu[nom] = { cle: etatNotif().cle,
-                    bouton: /activerNotifications\(\)/.test(h),
-                    inscrire: /reinscrire\(\)/.test(h),
+                    present: !!bt,
+                    agit: /basculerNotifications\(\)/.test(h),
+                    grise: !!(bt && bt.disabled),
+                    allume: !!(it && it.classList.contains('on')),
                     sous: etatNotif().sous };
         fin();
       });
       return lu;
     });
-    ok(r.jamais.cle === 'jamais' && r.jamais.bouton,
-       'l\'écran « Pas encore autorisées » porte enfin un bouton pour autoriser');
-    ok(!r.refus.bouton && r.refus.cle === 'refus',
-       'refusées : aucun bouton — iOS ne repose jamais la question');
-    ok(!r.accueil.bouton && r.accueil.cle === 'accueil',
-       'onglet Safari : aucun bouton — il n\'y a rien à activer');
-    ok(!r.noninscrit.bouton && r.noninscrit.inscrire,
-       '« appareil non inscrit » garde son bouton à lui, et n\'en gagne pas un second');
+    ok(Object.keys(r).every(k => r[k].present),
+       'l\'interrupteur est présent dans les quatre états — un réglage absent ne s\'explique pas');
+    ok(r.jamais.cle === 'jamais' && r.jamais.agit && !r.jamais.grise && !r.jamais.allume,
+       '« Pas encore autorisées » : interrupteur éteint et actionnable');
+    ok(r.refus.cle === 'refus' && r.refus.grise && !r.refus.allume,
+       'refusées : interrupteur GRISÉ — iOS ne repose jamais la question');
+    ok(r.accueil.cle === 'accueil' && r.accueil.grise && !r.accueil.allume,
+       'onglet Safari : interrupteur grisé — il n\'y a rien à activer');
+    ok(r.noninscrit.cle === 'noninscrit' && !r.noninscrit.grise && !r.noninscrit.allume,
+       '« appareil non inscrit » : un seul contrôle, éteint et actionnable');
     ok(/recommandations/.test(r.jamais.sous) && !/cloche/i.test(r.jamais.sous),
        'le sous-titre dit ce qu\'on y gagne au lieu d\'où chercher (obtenu : '+
        r.jamais.sous+')');
@@ -111,7 +125,7 @@ async function decor(page){
   }
 
   /* ===== §1 — un compte déjà inscrit ne voit rien de neuf ================== */
-  titre('§1 — un compte déjà inscrit ne voit NI le bouton NI la carte');
+  titre('§1 — un compte déjà inscrit : interrupteur ALLUMÉ, et aucune carte');
   {
     const r = await page.evaluate(()=>{
       const fin = monde({ permission:'granted' });
@@ -119,13 +133,16 @@ async function decor(page){
       db.notif.abo = 'https://push.example/abc';
       go('notifs', { from:'settings' });
       const h = document.getElementById('app').innerHTML;
-      const out = { cle:etatNotif().cle, bouton:/activerNotifications\(\)/.test(h),
-                    inscrire:/reinscrire\(\)/.test(h), carte:carteInvitPush() };
+      const it = document.querySelector('#app .reg .inter');
+      const out = { cle:etatNotif().cle,
+                    allume: !!(it && it.classList.contains('on')),
+                    agit: /basculerNotifications\(\)/.test(h),
+                    carte:carteInvitPush() };
       db.notif.abo = null; fin();
       return out;
     });
-    ok(r.cle === 'ok' && !r.bouton && !r.inscrire,
-       'l\'écran d\'un compte actif est inchangé');
+    ok(r.cle === 'ok' && r.allume && r.agit,
+       'l\'écran d\'un compte actif porte enfin de quoi COUPER (le manque du 29/08)');
     ok(r.carte === '', 'la carte du centre ne s\'affiche pas quand le push est actif');
   }
 
