@@ -930,7 +930,12 @@ function adopterCompte(uid){
        panne qui ne le concerne pas. */
     if(db.notif && typeof db.notif === 'object'){
       const n = db.notif;
-      db.notif = { abo: n.abo, actif: n.actif, erreur: n.erreur, clocheVue: n.clocheVue };
+      /* RETOUR-07 §1 — `coupe` est gardé au même titre qu'`abo`, et pour la
+         même raison : c'est un fait de l'APPAREIL, pas du compte. Un
+         téléphone qu'on a fait taire ne se remet pas à sonner parce que
+         quelqu'un d'autre s'y connecte. */
+      db.notif = { abo: n.abo, actif: n.actif, erreur: n.erreur,
+                   clocheVue: n.clocheVue, coupe: n.coupe };
     }
     /* Un parcours d'inscription abandonné par l'ancien : sans ça, le nouveau
        compte est dérouté au démarrage suivant vers un questionnaire qui n'est

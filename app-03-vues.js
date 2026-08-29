@@ -1,4 +1,227 @@
 "use strict";
+/* ===========================================================================
+   LA CARTE DE LA NAVIGATION — RETOUR-03 POINT 2 (29/08/2026)
+
+   Pourquoi cette carte existe. La navigation de l'app est répartie sur deux
+   fichiers : la MÉCANIQUE vit dans app-02 (`go`, `pileHisto`, `goBack`,
+   `reculer`, l'écouteur `popstate`, `glisseRetour`), la LISTE DES ÉCRANS vit
+   ici (`corpsDeVueBrut`, juste dessous). Chacune des deux moitiés est
+   abondamment commentée sur SON propre fonctionnement, et aucune ne dit
+   comment l'ensemble se tient. Résultat, à chaque lot : on relit trois cents
+   lignes d'app-02 pour retrouver « qui empile, qui remplace, où revient la
+   flèche ». Cette carte est là pour éviter ce trajet. Elle ne décide de rien
+   et ne s'exécute pas : le code fait foi, et si un jour les deux divergent,
+   c'est la carte qu'il faut corriger — dans le même commit.
+
+   ---------------------------------------------------------------------------
+   1. LES ÉCRANS, PAR ÉTAGE
+
+   L'étage est `DEPTH` (app-02). Il ne sert QU'À DEVINER LE SENS d'une
+   navigation quand l'appelant ne le dit pas (`navDir`), c'est-à-dire le sens
+   de l'animation. Il ne décide NI d'empiler, NI de remplacer — c'est
+   `substitue()` qui décide, et il a été écrit précisément parce que `DEPTH`
+   était trop grossier pour ça (voir le pavé « REMPLACER OU EMPILER »).
+
+   Étage 0 — LES QUATRE ONGLETS DE LA BARRE (`ONGLETS_BARRE`, dans cet ordre,
+   qui donne aussi le sens du glissement latéral) :
+       discover · search · follow · profile
+   Étage 0 — HORS PARCOURS :
+       bienvenue · motdepasse · avatar
+   Étage 1 :
+       preview · show · movie · settings · abos · moi · rangee · centre
+   Étage 2 :
+       acteur · account · biblio · notifs · gouts · plates
+   Étage 3 :
+       clochettes
+
+   `VUES_SANS_COMPTE` (déclaré plus bas) est une liste À PART, qui ne suit pas
+   les étages : bienvenue, account, motdepasse, avatar. C'est la seule porte
+   ouverte quand il n'y a pas de session — `porteFermee()` la lit dans le seul
+   passage obligé du rendu, pour qu'un `go()` oublié quelque part ne puisse pas
+   ouvrir une porte dérobée. `account` est donc à la fois d'étage 2 et sans
+   compte : les deux notions ne se recouvrent pas, et c'est voulu.
+
+   `sorties` a encore un étage et une fonction de rendu, mais plus aucun
+   `go('sorties')` et AUCUNE ROUTE : c'est du code mort, dont le sort est
+   tranché ailleurs (H8). Ne pas lui rendre une adresse par mégarde — ça
+   ouvrirait par un lien un écran qu'on ne peut plus atteindre autrement.
+
+   ---------------------------------------------------------------------------
+   2. QUI EMPILE, QUI REMPLACE
+
+   `go()` écrit l'historique APRÈS le rendu (parce que `render()` peut renvoyer
+   sur la porte d'entrée quand la session est fermée, et c'est CET écran-là qui
+   doit entrer dans la pile). Il empile, SAUF dans trois cas :
+
+     a. `opts.remplacer` — demandé explicitement par l'appelant. Cinq sites,
+        tous du même genre : un écran qui SE SUBSTITUE à celui d'où il vient.
+        `rejouerDestination` (la destination mise de côté remplace l'écran
+        d'attente) ; `reculer()` et le secours de `glisseRetour`, quand il n'y a
+        rien derrière et que le retour ne passe donc pas par l'historique ;
+        `commencerPresentation` (l'écran de présentation cède la place au
+        formulaire, et ne doit pas revenir à la flèche) ; `reprendreInscription`
+        (la reprise après abandon remplace l'écran de démarrage).
+     b. onglet du bas → onglet du bas (`substitue`). Sinon dix allers-retours
+        entre Découvrir et Mon profil font dix entrées, et le retour devient un
+        labyrinthe.
+     c. aperçu → fiche du même titre (`substitue`). Ajouter une série remplace
+        l'aperçu par sa fiche ; empiler renverrait sur un aperçu qu'on vient de
+        quitter et où il n'y a plus rien à faire.
+
+   ET DEUX CAS QUI N'ÉCRIVENT RIEN DU TOUT :
+     · `opts.depuisHistorique` — l'appel vient de `popstate`, l'entrée existe
+       déjà. En pousser une autre empilerait un cran à CHAQUE retour et
+       l'historique ne se viderait jamais. C'est le piège n°1 du chantier C2.
+     · même vue + mêmes paramètres — `go()` sort tout de suite (et remonte en
+       haut, sauf si l'appel vient de l'historique). Conséquence utile ailleurs :
+       deux entrées voisines de la pile ne peuvent JAMAIS être identiques, ce
+       qui est exactement ce qui rend sûre la garde « même écran » du §5.
+
+   Le miroir `pileHisto` est indexé (`iHisto`), et chaque entrée du navigateur
+   porte son rang (`etatHisto`). Le rang reçu au `popstate` donne le SENS —
+   c'est ce qui distingue un retour d'une marche avant, qu'une simple pile ne
+   saurait pas séparer. Le miroir existe parce que le navigateur ne donne accès
+   qu'à l'état de l'entrée COURANTE, alors que le geste de retour doit dessiner
+   l'écran d'arrivée AVANT de l'atteindre.
+
+   ---------------------------------------------------------------------------
+   3. OÙ REVIENT LE RETOUR
+
+   Deux sources, dans cet ordre :
+
+     1. L'HISTORIQUE FAIT FOI — `cibleRetour()` lit `pileHisto[iHisto - 1]`,
+        mais SEULEMENT si `miroirJuste()` : la tête du miroir doit décrire
+        l'écran affiché. Du code qui poserait `view` à la main sans passer par
+        `go()` désaccorde le miroir ; sans ce garde-fou, le retour partait sur
+        la porte d'entrée depuis n'importe où.
+     2. SINON `currentBack()` — la table des retours par défaut. Elle ne sert
+        plus qu'à l'ENTRÉE DIRECTE : un lien collé, une notification touchée.
+        Elle lit `params.from` d'abord, et ne tombe sur son défaut que si `from`
+        est absent :
+            show, movie   → from | follow
+            preview       → from | discover
+            settings      → from | profile
+            account       → from | settings
+            abos, moi     → from | profile
+            acteur        → from | discover
+            rangee        → from | discover
+            biblio        → from | abos
+            notifs        → from | settings
+            centre        → from | discover     (le fil s'ouvre depuis 3 onglets)
+            clochettes    → from | notifs
+            gouts, plates → from | settings
+        Tout le reste rend `null` : la flèche ne s'affiche pas, et `goBack()`
+        ne fait rien. `from` N'EST PAS sérialisé dans l'adresse — ce n'est pas
+        l'identité d'un écran, et deux adresses ne doivent pas désigner le même.
+
+   ---------------------------------------------------------------------------
+   4. LES QUATRE CHEMINS DE RETOUR, ET LEUR POINT DE JONCTION
+
+     ① la flèche de l'en-tête   → `goBack()`
+     ② le balayage depuis le bord gauche → `goBack()` → `glisseRetour.jouer()`
+        (le bord gauche est réservé à ce geste : c'est pourquoi le balayage des
+        cartes du jeu et du duel ne s'y arme pas)
+     ③ le bouton matériel d'Android → `popstate`
+     ④ le geste système d'iOS       → `popstate`
+
+   ① et ② passent par `goBack()`, qui joue l'animation puis recule dans
+   l'historique ; ③ et ④ arrivent directement dans l'écouteur `popstate`. LES
+   QUATRE finissent donc sur `history.back()` puis sur `go(..., 'back' |
+   depuisHistorique)`. C'est ce qui rend le discriminant `dernierGo` complet, et
+   c'est pour ça qu'un écran qui veut savoir « suis-je ouvert ou revenu ? »
+   demande `arriveeNeuve(vue)` et ne fouille jamais l'historique lui-même.
+
+   `goBack()` a une liste de priorité AVANT de quitter l'écran, et l'ordre
+   compte : lecteur vidéo → feuille modale → duel → jeu de Recherche → recherche
+   plein écran du profil → recherche d'acteurs de Mes goûts → puis seulement le
+   retour d'écran. L'écouteur `popstate` porte la MÊME liste, dans le même ordre.
+   Toute nouvelle surface plein écran doit être ajoutée AUX DEUX, sinon le
+   bouton d'Android quitte l'écran au lieu de la fermer.
+
+   ---------------------------------------------------------------------------
+   5. LES ÉTATS PLEIN ÉCRAN QUI NE SONT PAS DES VUES — LES ENTRÉES-GARDES
+
+   Une feuille de filtres, le jeu de Recherche, la recherche plein écran du
+   profil, la recherche d'acteurs : plein écran, mais pas des `view`. Sur un
+   onglet du bas — où les onglets SE REMPLACENT — il n'y a aucune entrée
+   derrière : le bouton retour du téléphone quittait l'app avec la feuille
+   ouverte, et toute la recherche composée était perdue.
+
+   D'où l'entrée-garde (`poserGarde` / `consommerGarde` / `retirerGarde`), qui
+   décrit l'écran COURANT. Le miroir N'AVANCE PAS : une garde n'est pas une
+   navigation.
+     · fermée par le bouton du téléphone → `popstate` consomme la garde, ferme
+       l'état, et l'historique est déjà retombé au bon endroit ;
+     · fermée DANS l'app → `retirerGarde` fait `history.back()`, ESTAMPILLÉ
+       (`retourGarde`, fenêtre de 400 ms). L'écouteur reconnaît son propre recul
+       et ne fait RIEN. Sans cet estampillage, le `popstate` qui suivait était
+       pris pour un geste de la personne et fermait la surface suivante de la
+       liste — c'est ce qui détruisait une session de duel entière quand on
+       touchait « Je ne l'ai pas vu » dans la fiche ⓘ.
+     · navigation volontaire pendant qu'une garde est posée → `go()` l'oublie ;
+       l'entrée restante décrit un écran réel et sera remplacée ou absorbée. Au
+       pire un appui de retour en trop, jamais une sortie d'app.
+
+   LA GARDE « MÊME ÉCRAN », dans `popstate` : un état qui décrit l'écran DÉJÀ
+   affiché n'a rien à rendre — on se recale sur son rang et on sort. Elle ne
+   peut pas avaler une vraie navigation, puisque deux entrées voisines ne sont
+   jamais identiques (§2). Elle a remplacé un compteur de `popstate` à avaler,
+   borné par une seconde : un pari sur le temps, qui perdait dans les deux sens.
+
+   ---------------------------------------------------------------------------
+   6. CE QUE `go()` RANGE EN PARTANT
+
+   Un seul point de fermeture d'écran dans toute l'app, et c'est `go()` :
+   la session de duel (qui occupe l'écran de Mes goûts sans être une vue), la
+   barre « Tu as aimé ? », le minuteur de frappe de la Recherche et sa requête
+   en vol, un retour de geste encore en vol, et les gardes orphelines. Ajouter
+   une ressource d'écran qui survit à un changement d'onglet, c'est l'ajouter
+   ici — pas dans l'écran qui la crée.
+
+   ---------------------------------------------------------------------------
+   7. LA POSITION DE DÉFILEMENT
+
+     · `LISTES` (discover, search, follow, profile, abos, biblio, acteur,
+       rangee, centre) — restaurent TOUJOURS.
+     · `FICHES` (show, movie, preview) — restaurent AU RETOUR SEULEMENT ; une
+       fiche ouverte part du haut, et sa mémoire d'avant est oubliée à cet
+       instant.
+     · La clé (`cleDefil`) porte l'identité : deux fiches, deux rangées dépliées
+       ne partagent pas leur position.
+     · Les rails horizontaux (`data-rail`) ont leur propre relevé. `go()` le
+       fait AVANT de changer `view` (clé juste) et lève `railsDejaReleves` pour
+       que `render()` ne le refasse pas avec la clé de l'écran d'arrivée.
+     · `history.scrollRestoration = 'manual'` est posé dès `amorcerHistorique`,
+       AVANT la première entrée : sinon le navigateur restaure SA position
+       par-dessus la nôtre à chaque `history.back()`.
+
+   ---------------------------------------------------------------------------
+   8. LES ADRESSES
+
+   `ROUTES` dit le segment et si l'écran est partageable. Un écran NON
+   partageable a quand même une entrée d'historique — sinon le retour le
+   sauterait — mais garde l'adresse courante dans la barre. Un écran à identité
+   dont on n'a pas l'identité ne se sérialise pas.
+
+   ORDRE IMPÉRATIF AU DÉMARRAGE ET AU `hashchange` : le jeton de mot de passe
+   se lit AVANT que la route ne réécrive l'adresse. Le lien ne dure qu'une heure
+   et ne sert qu'une fois — l'inverser le détruit, sans rattrapage possible.
+
+   PIÈGE `notifs` / `centre` : `notifs` est l'écran des RÉGLAGES de notification
+   (app-09), `centre` est le fil de SPEC-10. Deux écrans, deux adresses. La spec
+   écrivait `go('notifs')` pour le fil ; la collision est signalée et tranchée
+   en faveur de deux noms distincts.
+
+   ---------------------------------------------------------------------------
+   9. CE QUI ÉPROUVE TOUT ÇA
+
+   `tests/nav-cycle3.js` (le cycle complet et les retardataires),
+   `tests/nav-centre-spec10.js` (fil → fiche → retour → onglet, depuis les trois
+   écrans à cloche), `tests/retour-05.js`, `tests/retour-06.js` (jaquette et
+   titre du centre comme points d'entrée, popstate en plus de la flèche), et les
+   cas de navigation de `test.html`. Un test qui vérifie qu'on APPELLE `go()`
+   n'éprouve pas ce que `go()` FAIT : ces suites naviguent réellement.
+   =========================================================================== */
 /* ============================ Rendu ============================ */
 /* ---------- Plus de mise en route ----------
    Les deux écrans d'accueil demandaient un prénom déjà redemandé au compte,

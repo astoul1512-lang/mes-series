@@ -1459,6 +1459,141 @@ function collisionsCss(src){
     souci += soucis.length;
   }
 
+  /* --- RETOUR-03 POINT 2 — LA CARTE DE NAVIGATION NE DOIT PAS MENTIR ---
+
+     Le point 2 demandait une carte écrite de la pile de navigation ; elle est
+     en tête d'`app-03-vues.js`. Une carte est un DOCUMENT, et un document ne
+     tombe pas quand le code bouge : il devient faux, en silence, et c'est pire
+     que pas de carte du tout — on décide sur sa foi. Le dépôt tient déjà cette
+     règle ailleurs (contrôle n° 9, contrôle « §0.4 recopiée ») : « une règle
+     qu'aucun contrôle ne tient se défait toute seule, un lot à la fois ».
+
+     Ce contrôle confronte donc les QUATRE listes de la carte au code d'app-02 :
+     les onglets, les étages, la table des retours par défaut, et l'ordre de
+     priorité des surfaces plein écran. Il ne juge pas la prose ; il juge les
+     listes, qui sont ce sur quoi on se trompe. */
+  {
+    const fs = require('fs'), chemin = require('path');
+    const racine = chemin.join(__dirname, '..');
+    const soucis = [];
+    const v3 = fs.readFileSync(chemin.join(racine, 'app-03-vues.js'), 'utf8');
+    const v2 = fs.readFileSync(chemin.join(racine, 'app-02-outils.js'), 'utf8');
+    const carte = (/\/\* =+\s*\n\s*LA CARTE DE LA NAVIGATION[\s\S]*?=+ \*\//.exec(v3) || [])[0];
+    if(!carte){
+      soucis.push('app-03-vues.js : la carte de navigation a disparu de l\'en-tête');
+    }else{
+      /* ① Les onglets, dans l'ordre — il donne le sens du glissement latéral. */
+      const decl = (/const\s+ONGLETS_BARRE\s*=\s*\[([^\]]*)\]/.exec(v2) || [])[1] || '';
+      const vrais = (decl.match(/'([a-z]+)'/g) || []).map(s => s.slice(1, -1));
+      /* ② Les étages. La carte les écrit « nom · nom · nom » sous une ligne
+            « Étage N ». On relit le même découpage que l'œil. */
+      const parEtage = {};      // vue -> étage annoncé
+      const listes = {};        // étage -> [vues]
+      let courant = null;
+      carte.split('\n').forEach(l=>{
+        const e = /Étage\s+(\d)\s*(?:—|:)/.exec(l);
+        if(e){ courant = Number(e[1]); return; }
+        const m = /^\s+([a-z]+(?:\s+·\s+[a-z]+)*)\s*$/.exec(l);
+        if(!m || courant === null) return;
+        const noms = m[1].split('·').map(s => s.trim()).filter(Boolean);
+        listes[courant] = (listes[courant] || []).concat(noms);
+        noms.forEach(n=>{ parEtage[n] = courant; });
+        courant = null;         // une seule ligne de noms par étage annoncé
+      });
+      const onglets = listes[0] ? listes[0].slice(0, vrais.length) : [];
+      if(onglets.join(',') !== vrais.join(','))
+        soucis.push('les onglets de la carte (' + onglets.join(' · ') + ') ne sont plus ceux ' +
+                    'd\'ONGLETS_BARRE (' + vrais.join(' · ') + ') — l\'ordre donne le sens du glissement');
+      const dm = /const\s+DEPTH\s*=\s*\{([^}]*)\}/.exec(v2);
+      if(!dm) soucis.push('app-02-outils.js : DEPTH est introuvable, la carte n\'est plus vérifiable');
+      else{
+        const vraiDepth = {};
+        (dm[1].match(/([a-z]+)\s*:\s*(\d+)/g) || []).forEach(p=>{
+          const [n, d] = p.split(':').map(s => s.trim());
+          vraiDepth[n] = Number(d);
+        });
+        /* `sorties` est du code mort assumé, et la carte le dit en toutes
+           lettres au lieu de le ranger dans un étage : on ne l'exige donc pas. */
+        Object.keys(vraiDepth).forEach(n=>{
+          if(n === 'sorties'){
+            if(!/`sorties`/.test(carte)) soucis.push('la carte ne signale plus le code mort `sorties`');
+            return;
+          }
+          if(!(n in parEtage)) soucis.push('écran `' + n + '` (étage ' + vraiDepth[n] + ') absent de la carte');
+          else if(parEtage[n] !== vraiDepth[n])
+            soucis.push('écran `' + n + '` : la carte l\'annonce à l\'étage ' + parEtage[n] +
+                        ', DEPTH dit ' + vraiDepth[n]);
+        });
+        Object.keys(parEtage).forEach(n=>{
+          if(!(n in vraiDepth)) soucis.push('la carte annonce un écran `' + n + '` qui n\'est plus dans DEPTH');
+        });
+      }
+      /* ③ La table des retours par défaut de `currentBack()`. */
+      const cb = /function\s+currentBack\(\)\s*\{([\s\S]*?)\n\}/.exec(v2);
+      if(!cb) soucis.push('app-02-outils.js : currentBack() est introuvable');
+      else{
+        const vraiRetour = {};
+        const re = /if\s*\(\s*view\s*===\s*'([a-z]+)'(?:\s*\|\|\s*view\s*===\s*'([a-z]+)')?\s*\)\s*return\s+params\.from\s*\|\|\s*'([a-z]+)'/g;
+        let m;
+        while((m = re.exec(cb[1]))){
+          vraiRetour[m[1]] = m[3];
+          if(m[2]) vraiRetour[m[2]] = m[3];
+        }
+        const dite = {};
+        carte.split('\n').forEach(l=>{
+          const m2 = /^\s{8,}([a-z][a-z, ]*?)\s*→\s*from\s*\|\s*([a-z]+)/.exec(l);
+          if(!m2) return;
+          m2[1].split(',').map(s => s.trim()).filter(Boolean).forEach(n=>{ dite[n] = m2[2]; });
+        });
+        Object.keys(vraiRetour).forEach(n=>{
+          if(!(n in dite)) soucis.push('retour par défaut de `' + n + '` (→ ' + vraiRetour[n] + ') absent de la carte');
+          else if(dite[n] !== vraiRetour[n])
+            soucis.push('retour par défaut de `' + n + '` : la carte dit ' + dite[n] +
+                        ', currentBack() dit ' + vraiRetour[n]);
+        });
+        Object.keys(dite).forEach(n=>{
+          if(!(n in vraiRetour)) soucis.push('la carte annonce un retour par défaut pour `' + n + '`, que currentBack() ne connaît plus');
+        });
+      }
+      /* ④ « Toute nouvelle surface plein écran doit être ajoutée AUX DEUX. »
+            C'est la phrase la plus opérationnelle de la carte, et la seule que
+            l'on peut oublier sans qu'aucun écran ne casse à l'écriture : elle
+            ne se voit qu'au bouton matériel d'Android, sur un vrai téléphone.
+            On la tient donc ici. */
+      const corps = (nom, ouvre)=>{
+        const i = v2.indexOf(ouvre);
+        if(i < 0) return null;
+        let prof = 0, debut = v2.indexOf('{', i);
+        for(let j = debut; j < v2.length; j++){
+          if(v2[j] === '{') prof++;
+          else if(v2[j] === '}'){ prof--; if(!prof) return v2.slice(debut, j); }
+        }
+        return null;
+      };
+      const SURFACES = [
+        ['le lecteur vidéo',            /lecteurOuvert\(\)/],
+        ['la feuille modale',           /getElementById\('sheet'\)|feuille\.classList/],
+        ['le duel',                     /duel\.actif/],
+        ['le jeu de Recherche',         /etatRech\(\)\.jeu/],
+        ['la recherche du profil',      /pf12\.ouvert/],
+        ['la recherche d\'acteurs',     /rechActeur\.ouvert/]
+      ];
+      const cGoBack = corps('goBack', 'function goBack()');
+      const cPop = corps('popstate', "window.addEventListener('popstate'");
+      if(!cGoBack || !cPop) soucis.push('goBack() ou l\'écouteur popstate est introuvable');
+      else SURFACES.forEach(([nom, motif])=>{
+        const a = motif.test(cGoBack), b = motif.test(cPop);
+        if(a && !b) soucis.push(nom + ' : fermé par goBack() mais pas par popstate — le bouton d\'Android quittera l\'écran au lieu de la refermer');
+        if(b && !a) soucis.push(nom + ' : fermé par popstate mais pas par goBack() — la flèche et le balayage quitteront l\'écran');
+      });
+    }
+    console.log('carte de nav  → ' + (soucis.length
+      ? soucis.length + ' écart(s)'
+      : 'onglets, étages, retours par défaut et surfaces plein écran : la carte dit vrai'));
+    soucis.forEach(d => console.log('   ! ' + d));
+    souci += soucis.length;
+  }
+
   await nav.close();
   console.log(souci ? '\nÉCHEC — ' + souci + ' problème(s)' : '\nTout est vert.');
   process.exit(souci ? 1 : 0);

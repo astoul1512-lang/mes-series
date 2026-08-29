@@ -92,6 +92,19 @@ function migrerNotif(){
      TOUTE comparaison avec `NaN` est fausse : sans cette ligne la carte ne
      serait ni affichée ni tue, mais les deux à la fois selon le sens du test. */
   if(typeof n.invitPush !== 'number' || !isFinite(n.invitPush)) n.invitPush = 0;
+  /* RETOUR-07 §1 — L'INTERRUPTEUR, ET POURQUOI IL EST LOCAL À L'APPAREIL.
+     Zéro = les notifications ne sont pas coupées ; sinon la date de la coupure.
+     Une date plutôt qu'un booléen pour la même raison que les cloches : le jour
+     où il faudra trancher entre deux appareils, on aura de quoi.
+
+     IL NE VOYAGE PAS PAR LA SYNCHRO, et c'est le point à ne pas rater :
+     `notifPourSynchro` ne l'envoie pas, `fusionnerNotif` ne le lit pas. Couper
+     les notifications, c'est couper CE téléphone — comme `abo`, dont il est le
+     jumeau. Le faire voyager éteindrait la tablette de quelqu'un qui a coupé son
+     téléphone au bureau, ce que personne n'a demandé. En revanche il SURVIT au
+     changement de compte (`adopterCompte`, app-01) : c'est l'appareil qu'on a
+     fait taire, pas le compte. */
+  if(typeof n.coupe !== 'number' || !isFinite(n.coupe)) n.coupe = 0;
 }
 
 /* I8 — « Dispo en streaming » et « Sortie en VOD » étaient deux étiquettes pour
@@ -332,6 +345,12 @@ function motifAbonnement(e){
    fois dans la vie de l'app, autant que ce soit quand la raison est évidente. */
 async function inscrireSiBesoin(){
   if(!notifPossibles() || !notifAutorisees() || !signedIn() || !syncReady()) return false;
+  /* RETOUR-07 §1 — LE GARDE-FOU SANS LEQUEL L'INTERRUPTEUR NE TIENDRAIT PAS.
+     Cette fonction tourne au démarrage et à chaque retour de compte. Sans cette
+     ligne, elle réinscrirait l'appareil dans la seconde qui suit la coupure, et
+     l'interrupteur serait un bouton qui ne fait rien — le pire des deux mondes,
+     puisqu'il aurait l'air de marcher. */
+  if(db.notif && db.notif.coupe) return false;
   /* B11 (09/08) — LA PURGE D'ABORD, L'INSCRIPTION ENSUITE, ET DANS CET ORDRE.
      Les deux peuvent porter sur la MÊME adresse d'abonnement : se déconnecter
      ne résilie pas l'abonnement du navigateur, on revient donc avec la même.
@@ -758,6 +777,14 @@ function etatNotif(){
   if(permissionNotif() === 'denied')
     return { cle:'refus', ton:'refus', titre:'Notifications refusées',
              sous:'Réactive-les dans Réglages › Notifications › Mes séries.' };
+  /* RETOUR-07 §1 — LA COUPURE DÉLIBÉRÉE, AVANT TOUT LE RESTE.
+     Elle passe après « refusées » (là, c'est le téléphone qui a tranché, et le
+     dire autrement serait faux) mais avant tous les autres : quelqu'un qui a
+     coupé lui-même ne doit pas lire « Cet appareil n'est pas inscrit » en rouge
+     — ce serait présenter son propre choix comme une panne. */
+  if(db.notif && db.notif.coupe)
+    return { cle:'coupe', ton:'attente', titre:'Notifications coupées',
+             sous:'Tu ne reçois rien sur cet appareil. Tes cloches sont gardées.' };
   if(!notifAutorisees())
     /* RETOUR-05 §1 — LE SOUS-TITRE NE RENVOIE PLUS À LA CHASSE AU TRÉSOR.
        « Allume la cloche sur une série » restait vrai, mais c'était le SEUL
@@ -776,7 +803,7 @@ function etatNotif(){
     return { cle:'noninscrit', ton:'refus', titre:'Cet appareil n\'est pas inscrit',
              sous: db.notif.erreur
                ? ('Dernière tentative : ' + db.notif.erreur)
-               : 'Touche « Inscrire cet appareil » ci-dessous.' };
+               : 'Rallume l\'interrupteur ci-dessous pour le réinscrire.' };
   return { cle:'ok', ton:'ok', titre:'Notifications autorisées', sous:'Sur cet appareil' };
 }
 
@@ -784,6 +811,7 @@ function etatNotif(){
 function resumeNotif(){
   if(!notifPossibles()) return 'Indisponible sur cet appareil';
   if(permissionNotif() === 'denied') return 'Refusées';
+  if(db.notif && db.notif.coupe) return 'Coupées sur cet appareil';
   if(!notifAutorisees()) return 'Désactivées';
   const t = compterCloches('tv'), f = compterCloches('movie');
   if(!t && !f) return 'Autorisées · aucun titre surveillé';
@@ -802,6 +830,49 @@ const EVENEMENTS_FILM = [
   { v:'cine',   t:'En salle' },
   { v:'maison', t:'À la maison' }
 ];
+
+/* ===========================================================================
+   RETOUR-07 §1 — UN SEUL INTERRUPTEUR, TOUJOURS À L'ÉCRAN.
+
+   CE QU'IL REMPLACE, ET POURQUOI. RETOUR-05 avait posé un bouton « Activer les
+   notifications » qui ne s'affichait QUE sur l'état « Pas encore autorisées »,
+   et un bouton « Inscrire cet appareil » qui ne s'affichait que sur l'état
+   d'échec. Deux boutons, deux états, et surtout : AUCUN MOYEN DE COUPER. Quand
+   tout marchait, l'écran ne proposait rien du tout — c'est le reproche d'Adrien
+   du 29/08, et il est juste. Le raisonnement de RETOUR-05 (« un bouton qui ne
+   peut pas marcher est pire que pas de bouton ») reste vrai et est CONSERVÉ :
+   il est devenu la branche `dur` ci-dessous, où l'interrupteur se montre éteint
+   et DÉSACTIVÉ, avec la raison écrite dessous. Ce qui change, c'est qu'on ne
+   fait plus disparaître le réglage : on le montre, et on dit pourquoi il ne
+   bouge pas. Un réglage absent ne s'explique pas ; un réglage grisé, si.
+
+   IL LIT L'ÉTAT RÉEL (`pushActifIci`), jamais un drapeau : autorisé PLUS inscrit
+   au serveur. C'est la seule définition de « je reçois vraiment quelque chose »,
+   et c'est déjà celle qu'emploient `etatNotif` et la carte du fil.
+
+   AUCUNE CLASSE NOUVELLE : `.reg` + `.inter`, exactement le composant de
+   `interrupteurIA` (app-08), lui-même repris de l'écran des cloches. Trois
+   écrans, un seul interrupteur à l'œil.
+   =========================================================================== */
+function interrupteurNotif(e){
+  const on = pushActifIci();
+  /* Les trois états où l'interrupteur ne peut RIEN faire — ce n'est pas un
+     refus de l'app, c'est le téléphone qui a déjà tranché. */
+  const dur = (e.cle === 'impossible' || e.cle === 'accueil' || e.cle === 'refus');
+  const pris = occupe('cloches');
+  const sous = dur ? e.sous
+    : on ? 'Tu reçois les sorties et les recos de ton cercle sur cet appareil.'
+         : 'Ton téléphone demandera confirmation. Tes cloches sont gardées.';
+  return '<div class="wrap" style="padding-top:0">'+
+    '<button class="reg" '+(dur || pris ? 'disabled ' : '')+
+      (dur || pris ? '' : 'onclick="basculerNotifications()" ')+
+      'aria-pressed="'+(on ? 'true' : 'false')+'">'+
+      '<i>'+I.cloche+'</i>'+
+      '<span class="rtxt"><b>Notifications sur cet appareil</b>'+
+        '<em>'+esc(sous)+'</em></span>'+
+      '<span class="inter'+(on ? ' on' : '')+'"><i></i></span>'+
+    '</button></div>';
+}
 
 function viewNotifications(){
   const e = etatNotif();
@@ -845,29 +916,7 @@ function viewNotifications(){
       '</div></div>';
   }
 
-  /* RETOUR-05 §1 — LE BOUTON QUI MANQUAIT. L'écran annonçait « Pas encore
-     autorisées » et ne proposait rien : la question d'iOS ne se posait qu'en
-     allumant la cloche d'un TITRE (`basculerCloche`), c'est-à-dire ailleurs, et
-     personne ne l'a trouvé. Il ne s'affiche que sur cet état-là — voir les trois
-     autres, qui n'en veulent pas : « À installer sur l'écran d'accueil » (rien à
-     activer tant qu'on est dans Safari), « Notifications refusées » (iOS ne
-     repose JAMAIS la question, un bouton qui ne peut pas marcher est pire que
-     pas de bouton), « Cet appareil n'est pas inscrit » (qui a déjà le sien,
-     juste en dessous). */
-  if(e.cle === 'jamais'){
-    html += '<div class="wrap" style="padding-top:0">'+
-      '<button class="btn block" '+(occupe('cloches') ? 'disabled ' : '')+
-        'onclick="activerNotifications()">Activer les notifications</button>'+
-      '<div class="tiny muted" style="margin-top:8px">Ton téléphone va demander '+
-      'confirmation. Tu pourras toujours revenir ici pour choisir les titres.</div></div>';
-  }
-
-  if(notifPossibles() && notifAutorisees() && !db.notif.abo){
-    html += '<div class="wrap" style="padding-top:0">'+
-      '<button class="btn block" onclick="reinscrire()">Inscrire cet appareil</button>'+
-      '<div class="tiny muted" style="margin-top:8px">Nécessaire une seule fois par '+
-      'téléphone : c\'est ce qui dit au serveur où envoyer.</div></div>';
-  }
+  html += interrupteurNotif(e);
 
   html += '<div class="sectitle">Mes films</div><div class="wrap" style="padding-top:0">'+
     '<div class="fchips">'+
@@ -925,12 +974,78 @@ function basculerEvenementFilm(v){
 =========================================================================== */
 
 async function activerNotifications(){
-  const ok = await demanderPermissionNotif();   // refus : elle toaste déjà la raison
+  /* RETOUR-07 §1 — LE VERROU COUVRE AUSSI LA PHASE DE QUESTION, et c'est un
+     DÉFAUT TROUVÉ PAR LE TEST, pas une précaution de principe.
+     `reinscrire` porte `prendre('cloches')` depuis B11 ; la question d'iOS, qui
+     la précède, ne portait rien. Entre les deux, `couperNotifications` passait :
+     elle posait `coupe`, vidait `abo`… et `reinscrire` réinscrivait juste après.
+     On se retrouvait avec un appareil ABONNÉ AU SERVEUR sous un écran qui
+     annonce « Notifications coupées » — le pire état possible, puisque le seul
+     bouton visible ne le répare pas.
+     Le verrou est rendu juste avant `reinscrire`, qui le reprend aussitôt : il
+     n'y a AUCUN `await` entre les deux, donc aucune fenêtre. */
+  if(!prendre('cloches')) return false;
+  let ok = false;
+  try{
+    /* On lève la coupure avant de parler à qui que ce soit : `inscrireSiBesoin`
+       refuse tant que le drapeau est posé, et le lever après aurait donné un
+       interrupteur qui se rallume puis retombe au démarrage suivant. */
+    if(db.notif && db.notif.coupe){ db.notif.coupe = 0; saveDB(); }
+    render();
+    ok = await demanderPermissionNotif();       // refus : elle toaste déjà la raison
+  } finally { rendre('cloches'); }
   if(!ok){ render(); return false; }
   /* Accordée. `reinscrire` pose l'abonnement, pousse les cloches, rend l'écran
      et dit ce qui s'est passé — on ne redouble ni son rendu ni son toast. */
   await reinscrire();
   return true;
+}
+
+/* ===========================================================================
+   RETOUR-07 §1 — COUPER.
+
+   Il n'existait AUCUN chemin pour arrêter les notifications depuis l'app.
+   `oublierAppareil` faisait déjà exactement le travail — retirer la ligne de
+   `push_appareils` et oublier l'abonnement — mais elle n'était appelée qu'à la
+   déconnexion. On ne réécrit donc rien : on lui donne un second appelant, et on
+   pose le drapeau qui empêche l'app de défaire ce choix toute seule.
+
+   ON NE DÉSABONNE PAS LE NAVIGATEUR (`subscription.unsubscribe()`), et c'est
+   délibéré : sans ligne côté serveur, plus rien ne part, la coupure est réelle ;
+   et garder l'abonnement du navigateur rend le rallumage instantané, sans
+   repasser par la question du système. C'est aussi le chemin déjà éprouvé.
+
+   ON NE TOUCHE PAS AUX CLOCHES. Couper, ce n'est pas oublier ce qu'on suit :
+   c'est faire taire un téléphone. Le titre de l'écran le dit, et le rallumage
+   rend tout tel quel.
+
+   LE MÊME VERROU que `reinscrire` — `prendre('cloches')` — MAIS PAS POUR LA
+   RAISON QU'ON CROIT, et le dire évite de s'en remettre à lui pour ce qu'il ne
+   fait pas. Le corps de cette fonction est SYNCHRONE : `oublierAppareil` vide
+   `abo` tout de suite et n'attend pas le DELETE. Contre un double appui sur
+   l'interrupteur, la protection réelle est donc là — le second appel trouve
+   `abo` nul et ne fait rien. Ce que le verrou apporte, lui, est CROISÉ : il
+   refuse une coupure pendant qu'une ACTIVATION est en vol (`reinscrire` le
+   tient, et elle, elle attend le réseau), et il grise l'interrupteur pendant
+   ce temps-là. C'est ce cas-là qu'éprouve `tests/retour-07.js`.
+   =========================================================================== */
+async function couperNotifications(){
+  if(!db.notif) return false;
+  if(!prendre('cloches')) return false;
+  render();
+  try{
+    oublierAppareil();          // retire la ligne serveur, ou la met en file
+    db.notif.coupe = Date.now();
+    saveDB();
+  } finally { rendre('cloches'); render(); }
+  toast('Notifications coupées sur cet appareil');
+  return true;
+}
+
+/* L'interrupteur touché : on lit l'état RÉEL, pas un drapeau. */
+async function basculerNotifications(){
+  if(pushActifIci()) return couperNotifications();
+  return activerNotifications();
 }
 
 /* Le push est-il VRAIMENT actif sur CET appareil ? L'autorisation ne suffit
@@ -961,6 +1076,10 @@ const INVIT_PUSH_SILENCE = 30 * 86400000;
 function invitPushEtat(){
   if(!db.notif) return 'rien';
   if(pushActifIci()) return 'rien';
+  /* RETOUR-07 §1 — couper, c'est aussi faire taire l'invitation. Reproposer
+     dans le fil ce que quelqu'un vient d'éteindre dans les réglages est la
+     définition du harcèlement d'interface. */
+  if(db.notif.coupe) return 'rien';
   if(permissionNotif() === 'denied') return 'rien';
   if(estIOS() && !surEcranAccueil()) return 'accueil';
   if(!notifPossibles()) return 'rien';
