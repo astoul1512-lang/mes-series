@@ -1830,6 +1830,27 @@ let interpEnCoursIA = false;
 
 function oublierCachePhraseIA(){ iaPhraseCache = {}; }
 
+/* RETOUR-10 §2 — « ce qui a été compris, en clair ». Trois ou quatre mots, pas
+   un rapport : la ligne fait une seule hauteur et doit rester lisible d'un coup
+   d'œil. Le texte sort du relais, donc il est NON SÛR — `ligneStatutIA`
+   l'échappe, et on ne le pousse jamais dans un `onclick`. */
+function resumeComprisIA(d){
+  if(!d) return '';
+  if(d.mode === 'titre'){
+    const n = ((d.titres || []).length) | 0;
+    return n ? (n > 1 ? n + ' pistes possibles' : '1 titre probable') : '';
+  }
+  const f = d.filtres || {};
+  const bouts = [];
+  if(f.famille) bouts.push(String(f.famille));
+  (f.genres || []).slice(0, 3).forEach(g => bouts.push(String(g)));
+  (f.personnes || []).slice(0, 2).forEach(p => bouts.push(String(p)));
+  if(f.epoque) bouts.push(String(f.epoque));
+  if(f.duree) bouts.push(String(f.duree));
+  (f.plateformes || []).slice(0, 2).forEach(p => bouts.push(String(p)));
+  return bouts.slice(0, 5).join(' · ');
+}
+
 async function interpreterRechercheIA(phrase){
   const q = String(phrase == null ? '' : phrase).trim();
   if(!q) return;
@@ -1843,8 +1864,14 @@ async function interpreterRechercheIA(phrase){
     const cle = q.toLowerCase();
     let d;
     if(Object.prototype.hasOwnProperty.call(iaPhraseCache, cle)){
+      /* CACHE : AUCUN ALLER-RETOUR, DONC AUCUNE LIGNE DE STATUT (RETOUR-10 §2).
+         Refaire la même phrase répond dans la même frame ; poser « Je lis ta
+         phrase… » ici la ferait apparaître et disparaître d'un seul coup —
+         un clignotement, c'est-à-dire exactement l'impression de panne que ce
+         lot existe pour supprimer. */
       d = iaPhraseCache[cle];
     }else{
+      if(typeof poserStatutIA === 'function') poserStatutIA('lit');
       d = await appelIA('interpreter_recherche', { phrase: q.slice(0, 300) });
       if(d) noterRequeteIA();
       const cles = Object.keys(iaPhraseCache);
@@ -1858,12 +1885,24 @@ async function interpreterRechercheIA(phrase){
       toast('✦ Pas compris — décris un genre, une époque, une durée…');
       return;
     }
+    /* RETOUR-10 §2 — « ✓ Compris », et ce qui a été compris EN CLAIR. La ligne
+       reste pendant la suite du travail : après la réponse de l'IA, on résout
+       encore les personnes sur `/search/person` et on vérifie les candidats sur
+       `/search/multi`. C'est du temps que la personne voit passer, et il est
+       maintenant justifié au lieu d'être subi. */
+    if(typeof poserStatutIA === 'function') poserStatutIA('compris', resumeComprisIA(d));
     if(d.mode === 'titre') return await poserCandidatsIA(q, d.titres || []);
     return await poserFiltresIA(d.filtres || {});
   }catch(e){
     toast('✦ Pas compris — décris un genre, une époque, une durée…');
   }finally{
     interpEnCoursIA = false;
+    /* La ligne s'efface quand les résultats sont peints — c'est-à-dire ici,
+       une fois `poserFiltresIA` / `poserCandidatsIA` terminés. En cas de panne,
+       elle laisse la place au message d'erreur habituel (le `toast` ci-dessus),
+       et le liseré s'arrête dans tous les cas : un échec ne doit pas laisser la
+       barre courir indéfiniment. */
+    if(typeof effacerStatutIA === 'function') effacerStatutIA();
   }
 }
 

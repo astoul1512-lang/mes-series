@@ -721,9 +721,89 @@ function etatRech(){
        reconnus. Le premier s'affiche en carte « C'est celui-là ? », les autres
        en petites affiches. Vidé dès qu'on repart sur autre chose. */
     candIA:null,
+    /* RETOUR-10 §2 (01/09/2026) — CE QUE L'IA EST EN TRAIN DE FAIRE.
+       `null` quand rien n'est en cours, sinon `{etat, texte}` :
+       `lit` (elle lit la phrase), `loin` (elle a escaladé — voir §1) ou
+       `compris` (elle a répondu, on peint encore). Ce n'est PAS persisté et ce
+       n'est PAS un verrou : `interpEnCoursIA` (app-14) reste le seul garde-fou
+       contre deux appels simultanés. Celui-ci ne sert qu'à dire ce qui se
+       passe. */
+    iaStatut:null,
     jeu:null
   };
   return ui.rech;
+}
+/* ---------------------------------------------------------------------------
+   RETOUR-10 §2 — MONTRER QUE L'IA CHERCHE (maquette 28, VARIANTE A)
+
+   Demande d'Adrien (31/08) : « montrer que l'IA est en train de chercher, sinon
+   on a l'impression que ça bugue. »
+
+   UNE EXCEPTION ASSUMÉE À UNE RÈGLE ÉCRITE. Le pavé de tête d'app-14 pose que
+   « un spinner, c'est une attente, et une attente est un blocage » : l'IA de
+   SPEC-04 ne devait jamais faire patienter. La règle valait pour une IA qui
+   ENRICHIT un écran déjà peint — le pitch du jour, les intitulés. Ici l'IA est
+   sur le CHEMIN CRITIQUE : on a validé une phrase et il ne se passe rien
+   pendant plusieurs secondes. Ne rien montrer, ce n'est pas éviter l'attente,
+   c'est la laisser passer pour une panne. On la montre donc, et on la nomme.
+
+   OÙ ELLE S'AFFICHE, ET POURQUOI PAS AILLEURS. La barre ✦ vit dans le `sub` du
+   `<header>`, HORS de `#rres` que `peindreRech` réécrit. Repeindre l'en-tête
+   coûterait le focus du champ et refermerait les feuilles ouvertes. La ligne de
+   statut est donc le PREMIER élément de `corpsRech()` — donc juste sous la
+   barre à l'écran — et le liseré de la barre, lui, est posé en touchant la
+   classe du nœud existant, sans le réécrire.
+
+   LA GRILLE PRÉCÉDENTE NE BOUGE PAS : on n'entre jamais dans `r.res`. C'est la
+   règle du point 5 / point 7, et ce lot n'a aucune raison de la défaire.
+--------------------------------------------------------------------------- */
+const IA_STATUTS = {
+  lit:     ['✦ Je lis ta phrase…',    'un instant'],
+  loin:    ['✦ Je cherche plus loin…', 'ta description demande de la mémoire'],
+  compris: ['✓ Compris',               '']
+};
+/* Combien de temps « ✓ Compris » reste au minimum. MESURÉ le 01/09 en écrivant
+   la suite : quand la réponse arrive et que la pose des filtres ne demande
+   aucun aller-retour (tout est déjà en cache), l'état « compris » naissait et
+   mourait dans la MÊME frame. Zéro milliseconde à l'écran, donc soit rien, soit
+   un scintillement — c'est-à-dire précisément l'impression de panne que ce lot
+   existe pour supprimer. Une ligne qui confirme doit se lire. */
+const IA_COMPRIS_MIN_MS = 900;
+let iaStatutQuand = 0, iaStatutTimer = null;
+function poserStatutIA(etat, texte){
+  clearTimeout(iaStatutTimer);
+  const r = etatRech();
+  r.iaStatut = etat ? { etat: etat, texte: texte || '' } : null;
+  iaStatutQuand = Date.now();
+  /* Le liseré qui court : posé sur le nœud existant, jamais par un repeint de
+     l'en-tête — sinon on perdrait le curseur dans le champ. */
+  const b = document.querySelector('.qbar');
+  if(b) b.classList.toggle('qcherche', etat === 'lit' || etat === 'loin');
+  /* On ne repeint que si l'écran Recherche est encore là : un `peindreRech`
+     hors de son écran retomberait sur un `render()` complet et ferait bouger
+     un écran que la personne est en train de lire. */
+  if(typeof view === 'undefined' || view === 'search') peindreRech();
+}
+/* La sortie : immédiate pour les états d'attente, différée pour « compris » le
+   temps qu'il soit lisible. Jamais bloquante — les résultats, eux, sont déjà
+   peints ; c'est seulement la ligne au-dessus qui s'attarde. */
+function effacerStatutIA(){
+  const s = etatRech().iaStatut;
+  if(!s) return;
+  if(s.etat !== 'compris') return poserStatutIA(null);
+  const reste = IA_COMPRIS_MIN_MS - (Date.now() - iaStatutQuand);
+  if(reste <= 0) return poserStatutIA(null);
+  clearTimeout(iaStatutTimer);
+  iaStatutTimer = setTimeout(()=> poserStatutIA(null), reste);
+}
+function ligneStatutIA(){
+  const s = etatRech().iaStatut;
+  if(!s) return '';
+  const d = IA_STATUTS[s.etat] || IA_STATUTS.lit;
+  const fini = s.etat === 'compris';
+  return '<div class="iastat'+(fini ? ' iafini' : '')+'">'+
+    '<span class="iapt"></span><span class="iatx"><b>'+esc(d[0])+'</b>'+
+    '<span>'+esc(s.texte || d[1])+'</span></span></div>';
 }
 function rechTexte(){ return (etatRech().q || '').trim(); }
 /* RETOUR-01 POINT 6 — LE POINT DE BASCULE UNIQUE DE L'ÉCRAN. `enRechercheTitre`
@@ -2961,8 +3041,10 @@ function corpsRech(){
      sinon on la demande une fois, en arrière-plan, et l'écran se repeint à
      l'arrivée. Jamais bloquant : sans elle, le duo n'ajoute simplement rien. */
   if(typeof amorcerDuoRech === 'function') amorcerDuoRech();
-  return rangeeAmbiancesRech() + blocPhraseRech() + carteCandidatsIARech() +
-         carteMatchRech() + barreTriRech() + grilleRech();
+  /* RETOUR-10 §2 — la ligne de statut EN TÊTE, donc juste sous la barre ✦, et
+     au-dessus de la grille précédente qui, elle, reste à l'écran. */
+  return ligneStatutIA() + rangeeAmbiancesRech() + blocPhraseRech() +
+         carteCandidatsIARech() + carteMatchRech() + barreTriRech() + grilleRech();
 }
 
 /* ------------------ Un nom tapé : titres, puis personnes ------------------ */
