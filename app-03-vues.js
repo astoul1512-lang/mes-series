@@ -395,10 +395,18 @@ function render(){
      fait changer d'écran. */
   if(view !== 'gouts' && typeof rechActeur !== 'undefined' && rechActeur.ouvert
      && typeof oublierRechActeur === 'function') oublierRechActeur();
-  if(view !== 'profile' && typeof pf12 !== 'undefined' && pf12.ouvert){
-    rangerRecentPf12(); avorterPf12(); pf12.ouvert = false; pf12.q = '';
-    pf12.pers = null; pf12.persEtat = ''; pf12.persErr = '';
+  /* RETOUR-11 — la portée de `pf12` suit l'écran, et la recherche plein écran
+     ne survit à AUCUN changement de portée. Deux écrans en portent une : « Mon
+     profil » (`moi`) et la bibliothèque d'un proche (`proche:<id>`). Passer de
+     l'un à l'autre est un changement d'écran comme un autre — on referme, puis
+     on bascule. Un simple redessin sur place, lui, ne change pas la clé et ne
+     ferme donc rien. */
+  const pf12Cible = (typeof pf12PorteeDe === 'function') ? pf12PorteeDe(view, params) : null;
+  if(typeof pf12 !== 'undefined' && pf12Cible !== pf12Cle){
+    if(pf12.ouvert){ rangerRecentPf12(); avorterPf12(); }
+    pf12ToutFermer();
   }
+  if(pf12Cible) pf12Portee(pf12Cible);
   /* C4.3 — la position horizontale des rails est relevée avant d'écraser le
      DOM, et remise juste après. Ici plutôt que dans `go()` seul : la plupart
      des redessins ne changent pas d'écran (cocher un épisode, ajouter un film)
@@ -437,7 +445,10 @@ function render(){
        plein écran veut dire sans la barre du bas : mesuré clavier levé (300 px),
        elle laisse voir 1 résultat sur 7 en place contre 4 sur 7 ici. Les 64 px
        de la barre sont la dernière chose à rendre aux résultats. */
-    || (view === 'profile' && typeof pf12 !== 'undefined' && pf12.ouvert)
+    /* RETOUR-11 : la bibliothèque d'un proche porte la même recherche plein
+       écran, donc la même mesure et la même règle. */
+    || ((view === 'profile' || view === 'biblio')
+        && typeof pf12 !== 'undefined' && pf12.ouvert)
     /* RETOUR-02 POINT 8 (11/08/2026) — la recherche d'acteurs de Mes goûts
        suit le même chemin, et pour la même mesure : clavier levé, les résultats
        passaient sous « Terminé » et sous la barre du bas. Une ligne ici, la
@@ -960,12 +971,61 @@ function lastWatchedAt(s){
   });
 }
 
-/* L'état de l'écran, hors de `ui` : il est entièrement local au point 12 et
-   n'a aucune raison d'être relu par un autre écran. `ouvert` est la recherche
-   plein écran, `yAvant` la position de lecture à laquelle « Annuler » ramène. */
-let pf12 = { ouvert:false, yAvant:0, q:'', tri:'recent',
-             filtres:{ genre:[], epoque:[], plate:[], nonnotes:false },
-             pers:null, persEtat:'', persErr:'', recents:null };
+/* L'état de l'écran, hors de `ui`. `ouvert` est la recherche plein écran,
+   `yAvant` la position de lecture à laquelle « Annuler » ramène.
+
+   RETOUR-11 (01/09/2026) — IL Y A MAINTENANT UN ÉTAT PAR BIBLIOTHÈQUE.
+
+   Le commentaire d'origine disait « entièrement local au point 12 » : c'était
+   vrai tant que « Mon profil » était le seul écran à trier et filtrer. Depuis
+   que la bibliothèque d'un proche porte les mêmes commandes, un objet unique
+   ferait fuiter les filtres d'un écran à l'autre — poser « Comédie » chez Marie
+   les appliquerait à MA bibliothèque au retour, et inversement. Un bug
+   invisible : rien ne s'affiche, des titres manquent simplement.
+
+   LE CHOIX : un registre par clé (`moi`, `proche:<id>`), et `pf12` reste une
+   variable qui POINTE sur l'état courant. Les quelque soixante lecteurs
+   existants (`pf12.tri`, `pf12.filtres`…) continuent donc de fonctionner sans
+   être touchés — ils lisent la globale au moment de l'appel. On ne recopie
+   jamais l'état : `pf12` et `PF12_ETATS[cle]` sont le MÊME objet, donc une
+   écriture est déjà rangée au bon endroit.
+
+   Une bibliothèque jamais ouverte naît propre : c'est ce qui fait qu'ouvrir
+   celle d'un AUTRE proche ne montre pas les filtres du précédent. */
+function pf12Neuf(){
+  return { ouvert:false, yAvant:0, q:'', tri:'recent',
+           filtres:{ genre:[], epoque:[], plate:[], nonnotes:false },
+           pers:null, persEtat:'', persErr:'', recents:null };
+}
+const PF12_ETATS = { moi: pf12Neuf() };
+let pf12 = PF12_ETATS.moi;
+let pf12Cle = 'moi';
+/* La clé de l'écran courant. Tout ce qui n'est ni « Mon profil » ni une
+   bibliothèque de proche garde la portée en place : on ne bascule que sur les
+   deux écrans qui portent réellement des commandes. */
+function pf12PorteeDe(v, p){
+  if(v === 'biblio' && p && p.id) return 'proche:' + p.id;
+  if(v === 'profile') return 'moi';
+  return null;
+}
+function pf12Portee(cle){
+  if(!cle || cle === pf12Cle) return;
+  if(!PF12_ETATS[cle]) PF12_ETATS[cle] = pf12Neuf();
+  pf12Cle = cle;
+  pf12 = PF12_ETATS[cle];
+}
+/* La recherche plein écran ne doit survivre à AUCUN changement d'écran, quelle
+   que soit la portée où elle a été ouverte. On balaie donc le registre entier
+   plutôt que le seul état courant : sans ça, quitter la bibliothèque de Marie
+   pendant qu'on y cherchait laisserait `ouvert:true` dans SON état, et y
+   revenir rouvrirait un clavier que personne n'a demandé. */
+function pf12ToutFermer(){
+  Object.keys(PF12_ETATS).forEach(k=>{
+    const e = PF12_ETATS[k];
+    if(!e.ouvert) return;
+    e.ouvert = false; e.q = ''; e.pers = null; e.persEtat = ''; e.persErr = '';
+  });
+}
 let pf12Timer = null, pf12Seq = 0, pf12Abort = null;
 
 const PF12_TRIS = [['recent','Récents'], ['ancien','Anciens'], ['az','A→Z'], ['za','Z→A']];
