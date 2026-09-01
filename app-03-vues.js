@@ -995,7 +995,7 @@ function lastWatchedAt(s){
 function pf12Neuf(){
   return { ouvert:false, yAvant:0, q:'', tri:'recent',
            filtres:{ genre:[], epoque:[], plate:[], nonnotes:false },
-           pers:null, persEtat:'', persErr:'', recents:null };
+           pers:null, persEtat:'', persErr:'', recents:null, tab:'series' };
 }
 const PF12_ETATS = { moi: pf12Neuf() };
 let pf12 = PF12_ETATS.moi;
@@ -1025,6 +1025,49 @@ function pf12ToutFermer(){
     if(!e.ouvert) return;
     e.ouvert = false; e.q = ''; e.pers = null; e.persEtat = ''; e.persErr = '';
   });
+}
+/* Est-on chez soi ? Toute la différence de comportement tient à cette question,
+   et elle se pose à un seul endroit. */
+function pf12ChezMoi(){ return pf12Cle === 'moi'; }
+/* L'identifiant du proche dont on regarde la bibliothèque, ou ''. */
+function pf12Proche(){ return pf12ChezMoi() ? '' : pf12Cle.slice(7); }
+
+/* LA SOURCE DES TITRES. C'est la pièce qui permet de ne PAS écrire une seconde
+   façon de trier, filtrer et chercher une bibliothèque : `listesProfil` passe
+   par ici, donc tout ce qui en découle (tris, feuille de filtres, recherche
+   plein écran) fonctionne sur les données du proche sans une ligne de plus.
+
+   Les données d'un proche viennent de la colonne `data` d'un AUTRE compte,
+   qu'il peut écrire par appel direct à l'API — voir le pavé « FRONTIÈRE DE
+   CONFIANCE » d'app-07. Elles ne sont donc jamais rendues sans `esc`, et aucun
+   identifiant ne devient cliquable sans passer `estIdTmdb`. */
+function sourcePf12(){
+  if(pf12ChezMoi()) return { shows: db.shows || {}, movies: db.movies || {} };
+  const d = (typeof biblios !== 'undefined') ? biblios[pf12Proche()] : null;
+  return { shows: (d && d.shows) || {}, movies: (d && d.movies) || {} };
+}
+
+/* L'ONGLET COURANT. « Mon profil » garde `ui.profTab` : d'autres écrans l'y
+   posent pour arriver sur le bon onglet (app-03:795, « Ouvrir À voir »), et le
+   déplacer casserait ces chemins. La bibliothèque d'un proche, elle, range le
+   sien dans SA portée — c'est ce qui fait qu'ouvrir celle de quelqu'un d'autre
+   ne reprend pas l'onglet du précédent. */
+function ongletPf12(){ return pf12ChezMoi() ? ui.profTab : pf12.tab; }
+function poserOngletPf12(t){
+  if(pf12ChezMoi()) ui.profTab = t; else pf12.tab = t;
+}
+
+/* « Le champ DOIT dire où il cherche » : la règle de `PF12_OU` vaut encore plus
+   chez quelqu'un d'autre, où « mes séries » serait un contresens. On garde les
+   libellés d'origine chez soi, et on les décline au prénom du proche. */
+function pf12OuTexte(possessif){
+  const t = ongletPf12();
+  if(pf12ChezMoi()) return PF12_OU[t] || (possessif ? 'ma bibliothèque' : 'ta bibliothèque');
+  const nom = (typeof nomDuCercle === 'function') ? nomDuCercle(pf12Proche()) : '';
+  const qui = (nom || '').split(' ')[0].slice(0, 12) || 'cette personne';
+  const OU = { series:'les séries de ', animes:'les animés de ', films:'les films de ',
+               avoir:'la liste à voir de ', pause:'les séries en pause de ' };
+  return (OU[t] || 'la bibliothèque de ') + qui;
 }
 let pf12Timer = null, pf12Seq = 0, pf12Abort = null;
 
@@ -1069,7 +1112,11 @@ function estAnimeProfil(s){
   return familleDe(s, 'tv') === 'anime';
 }
 function listesProfil(){
-  const S = Object.values(db.shows), F = Object.values(db.movies);
+  /* RETOUR-11 — la source n'est plus forcément `db` : c'est celle de la portée
+     courante (`sourcePf12`). Chez soi, rien ne change. */
+  const src = (typeof sourcePf12 === 'function')
+    ? sourcePf12() : { shows: db.shows, movies: db.movies };
+  const S = Object.values(src.shows || {}), F = Object.values(src.movies || {});
   const sr = s => ({ m:'tv', o:s });
   const fm = f => ({ m:'movie', o:f });
   /* « Commencée » au sens de la bibliothèque : ni à voir, ni en pause. C'est
@@ -1086,7 +1133,22 @@ function listesProfil(){
 }
 const titrePf12 = x => (x.m === 'tv' ? x.o.name : x.o.title) || '';
 const datePf12  = x => (x.m === 'tv' ? x.o.first : x.o.date) || '';
-const cartePf12 = x => x.m === 'tv' ? showCard(x.o) : movieCard(x.o);
+/* RETOUR-11 — LECTURE SEULE CHEZ UN PROCHE. `showCard` / `movieCard` portent
+   les gestes de MA bibliothèque (cocher un épisode, mettre en pause, noter) :
+   servies sur les titres de quelqu'un d'autre, elles proposeraient de modifier
+   ce qu'on n'a pas le droit de toucher. On garde donc les cartes de lecture
+   d'app-07 — exactement celles que l'écran affichait déjà, seul leur agencement
+   change. `carteLecture` fait passer l'identifiant par `estIdTmdb` avant tout
+   `onclick` : un identifiant qui n'est pas une suite de chiffres n'est pas rendu
+   cliquable du tout (pavé « FRONTIÈRE DE CONFIANCE », app-07). */
+const cartePf12 = x => {
+  if(typeof pf12ChezMoi === 'function' && !pf12ChezMoi()){
+    const nom = (typeof nomDuCercle === 'function') ? nomDuCercle(pf12Proche()) : '';
+    const prenom = (nom || '').split(' ')[0].slice(0, 12);
+    return x.m === 'tv' ? carteLecture(x.o, prenom) : carteFilmLecture(x.o);
+  }
+  return x.m === 'tv' ? showCard(x.o) : movieCard(x.o);
+};
 /* « Récents » ne veut pas dire la même chose d'un onglet à l'autre, et c'est
    voulu : une série en pause n'a pas de dernier épisode pertinent, elle a une
    date de mise de côté. Chaque onglet garde donc EXACTEMENT l'ordre qu'il avait
@@ -1143,7 +1205,16 @@ function passeFiltresPf12(x){
   if(f.genre.length  && !genresPf12(x).some(g => f.genre.indexOf(g) >= 0)) return false;
   if(f.epoque.length && f.epoque.indexOf(decenniePf12(x)) < 0) return false;
   if(f.plate.length  && f.plate.indexOf(platePf12(x)) < 0) return false;
-  if(f.nonnotes && notePf12(x)) return false;
+  /* RETOUR-11 — « jamais notés » NE VAUT QUE CHEZ SOI, et c'est une décision,
+     pas un oubli. `notePf12` interroge `avisDe`, qui lit `db.avis` — MA base.
+     Appliqué à la bibliothèque d'un proche, cet axe répondrait « ce que MOI je
+     n'ai pas jugé », une réponse fausse donnée avec assurance. Les avis du
+     proche voyagent pourtant bien dans `biblios[id].avis`, mais aucun code ne
+     les lit à ce jour : brancher l'axe dessus est un lot à part entière. En
+     attendant, il ne s'affiche pas chez un proche (`ouvrirFiltresPf12`) et il
+     est ignoré ici — deux défenses, parce qu'un filtre resté posé dans un état
+     traînant ne doit pas mordre non plus. */
+  if(f.nonnotes && pf12ChezMoi() && notePf12(x)) return false;
   return true;
 }
 /* Le bouton compte des AXES, pas des cases : « Filtrer · 2 » se lit « deux
@@ -1171,7 +1242,7 @@ function optionsPf12(l){
 }
 
 function ouvrirFiltresPf12(){
-  const brut = listesProfil()[ui.profTab] || [];
+  const brut = listesProfil()[ongletPf12()] || [];
   const o = optionsPf12(brut);
   const f = pf12.filtres;
   const n = brut.filter(passeFiltresPf12).length;
@@ -1189,8 +1260,13 @@ function ouvrirFiltresPf12(){
         bouton('epoque', an, 'Années '+String(an).slice(2), c, f.epoque.indexOf(an) >= 0)).join(''));
   h += bloc('Plateforme', o.plates.map(([nom, c]) =>
         bouton('plate', nom, nom, c, f.plate.indexOf(nom) >= 0)).join(''));
-  h += bloc('Ce que je n’ai pas jugé',
-        bouton('nonnotes', 1, 'Jamais notés', 0, f.nonnotes));
+  /* RETOUR-11 — cet axe ne s'affiche QUE chez soi. C'est le seul bloc que
+     `bloc()` ne masque jamais tout seul (son corps est un bouton codé en dur,
+     jamais vide) : il fallait donc une condition explicite, sinon il serait
+     resté à l'écran chez un proche en répondant à côté de la question. */
+  if(pf12ChezMoi())
+    h += bloc('Ce que je n’ai pas jugé',
+          bouton('nonnotes', 1, 'Jamais notés', 0, f.nonnotes));
   /* Une feuille de filtres qui ne propose rien est un piège : on dit pourquoi
      plutôt que d'ouvrir un panneau vide. */
   if(!o.genres.length && !o.epoques.length && !o.plates.length)
@@ -1334,7 +1410,7 @@ function normPf12(s){
 function titresPf12(q){
   const n = normPf12(q);
   if(n.length < 2) return [];
-  return (listesProfil()[ui.profTab] || [])
+  return (listesProfil()[ongletPf12()] || [])
     .filter(x => normPf12(titrePf12(x)).indexOf(n) >= 0)
     .sort((a,b)=>{
       const pa = normPf12(titrePf12(a)).indexOf(n), pb = normPf12(titrePf12(b)).indexOf(n);
@@ -1500,12 +1576,12 @@ function corpsRechPf12(){
   let h = '<div class="sectitle pf12sec">Titres<span class="cnt">'+t.length+'</span></div>';
   h += t.length
     ? '<div class="pgrid pf12trois">'+t.map(cartePf12).join('')+'</div>'
-    : '<div class="pf12vide">Aucun titre de '+esc(PF12_OU[ui.profTab] || 'ta bibliothèque')+
+    : '<div class="pf12vide">Aucun titre de '+esc(pf12OuTexte(false))+
       ' ne s’appelle comme ça.</div>';
   return h + sectionPersonnePf12() + '<div style="height:26px"></div>';
 }
 function ecranRechPf12(){
-  const ou = PF12_OU[ui.profTab] || 'ma bibliothèque';
+  const ou = pf12OuTexte(true);
   return '<div class="pf12plein">'+
     '<div class="pf12champ">'+
       '<div class="pf12z">'+I.search+
@@ -1533,7 +1609,10 @@ function ecranRechPf12(){
    déplacé le coût au lieu de le supprimer.
 --------------------------------------------------------------------------- */
 function peindreProfil(){
-  if(view !== 'profile') return;
+  /* RETOUR-11 — la bibliothèque d'un proche porte les mêmes commandes, donc le
+     même repeint partiel : sans ça, changer de puce chez Marie passerait par un
+     `render()` complet et referait la boucle sur tous ses épisodes. */
+  if(view !== 'profile' && view !== 'biblio') return;
   if(pf12.ouvert){
     const r = document.getElementById('pf12res');
     if(!r) return render();
@@ -1547,11 +1626,49 @@ function peindreProfil(){
   try{ z.innerHTML = barreProfil() + cartesProfil(); } finally { sortirRendu(); }
   const ch = document.getElementById('pfchips');
   if(ch) ch.querySelectorAll('.chip').forEach(b =>
-    b.classList.toggle('on', b.getAttribute('data-tab') === ui.profTab));
+    b.classList.toggle('on', b.getAttribute('data-tab') === ongletPf12()));
+}
+/* LES PUCES DE FAMILLE, PARTAGÉES PAR LES DEUX BIBLIOTHÈQUES (RETOUR-11).
+
+   Extraites de `viewProfile` sans une virgule de changement de dessin : c'est
+   tout l'objet du lot — « pas une seconde façon de filtrer une bibliothèque ».
+   Elles lisent `listesProfil()`, donc la source de la portée courante ; chez un
+   proche, elles comptent SES titres.
+
+   RETOUR-02 POINT 4 — la puce « Animés » s'AJOUTE, juste après « Séries ».
+   L'ordre d'avant ne bouge pas : Séries en premier, c'est l'usage principal.
+   Elle n'apparaît QUE s'il y a des animés — comme « En pause », et pour la même
+   raison : une puce à zéro n'est pas une information, c'est une porte vers un
+   écran vide. */
+function pucesPf12(){
+  const L = listesProfil();
+  const tabs = [['series','Séries',L.series.length]];
+  if(L.animes.length) tabs.push(['animes','Animés',L.animes.length]);
+  tabs.push(['films','Films',L.films.length],
+            ['avoir','À voir',L.avoir.length]);
+  if(L.pause.length) tabs.push(['pause','En pause',L.pause.length]);
+  /* La puce « En pause » disparaît quand la dernière série reprend : on ne
+     laisse pas l'onglet sélectionné pointer dans le vide. Chez un proche, le
+     même garde-fou évite d'arriver sur un onglet qu'il n'alimente pas. */
+  if(!tabs.some(t=>t[0]===ongletPf12())) poserOngletPf12('series');
+  return '<div class="chips" id="pfchips" style="padding-top:12px">'+tabs.map(([id,l,n])=>
+    '<button class="chip '+(ongletPf12()===id?'on':'')+'" data-tab="'+esc(id)+'" '+
+    'onclick="setTabProfil(\''+escJs(id)+'\')">'+
+    esc(l)+' <span style="opacity:.65">'+n+'</span></button>').join('')+'</div>';
+}
+/* Le nœud identifié : la barre et la grille, et rien d'autre. C'est tout ce que
+   `peindreProfil` réécrit.
+
+   IL EST ÉMIS ICI, ET NULLE PART AILLEURS. Le contrôle n° 6 du lanceur refuse
+   qu'un même identifiant DOM sorte de deux fichiers — « un doublon casse un
+   écran à distance ». La bibliothèque d'un proche a besoin du même nœud : elle
+   appelle donc cette fonction au lieu d'écrire la balise de son côté. */
+function blocCartesPf12(){
+  return '<div id="pfcards">'+ barreProfil() + cartesProfil() +'</div>';
 }
 function setTabProfil(t){
-  if(ui.profTab === t) return;
-  ui.profTab = t;
+  if(ongletPf12() === t) return;
+  poserOngletPf12(t);
   peindreProfil();
 }
 function setAvoirTriPf12(t){
@@ -1561,7 +1678,7 @@ function setAvoirTriPf12(t){
 }
 
 function cartesProfil(){
-  const onglet = ui.profTab;
+  const onglet = ongletPf12();
   let base = listesProfil()[onglet] || [];
   let h = '';
   if(onglet === 'avoir'){
@@ -1615,20 +1732,6 @@ function viewProfile(){
   });
   Object.values(db.movies).filter(m=>m.seen).forEach(m=> minutes += (m.runtime||100));
 
-  const L = listesProfil();
-  /* RETOUR-02 POINT 4 — la puce « Animés » s'AJOUTE, juste après « Séries ».
-     L'ordre d'avant ne bouge pas : Séries en premier, c'est l'usage principal.
-     Elle n'apparaît QUE s'il y a des animés — comme « En pause », et pour la
-     même raison : une puce à zéro n'est pas une information, c'est une porte
-     vers un écran vide. */
-  const tabs = [['series','Séries',L.series.length]];
-  if(L.animes.length) tabs.push(['animes','Animés',L.animes.length]);
-  tabs.push(['films','Films',L.films.length],
-            ['avoir','À voir',L.avoir.length]);
-  if(L.pause.length) tabs.push(['pause','En pause',L.pause.length]);
-  /* la puce « En pause » disparaît quand la dernière série reprend : on ne laisse pas
-     l'onglet sélectionné pointer dans le vide */
-  if(!tabs.some(t=>t[0]===ui.profTab)) ui.profTab = 'series';
 
   /* ---------------------------------------------------------------------
      L'en-tête façon Instagram, voulu par Adrien : photo à gauche, compteurs
@@ -1691,14 +1794,11 @@ function viewProfile(){
   if(typeof carteDuelProfil === 'function') html += carteDuelProfil();
   html += ligneCerclePf12();
 
-  html += '<div class="chips" id="pfchips" style="padding-top:12px">'+tabs.map(([id,l,n])=>
-    '<button class="chip '+(ui.profTab===id?'on':'')+'" data-tab="'+esc(id)+'" '+
-    'onclick="setTabProfil(\''+escJs(id)+'\')">'+
-    esc(l)+' <span style="opacity:.65">'+n+'</span></button>').join('')+'</div>';
+  html += pucesPf12();
 
   /* Le nœud identifié : la barre et la grille, et rien d'autre. C'est tout ce
      que `peindreProfil` réécrit. */
-  return html + '<div id="pfcards">'+ barreProfil() + cartesProfil() +'</div>'+
+  return html + blocCartesPf12()+
     '<div style="height:26px"></div>';
 }
 
