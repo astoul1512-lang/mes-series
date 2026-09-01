@@ -1643,13 +1643,65 @@ function viewCentre(){
   return html;
 }
 
+/* RETOUR-09 (01/09/2026) — L'AFFICHE D'UNE SORTIE, LUE EN BASE.
+
+   Une sortie ne concerne QUE un titre suivi : son affiche est donc déjà dans
+   `db.shows` / `db.movies`, et l'entrée porte déjà `type` et `id` (posés en
+   app-07:1502 et :1511). Zéro requête d'API — c'est ce qui autorise ce lot.
+
+   LE PIÈGE, ET IL EST DISCRET : ne PAS lire `f.image` de l'entrée rendue par
+   `filmsBientot`. Ce champ vaut `m.backdrop || m.poster` (app-10:400) — un
+   BANDEAU paysage en priorité, qui remplirait de travers un cadre 2/3. On
+   redescend donc à la source, `db.movies[id].poster`.
+
+   Rend l'objet de la base, ou `null` s'il est introuvable. On rend l'OBJET et
+   pas seulement le chemin de l'affiche parce que l'appelant a besoin des deux :
+   le poster, et le NOM NU du titre. Le `e.titre` d'une entrée de sortie est une
+   phrase — « Severance · S1E2 est disponible » — qui ferait un texte de repli
+   illisible et un `alt` qui répète la ligne d'à côté. */
+function objetSortieCentre(e){
+  if(!e || e.fam !== 'sortie') return null;
+  const id = Number(e.id || 0);
+  if(!id) return null;
+  return (e.type === 'tv')    ? ((db.shows  || {})[id] || null)
+       : (e.type === 'movie') ? ((db.movies || {})[id] || null)
+       : null;
+}
+
 /* Une ligne simple : un retour, une sortie. Toucher la ligne la marque lue et
-   ouvre ce qu'elle désigne — c'est le geste attendu, il n'y en a pas d'autre. */
+   ouvre ce qu'elle désigne — c'est le geste attendu, il n'y en a pas d'autre.
+
+   La vignette de gauche a deux formes, et une seule raison de choisir : une
+   SORTIE parle d'un titre, donc elle montre son affiche ; un RETOUR parle d'une
+   personne autant que d'un titre (« Camille a ajouté… »), et son ✓ porte
+   l'information — il reste. Les recos, elles, ne passent jamais par ici
+   (aiguillage de `viewCentre`, plus haut).
+
+   `posterEl` porte SON PROPRE repli : un cadre neutre avec le début du titre
+   (app-02:364-376). On ne réécrit donc pas de secours ici — la spec demandait
+   le pictogramme, mais elle demandait AUSSI « pas de second chemin
+   d'affichage », et les deux ne tiennent pas ensemble. Arbitré avec Adrien le
+   01/09 : le repli natif, celui que le reste de l'app emploie déjà partout.
+
+   Pas de `<button>` autour de la jaquette : cette ligne EST déjà un bouton.
+   `carteRecoCentre` peut se le permettre parce que sa racine est un `<div>` ;
+   la recopier ici produirait un bouton dans un bouton. */
 function ligneCentre(e){
   const lu = estLuNotif(e.cle);
+  /* Le choix se fait sur la FAMILLE, jamais sur « a-t-on trouvé une affiche ».
+     Décider au vu du poster ferait retomber les titres sans affiche sur le carré
+     de 34 px, et la hauteur de la ligne sauterait d'une entrée à l'autre (mesuré
+     le 01/09 : 84 px avec jaquette, 59 px avec le pictogramme). Une sortie prend
+     donc le cadre 2/3 dans tous les cas, et c'est `posterEl` qui décide quoi y
+     peindre — l'affiche, ou son repli. */
+  const o = objetSortieCentre(e);
+  const vignette = (e && e.fam === 'sortie' && Number(e.id || 0))
+    ? posterEl(o && o.poster, 'w154', 'notifj',
+               (o && (o.name || o.title)) || e.titre)
+    : '<span class="notifi">'+esc(e.ic||'•')+'</span>';
   return '<button class="notifl'+(lu ? '' : ' nonlu')+'" onclick="toucherCentre(\''+
       escJs(e.cle)+'\',\''+escJs(String(e.type||''))+'\','+Number(e.id||0)+')">'+
-    '<span class="notifi">'+esc(e.ic||'•')+'</span>'+
+    vignette+
     '<span class="notift"><b>'+esc(e.titre)+'</b>'+
       (e.sous ? '<span>'+esc(e.sous)+'</span>' : '')+'</span>'+
   '</button>';
