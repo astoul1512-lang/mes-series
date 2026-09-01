@@ -17,6 +17,13 @@
 # ici. Il tourne avant chaque mise en production. Ne pas le retirer.
 # ---------------------------------------------------------------------------
 exclude:
+  # CLAUDE.md — ajouté le 01/09/2026, et c'est l'accident que le pavé ci-dessus
+  # annonçait mot pour mot. Le fichier est arrivé à la racine au commit 12dbfff
+  # sans passer par cette liste : il a donc été servi en HTTPS public, avec la
+  # carte complète de l'architecture, des règles de sécurité et des pièges du
+  # projet. Personne ne l'a vu — c'est le contrôle « publication » du lanceur de
+  # tests qui l'a signalé, exactement pour ça qu'il existe.
+  - CLAUDE.md
   - README.md
   - test.html
   - tests
