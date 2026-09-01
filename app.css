@@ -2905,6 +2905,25 @@ body.rphnette .rphrase{background:#15171e}
     border-radius:50%;background:var(--accent)}
   .notifi{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;
     font-size:15px;flex:none;background:var(--surface2);border:1px solid var(--line)}
+  /* RETOUR-09 (01/09/2026) — la jaquette d'une SORTIE, à la place du 📅.
+     Demande d'Adrien : « une ligne de texte à côté d'un émoji ne dit pas DE QUOI
+     on parle ». 40×60, soit le rapport 2/3 exact d'une affiche.
+
+     PAS `.cthumb` (app.css:477), que la spec citait : elle fait 74×42, c'est la
+     vignette PAYSAGE du calendrier — la reprendre aurait donné l'inverse de ce
+     qui était demandé. La bonne référence était `.recocp`, quarante lignes plus
+     bas : même écran, même rapport, déjà servie par `posterEl`.
+
+     Elle n'impose QUE les dimensions. Le reste — `object-fit:cover`, le fond
+     d'attente, et surtout le repli centré de `.poster.ph` — vient du socle
+     (app.css:173-174), et c'est LUI qui fait qu'un titre sans affiche garde
+     exactement la même hauteur de ligne. */
+  .notifj{width:40px;height:60px;border-radius:8px;overflow:hidden}
+  /* Le repli de `posterEl` est dessiné pour un cadre de 64 px (app.css:174) :
+     à 40 px, ses 18 caractères en 10 px DÉBORDAIENT sur le titre de la ligne —
+     vu en capture le 01/09, pas par les tests, qui mesuraient la hauteur et pas
+     le débordement. On resserre le texte et on borne la boîte. */
+  .notifj.ph{font-size:8px;line-height:1.15;padding:3px;word-break:break-word}
   .notift{flex:1;min-width:0;padding-right:14px}
   .notift b{font-size:13px;display:block;line-height:1.35;font-weight:700}
   .notift span{font-size:11.5px;color:var(--muted);display:block;margin-top:1px}
