@@ -1,0 +1,29 @@
+# ---------------------------------------------------------------------------
+# CE QUI N'ENTRE JAMAIS DANS LE DÉPÔT — 01/09/2026
+#
+# Le dépôt n'avait pas de `.gitignore`, et le 01/09 on a passé une livraison
+# entière à retirer `CLAUDE.md` de la publication : un fichier posé à la racine
+# est servi en HTTPS public par GitHub Pages, en silence, tant que
+# `_config.yml` ne le retire pas. Le `.DS_Store` que macOS sème dans chaque
+# dossier visité était exactement dans cette situation — hors du dépôt par
+# chance, pas par règle, et à un `git add .` près d'être publié.
+#
+# Ce fichier ferme la porte en amont. `_config.yml` reste la seconde défense :
+# l'un empêche d'AJOUTER, l'autre empêche de SERVIR. Les deux, parce qu'une
+# seule barrière finit toujours par être contournée un jour de fatigue.
+# ---------------------------------------------------------------------------
+
+# macOS
+.DS_Store
+._*
+
+# Éditeurs
+.vscode/
+.idea/
+*.swp
+
+# Outils de test installés HORS du dépôt (Playwright, Deno) — ils n'ont jamais
+# leur place ici : « aucune dépendance, aucun build » est la règle du projet.
+node_modules/
+package-lock.json
+package.json

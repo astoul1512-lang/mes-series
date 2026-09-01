@@ -56,6 +56,29 @@ Tout doit être vert. Chaque bug corrigé = un cas de test qui le REJOUE, écrit
 AVANT le correctif. Le lanceur fait aussi les contrôles statiques (doubles
 déclarations, classes CSS, écritures d'état non ouvertes) — ne les contourne pas.
 
+**Un serveur frais avant d'accuser le code** (01/09). `python3 -m http.server` est
+mono-thread : après une trentaine de lancements de navigateur il ne tient plus la
+cadence, et `lot D` — le test le plus sensible au minutage — lâche par
+intermittence. Mesuré ce jour-là : `main` 7/7 au vert, la même branche 1/5 sur le
+serveur usé, puis 3/3 sur un port neuf avec des fichiers identiques. Un échec se
+rejoue sur un serveur relancé AVANT de soupçonner le correctif. Le lanceur accepte
+`BASE=http://localhost:<port>`, ce qui permet de comparer deux arbres servis en
+parallèle sans toucher aux fichiers.
+
+**Un lot qui touche au rendu SE REGARDE, il ne se teste pas seulement** (01/09).
+RETOUR-09 passait ses vingt cas et était faux à l'œil : le texte de repli d'une
+jaquette, dessiné pour un cadre de 64 px, débordait de sa boîte de 40 px et
+chevauchait le titre de la ligne. Les tests mesuraient la HAUTEUR — juste — et pas
+le DÉBORDEMENT. Une capture d'écran a trouvé en une seconde ce qu'aucune assertion
+ne cherchait. Prendre la capture fait partie du lot, pas de la PR.
+
+**Ce qui naît et meurt dans la même frame n'existe pas — ou clignote** (01/09).
+Deux fois dans le même lot : « ✓ Compris » s'affichait zéro milliseconde quand rien
+ne restait à charger, et la ligne d'attente aurait scintillé sur une réponse servie
+par le cache. Un état visible a besoin d'une durée minimale, ou de ne pas être posé
+du tout. Un scintillement ressemble à une panne — c'est-à-dire l'inverse exact de
+ce qu'un indicateur d'attente est censé produire.
+
 ## Conventions maison
 
 - **Tout en français** : code, commits, PR, et surtout les commentaires — qui
