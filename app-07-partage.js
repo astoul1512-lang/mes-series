@@ -581,6 +581,12 @@ function ouvrirBiblio(id){
 
 /* ---------- Vue : bibliothèque d'une personne suivie (lecture seule) ---------- */
 function viewBiblio(){
+  /* RETOUR-11 — la recherche plein écran occupe TOUT l'écran, ici comme sur Mon
+     profil : même court-circuit, en tête et avant quoi que ce soit d'autre.
+     `ecranRechPf12` lit la portée courante — elle cherche donc chez le proche,
+     et son champ le dit (`pf12OuTexte`, app-03). */
+  if(typeof pf12 !== 'undefined' && pf12.ouvert
+     && typeof ecranRechPf12 === 'function') return ecranRechPf12();
   const id = params.id;
   const qui = partage.suivis.find(p=>p.id===id);
   const nom = qui ? qui.pseudo : 'Bibliothèque';
@@ -606,11 +612,6 @@ function viewBiblio(){
   });
   movies.filter(m=>m.seen).forEach(m=> minutes += (m.runtime||100));
 
-  const enCours = shows.filter(sh=>statutSerie(sh)==='asuivre').sort((a,b)=>lastWatchedAt(b)-lastWatchedAt(a));
-  const vues    = shows.filter(sh=>statutSerie(sh)==='vu');
-  const aVoir   = shows.filter(sh=>statutSerie(sh)==='avoir');
-  const filmsVus= movies.filter(m=>m.seen).sort((a,b)=>(b.watchedAt||0)-(a.watchedAt||0));
-
   html += '<div class="stats">'+
     '<div class="stat"><b>'+eps+'</b><span>épisode'+(eps>1?'s':'')+' vu'+(eps>1?'s':'')+'</span></div>'+
     '<div class="stat"><b>'+fmtDurShort(minutes)+'</b><span>de visionnage</span></div>'+
@@ -619,20 +620,30 @@ function viewBiblio(){
   html += '<div class="wrap" style="padding-top:0"><div class="card" style="padding:12px;text-align:center">'+
     '<span class="small muted ro">'+I.eye+' Lecture seule — tu ne peux rien modifier ici</span></div></div>';
 
-  const bloc = (titre, liste, rendu)=> liste.length
-    ? '<div class="sectitle">'+titre+'<span class="cnt">'+liste.length+'</span></div>'+
-      '<div class="pgrid">'+liste.map(rendu).join('')+'</div>'
-    : '';
+  /* RETOUR-11 (01/09/2026) — LES MÊMES COMMANDES QUE CHEZ SOI.
 
-  /* Le prénom accompagne chaque avancement : sur un titre que j'ai aussi, «
-     63 % » sans dire de qui est confondu avec le mien en une seconde. */
-  const prenom = (nom || '').split(' ')[0].slice(0, 12);
+     Demande d'Adrien : « quand je vais voir la bibliothèque de quelqu'un,
+     j'aimerais pouvoir filtrer comme sur mon profil. » Les quatre blocs figés
+     — En cours, Séries vues, Films vus, Sa liste à voir — laissent donc la
+     place aux puces de famille et à la barre Chercher / Trier / Filtrer, avec
+     les composants de `viewProfile` et PAS une seconde version : `pucesPf12`,
+     `barreProfil` et `cartesProfil` sont exactement ceux du profil, servis sur
+     une autre source (`sourcePf12`, app-03).
 
-  html += bloc('En cours', enCours, sh=>carteLecture(sh, prenom));
-  html += bloc('Séries vues', vues, sh=>carteLecture(sh, prenom));
-  html += bloc('Films vus', filmsVus, carteFilmLecture);
-  html += bloc('Sa liste à voir', aVoir, sh=>carteLecture(sh, prenom));
-  return html + '<div style="height:26px"></div>';
+     CE QUE CE CHANGEMENT REND VISIBLE, et qui ne l'était pas : les quatre blocs
+     ne montraient NI les séries en pause du proche, NI ses films à voir, alors
+     que les données étaient là. Les puces les exposent — c'est un changement de
+     CONTENU autant que de commandes, signalé comme tel à Adrien le 01/09.
+
+     LECTURE SEULE, TOUJOURS. Le bandeau reste, et `cartePf12` sert les cartes
+     de lecture d'app-07 (pas `showCard`/`movieCard`, qui porteraient les gestes
+     de MA bibliothèque sur les titres de quelqu'un d'autre).
+
+     Le nœud `#pfcards` est le même que celui du profil : c'est ce que
+     `peindreProfil` réécrit quand on change de puce, d'ordre ou de filtre —
+     sans refaire la boucle sur tous les épisodes de l'en-tête. */
+  return html + pucesPf12() + blocCartesPf12() +
+    '<div style="height:26px"></div>';
 }
 
 /* ---------------------------------------------------------------------------

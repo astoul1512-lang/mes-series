@@ -9123,7 +9123,12 @@ window.MODE_TEST = true;
   test('D-10 — la carte est en tête du profil, et le bloc de Mes goûts est intact', ()=>{
     const c = codeDe(viewProfile);
     const iCarte = c.indexOf('carteDuelProfil');
-    const iCartes = c.indexOf('cartesProfil');
+    /* RETOUR-11 (01/09/2026) — la barre et la grille sont sorties dans
+       `blocCartesPf12`, partagé avec la bibliothèque d'un proche : le contrôle
+       n° 6 du lanceur exige qu'un seul fichier émette `#pfcards`. Ce qui doit
+       rester vrai est l'ORDRE — la carte du duel AU-DESSUS de la grille — et
+       pas le nom de la fonction qui la pose. On accepte donc les deux. */
+    const iCartes = Math.max(c.indexOf('cartesProfil'), c.indexOf('blocCartesPf12'));
     vrai(iCarte >= 0 && iCarte < iCartes, 'la carte n\'est pas en tête de Mon profil');
     /* §0.6 — rien ne disparaît : le bloc Duel de Mes goûts est toujours appelé. */
     vrai(codeDe(viewGouts).indexOf('carteDuelGouts') >= 0,

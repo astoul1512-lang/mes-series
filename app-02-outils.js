@@ -1407,7 +1407,14 @@ function goBack(){
      retirent elles-mêmes leur entrée-garde. */
   if(view === 'search' && typeof etatRech === 'function' && etatRech().jeu
      && typeof fermerJeuRech === 'function') return fermerJeuRech();
-  if(view === 'profile' && typeof pf12 !== 'undefined' && pf12.ouvert
+  /* RETOUR-11 (01/09) — `biblio` est ajouté ICI ET AUX DEUX AUTRES SITES
+     (`popstate` plus bas, `glisseRetour` en fin de fichier). La carte de nav en
+     tête d'app-03 le dit noir sur blanc : « toute nouvelle surface plein écran
+     doit être ajoutée AUX DEUX, sinon le bouton d'Android quitte l'écran au
+     lieu de la fermer ». La bibliothèque d'un proche porte désormais la même
+     recherche plein écran que Mon profil. */
+  if((view === 'profile' || view === 'biblio')
+     && typeof pf12 !== 'undefined' && pf12.ouvert
      && typeof fermerRechPf12 === 'function') return fermerRechPf12();
   /* RETOUR-02 point 8 — le retour ferme la recherche d'acteurs, il ne quitte
      pas Mes goûts. Même règle que la recherche du profil juste au-dessus. */
@@ -1503,7 +1510,8 @@ window.addEventListener('popstate', function(e){
     if(!garde){ try{ history.pushState(etatHisto(view, params, iHisto), '', adresseCourante()); }catch(err){} }
     return;
   }
-  if(view === 'profile' && typeof pf12 !== 'undefined' && pf12.ouvert){
+  if((view === 'profile' || view === 'biblio')
+     && typeof pf12 !== 'undefined' && pf12.ouvert){
     const garde = consommerGarde('pf12');
     if(typeof fermerRechPf12 === 'function') fermerRechPf12();
     if(!garde){ try{ history.pushState(etatHisto(view, params, iHisto), '', adresseCourante()); }catch(err){} }
@@ -1863,7 +1871,8 @@ const RAILS = '.rangee, .cast, .rattrap, .filmrow, .chips, .souschips, .seasonpi
        par la flèche ou le bouton du téléphone, qui savent désormais les
        fermer. */
     if(view === 'search' && typeof etatRech === 'function' && etatRech().jeu && !surVideo){ x0=null; return; }
-    if(view === 'profile' && typeof pf12 !== 'undefined' && pf12.ouvert && !surVideo){ x0=null; return; }
+    if((view === 'profile' || view === 'biblio')
+       && typeof pf12 !== 'undefined' && pf12.ouvert && !surVideo){ x0=null; return; }
     if(t.clientX <= 28 && (surVideo || cibleRetour()) &&
        !document.getElementById('sheet').classList.contains('show')){
       x0=t.clientX; y0=t.clientY; t0=Date.now();
