@@ -7484,7 +7484,15 @@ window.MODE_TEST = true;
      ci-dessous comblent exactement ces trous — ce sont eux qui auraient dû
      tomber en rouge avant la livraison. */
 
-  testAsync('C24 — une journée IA allumée coûte EXACTEMENT deux requêtes', async ()=>{
+  /* SPEC-09 LOT 1 (01/09/2026) — CE CAS A CHANGÉ DE CHIFFRE, PAS DE PROMESSE.
+     Une journée coûtait deux requêtes : le pitch du hero et les intitulés. Elle
+     en coûte maintenant davantage, parce que l'IA COMPOSE les rangées
+     personnelles — le §5 de la spec annonce 15 à 30 requêtes par jour.
+     Ce que ce cas tient, et qui n'a pas bougé d'un pouce : **un rendu de plus
+     ne coûte rien de plus**. C'est la moitié du §4.3, c'est le seul défaut que
+     personne ne verrait (une rafale silencieuse), et c'est pour ça qu'il est
+     ici. */
+  testAsync('C24 — une journée IA allumée : le lot du jour, puis plus rien', async ()=>{
     iaVierge();
     db.gouts.ia.decouvrir = true;
     db.auth = { token:'t', uid:'u' }; db.sync = { url:'https://x.test', key:'k' };
@@ -7503,13 +7511,26 @@ window.MODE_TEST = true;
       await new Promise(r=> setTimeout(r, 60));
       egal(taches.sort(), ['intitules_rangees','pitch_jour'],
            'le lot du jour ne coûte pas exactement les deux requêtes annoncées');
-      /* Et le second rendu du même jour ne coûte RIEN. C'est la moitié de la
-         promesse du §4.3, et elle n'était vérifiée nulle part. */
+
+      /* Le rendu suivant lance la COMPOSITION des rangées de la puce courante
+         (SPEC-09 lot 1) — une requête, pas deux, et pas au même moment que le
+         lot du jour : ils partagent le verrou, donc ils se suivent. */
+      taches.length = 0;
+      apresRenduDecouvrirIA();
+      await new Promise(r=> setTimeout(r, 60));
+      egal(taches, ['suggestions_famille'],
+           'la composition ne part pas, ou elle part en double');
+
+      /* ET ENSUITE, PLUS RIEN. C'est l'invariant du cas, et il n'a pas changé :
+         la famille est composée, la signature des goûts n'a pas bougé, donc
+         deux rendus de plus ne coûtent pas une requête. Sans cette garantie, une
+         réponse vide ferait repartir la composition à CHAQUE repeint — une
+         rafale silencieuse, que personne ne verrait jamais. */
       taches.length = 0;
       apresRenduDecouvrirIA();
       apresRenduDecouvrirIA();
       await new Promise(r=> setTimeout(r, 60));
-      egal(taches, [], 'le lot repart à chaque rendu de la journée');
+      egal(taches, [], 'le lot ou la composition repartent à chaque rendu');
     }finally{
       window.sbFetch = vrai_; window.propositionDuJour = vraiProp;
       window.rangeesSuggerees = vraiRang; window.peindreDisc = vraiPeindre;
