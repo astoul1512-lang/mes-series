@@ -111,10 +111,18 @@ Dans *Edge Functions → Secrets* :
 |---|---|
 | `TMDB_KEY` | une clé TMDB. Les deux formats marchent : clé v3 courte, ou jeton v4 (long, commençant par `eyJ`). |
 | `VAPID_PRIVEE` | la clé privée VAPID des notifications push. |
-| `GEMINI_API_KEY` | une clé Google AI Studio. Elle sert aux **deux** étages Gemini de l'échelle IA — c'est la même clé, seul le modèle change. |
+| `GEMINI_API_KEY` | une clé Google AI Studio. Elle sert aux étages **1** et **3** de l'échelle IA (Flash et Flash-Lite du premier compte). |
+| `GEMINI_API_KEY2` | une clé Google AI Studio d'un **autre projet ET d'un autre compte**. Elle sert aux étages **2** et **4** — les mêmes modèles, sur un second quota gratuit. Facultative : sans elle, ces deux étages sont sautés et l'échelle se comporte comme avant le 01/09/2026. |
 | `OPENROUTER_API_KEY` | une clé OpenRouter, pour l'étage de secours. |
 
-Les deux clés d'IA ne sont pas obligatoires : sans elles, le relais `ia` rend
+**La condition qui rend `GEMINI_API_KEY2` utile, et il faut la vérifier avant de
+la poser** : le quota gratuit de Gemini se compte **par projet Google Cloud**,
+pas par clé. Deux clés du même projet partageraient le même compteur — la
+bascule n'apporterait rien et ajouterait seulement un étage qui échoue. Deux
+projets **et** deux comptes distincts : c'est la configuration d'Adrien,
+confirmée le 01/09/2026.
+
+Les clés d'IA ne sont pas obligatoires : sans elles, le relais `ia` rend
 `{indisponible:true}` et l'app fonctionne exactement comme si l'IA était
 éteinte. C'est le mode dégradé de SPEC-04 §4.5, et il est le socle, pas un
 pis-aller.
@@ -370,9 +378,38 @@ semis (base neuve) et par rattrapage sur les lignes déjà semées sans limite :
 | `gemini-flash-lite` | 15 | 1500 |
 
 Ces chiffres ne prétendent pas être ceux de Google : ils sont **assez bas pour
-protéger** et assez hauts pour ne gêner aucun usage réel (le budget par
-personne est de 30 requêtes par jour). Le rattrapage est borné par
-`where limite_minute is null` : un chiffre posé à la main n'est jamais défait.
+protéger** et assez hauts pour ne gêner aucun usage réel. Le rattrapage est borné
+par `where limite_minute is null` : un chiffre posé à la main n'est jamais défait.
+
+**Ce que la migration 017 a ajouté (01/09/2026).** L'échelle passe à cinq
+étages : les mêmes deux modèles Gemini apparaissent deux fois, sur deux comptes.
+Les jumeaux `gemini-flash-2` et `gemini-flash-lite-2` portent **les mêmes
+limites** que leur modèle — même palier gratuit, autre compte — et leur propre
+compteur, parce que `ia_compteurs` est indexé par le **nom** du fournisseur.
+
+| rang | étage | clé | limite_minute | limite_jour |
+|---|---|---|---|---|
+| 1 | `gemini-flash` | `GEMINI_API_KEY` | 10 | 1000 |
+| 2 | `gemini-flash-2` | `GEMINI_API_KEY2` | 10 | 1000 |
+| 3 | `gemini-flash-lite` | `GEMINI_API_KEY` | 15 | 1500 |
+| 4 | `gemini-flash-lite-2` | `GEMINI_API_KEY2` | 15 | 1500 |
+| 5 | `openrouter` | `OPENROUTER_API_KEY` | 20 | 50 |
+
+L'ordre est une décision : on épuise un modèle **sur les deux comptes** avant de
+descendre en qualité (RETOUR-01 point 4, « on ne descend que contraint »).
+
+**Le seul chiffre qui dit si le second compte sert vraiment**, une fois quelques
+requêtes passées :
+
+```sql
+select fournisseur, count(*), sum((ok)::int) as succes
+  from public.ia_journal
+ where jour = current_date group by fournisseur order by 1;
+```
+
+Un `gemini-flash-2` absent est normal tant que l'étage 1 tient la charge. Un
+`gemini-flash-2` toujours en **statut 0** veut dire que le secret
+`GEMINI_API_KEY2` n'est pas posé sur la fonction.
 
 Pour poser les vrais chiffres le jour où on les connaît :
 

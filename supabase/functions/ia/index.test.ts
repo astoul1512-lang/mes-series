@@ -28,18 +28,28 @@ function assertEquals(a: unknown, b: unknown, msg = ""): void {
   }
 }
 
-import { rpc, servir, oublierFournisseurs, attenteDe, CACHE_FOURNISSEURS_MS } from "./relais.ts";
+import {
+  rpc, servir, oublierFournisseurs, attenteDe, bornerTempsRequetePourTest,
+  CACHE_FOURNISSEURS_MS,
+} from "./relais.ts";
 import { construire, valider, tacheConnue, INTERDIT_EMOTION, CONSIGNE_COMMUNE } from "./gabarits.ts";
 import {
   BUDGET_GLOBAL_JOUR, BUDGET_UTILISATEUR_JOUR, FOURNISSEURS, MAX_JETONS_SORTIE,
-  ORIGINES, TACHES, TIMEOUT_MS,
+  ORIGINES, TACHES, TIMEOUT_MS, TIMEOUT_REQUETE_MS,
 } from "./config.ts";
 
 Deno.env.set("SUPABASE_URL", "https://projet.supabase.co");
 Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "cle-de-service");
 Deno.env.set("GEMINI_API_KEY", "cle-gemini");
+/* La seconde clé Gemini (01/09/2026). Sans elle dans l'environnement de test,
+   les étages 2 et 4 seraient sautés et la moitié de l'échelle ne serait jamais
+   éprouvée — c'est-à-dire que le lot des deux clés livrerait du code que rien
+   ne parcourt. Un cas dédié éteint cette clé pour vérifier l'autre moitié :
+   « une clé absente ne coûte plus une réservation du tout ». */
+Deno.env.set("GEMINI_API_KEY2", "cle-gemini-2");
 Deno.env.set("OPENROUTER_API_KEY", "cle-openrouter");
 
+const CLE_2 = "cle-gemini-2";
 const APP = "https://astoul1512-lang.github.io";
 
 /* ---------------------------------------------------------------------------
@@ -66,6 +76,9 @@ type Plan = {
      PostgREST. Le faux monde savait seulement rendre du JSON, donc il ne
      pouvait pas reproduire le défaut relevé le 10/08. Il le sait maintenant. */
   rpcVide?: boolean;
+  /* Le budget de temps de la requête entière, en millisecondes. Un cas qui
+     vérifie la borne des cinq étages ne peut pas attendre vingt secondes. */
+  budgetTemps?: number;
 };
 
 // Les RPC dont la fonction SQL rend `void` — celles qui répondent 204.
@@ -73,6 +86,7 @@ const RPC_VOID = ["ia_saturer", "ia_rendre_budget", "ia_rendre_fournisseur"];
 
 function faireSemblant(plan: Plan) {
   const vrai = globalThis.fetch;
+  if (plan.budgetTemps) bornerTempsRequetePourTest(plan.budgetTemps);
   const vues: { url: string; corps: unknown; signal: boolean; entetes: string }[] = [];
   globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
     const u = String(url);
@@ -116,10 +130,25 @@ function faireSemblant(plan: Plan) {
         ? rendre({ erreur: "nope" }, 500)
         : rendre(plan.fournisseurs || []);
     }
-    // Un fournisseur.
-    const cle = u.indexOf("openrouter") >= 0 ? "openrouter"
+    /* UN FOURNISSEUR — ET DEPUIS LES DEUX CLÉS, L'URL NE SUFFIT PLUS À DIRE
+       LEQUEL (01/09/2026). `gemini-flash` et `gemini-flash-2` demandent le même
+       modèle à la même adresse : seule la clé présentée les distingue. On lit
+       donc l'en-tête, ce qui donne au passage le moyen de vérifier que le
+       second compte est RÉELLEMENT débité — la seule chose qui rende ce lot
+       vrai plutôt que décoratif. */
+    const entetesEnvoyes = ((init && (init as RequestInit).headers) || {}) as Record<string, string>;
+    const compte2 = entetesEnvoyes["x-goog-api-key"] === CLE_2;
+    const base = u.indexOf("openrouter") >= 0 ? "openrouter"
       : u.indexOf("flash-lite") >= 0 ? "gemini-flash-lite" : "gemini-flash";
-    const r = (plan.reponses || {})[cle] || { statut: 200, texte: '{"texte":"Une phrase honnête."}' };
+    const cle = base === "openrouter" ? base : base + (compte2 ? "-2" : "");
+    const rep = plan.reponses || {};
+    /* UN CAS QUI NE NOMME QUE `gemini-flash` PARLE DES DEUX COMPTES du même
+       modèle : c'est le MODÈLE qui tronque, qui refuse ou qui tombe, pas le
+       compte. Les cas qui veulent distinguer les deux comptes nomment
+       `gemini-flash-2` explicitement, et cette clé-là gagne. Sans ce repli, les
+       vingt cas écrits avant ce lot auraient tous eu à énumérer cinq étages
+       pour continuer à dire la même chose. */
+    const r = rep[cle] || rep[base] || { statut: 200, texte: '{"texte":"Une phrase honnête."}' };
     const attendre = <T>(v: T): Promise<T> =>
       plan.lenteur ? new Promise((ok) => setTimeout(() => ok(v), plan.lenteur)) : Promise.resolve(v);
     if (r.statut !== 200) {
@@ -139,11 +168,24 @@ function faireSemblant(plan: Plan) {
     // Les URL des fournisseurs seulement : c'est l'échelle réellement parcourue.
     etages: () => vues.map((v) => v.url).filter((u) =>
       u.indexOf("generativelanguage") >= 0 || u.indexOf("openrouter.ai") >= 0),
+    /* LES CLÉS RÉELLEMENT PRÉSENTÉES À GOOGLE, dans l'ordre. C'est la seule
+       observation qui prouve que le second compte est débité : deux appels au
+       même modèle avec la même clé auraient exactement la même trace dans
+       `etages()`, et le lot des deux clés aurait l'air livré sans l'être. */
+    clesGemini: () => vues.filter((v) => v.url.indexOf("generativelanguage") >= 0)
+      .map((v) => { try { return JSON.parse(v.entetes)["x-goog-api-key"]; } catch (_e) { return ""; } }),
     // Les CORPS envoyés à une RPC ou au journal : ce que l'appel DEMANDE, et
     // pas seulement le fait qu'il soit parti.
     appels,
     journal: () => appels("/ia_journal"),
-    rendre: () => { globalThis.fetch = vrai; oublierFournisseurs(); },
+    rendre: () => {
+      globalThis.fetch = vrai;
+      oublierFournisseurs();
+      // Le budget de temps revient toujours à sa valeur de production : un cas
+      // qui l'aurait laissé à 100 ms ferait échouer les suivants, au hasard de
+      // l'ordre d'exécution.
+      if (plan.budgetTemps) bornerTempsRequetePourTest(TIMEOUT_REQUETE_MS);
+    },
   };
 }
 
@@ -281,9 +323,15 @@ Deno.test("base injoignable : un budget qu'on ne peut pas lire vaut un budget at
 /* ======================= L'ÉCHELLE ET LA BASCULE ======================= */
 
 Deno.test("étage 1 saturé (429) → bascule sur l'étage 2, transparent", async () => {
+  /* DEPUIS LE 01/09, L'ÉTAGE 2 EST LE MÊME MODÈLE SUR L'AUTRE COMPTE. Le
+     « cran » de l'échelle n'est plus forcément une descente en qualité : on
+     épuise d'abord le second compte, et on ne descend que contraint. */
   const f = faireSemblant({
     fournisseurs: null,                       // repli sur la config du fichier
-    reponses: { "gemini-flash": { statut: 429 } },
+    reponses: {
+      "gemini-flash": { statut: 429 },
+      "gemini-flash-2": { statut: 200, texte: '{"texte":"Une phrase honnête."}' },
+    },
   });
   try {
     const r = await servir(requete(PITCH));
@@ -291,10 +339,13 @@ Deno.test("étage 1 saturé (429) → bascule sur l'étage 2, transparent", asyn
     assertEquals(JSON.stringify(await r.json()), '{"texte":"Une phrase honnête."}');
     const e = f.etages();
     assertEquals(e.length, 2, "l'échelle n'a pas été descendue d'un cran exactement");
-    assert(e[1].indexOf("flash-lite") >= 0, "le second étage n'est pas celui du §4.2");
+    assertEquals(f.clesGemini().join(","), "cle-gemini," + CLE_2,
+      "le second étage n'est pas le second compte");
     // Un 429 se retient : le fournisseur est marqué saturé pour sa fenêtre.
-    assert(f.vues.some((v) => v.url.indexOf("ia_saturer") >= 0),
-      "un 429 n'a pas été retenu : on le redécouvrira à chaque requête");
+    const s = f.appels("/rpc/ia_saturer");
+    assertEquals(s.length, 1, "un 429 n'a pas été retenu : on le redécouvrira à chaque requête");
+    assertEquals(s[0].p_fournisseur, "gemini-flash",
+      "le 429 d'un compte a muré l'autre : les deux quotas n'en font plus qu'un");
   } finally { f.rendre(); }
 });
 
@@ -304,7 +355,9 @@ Deno.test("un compteur plein évite l'appel au lieu de le découvrir", async () 
     await servir(requete(PITCH));
     const e = f.etages();
     assertEquals(e.length, 1, "on a appelé un fournisseur que le compteur disait plein");
-    assert(e[0].indexOf("flash-lite") >= 0);
+    // Le compteur du compte n° 1 est plein ; celui du compte n° 2 ne l'est pas.
+    assert(e[0].indexOf("gemini-3.6-flash") >= 0, "on est descendu en qualité sans y être forcé");
+    assertEquals(f.clesGemini().join(","), CLE_2);
   } finally { f.rendre(); }
 });
 
@@ -319,14 +372,20 @@ Deno.test("une seule tentative par fournisseur, jamais deux", async () => {
   });
   try {
     await servir(requete(PITCH));
-    assertEquals(f.etages().length, 3, "un étage a été rappelé, ou un a été sauté");
+    assertEquals(f.etages().length, 5, "un étage a été rappelé, ou un a été sauté");
+    // Cinq appels, et CINQ clés distinctes d'étage : deux comptes par modèle.
+    assertEquals(f.clesGemini().join(","),
+      ["cle-gemini", CLE_2, "cle-gemini", CLE_2].join(","));
   } finally { f.rendre(); }
 });
 
 Deno.test("tous épuisés → {indisponible:true}, aucune erreur brute", async () => {
   const f = faireSemblant({
     fournisseurs: null,
-    place: { "gemini-flash": false, "gemini-flash-lite": false, "openrouter": false },
+    place: {
+      "gemini-flash": false, "gemini-flash-2": false,
+      "gemini-flash-lite": false, "gemini-flash-lite-2": false, "openrouter": false,
+    },
   });
   try {
     const r = await servir(requete(PITCH));
@@ -361,9 +420,14 @@ Deno.test("RETOUR-01 point 4 : toute tâche part de l'étage 1, et y revient seu
   try {
     await servir(requete(PITCH));
     const e = g.etages();
-    assert(e.length >= 2, "la cascade ne joue plus sur saturation");
-    assert(e[0].indexOf("gemini-3.6-flash") >= 0 && e[1].indexOf("flash-lite") >= 0,
-      "la cascade ne descend pas dans l'ordre des rangs");
+    assert(e.length >= 3, "la cascade ne joue plus sur saturation");
+    /* L'ORDRE DES RANGS DEPUIS LE 01/09 : le modèle est épuisé sur les DEUX
+       comptes avant qu'on descende en qualité. Le 429 porte ici sur le modèle,
+       donc sur les deux comptes ; c'est seulement après qu'on voit Flash-Lite. */
+    assert(e[0].indexOf("gemini-3.6-flash") >= 0 && e[1].indexOf("gemini-3.6-flash") >= 0,
+      "on descend en qualité avant d'avoir essayé le second compte");
+    assert(e[2].indexOf("flash-lite") >= 0, "la cascade ne descend pas dans l'ordre des rangs");
+    assertEquals(g.clesGemini().slice(0, 2).join(","), "cle-gemini," + CLE_2);
   } finally { g.rendre(); }
 
   const h = faireSemblant({ fournisseurs: null });
@@ -604,32 +668,185 @@ Deno.test("un 5xx rend la réservation du fournisseur ; un 429 ne la rend pas", 
   const f = faireSemblant({
     fournisseurs: null,
     reponses: {
-      "gemini-flash": { statut: 503 },
-      "gemini-flash-lite": { statut: 429 },
+      "gemini-flash": { statut: 503 },        // le modèle tombe, sur les deux comptes
+      "gemini-flash-lite": { statut: 429 },   // le modèle refuse, sur les deux comptes
     },
   });
   try {
     await servir(requete(PITCH));
     const rendus = f.appels("/rpc/ia_rendre_fournisseur").map((c) => c.p_fournisseur);
     assert(rendus.indexOf("gemini-flash") >= 0, "un 5xx a consommé du quota pour rien");
+    assert(rendus.indexOf("gemini-flash-2") >= 0, "le second compte, lui, n'est pas remboursé");
     assert(rendus.indexOf("gemini-flash-lite") < 0, "un 429 a été remboursé");
-    assertEquals(f.appels("/rpc/ia_saturer").length, 1, "le 429 n'a pas été retenu");
+    /* Deux comptes refusent, donc DEUX saturations — une par compteur. Un seul
+       appel ici voudrait dire que les deux comptes partagent une ligne de
+       `ia_compteurs`, c'est-à-dire que le quota n'est pas doublé. */
+    const s = f.appels("/rpc/ia_saturer").map((c) => c.p_fournisseur);
+    assertEquals(s.join(","), "gemini-flash-lite,gemini-flash-lite-2");
   } finally { f.rendre(); }
 });
 
-Deno.test("une clé absente rend aussi la réservation", async () => {
-  const vraieCle = Deno.env.get("GEMINI_API_KEY");
+Deno.test("une clé absente ne coûte plus une réservation du tout", async () => {
+  /* CE CAS A CHANGÉ DE PROMESSE LE 01/09/2026, et c'est délibéré. Avant, un
+     étage sans clé réservait sa place, découvrait l'absence dans `appeler`, et
+     se faisait rembourser : deux allers-retours de base pour un étage dont on
+     savait d'avance qu'il ne partirait pas. Le cas d'avant vérifiait donc le
+     REMBOURSEMENT ; celui-ci vérifie qu'il n'y a plus rien à rembourser.
+     Ce n'est pas de l'esthétique : sans `GEMINI_API_KEY2`, c'est l'état
+     ORDINAIRE de deux étages sur cinq, et ils tombent sur le chemin déjà
+     dégradé — celui qu'on n'a aucune raison de ralentir davantage. */
+  const cle1 = Deno.env.get("GEMINI_API_KEY");
+  const cle2 = Deno.env.get("GEMINI_API_KEY2");
   Deno.env.set("GEMINI_API_KEY", "");
+  Deno.env.set("GEMINI_API_KEY2", "");
   const f = faireSemblant({ fournisseurs: null });
   try {
-    await servir(requete(PITCH));
-    const rendus = f.appels("/rpc/ia_rendre_fournisseur").map((c) => c.p_fournisseur);
-    // Les deux étages Gemini partagent la clé : les deux sont sautés, et aucun
-    // des deux ne doit avoir coûté une unité.
-    assert(rendus.indexOf("gemini-flash") >= 0);
-    assert(rendus.indexOf("gemini-flash-lite") >= 0);
+    const r = await servir(requete(PITCH));
+    // Le socle ne meurt pas : OpenRouter reste et répond.
+    assertEquals(JSON.stringify(await r.json()), '{"texte":"Une phrase honnête."}');
     assertEquals(f.etages().length, 1, "on a appelé un fournisseur sans clé");
-  } finally { f.rendre(); Deno.env.set("GEMINI_API_KEY", vraieCle || "cle-gemini"); }
+    const reserves = f.appels("/rpc/ia_reserver_fournisseur").map((c) => c.p_fournisseur);
+    assertEquals(reserves.join(","), "openrouter",
+      "un étage sans clé a quand même pris une réservation");
+    assertEquals(f.appels("/rpc/ia_rendre_fournisseur").length, 0,
+      "on rembourse une réservation qui n'aurait pas dû être prise");
+    // Les quatre étages Gemini restent LISIBLES dans le journal : un étage
+    // sauté en silence ressemblerait à un étage qui n'existe pas.
+    const j = f.journal();
+    assertEquals(j.length, 5, "le journal doit raconter les cinq étages");
+    assertEquals(j.slice(0, 4).map((l) => l.statut).join(","), "0,0,0,0");
+  } finally {
+    f.rendre();
+    Deno.env.set("GEMINI_API_KEY", cle1 || "cle-gemini");
+    Deno.env.set("GEMINI_API_KEY2", cle2 || CLE_2);
+  }
+});
+
+/* ============== LES DEUX CLÉS GEMINI (01/09/2026) ============== */
+
+Deno.test("deux comptes Gemini : le second est réellement débité", async () => {
+  /* LE CAS QUI DIT SI LE LOT EXISTE. `relais.ts` déduisait la clé du NOM du
+     fournisseur : deux étages Gemini tapaient forcément sur la même clé, donc
+     sur le même quota, donc l'échelle avait l'air de doubler sans rien doubler.
+     On regarde ici les clés RÉELLEMENT présentées à Google, pas les URL —
+     les deux appels ont la même adresse. */
+  const f = faireSemblant({
+    fournisseurs: null,
+    reponses: { "gemini-flash": { statut: 429 } },   // le modèle refuse sur les DEUX comptes
+  });
+  try {
+    await servir(requete(PITCH));
+    const cles = f.clesGemini();
+    assertEquals(cles[0], "cle-gemini", "le premier étage n'utilise pas la clé n° 1");
+    assertEquals(cles[1], CLE_2, "le second étage retape sur la clé n° 1 : le quota n'est pas doublé");
+  } finally { f.rendre(); }
+});
+
+Deno.test("deux comptes Gemini : deux compteurs, et donc deux quotas", async () => {
+  /* `ia_compteurs` a pour clé (fournisseur, fenêtre), et le fournisseur est un
+     NOM. Deux noms distincts donnent deux compteurs séparés sans une ligne de
+     SQL de plus — mais si quelqu'un donnait un jour le même nom aux deux
+     comptes, les deux seraient comptés ENSEMBLE et le lot serait annulé en
+     silence. Ce cas est là pour que ça se voie. */
+  const f = faireSemblant({
+    fournisseurs: null,
+    reponses: { "gemini-flash": { statut: 429 }, "gemini-flash-lite": { statut: 429 } },
+  });
+  try {
+    await servir(requete(PITCH));
+    const reserves = f.appels("/rpc/ia_reserver_fournisseur").map((c) => c.p_fournisseur);
+    assertEquals(reserves.join(","),
+      "gemini-flash,gemini-flash-2,gemini-flash-lite,gemini-flash-lite-2,openrouter");
+    assertEquals(new Set(reserves).size, 5, "deux étages partagent un compteur");
+    // Et un 429 sur un compte ne mure pas l'autre.
+    const satures = f.appels("/rpc/ia_saturer").map((c) => c.p_fournisseur);
+    assertEquals(satures.join(","),
+      "gemini-flash,gemini-flash-2,gemini-flash-lite,gemini-flash-lite-2");
+  } finally { f.rendre(); }
+});
+
+Deno.test("l'échelle épuise un modèle sur les deux comptes avant de descendre", async () => {
+  /* L'ORDRE EST UNE DÉCISION, pas un effet de bord du tri. Un second compte de
+     Flash vaut mieux qu'un premier compte de Flash-Lite : on ne descend en
+     qualité que contraint (RETOUR-01 point 4). Si quelqu'un renumérotait la
+     table en 1-2-3-4-5 « dans l'ordre des modèles », ce cas tomberait. */
+  const rangs = FOURNISSEURS.slice().sort((a, b) => a.rang - b.rang);
+  assertEquals(rangs.map((x) => x.nom).join(","),
+    "gemini-flash,gemini-flash-2,gemini-flash-lite,gemini-flash-lite-2,openrouter");
+  assertEquals(rangs.map((x) => x.cle_env).join(","),
+    "GEMINI_API_KEY,GEMINI_API_KEY2,GEMINI_API_KEY,GEMINI_API_KEY2,OPENROUTER_API_KEY");
+  // Deux clés distinctes sur les étages Gemini : sans ça, rien n'est doublé.
+  const clesGemini = new Set(rangs.filter((x) => x.nom.indexOf("gemini") === 0).map((x) => x.cle_env));
+  assertEquals(clesGemini.size, 2, "les étages Gemini partagent une seule clé");
+});
+
+Deno.test("une ligne de table sans `cle_env` retombe sur l'ancienne règle", async () => {
+  /* L'ENTRE-DEUX DU DÉPLOIEMENT. La fonction peut partir avant que la migration
+     017 ne passe : elle lit alors des lignes qui n'ont pas encore la colonne.
+     Les écarter viderait l'échelle pendant un déploiement — donc au pire
+     moment. Elles retombent sur `cleParDefaut`, qui est la règle qu'appliquait
+     ce fichier en dur jusqu'au 01/09 : le pire cas de l'entre-deux est
+     « comme avant », jamais « aucune clé ». */
+  const f = faireSemblant({
+    fournisseurs: [
+      { nom: "gemini-flash", rang: 1, modele: "gemini-3.6-flash",
+        limite_minute: 10, limite_jour: 1000, actif: true },
+    ],
+  });
+  try {
+    const r = await servir(requete(PITCH));
+    assertEquals(JSON.stringify(await r.json()), '{"texte":"Une phrase honnête."}');
+    assertEquals(f.clesGemini().join(","), "cle-gemini");
+  } finally { f.rendre(); }
+});
+
+Deno.test("une `cle_env` PRÉSENTE mais vide écarte la ligne", async () => {
+  /* Absente, on sait quoi faire (voir le cas ci-dessus). Vide, non : c'est une
+     ligne éditée à la main qu'on ne comprend pas, et une ligne qu'on ne
+     comprend pas ne décide pas d'un appel — c'est la règle de
+     `fournisseurValide` depuis la relecture du 10/08. Sans ce cas, une chaîne
+     vide passerait et l'étage partirait SANS CLÉ à chaque requête. */
+  const f = faireSemblant({
+    fournisseurs: [
+      { nom: "gemini-flash", rang: 1, modele: "gemini-3.6-flash", cle_env: "  ",
+        limite_minute: 10, limite_jour: 1000, actif: true },
+    ],
+  });
+  try {
+    const r = await servir(requete(PITCH));
+    /* La table ne rend plus aucune ligne exploitable → on retombe sur le repli
+       du fichier, qui a ses cinq étages. Le premier répond. */
+    assertEquals(JSON.stringify(await r.json()), '{"texte":"Une phrase honnête."}');
+    assertEquals(f.clesGemini().join(","), "cle-gemini");
+  } finally { f.rendre(); }
+});
+
+Deno.test("cinq étages ne font pas quarante secondes d'attente", async () => {
+  /* LA BORNE DE TEMPS DE LA REQUÊTE. En passant de trois étages à cinq, le pire
+     cas passait mécaniquement de 24 s à 40 s — personne ne l'avait demandé, et
+     ce lot arrive en même temps qu'un lot dont tout l'objet est d'ACCÉLÉRER la
+     recherche. Ici chaque étage traîne 60 ms et le budget est ramené à 100 ms :
+     on vérifie que l'échelle s'arrête d'elle-même, que l'arrêt se LIT dans le
+     journal (statut 5), et que le client reçoit l'écran normal.
+     On ne fige pas la valeur de 20 s, on fige le fait qu'une borne existe. */
+  const f = faireSemblant({
+    fournisseurs: null, lenteur: 60,
+    reponses: { "gemini-flash": { statut: 500 }, "gemini-flash-lite": { statut: 500 },
+                "openrouter": { statut: 500 } },
+    budgetTemps: 100,
+  });
+  try {
+    const r = await servir(requete(PITCH));
+    assertEquals(JSON.stringify(await r.json()), '{"indisponible":true}');
+    const e = f.etages();
+    assert(e.length < 5, "les cinq étages ont été tentés malgré la borne de temps");
+    assert(e.length >= 1, "la borne a coupé avant même le premier étage");
+    const j = f.journal();
+    assertEquals(j[j.length - 1].statut, 5,
+      "un étage non tenté faute de temps doit se distinguer d'un étage épuisé");
+    assertEquals(f.appels("/rpc/ia_rendre_budget").length, 1,
+      "rien n'a été rendu : le budget de la personne doit lui revenir");
+  } finally { f.rendre(); }
 });
 
 /* ------------------- R1 : `Retry-After` CHOISIT LA FENÊTRE --------------- */
@@ -644,7 +861,13 @@ Deno.test("R1 — `Retry-After` long mure le jour, court mure la minute", async 
   for (const c of cas) {
     const f = faireSemblant({
       fournisseurs: null,
-      reponses: { "gemini-flash": { statut: 429, retry: c.retry } },
+      reponses: {
+        "gemini-flash": { statut: 429, retry: c.retry },
+        // Le second compte répond : le cas ne parle que de la FENÊTRE murée,
+        // pas de la cascade. Sans ça, les deux comptes refuseraient et il y
+        // aurait deux saturations à démêler pour rien.
+        "gemini-flash-2": { statut: 200, texte: '{"texte":"Une phrase honnête."}' },
+      },
     });
     try {
       await servir(requete(PITCH));
@@ -664,23 +887,25 @@ Deno.test("R2 — une ligne de journal par étage tenté, avec son statut", asyn
   // sur l'étage 2 ne laissait que « flash-lite, ok », et le 429 n'existait pas.
   const f = faireSemblant({
     fournisseurs: null,
-    place: { "gemini-flash": false },                 // compteur plein, aucun appel
-    reponses: { "gemini-flash-lite": { statut: 429 } }, // refus du fournisseur
+    // Compteurs pleins sur les deux comptes du Flash : aucun appel ne part.
+    place: { "gemini-flash": false, "gemini-flash-2": false },
+    reponses: { "gemini-flash-lite": { statut: 429 } }, // refus, sur les deux comptes
     // openrouter répond bien.
   });
   try {
     const r = await servir(requete(PITCH));
     assertEquals(JSON.stringify(await r.json()), '{"texte":"Une phrase honnête."}');
     const j = f.journal();
-    assertEquals(j.length, 3, "le journal ne raconte pas les trois étages");
-    assertEquals(j[0].fournisseur, "gemini-flash");
+    assertEquals(j.length, 5, "le journal ne raconte pas les cinq étages");
+    assertEquals(j.map((l) => l.fournisseur).join(","),
+      "gemini-flash,gemini-flash-2,gemini-flash-lite,gemini-flash-lite-2,openrouter");
     assertEquals(j[0].ok, false);
     assertEquals(j[0].statut, 2, "un étage sauté sur compteur plein doit se voir");
-    assertEquals(j[1].fournisseur, "gemini-flash-lite");
-    assertEquals(j[1].statut, 429, "le 429 n'est plus lisible dans le journal");
-    assertEquals(j[2].fournisseur, "openrouter");
-    assertEquals(j[2].ok, true);
-    assertEquals(j[2].statut, 200);
+    assertEquals(j[1].statut, 2, "le second compte a son propre compteur, et sa propre ligne");
+    assertEquals(j[2].statut, 429, "le 429 n'est plus lisible dans le journal");
+    assertEquals(j[3].statut, 429);
+    assertEquals(j[4].ok, true);
+    assertEquals(j[4].statut, 200);
   } finally { f.rendre(); }
 });
 
@@ -963,11 +1188,11 @@ Deno.test("R-5 — `duree_ms` mesure l'étage, pas la requête entière", async 
   try {
     await servir(requete(PITCH));
     const j = f.journal();
-    assertEquals(j.length, 3);
-    const dernier = Number(j[2].duree_ms);
-    assert(dernier >= 40, "le troisième étage annonce " + dernier + " ms : la durée n'est pas mesurée du tout");
+    assertEquals(j.length, 5);
+    const dernier = Number(j[4].duree_ms);
+    assert(dernier >= 40, "le dernier étage annonce " + dernier + " ms : la durée n'est pas mesurée du tout");
     assert(dernier < 150,
-      "le troisième étage annonce " + dernier + " ms : la durée est cumulée, pas mesurée");
+      "le dernier étage annonce " + dernier + " ms : la durée est cumulée, pas mesurée");
   } finally { f.rendre(); }
 });
 
@@ -1154,17 +1379,25 @@ Deno.test("M33 — chaque fournisseur réserve avec SES limites, dans le bon sen
   try {
     await servir(requete(PITCH));
     const a = f.appels("/rpc/ia_reserver_fournisseur");
-    assertEquals(a.length, 3);
+    assertEquals(a.length, 5);
     /* RETOUR-01 point 4 — les deux étages Gemini ne partent plus avec des
        limites nulles : le repli de `config.ts` porte les mêmes chiffres que le
        semis corrigé (migration 015). Une limite nulle valait un plafond d'un
-       million, c'est-à-dire aucun garde-fou. */
+       million, c'est-à-dire aucun garde-fou.
+       01/09 — LE JUMEAU PORTE LES MÊMES CHIFFRES QUE SON MODÈLE, et c'est le
+       sens du lot : même modèle, même palier gratuit, autre compte. Un jumeau
+       sans limites rouvrirait exactement le trou que 015 a refermé. */
     assertEquals(JSON.stringify(a[0]),
       '{"p_fournisseur":"gemini-flash","p_limite_minute":10,"p_limite_jour":1000}',
       "l'étage 1 réserve encore sans limite : le garde-fou anti-429 reste désarmé");
     assertEquals(JSON.stringify(a[1]),
-      '{"p_fournisseur":"gemini-flash-lite","p_limite_minute":15,"p_limite_jour":1500}');
+      '{"p_fournisseur":"gemini-flash-2","p_limite_minute":10,"p_limite_jour":1000}',
+      "le second compte de Flash n'a pas les mêmes limites que le premier");
     assertEquals(JSON.stringify(a[2]),
+      '{"p_fournisseur":"gemini-flash-lite","p_limite_minute":15,"p_limite_jour":1500}');
+    assertEquals(JSON.stringify(a[3]),
+      '{"p_fournisseur":"gemini-flash-lite-2","p_limite_minute":15,"p_limite_jour":1500}');
+    assertEquals(JSON.stringify(a[4]),
       '{"p_fournisseur":"openrouter","p_limite_minute":20,"p_limite_jour":50}',
       "les limites d'OpenRouter ne partent pas dans le bon sens");
   } finally { f.rendre(); }
@@ -1200,7 +1433,11 @@ Deno.test("C1 — une réponse tronquée fait DESCENDRE l'échelle, elle ne dég
      toutes les tâches qui en partent, sans jamais essayer l'étage 2 qui marche. */
   const f = faireSemblant({
     fournisseurs: null,
-    reponses: { "gemini-flash": { statut: 200, texte: '{"texte', coupee: true } },
+    reponses: {
+      "gemini-flash": { statut: 200, texte: '{"texte', coupee: true },
+      // Le compte suivant, lui, répond : c'est le cran d'exactement un étage.
+      "gemini-flash-2": { statut: 200, texte: '{"texte":"Une phrase honnête."}' },
+    },
   });
   try {
     const r = await servir(requete(PITCH));
@@ -1208,7 +1445,7 @@ Deno.test("C1 — une réponse tronquée fait DESCENDRE l'échelle, elle ne dég
       "une réponse tronquée n'a pas fait descendre l'échelle");
     const e = f.etages();
     assertEquals(e.length, 2, "l'échelle n'a pas été descendue d'un cran exactement");
-    assert(e[1].indexOf("flash-lite") >= 0);
+    assertEquals(f.clesGemini().join(","), "cle-gemini," + CLE_2);
     const j = f.journal();
     assertEquals(j[0].statut, 4, "une troncature doit se lire dans le journal (statut 4)");
     assertEquals(j[1].statut, 200);
@@ -1252,9 +1489,9 @@ Deno.test("C1 — tronqué partout : dégradé propre, budget rendu, rien de sat
   try {
     const r = await servir(requete(PITCH));
     assertEquals(JSON.stringify(await r.json()), '{"indisponible":true}');
-    assertEquals(f.etages().length, 3, "les trois étages doivent être tentés");
+    assertEquals(f.etages().length, 5, "les cinq étages doivent être tentés");
     assertEquals(f.appels("/rpc/ia_rendre_budget").length, 1, "aucun texte rendu : le budget se rend");
-    assertEquals(f.journal().map((l) => l.statut).join(","), "4,4,4");
+    assertEquals(f.journal().map((l) => l.statut).join(","), "4,4,4,4,4");
   } finally { f.rendre(); }
 });
 
@@ -1274,7 +1511,7 @@ Deno.test("C2 — un 400 « sortie structurée non supportée » n'est pas un 42
     const r = await servir(requete(PITCH));
     assertEquals(JSON.stringify(await r.json()), '{"indisponible":true}');
     assertEquals(f.appels("/rpc/ia_saturer").length, 0, "un 400 a été pris pour une saturation");
-    assertEquals(f.journal()[2].statut, 400, "le journal doit porter le 400 tel quel");
+    assertEquals(f.journal()[4].statut, 400, "le journal doit porter le 400 tel quel");
     // Un 400 n'a rien produit : la réservation se rend.
     assert(f.appels("/rpc/ia_rendre_fournisseur").map((c) => c.p_fournisseur).indexOf("openrouter") >= 0);
   } finally { f.rendre(); }

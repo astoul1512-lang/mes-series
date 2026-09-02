@@ -11,7 +11,7 @@
    et l'app affiche un bandeau « Recharger » (app-08). Le réseau ne reste le
    premier recours que pour un fichier ABSENT du cache.
    Les appels TMDB ne sont jamais mis en cache. */
-const CACHE = 'mes-series-v110';
+const CACHE = 'mes-series-v111';
 
 const SHELL = ['./', './index.html', './app.css', './manifest.json',
                './icon-192.png', './icon-512.png',
