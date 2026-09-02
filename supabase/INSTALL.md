@@ -411,6 +411,34 @@ Un `gemini-flash-2` absent est normal tant que l'étage 1 tient la charge. Un
 `gemini-flash-2` toujours en **statut 0** veut dire que le secret
 `GEMINI_API_KEY2` n'est pas posé sur la fonction.
 
+**Le taux d'escalade de la recherche ✦ (RETOUR-10 §1, 01/09/2026).** La tâche
+`interpreter_recherche` démarre au petit modèle et ne remonte au fort que si la
+réponse ne vaut rien. Deux chiffres disent si le pari tient — à relever une
+semaine après la mise en service :
+
+```sql
+-- Durée médiane par étage, sur la seule tâche de la recherche ✦
+select fournisseur,
+       count(*)                                                  as appels,
+       percentile_cont(0.5) within group (order by duree_ms)::int as median_ms
+  from public.ia_journal
+ where tache = 'interpreter_recherche' and ok
+ group by fournisseur order by 1;
+
+-- Taux d'escalade : part des requêtes qui ont dû remonter au modèle fort
+select round(100.0 * count(*) filter (where fournisseur like 'gemini-flash'
+                                         or fournisseur like 'gemini-flash-2')
+             / nullif(count(*) filter (where fournisseur like 'gemini-flash-lite%'), 0), 1)
+       as pct_escalade
+  from public.ia_journal
+ where tache = 'interpreter_recherche' and jour > current_date - 7;
+```
+
+**Le seuil qui déclenche un retour en arrière : ~40 %.** Au-delà, une requête
+sur deux paie DEUX appels au lieu d'un, et le gain de médiane est mangé par les
+escalades — il faut alors remettre la tâche à l'étage 1 (une ligne dans
+`config.ts`, `etage_depart: 1`, et retirer `escalade_vers`).
+
 Pour poser les vrais chiffres le jour où on les connaît :
 
 1. Ouvrir <https://aistudio.google.com/rate-limit> avec le compte qui porte

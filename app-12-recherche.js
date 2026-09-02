@@ -769,9 +769,49 @@ const IA_STATUTS = {
    un scintillement — c'est-à-dire précisément l'impression de panne que ce lot
    existe pour supprimer. Une ligne qui confirme doit se lire. */
 const IA_COMPRIS_MIN_MS = 900;
-let iaStatutQuand = 0, iaStatutTimer = null;
+/* ---------------------------------------------------------------------------
+   RETOUR-10 §1 (01/09/2026) — QUAND DIRE « JE CHERCHE PLUS LOIN ».
+
+   L'escalade a lieu ENTIÈREMENT SUR LE SERVEUR : le relais essaie le petit
+   modèle, et ne repart sur le modèle fort que si la réponse ne vaut rien. Il ne
+   parle au téléphone qu'UNE fois, à la fin. Le troisième état de la maquette 28
+   ne peut donc pas être déclenché par un signal — il n'y en a pas — et on le
+   DÉDUIT DE LA DURÉE.
+
+   1 400 MS, ET LE CHIFFRE VIENT D'UNE MESURE, pas d'un réglage à l'oreille :
+   `gemini-flash-lite` répond en 949 ms de médiane sur cette tâche (945 → 953 au
+   31/08, une régularité de métronome). Passé 1,4 s, le petit modèle a donc
+   presque toujours déjà rendu la main : ce qui se passe est une escalade.
+
+   CE QUE ÇA COÛTE, ET C'EST ASSUMÉ (choix d'Adrien du 01/09) : un jour où le
+   petit modèle rame, la ligne s'affichera sans qu'il y ait eu de second essai —
+   elle dira « ta description demande de la mémoire » alors que non. Rien ne
+   casse, et l'attente reste réelle : c'est la RAISON affichée qui peut être
+   fausse, pas l'attente. La réponse porte `escalade:true` quand il y a eu
+   escalade pour de vrai, ce qui permet de mesurer l'écart après coup au lieu de
+   le supposer.
+--------------------------------------------------------------------------- */
+const IA_LOIN_APRES_MS = 1400;
+let iaStatutQuand = 0, iaStatutTimer = null, iaLoinTimer = null;
+/* Armé juste après « ✦ Je lis ta phrase… », désarmé par TOUT changement d'état
+   (voir `poserStatutIA`) : une réponse arrivée avant l'échéance ne laisse rien
+   derrière elle. */
+function guetterEscaladeIA(){
+  clearTimeout(iaLoinTimer);
+  iaLoinTimer = setTimeout(function(){
+    const s = etatRech().iaStatut;
+    /* On ne passe à « plus loin » que depuis « je lis » : si l'écran a changé
+       d'état entre-temps, la minuterie n'a plus rien à dire. */
+    if(s && s.etat === 'lit') poserStatutIA('loin');
+  }, IA_LOIN_APRES_MS);
+}
 function poserStatutIA(etat, texte){
   clearTimeout(iaStatutTimer);
+  /* Tout état AUTRE que « je lis » met fin au guet. C'est ici et pas chez
+     l'appelant : un désarmement oublié sur un seul des chemins de sortie
+     ferait apparaître la ligne APRÈS la réponse, ce qui serait pire que de ne
+     rien afficher du tout. */
+  if(etat !== 'lit') clearTimeout(iaLoinTimer);
   const r = etatRech();
   r.iaStatut = etat ? { etat: etat, texte: texte || '' } : null;
   iaStatutQuand = Date.now();

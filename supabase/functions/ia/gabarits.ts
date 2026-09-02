@@ -627,6 +627,39 @@ export type Rendu = { texte?: string; textes?: string[]; criteres?: Critere[];
                       rangees?: RangeeIA[];
                       mode?: string; filtres?: FiltresIA; titres?: TitreIA[] };
 
+/* ---------------------------------------------------------------------------
+   RETOUR-10 §1 (01/09/2026) — CETTE RÉPONSE MÉRITE-T-ELLE UN SECOND MODÈLE ?
+
+   La RÈGLE vit ici, avec les formes de sortie ; le DROIT d'escalader vit dans
+   `config.ts` (`escalade_vers`), avec les étages. Séparer les deux évite la
+   question qu'on se poserait dans six mois — « où est-ce qu'on décide qu'une
+   tâche escalade ? » — en y répondant deux fois, à deux niveaux différents :
+   quelles tâches ont le droit (une donnée), et sur quoi (une forme).
+
+   POUR `interpreter_recherche`, LA RÈGLE EST CELLE DE LA SPEC, MOT POUR MOT :
+   escalade si la réponse est invalide ou illisible, OU si le mode `titre` — qui
+   demande d'identifier une œuvre à partir de sa description, donc de la mémoire
+   — n'a rendu AUCUN candidat exploitable. Les deux cas se confondent ici, et ce
+   n'est pas un raccourci : `valider` rend `null` sur une liste de titres vide
+   exactement comme sur un JSON cassé. « Aucun candidat » et « rien de lisible »
+   sont la même chose vue du relais.
+
+   CE QU'ELLE NE COUVRE PAS, ET IL FAUT LE SAVOIR : un petit modèle qui nomme un
+   film AVEC APLOMB ET À TORT rend une réponse parfaitement valide. Elle
+   n'escalade donc pas, et c'est le client qui jette le titre en ne le trouvant
+   pas sur TMDB. Le serveur ne peut pas faire mieux sans vérifier lui-même les
+   titres — ce qu'il ne fait pas, par construction (c'est le rôle du client
+   depuis SPEC-09 lot 0). À rouvrir si le taux d'escalade mesuré est bas alors
+   que les réponses déçoivent : ce serait le symptôme.
+--------------------------------------------------------------------------- */
+export function meriteEscalade(tache: string, propre: unknown): boolean {
+  if (tache === "interpreter_recherche") return !propre;
+  /* Par défaut, JAMAIS. Une tâche qui veut escalader se nomme ici — sinon un
+     `escalade_vers` posé par distraction dans `config.ts` doublerait la
+     consommation d'une tâche sans que personne l'ait décidé. */
+  return false;
+}
+
 export function valider(tache: string, brut: unknown): Rendu | null {
   if (!tacheConnue(tache)) return null;
   const t = TACHES[tache];

@@ -1872,6 +1872,12 @@ async function interpreterRechercheIA(phrase){
       d = iaPhraseCache[cle];
     }else{
       if(typeof poserStatutIA === 'function') poserStatutIA('lit');
+      /* RETOUR-10 §1 — l'escalade se passe sur le serveur, qui ne parle qu'une
+         fois. Passé 1 400 ms sans réponse, le petit modèle a presque toujours
+         déjà rendu la main : ce qui dure est le second essai, et on le dit.
+         Voir le pavé d'`IA_LOIN_APRES_MS` (app-12) pour le chiffre et pour ce
+         que cette déduction peut coûter. */
+      if(typeof guetterEscaladeIA === 'function') guetterEscaladeIA();
       d = await appelIA('interpreter_recherche', { phrase: q.slice(0, 300) });
       if(d) noterRequeteIA();
       const cles = Object.keys(iaPhraseCache);

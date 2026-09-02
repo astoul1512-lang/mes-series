@@ -27,7 +27,7 @@ import {
   MAX_JETONS_SORTIE, ORIGINES, TACHES, TIMEOUT_MS, TIMEOUT_REQUETE_MS,
   type Fournisseur,
 } from "./config.ts";
-import { construire, valider } from "./gabarits.ts";
+import { construire, meriteEscalade, valider } from "./gabarits.ts";
 
 const URL_SB = () => Deno.env.get("SUPABASE_URL") || "";
 const CLE_ADMIN = () => Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -576,19 +576,55 @@ async function servirAccepte(req: Request, cors: Record<string, string>): Promis
   }
 
   // --- L'échelle, à partir de l'étage de départ de la tâche (§4.2). ---
-  const etage = TACHES[tache].etage_depart;
-  const echelle = (await lireFournisseurs()).filter((f) => f.rang >= etage);
+  const conf = TACHES[tache];
+  const tous = await lireFournisseurs();
 
   /* R3 (relecture du 10/08) — LE BUDGET SE REND QUAND RIEN N'ABOUTIT. Il était
      réservé avant la boucle et jamais rendu : une journée où toute la chaîne
      est en panne consommait les trente unités de chaque personne pour zéro
      texte, et le lendemain quelqu'un pouvait se retrouver à court sans avoir
-     jamais rien reçu. */
+     jamais rien reçu.
+     RETOUR-10 §1 (01/09/2026) — IL PEUT Y AVOIR DEUX RÉSERVATIONS. Une escalade
+     demande une seconde réponse d'IA pour la même phrase, et la spec veut que
+     les budgets s'appliquent aux deux appels. On rend donc AUTANT qu'on a pris,
+     pas « une fois » : rendre une seule unité sur deux prises laissait fuir un
+     budget, et une fuite de compteur ne se voit qu'au bout de plusieurs jours. */
+  let budgetsPris = 1;
   const rendreBudget = async () => {
-    try { await rpc("ia_rendre_budget", { p_uid: uid }); } catch (_e) { /* tant pis */ }
+    while (budgetsPris > 0) {
+      budgetsPris--;
+      try { await rpc("ia_rendre_budget", { p_uid: uid }); } catch (_e) { /* tant pis */ }
+    }
   };
 
-  for (const f of echelle) {
+  /* ---------------------------------------------------------------------
+     UN PASSAGE D'ÉCHELLE — extrait en fonction pour RETOUR-10 §1.
+
+     La boucle était en ligne tant qu'il n'y avait qu'un seul parcours. Il y en
+     a maintenant deux au plus : celui qui part de l'étage de la tâche, et, si
+     la réponse ne vaut rien, celui qui repart du modèle fort.
+
+     `tentes` retient les étages DÉJÀ VISITÉS — y compris ceux qu'on a sautés
+     parce que leur compteur était plein ou leur clé absente. Rejouer un étage
+     saturé dans la même requête ne pourrait rien donner (la fenêtre n'a pas eu
+     le temps de se rouvrir) et écrirait une seconde ligne de journal
+     identique : le taux d'escalade, qui est le chiffre que la spec demande de
+     mesurer, deviendrait illisible.
+
+     Trois issues, et elles ne veulent pas dire la même chose :
+       · `{propre}`     — un fournisseur a répondu, et sa réponse est valide ;
+       · `{malformee}`  — un fournisseur a répondu, sa réponse ne vaut rien.
+                          On ne descend PAS l'échelle (§4.4) : il a répondu, il
+                          a juste mal répondu, et payer un second étage pour la
+                          même phrase serait payer deux fois. C'est le passage
+                          appelant qui décide d'escalader ou non ;
+       · `{}`           — personne n'a répondu : saturés, en panne, ou plus de
+                          temps.
+  --------------------------------------------------------------------- */
+  const tentes: Record<string, true> = {};
+
+  const parcourir = async (depuis: number): Promise<{ propre?: unknown; malformee?: boolean }> => {
+  for (const f of tous.filter((x) => x.rang >= depuis && !tentes[x.nom])) {
     /* L'HORLOGE REPART À CHAQUE ÉTAGE. Voir `journaliser` : `duree_ms` mesure
        l'étage, pas la requête. */
     const departEtage = Date.now();
@@ -603,6 +639,9 @@ async function servirAccepte(req: Request, cors: Record<string, string>): Promis
       await journaliser(tache, f.nom, false, 5, 0);
       break;
     }
+    /* L'étage est VISITÉ à partir d'ici — même s'il est sauté deux lignes plus
+       bas. Voir le pavé de `parcourir` : un étage visité ne se rejoue pas. */
+    tentes[f.nom] = true;
 
     /* UN ÉTAGE SANS CLÉ SE SAUTE AVANT DE RÉSERVER SA PLACE. `appeler` sait
        déjà rendre le statut 0 quand le secret manque — mais il le fait APRÈS
@@ -638,12 +677,11 @@ async function servirAccepte(req: Request, cors: Record<string, string>): Promis
     if (r.ok) {
       const propre = valider(tache, r.brut);
       await journaliser(tache, f.nom, !!propre, propre ? 200 : 1, Date.now() - departEtage);
-      // RÉPONSE MALFORMÉE : DÉGRADÉ, SANS RÉESSAI (§4.4). On ne descend pas
-      // l'échelle non plus — le fournisseur a répondu, il a juste mal répondu,
-      // et payer un second étage pour la même phrase serait payer deux fois.
-      if (propre) return json(propre, 200, cors);
-      await rendreBudget();
-      return indisponible(cors);
+      // RÉPONSE MALFORMÉE : ON NE DESCEND PAS L'ÉCHELLE (§4.4). Le fournisseur
+      // a répondu, il a juste mal répondu. Ce qu'on en fait — dégrader, ou
+      // escalader une fois — se décide plus bas, pas ici.
+      if (propre) return { propre };
+      return { malformee: true };
     }
 
     await journaliser(tache, f.nom, false, r.statut, Date.now() - departEtage);
@@ -670,6 +708,88 @@ async function servirAccepte(req: Request, cors: Record<string, string>): Promis
          requête. On ne se rembourse pas un travail qui a eu lieu. */
       try { await rpc("ia_rendre_fournisseur", { p_fournisseur: f.nom }); } catch (_e) { /* tant pis */ }
     }
+  }
+  return {};
+  };
+
+  let res = await parcourir(conf.etage_depart);
+
+  /* =====================================================================
+     RETOUR-10 §1 — DÉMARRER SUR LE PETIT MODÈLE, N'ESCALADER QU'AU BESOIN
+     (01/09/2026)
+
+     MESURÉ DANS `ia_journal` LE 31/08, sur `interpreter_recherche` :
+       · gemini-flash      7 succès, MÉDIANE 3 983 ms (2 910 → 7 895)
+       · gemini-flash      2 délais dépassés : 8 096 ms perdus, puis bascule
+       · gemini-flash-lite 2 succès, MÉDIANE 949 ms (945 → 953)
+     Pire cas mesuré : 8 s de délai + 1 s = NEUF SECONDES pour une phrase
+     simple. Découper une phrase en critères ne demande pas de culture
+     générale — c'est de l'analyse de texte, et le petit modèle la fait en une
+     seconde avec une régularité parfaite.
+
+     DEUX CHEMINS, ET ILS NE COÛTENT PAS LA MÊME CHOSE :
+
+     · UN FOURNISSEUR A RÉPONDU, ET SA RÉPONSE NE VAUT RIEN (`malformee`).
+       C'est l'escalade au sens de la spec : on redemande LA MÊME PHRASE à un
+       autre modèle, plus fort. La spec veut que « les budgets s'appliquent aux
+       deux » — donc une SECONDE réservation, et si elle est refusée on
+       n'escalade pas. Deuxième réponse d'IA, deuxième unité.
+
+     · PERSONNE N'A RÉPONDU (saturés, en panne, plus de temps). Là il n'y a pas
+       eu de première réponse : on continue simplement l'échelle sur les étages
+       que l'étage de départ avait mis hors de portée, SANS seconde unité. Sans
+       ce chemin, faire partir la tâche du rang 3 lui aurait fait perdre pour de
+       bon les deux meilleurs étages — un lot de VITESSE aurait coûté de la
+       DISPONIBILITÉ, ce que personne n'a demandé.
+
+     UNE SEULE FOIS, JAMAIS DEUX : `parcourir` ne rejoue aucun étage déjà
+     visité, donc le second passage s'arrête tout seul quand il ne reste rien.
+     Et les deux appels sont dans `ia_journal`, ce qui rend le taux d'escalade
+     mesurable après coup — la spec le demande explicitement.
+
+     INTERDIT PAR LA SPEC, et le code le respecte par construction : lancer les
+     deux modèles EN PARALLÈLE. Il n'y a qu'un seul `await` à la fois.
+  ===================================================================== */
+  let escalade = false;
+  if (!res.propre && conf.escalade_vers && conf.escalade_vers < conf.etage_depart) {
+    let permis = true;
+    if (res.malformee) {
+      // Le cas « il a répondu, mal » : c'est une seconde réponse d'IA, donc une
+      // seconde unité de budget. Refusée → on dégrade, comme avant ce lot.
+      permis = meriteEscalade(tache, res.propre || null);
+      if (permis) {
+        let ok2 = false;
+        try {
+          ok2 = await rpc("ia_reserver_budget", {
+            p_uid: uid, p_max_utilisateur: BUDGET_UTILISATEUR_JOUR, p_max_global: BUDGET_GLOBAL_JOUR,
+          }) === true;
+        } catch (_e) { ok2 = false; }
+        if (ok2) budgetsPris++;
+        else {
+          await journaliser(tache, null, false, 3, Date.now() - debut);
+          permis = false;
+        }
+      }
+    }
+    if (permis) {
+      const suite = await parcourir(conf.escalade_vers);
+      // Un second passage qui ne donne rien laisse le premier verdict tel quel.
+      if (suite.propre) { res = suite; escalade = true; }
+      else if (suite.malformee) res = suite;
+    }
+  }
+
+  if (res.propre) {
+    /* `escalade` VOYAGE AVEC LA RÉPONSE. Le client n'en a pas besoin pour
+       fonctionner — il déduit l'attente longue de sa propre montre — mais sans
+       ce champ, rien ne permettrait de vérifier après coup que ce qu'il a
+       affiché correspondait à ce qui s'est vraiment passé. Un champ inconnu de
+       plus est sans effet côté client : il ne lit que `mode`, `filtres` et
+       `titres`. */
+    const corpsRep = escalade
+      ? { ...(res.propre as Record<string, unknown>), escalade: true }
+      : res.propre;
+    return json(corpsRep, 200, cors);
   }
 
   // Tous épuisés. `{indisponible:true}`, HTTP 200, et le client ne montre rien.
