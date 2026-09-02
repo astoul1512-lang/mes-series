@@ -143,6 +143,14 @@ function lireCacheIA(){
      reste : un cache écrit par une version antérieure n'a pas ce champ, et
      `ordreIARangee` doit lire `null` plutôt que `undefined.ids`. */
   if(!o.ordres || typeof o.ordres !== 'object' || Array.isArray(o.ordres)) o.ordres = null;
+  /* SPEC-09 lot 1 (2/2) — les rangées composées par l'IA, par famille, plus le
+     compteur d'anti-boucle du jour. Normalisé ici pour la même raison que le
+     reste : un cache écrit par une version antérieure n'a pas ce champ. */
+  if(!o.compo || typeof o.compo !== 'object' || Array.isArray(o.compo))
+    o.compo = { jour:'', n:0, fams:{} };
+  if(!o.compo.fams || typeof o.compo.fams !== 'object' || Array.isArray(o.compo.fams))
+    o.compo.fams = {};
+  if(typeof o.compo.n !== 'number' || !(o.compo.n >= 0)) o.compo.n = 0;
   if(!o.rech.pourquoi || typeof o.rech.pourquoi !== 'object' || Array.isArray(o.rech.pourquoi))
     o.rech.pourquoi = {};
   /* RETOUR-01 point 5 — le compteur de pitchs se remet à zéro au changement de
@@ -170,6 +178,9 @@ function oublierCacheIA(quoi){
      l'IA ne doit pas rendre trente nouvelles requêtes. */
   if(quoi === 'decouvrir'){
     o.jour = ''; o.pitch = null; o.titres = null; o.humeurs = {}; o.ordres = null;
+    /* Le COMPTEUR de compositions reste, comme celui des pitchs : couper puis
+       rallumer l'IA ne doit pas rendre six nouvelles compositions. */
+    o.compo = { jour:o.compo.jour, n:o.compo.n, fams:{} };
     o.pitchs = { jour:o.pitchs.jour, n:o.pitchs.n, t:{} };
   }
   if(quoi === 'recherche') o.rech = { pourquoi:{} };
@@ -337,16 +348,29 @@ function rendreVerrouIA(){
   try{ localStorage.removeItem(IA_VERROU_CLE); }catch(e){}
 }
 
+/* SPEC-09 LOT 1 — DEUX TRAVAUX DE FOND, ET UN SEUL À LA FOIS.
+
+   Le lot du jour (pitch et intitulés) ne se fait qu'une fois par journée ; la
+   composition des rangées, elle, peut repartir en cours de journée sur un
+   SIGNAL FORT — un 👍, un 👎, un duel joué, un ajout. Ils partagent le verrou
+   inter-onglets, donc ils ne peuvent pas tourner ensemble de toute façon.
+
+   LE LOT DU JOUR PASSE D'ABORD, et l'ordre compte : c'est lui qui écrit la
+   phrase du hero, la seule des deux qui se voit tout de suite. Si la
+   composition se servait la première, elle prendrait le verrou à chaque rendu
+   tant qu'il lui reste des familles à composer, et le pitch du matin
+   arriverait le soir. */
 function apresRenduDecouvrirIA(){
   if(!iaActive('decouvrir')) return;
-  if(iaLotEnCours) return;
   const o = lireCacheIA();
-  if(o.jour === todayISO()) return;      // le lot du jour est déjà là
-  if(!prendreVerrouIA()) return;         // un autre onglet s'en occupe
-  iaLotEnCours = true;
-  /* Un tour de boucle d'événements : le rendu en cours se termine, la personne
-     voit son écran, et seulement ensuite on parle au réseau. */
-  setTimeout(()=>{ lotIAduJour().catch(()=>{}); }, 0);
+  if(!iaLotEnCours && o.jour !== todayISO() && prendreVerrouIA()){
+    iaLotEnCours = true;
+    /* Un tour de boucle d'événements : le rendu en cours se termine, la
+       personne voit son écran, et seulement ensuite on parle au réseau. */
+    setTimeout(()=>{ lotIAduJour().catch(()=>{}); }, 0);
+    return;                              // une chose à la fois
+  }
+  apresRenduCompoIA();
 }
 
 async function lotIAduJour(){
@@ -1890,6 +1914,200 @@ async function bancGenererIA(){
   if(typeof render === 'function') render();
 }
 
+/* ===========================================================================
+   SPEC-09 LOT 1 (2/2) — L'IA COMPOSE LES RANGÉES PERSONNELLES DE DÉCOUVRIR
+
+   Décision d'Adrien du 31/08 : « L'IA compose une partie des rangées, les
+   autres restent locales (Bientôt, Nouveautés, Vu par tes proches), mais
+   vérifié sur TMDB. »
+
+   CE LOT NE RÉÉCRIT RIEN : il BRANCHE sur l'écran réel la chaîne que le banc
+   d'essai (lot 0) a mise au point et qui tourne depuis le 29/08 —
+   `bancFamilleIA` : une requête IA, chaque titre proposé cherché sur TMDB,
+   l'ambigu et l'introuvable JETÉS sans discussion, puis le tamis habituel
+   (déjà chez moi, « pas pour moi », genres exclus, cadre de la famille). Le
+   nom de cette fonction commence toujours par « banc » parce que c'est là
+   qu'elle est née et que la renommer ne rendrait pas le code plus vrai ; elle
+   est maintenant partagée par les deux, comme `normNomIA` l'est entre le banc
+   et l'interprète de la barre ✦.
+
+   LES RANGÉES QUE L'IA COMPOSE (liste A de la spec) : `top10`, `esprit`,
+   `favoris`, `genre`, `acteur:<id>`, `serie`/`film`/`anime`, `reste`. Elles
+   sont REMPLACÉES par les siennes, intitulés compris — elle nomme ce qu'elle
+   compose, et `intitules_rangees` ne s'applique donc plus qu'aux rangées
+   locales.
+
+   CE QUI RESTE LOCAL, SOURCE INCHANGÉE : `avenir` (un calendrier), `nouv`,
+   `cercle`, et les éditoriales — celles-là sont seulement rangées et
+   contrôlées, c'est le lot 1a.
+
+   LE DÉGRADÉ PRIME SUR TOUT LE RESTE (§4) : IA coupée, en panne, hors quota ou
+   réponse invalide → l'écran redevient EXACTEMENT celui d'aujourd'hui, moteur
+   local intégral, sans message d'erreur et sans trou. C'est une règle du
+   dépôt, pas une option de ce lot.
+   =========================================================================== */
+
+/* Les clés de rangée que l'IA remplace. Tout ce qui n'est pas là reste local.
+   `acteur:` est un préfixe : la clé porte l'identifiant de la personne. */
+const IA_RANGEES_COMPOSEES = ['top10', 'esprit', 'favoris', 'genre', 'reste',
+                              'serie', 'film', 'anime'];
+function estRangeeComposeeIA(cle){
+  return IA_RANGEES_COMPOSEES.indexOf(cle) >= 0 || String(cle).indexOf('acteur:') === 0;
+}
+
+/* L'ANTI-BOUCLE (§3) — six compositions par jour au plus, tous motifs
+   confondus. Sans lui, un après-midi de 👍 et de duels ferait repartir une
+   composition à chaque geste : c'est-à-dire une rafale de requêtes IA ET de
+   requêtes TMDB, pour un écran que personne ne regarde entre-temps.
+   Six, c'est quatre familles plus deux recompositions sur signal fort — la
+   spec pose ce chiffre comme défaut, et il est ici et nulle part ailleurs. */
+const IA_COMPO_MAX_JOUR = 6;
+
+/* Le compteur de compositions du jour, dans le cache IA. Il se remet à zéro au
+   changement de jour, EN LECTURE, comme celui des pitchs — un compteur de la
+   veille ne doit jamais faire croire que la journée est consommée. */
+function compoCompteIA(){
+  const o = lireCacheIA();
+  const auj = todayISO();
+  if(!o.compo || o.compo.jour !== auj) return 0;
+  return o.compo.n || 0;
+}
+
+/* La signature des goûts au moment de la composition. C'est elle qui dit qu'un
+   signal fort est passé — un 👍, un 👎, un duel joué, un ajout. On réutilise
+   `signatureGouts` d'app-11 : une seconde définition finirait par diverger de
+   celle qui invalide déjà le cache des suggestions. */
+function compoSignatureIA(){
+  try{ return (typeof signatureGouts === 'function') ? String(signatureGouts()) : ''; }
+  catch(e){ return ''; }
+}
+
+/* --------------------------- LA LECTURE (à chaque rendu) --------------------------- */
+
+/* SYNCHRONE, SANS RÉSEAU, ET ELLE SERT LA COMPOSITION PRÉCÉDENTE tant que la
+   nouvelle n'est pas écrite. C'est ce qui tient la règle transverse du dépôt :
+   une recomposition s'affiche à la PROCHAINE entrée d'écran, jamais sous le
+   doigt de quelqu'un qui est en train de faire défiler.
+
+   LE TAMIS EST REPASSÉ ICI, et ce n'est pas de la méfiance : entre la
+   composition d'hier soir et ce rendu-ci, la personne a pu ajouter un de ces
+   titres à sa bibliothèque ou le refuser. Le proposer encore serait la seule
+   chose qui se verrait vraiment. C'est le même réflexe que `poserTop`, qui
+   refait un `dejaChezMoi` à la main sur un cache qui peut être périmé. */
+function compoIARangees(puce){
+  if(!iaActive('decouvrir')) return null;
+  const o = lireCacheIA();
+  const c = o.compo && o.compo.fams && o.compo.fams[puce || 'tout'];
+  if(!c || !Array.isArray(c.rangees) || !c.rangees.length) return null;
+  if(c.jour !== todayISO()) return null;      // une composition d'hier ne sert pas
+
+  const vus = {};
+  const cadre = (typeof cadreSugg === 'function') ? cadreSugg(puce)
+                                                  : { medias:['tv','movie'], origine:'mixte' };
+  const out = [];
+  c.rangees.forEach((r, i)=>{
+    const brut = Array.isArray(r.l) ? r.l : [];
+    const l = (typeof tamiser === 'function') ? tamiser(brut, vus, cadre, false) : brut;
+    if(l.length) out.push({ cle:'ia:' + i, titre:String(r.titre || ''), l:l, ia:true });
+  });
+  return out.length ? out : null;
+}
+
+/* --------------------------- LE CALCUL (au lot du jour, et sur signal fort) --------------------------- */
+
+/* Une famille. Rend `true` si des rangées ont été écrites.
+
+   LA TENTATIVE EST TOUJOURS INSCRITE, MÊME QUAND ELLE ÉCHOUE, et c'est le
+   garde-fou le plus important de cette fonction. Sans lui, une réponse vide —
+   relais coupé, quota atteint, JSON refusé — laisserait `compoIAaFaire` rendre
+   `true` indéfiniment, donc une nouvelle tentative À CHAQUE RENDU de l'écran.
+   Une rafale, exactement ce que le §3 demande d'éviter, et personne ne la
+   verrait : elle est silencieuse par construction. C'est la même règle que le
+   lot du jour, qui pose son marqueur même quand ses deux requêtes ont échoué —
+   « une journée de dégradé silencieux vaut mieux qu'un écran qui redemande à
+   chaque repeint ».
+
+   UNE COMPOSITION QUI ÉCHOUE N'EFFACE PAS LA PRÉCÉDENTE : on garde ses rangées
+   si elle en avait. Écraser une bonne composition par une liste vide serait le
+   seul moyen de rendre l'écran pire qu'avant. */
+async function composerFamilleIA(puce){
+  const f = BANC_FAMILLES.filter(x => x.puce === puce)[0] || BANC_FAMILLES[0];
+  const mesures = { tmdb:0, proposes:0, tamises:0, ms:0 };
+  const t0 = Date.now();
+  let r = null;
+  try{ r = await bancFamilleIA(f, mesures); }catch(e){ r = null; }
+  mesures.ms = Date.now() - t0;
+
+  /* La spec demande de FOURNIR LARGE : environ deux fois ce qui sera affiché,
+     parce que la vérification TMDB et le tamis en retirent une partie. On garde
+     au plus six rangées et douze titres chacune — au-delà, on stocke des
+     vignettes que personne ne fera défiler, dans un `localStorage` qui n'est
+     pas extensible. */
+  const rangees = (r && !r.err ? r.rangees || [] : []).slice(0, 6).map(x => ({
+    titre: String(x.titre || '').slice(0, 60),
+    l: (x.l || []).slice(0, 12)
+  })).filter(x => x.titre && x.l.length);
+
+  const o = lireCacheIA();
+  const auj = todayISO();
+  if(!o.compo || o.compo.jour !== auj) o.compo = { jour:auj, n:0, fams:{} };
+  if(!o.compo.fams || typeof o.compo.fams !== 'object') o.compo.fams = {};
+  const avant = o.compo.fams[f.puce];
+  o.compo.n = (o.compo.n || 0) + 1;
+  o.compo.fams[f.puce] = {
+    jour: auj, sig: compoSignatureIA(),
+    /* Rien de neuf : on reconduit ce qui était là, s'il est du jour. */
+    rangees: rangees.length ? rangees
+            : ((avant && avant.jour === auj && avant.rangees) || []),
+    /* Les mesures voyagent avec la composition : c'est le taux de jetés que la
+       spec demande de rapporter, et il ne se reconstitue pas après coup. */
+    proposes: mesures.proposes, jetes: ((r && r.jetes) || []).length,
+    tamises: mesures.tamises, tmdb: mesures.tmdb, ms: mesures.ms
+  };
+  ecrireCacheIA(o);
+  return rangees.length > 0;
+}
+
+/* Le déclencheur, appelé après chaque rendu de la vitrine (jamais avant).
+   Trois raisons de composer, dans l'ordre où on les teste :
+     · rien pour cette famille aujourd'hui ;
+     · la signature des goûts a bougé depuis — c'est le SIGNAL FORT du §3
+       (un 👍, un 👎, un duel joué, un ajout) ;
+     · rien d'autre. On ne compose pas « pour voir ».
+   Et dans tous les cas, l'anti-boucle a le dernier mot. */
+function compoIAaFaire(puce){
+  if(!iaActive('decouvrir')) return false;
+  if(compoCompteIA() >= IA_COMPO_MAX_JOUR) return false;
+  const o = lireCacheIA();
+  const c = o.compo && o.compo.fams && o.compo.fams[puce];
+  if(!c || c.jour !== todayISO()) return true;
+  return c.sig !== compoSignatureIA();
+}
+
+let compoEnCoursIA = false;
+function apresRenduCompoIA(){
+  if(compoEnCoursIA) return;
+  const puce = (typeof ui !== 'undefined' && ui.disc && ui.disc.type) ? ui.disc.type : 'tout';
+  if(!compoIAaFaire(puce)) return;
+  if(!prendreVerrouIA()) return;         // un autre onglet s'en occupe
+  compoEnCoursIA = true;
+  /* Un tour de boucle d'événements : l'écran en cours finit de se peindre, la
+     personne le voit, et seulement ensuite on parle au réseau. */
+  setTimeout(async ()=>{
+    try{
+      const ecrit = await composerFamilleIA(puce);
+      /* ON NE REPEINT PAS. La composition qui vient d'arriver s'affichera à la
+         PROCHAINE entrée d'écran — c'est la règle transverse du dépôt, et c'est
+         aussi la demande explicite du §3 : « jamais de rangée qui bouge sous le
+         doigt ». Un `peindreDisc()` ici ferait exactement ce qu'elle interdit,
+         et ce serait le premier réflexe. */
+      if(!ecrit && typeof console !== 'undefined' && console.debug)
+        console.debug('[ia] composition sans résultat pour ' + puce);
+    }catch(e){}
+    finally{ compoEnCoursIA = false; rendreVerrouIA(); }
+  }, 0);
+}
+
 /* ------------------------------ LES VOTES ------------------------------ */
 
 /* Un vote porte sur une RANGÉE — c'est la maille que la spec demande, et c'est
@@ -1995,6 +2213,46 @@ function bancMesures(){
     '<span><b>'+(m.ms / 1000).toFixed(1).replace('.', ',')+' s</b> au total</span>'+
   '</div>';
 }
+/* ---------------------------------------------------------------------------
+   SPEC-09 LOT 1 — LE TAUX DE JETÉS DE L'ÉCRAN RÉEL, ET PAS SEULEMENT DU BANC.
+
+   La spec demande de mesurer ce taux et de le rapporter. Le banc le donne pour
+   SES propres tirages — mais le banc, on l'ouvre exprès, et il tire sur un
+   profil qu'on choisit. Ce qui compte pour de bon, c'est ce que la composition
+   de l'écran RÉEL a jeté hier soir, sans que personne regarde.
+
+   Ces chiffres-là sont écrits par `composerFamilleIA` à chaque composition, et
+   cette ligne est le seul endroit où on peut les lire. Sans elle, ils
+   existeraient sans être lisibles — c'est-à-dire qu'ils n'existeraient pas.
+
+   AU-DESSUS DE 30 %, LA SPEC DEMANDE DE RESSERRER LE PROMPT plutôt que de
+   laisser filer : le seuil est écrit dans le texte affiché, pour que la
+   décision se prenne en regardant le chiffre et pas de mémoire.
+--------------------------------------------------------------------------- */
+function bancMesuresReelles(){
+  const c = lireCacheIA().compo;
+  if(!c || !c.fams) return '';
+  const noms = Object.keys(c.fams);
+  if(!noms.length) return '';
+  let proposes = 0, jetes = 0, tamises = 0, tmdb = 0;
+  noms.forEach(k=>{
+    const f = c.fams[k];
+    proposes += f.proposes || 0; jetes += f.jetes || 0;
+    tamises += f.tamises || 0;   tmdb += f.tmdb || 0;
+  });
+  if(!proposes) return '';
+  const taux = Math.round(jetes / proposes * 100);
+  return '<div class="bncmes">'+
+    '<span><b>Écran réel, '+esc(c.jour || '')+'</b></span>'+
+    '<span><b>'+jetes+' / '+proposes+'</b> titres jetés ('+taux+' %'+
+      (taux > 30 ? ' — au-dessus des 30 % : resserrer le prompt' : '')+')</span>'+
+    '<span><b>'+tamises+'</b> retirés par le tamis</span>'+
+    '<span><b>'+tmdb+'</b> requêtes TMDB de vérification</span>'+
+    '<span><b>'+noms.length+'</b> composition'+(noms.length > 1 ? 's' : '')+
+      ' sur '+IA_COMPO_MAX_JOUR+' possibles aujourd\'hui</span>'+
+  '</div>';
+}
+
 function jetesTotalBanc(){
   let n = 0;
   BANC_FAMILLES.forEach(f=>{ const e = bancEtat.fams[f.cle]; if(e) n += (e.ia.jetes || []).length; });
@@ -2007,8 +2265,17 @@ function viewBancIA(){
     '<p class="tiny muted">L\'IA compose les rangées elle-même, au service de ton profil. '+
     'Chaque titre proposé est vérifié sur TMDB avant d\'être affiché, puis passe le tamis '+
     'habituel (déjà vu, écarté, « pas pour moi », genres exclus). '+
-    '<b>Rien de ce que tu vois ici n\'atteint l\'écran Découvrir.</b> '+
     'Vote par rangée : ce sont ces votes qui décideront de la suite.</p>';
+  /* SPEC-09 LOT 1 (01/09/2026) — LA PHRASE « rien de ce que tu vois ici
+     n'atteint l'écran Découvrir » A ÉTÉ RETIRÉE, parce qu'elle est devenue
+     fausse : la même chaîne compose maintenant les rangées personnelles de
+     l'écran réel. Laisser la phrase aurait été pire qu'un oubli — c'est le
+     genre de mensonge qu'on croit six mois. Ce qui reste vrai, et qui la
+     remplace : les TIRAGES du banc, eux, restent des tirages d'essai. */
+  html += '<p class="tiny muted">Depuis SPEC-09 lot 1, cette chaîne compose '+
+    'aussi les rangées personnelles de l\'écran Découvrir. Les tirages faits '+
+    'ICI restent des essais : ils ne remplacent rien.</p>';
+  html += bancMesuresReelles();
   if(!iaActive('decouvrir'))
     html += '<div class="banner">L\'IA de Découvrir est coupée dans les Réglages : '+
       'le banc ne peut rien demander. Rien d\'autre ne change.</div>';

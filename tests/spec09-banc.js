@@ -137,9 +137,21 @@ const dors = ms => new Promise(r=>setTimeout(r, ms));
       await chargerSuggestions();
       for(let i=0; i<100 && suggCourantes().etat !== 'ok'; i++) await new Promise(r=>setTimeout(r,20));
       render();
+      /* SPEC-09 LOT 1 (01/09/2026) — ON LAISSE LA COMPOSITION DE L'ÉCRAN SE
+         FAIRE AVANT DE FIGER. Depuis le lot 1, rendre Découvrir déclenche la
+         composition de ses rangées personnelles : elle s'écrit en tâche de
+         fond et s'affiche au rendu suivant. La figer AVANT reviendrait à
+         comparer un écran d'avant la composition à un écran d'après, et à
+         reprocher au banc un changement dont il n'est pas la cause. Ce que ce
+         cas doit isoler, c'est l'effet DU BANC, et rien d'autre. */
+      for(let i=0; i<100 && !(lireCacheIA().compo || {}).n; i++) await new Promise(r=>setTimeout(r,20));
+      render();
       return document.getElementById('app').innerHTML;
     });
     ok(avantDisc.length > 500, 'la vitrine réelle est bien peinte (' + avantDisc.length + ' caractères)');
+    /* L'état de la composition à cet instant : c'est LUI que le banc ne doit
+       pas toucher. */
+    const compoAvant = await page.evaluate(()=> JSON.stringify(lireCacheIA().compo || {}));
 
     titre('§2 — le banc génère : quatre requêtes IA, une par famille');
     const r1 = await page.evaluate(async ()=>{
@@ -196,7 +208,22 @@ const dors = ms => new Promise(r=>setTimeout(r, ms));
     ok(r3.tmdbCompte > 0 && typeof r3.duree === 'number',
        r3.tmdbCompte + ' requêtes TMDB de vérification, ' + r3.duree + ' ms');
 
-    titre('§4 ④ — l\'écran Découvrir réel n\'a pas bougé d\'un caractère');
+    /* CE CAS A CHANGÉ DE PROMESSE LE 01/09/2026, ET IL FAUT DIRE POURQUOI.
+       Au lot 0, la borne était « l'écran Découvrir réel ne bouge pas d'un
+       pixel » — le banc était un instrument de mesure, rien de plus. Le lot 1
+       lève cette borne : la même chaîne compose maintenant les rangées
+       personnelles de l'écran réel, et c'était tout l'objet de la décision
+       d'Adrien du 31/08.
+       CE QUI RESTE VRAI, et que ce cas tient maintenant : les TIRAGES DU BANC
+       ne deviennent jamais l'écran. Ouvrir le banc, générer, revenir — rien de
+       ce qui a été tiré ici n'a été écrit dans la composition de Découvrir.
+       La distinction compte : sans elle, un aller-retour par le banc
+       remplacerait l'écran par un tirage d'essai, sans que personne l'ait
+       demandé. */
+    titre('§4 ④ — les TIRAGES du banc n\'atteignent jamais l\'écran Découvrir');
+    const compoApres = await page.evaluate(()=> JSON.stringify(lireCacheIA().compo || {}));
+    ok(compoApres === compoAvant,
+       'le banc a tiré quatre familles et n\'a rien écrit dans la composition de l\'écran');
     const apresDisc = await page.evaluate(()=>{
       go('discover', {});
       render();

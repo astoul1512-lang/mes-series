@@ -3310,6 +3310,46 @@ function rangeesSuggerees(){
     poser('avenir', 'Bientôt', s.avenir, { sansRepli:true, mini:AVENIR_MINI });
   }
 
+  /* ===== SPEC-09 LOT 1 (2/2) — L'IA PREND LA PLACE DES RANGÉES PERSONNELLES ==
+     Décision d'Adrien du 31/08 : « L'IA compose une partie des rangées, les
+     autres restent locales (Bientôt, Nouveautés, Vu par tes proches). »
+
+     LA SUBSTITUTION SE FAIT ICI, SUR `brut`, ET AVANT LA RÈGLE DES 10 : les
+     rangées de l'IA doivent passer la même sentence que les autres, sinon on
+     afficherait une rangée maigre parce qu'elle vient de l'IA — exactement ce
+     que le §2.4 interdit. Ce que l'IA ne remplit pas retombe dans « Aussi pour
+     toi » avec le reste, donc AUCUN titre local n'est perdu : c'est ça, la
+     « complétion par le moteur local » de la spec, et elle est déjà écrite.
+
+     LES RANGÉES DE L'IA PRENNENT LA PLACE DE LA PREMIÈRE personnelle, et les
+     locales gardent leur ordre relatif derrière. Les mettre en tête aurait
+     poussé « Bientôt » et « Vu par tes proches » hors de l'écran ; les mettre à
+     la fin aurait fait payer une requête IA pour des rangées que personne ne
+     fait défiler jusque-là.
+
+     DÉGRADÉ (§4) : `compoIARangees` rend `null` dès que l'IA est coupée, en
+     panne, hors quota, ou qu'aucune composition du jour n'existe. `brut` reste
+     alors ce qu'il était, c'est-à-dire l'écran d'aujourd'hui à l'identique.
+     Cette ligne EST le dégradé, il n'y en a pas d'autre à écrire. */
+  const compoIA = (!hum && typeof compoIARangees === 'function'
+                        && typeof estRangeeComposeeIA === 'function')
+    ? compoIARangees((ui.disc && ui.disc.type) || 'tout') : null;
+  if(compoIA && compoIA.length){
+    const i0 = brut.findIndex(r => estRangeeComposeeIA(r.cle));
+    const locales = brut.filter(r => !estRangeeComposeeIA(r.cle));
+    /* Les titres que l'IA propose déjà ne doivent pas réapparaître dans une
+       rangée locale : c'est la règle du tamis partagé, appliquée entre les deux
+       moitiés de l'écran. */
+    const dejaIA = {};
+    compoIA.forEach(r => r.l.forEach(x => { dejaIA[x.media + ':' + x.id] = 1; }));
+    locales.forEach(r => { r.l = r.l.filter(x => !dejaIA[x.media + ':' + x.id]); });
+    const coupe = i0 < 0 ? 0 : locales.findIndex(r => brut.indexOf(r) > i0);
+    const avant = coupe < 0 ? locales : locales.slice(0, coupe);
+    const apres = coupe < 0 ? [] : locales.slice(coupe);
+    brut.length = 0;
+    brut.push.apply(brut, avant.concat(compoIA, apres));
+  }
+
   /* ===== LA RÈGLE DES 10 (§0.5) =====
      Dix affiches ou la rangée n'existe pas. L'élargissement TMDB a déjà eu
      lieu au calcul (`remplirSugg`, cible dix, deux pages supplémentaires au
@@ -3430,7 +3470,13 @@ async function chargerPageRangee(cle, page, vus){
   /* SPEC-04 — DEUX RANGÉES SANS SUITE. Le Top 10 est borné à dix par
      définition, et « Aussi pour toi » est déjà le fond du panier : tout ce qui
      restait y est. La grille dépliée sert donc ce qui est en mémoire. */
-  if(cle === 'top10' || cle === 'reste'){
+  /* SPEC-09 lot 1 — UNE RANGÉE COMPOSÉE PAR L'IA N'A PAS DE PAGE 2, et pour
+     une raison de fond : elle n'est pas une requête TMDB qu'on pourrait
+     repaginer, c'est une LISTE DE NOMS que le modèle a proposée et que TMDB a
+     confirmée un par un. Demander « la suite » n'aurait aucun sens — il n'y a
+     pas de suite, il y a une autre composition. On sert donc ce qui est en
+     mémoire, exactement comme le Top 10 et « Aussi pour toi ». */
+  if(cle === 'top10' || cle === 'reste' || String(cle).indexOf('ia:') === 0){
     if(page > 1) return { titres:[], pages:1 };
     const r = (typeof rangeeParCle === 'function') ? rangeeParCle(cle) : null;
     const tout = (r && r.l) || [];
