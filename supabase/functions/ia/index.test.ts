@@ -32,7 +32,9 @@ import {
   rpc, servir, oublierFournisseurs, attenteDe, bornerTempsRequetePourTest,
   CACHE_FOURNISSEURS_MS,
 } from "./relais.ts";
-import { construire, valider, tacheConnue, INTERDIT_EMOTION, CONSIGNE_COMMUNE } from "./gabarits.ts";
+import {
+  construire, meriteEscalade, valider, tacheConnue, INTERDIT_EMOTION, CONSIGNE_COMMUNE,
+} from "./gabarits.ts";
 import {
   BUDGET_GLOBAL_JOUR, BUDGET_UTILISATEUR_JOUR, FOURNISSEURS, MAX_JETONS_SORTIE,
   ORIGINES, TACHES, TIMEOUT_MS, TIMEOUT_REQUETE_MS,
@@ -1703,14 +1705,192 @@ Deno.test("la liste blanche compte NEUF tâches, exactement celles qui ont un ap
   assertEquals(valider("profil_humeur", { texte: "x" }), null);
 });
 
-/* ---- RETOUR-01 POINT 4 — TOUTES LES TÂCHES DÉMARRENT À L'ÉTAGE 1 ---- */
+/* ---- RETOUR-01 POINT 4 — TOUTES LES TÂCHES DÉMARRENT À L'ÉTAGE 1 ----
+   … SAUF UNE, ET L'EXCEPTION EST DATÉE (RETOUR-10 §1, 01/09/2026).
+   Ce cas ne dit plus « toutes », il dit « toutes sauf celles qui savent se
+   rattraper ». La différence tient en une phrase : le point 4 refusait de
+   partir bas parce qu'on ne pouvait pas RATTRAPER un petit modèle qui se
+   trompe ; une tâche qui porte `escalade_vers` le peut. Une tâche qui
+   partirait bas SANS escalade retomberait dans le défaut que le point 4 a
+   corrigé, et c'est exactement ce que ce cas interdit. */
 
-Deno.test("RETOUR-01 point 4 : aucune tâche ne démarre au-dessus de l'étage 1", () => {
+Deno.test("RETOUR-01 point 4 : une tâche ne part bas que si elle sait remonter", () => {
   for (const [nom, t] of Object.entries(TACHES)) {
-    assertEquals(t.etage_depart, 1,
+    if (t.etage_depart === 1) {
+      assertEquals(t.escalade_vers, undefined,
+        "`" + nom + "` part déjà de l'étage 1 : elle n'a rien vers quoi escalader");
+      continue;
+    }
+    assertEquals(nom, "interpreter_recherche",
       "`" + nom + "` démarre à l'étage " + t.etage_depart +
-      " — la décision du 11/08 dit : pertinence d'abord, cascade seulement sur saturation");
+      " — seule `interpreter_recherche` a une mesure qui le justifie (RETOUR-10 §1)");
+    assertEquals(t.escalade_vers, 1,
+      "une tâche qui part bas DOIT pouvoir remonter au rang 1, sinon on a perdu " +
+      "la qualité sans rien gagner d'autre que de la vitesse");
+    assert((t.escalade_vers || 0) < t.etage_depart, "l'escalade doit remonter, pas descendre");
   }
+});
+
+/* ========== RETOUR-10 §1 — L'ESCALADE, VUE DE L'ÉCHELLE (01/09/2026) ========== */
+
+/* La phrase de référence de la spec, côté critères : « un film d'action avec
+   Will Smith ». Le petit modèle la découpe en une seconde. */
+const INTERP = { tache: "interpreter_recherche", params: { phrase: "un film d'action avec Will Smith" } };
+const REP_FILTRES = JSON.stringify({ mode: "filtres", filtres: { famille: "film", genres: ["action"] } });
+const REP_TITRE = JSON.stringify({ mode: "titre", titres: [{ nom: "Le Loup de Wall Street", media: "film" }] });
+
+Deno.test("RETOUR-10 §1 : une phrase de critères ne touche JAMAIS le modèle fort", async () => {
+  /* LE CŒUR DU LOT, et le chiffre qui le motive : 949 ms de médiane sur le
+     petit modèle contre 3 983 ms sur le fort, mesurés le 31/08. Si cette
+     requête touchait encore le rang 1, le lot n'aurait rien accéléré. */
+  const f = faireSemblant({
+    fournisseurs: null,
+    reponses: { "gemini-flash-lite": { statut: 200, texte: REP_FILTRES } },
+  });
+  try {
+    const r = await servir(requete(INTERP));
+    const d = await r.json();
+    assertEquals(d.mode, "filtres");
+    assertEquals(d.escalade, undefined, "une réponse non escaladée s'annonce comme escaladée");
+    const e = f.etages();
+    assertEquals(e.length, 1, "un seul appel, ou le lot double la consommation");
+    assert(e[0].indexOf("gemini-3.5-flash-lite") >= 0, "la tâche part encore du modèle fort");
+    assertEquals(f.journal().length, 1);
+    // Une seule unité de budget : pas d'escalade, pas de seconde réservation.
+    assertEquals(f.appels("/rpc/ia_reserver_budget").length, 1);
+  } finally { f.rendre(); }
+});
+
+Deno.test("RETOUR-10 §1 : une réponse qui ne vaut rien fait remonter au modèle fort", async () => {
+  /* Le mode `titre` sans candidat exploitable — identifier une œuvre par sa
+     description demande de la mémoire, et c'est là que le petit modèle sèche.
+     `valider` rend `null` sur une liste vide, donc le relais voit la même chose
+     que sur un JSON cassé : « rien d'exploitable ». */
+  const f = faireSemblant({
+    fournisseurs: null,
+    reponses: {
+      "gemini-flash-lite": { statut: 200, texte: JSON.stringify({ mode: "titre", titres: [] }) },
+      "gemini-flash": { statut: 200, texte: REP_TITRE },
+    },
+  });
+  try {
+    const r = await servir(requete(INTERP));
+    const d = await r.json();
+    assertEquals(d.mode, "titre");
+    assertEquals(d.titres[0].nom, "Le Loup de Wall Street");
+    assertEquals(d.escalade, true, "l'escalade ne se voit nulle part dans la réponse");
+    const e = f.etages();
+    assertEquals(e.length, 2, "il faut UN seul nouvel essai, jamais deux modèles en parallèle");
+    assert(e[0].indexOf("gemini-3.5-flash-lite") >= 0);
+    assert(e[1].indexOf("gemini-3.6-flash") >= 0, "l'escalade ne remonte pas au modèle fort");
+    // Les DEUX appels sont tracés : c'est ce qui rend le taux d'escalade mesurable.
+    assertEquals(f.journal().length, 2, "un appel d'escalade doit se lire dans le journal");
+    // Et la spec veut que les budgets s'appliquent aux deux.
+    assertEquals(f.appels("/rpc/ia_reserver_budget").length, 2,
+      "la seconde réponse d'IA n'a rien coûté : le budget ne protège plus rien");
+  } finally { f.rendre(); }
+});
+
+Deno.test("RETOUR-10 §1 : l'escalade n'a lieu qu'UNE fois", async () => {
+  /* « UN seul nouvel essai sur le modèle fort, puis l'échelle habituelle. » Si
+     chaque réponse invalide relançait un passage, une phrase que personne ne
+     comprend ferait cinq appels au lieu de deux — et le petit modèle serait
+     rejoué, alors qu'il vient de répondre. */
+  const f = faireSemblant({
+    fournisseurs: null,
+    reponses: { "gemini-flash": { statut: 200, texte: "{}" },
+                "gemini-flash-lite": { statut: 200, texte: "{}" },
+                "openrouter": { statut: 200, texte: "{}" } },
+  });
+  try {
+    const r = await servir(requete(INTERP));
+    assertEquals(JSON.stringify(await r.json()), '{"indisponible":true}');
+    assertEquals(f.etages().length, 2, "l'escalade s'est répétée, ou l'échelle a été redescendue");
+    // Deux unités prises, deux unités rendues : aucune fuite de compteur.
+    assertEquals(f.appels("/rpc/ia_reserver_budget").length, 2);
+    assertEquals(f.appels("/rpc/ia_rendre_budget").length, 2,
+      "une unité de budget prise n'a pas été rendue");
+  } finally { f.rendre(); }
+});
+
+Deno.test("RETOUR-10 §1 : petits étages saturés → le fort prend la suite, sans seconde unité", async () => {
+  /* LE CHEMIN QU'ON OUBLIE. Faire partir la tâche du rang 3 lui retire les deux
+     meilleurs étages ; si personne ne répond en bas, il faut monter, sinon un
+     lot de VITESSE aurait coûté de la DISPONIBILITÉ. Mais aucune IA n'a répondu
+     ici, donc il n'y a pas de seconde réponse à facturer : une seule unité. */
+  const f = faireSemblant({
+    fournisseurs: null,
+    place: { "gemini-flash-lite": false, "gemini-flash-lite-2": false, "openrouter": false },
+    reponses: { "gemini-flash": { statut: 200, texte: REP_FILTRES } },
+  });
+  try {
+    const r = await servir(requete(INTERP));
+    const d = await r.json();
+    assertEquals(d.mode, "filtres");
+    assertEquals(f.appels("/rpc/ia_reserver_budget").length, 1,
+      "personne n'avait répondu : on a facturé une seconde unité pour rien");
+    assertEquals(f.etages().length, 1, "un étage saturé a été rappelé dans le second passage");
+  } finally { f.rendre(); }
+});
+
+Deno.test("RETOUR-10 §1 : budget refusé → pas d'escalade, et l'écran normal", async () => {
+  /* La seconde unité peut être refusée (budget global atteint). Alors on
+     n'escalade pas : `{indisponible:true}`, c'est-à-dire l'écran d'aujourd'hui,
+     jamais un message. Et l'unique unité prise revient à la personne. */
+  let n = 0;
+  const f = faireSemblant({
+    fournisseurs: null,
+    reponses: { "gemini-flash-lite": { statut: 200, texte: "{}" } },
+  });
+  const vrai = globalThis.fetch;
+  globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
+    // La première réservation passe, la seconde est refusée.
+    if (String(url).indexOf("/rpc/ia_reserver_budget") >= 0 && ++n > 1) {
+      return Promise.resolve(new Response("false", { status: 200 }));
+    }
+    return vrai(url as string, init);
+  }) as typeof fetch;
+  try {
+    const r = await servir(requete(INTERP));
+    assertEquals(JSON.stringify(await r.json()), '{"indisponible":true}');
+    assertEquals(f.etages().length, 1, "on a escaladé sans budget");
+    const j = f.journal();
+    assertEquals(j[j.length - 1].statut, 3, "un refus de budget doit se lire dans le journal");
+  } finally { globalThis.fetch = vrai; f.rendre(); }
+});
+
+Deno.test("RETOUR-10 §1 : les autres tâches gardent l'échelle d'origine", async () => {
+  /* « Rien d'autre ne change » — la spec l'écrit, et c'est vérifiable dans le
+     journal. Une tâche de rédaction part toujours du modèle fort et ne fait
+     jamais deux appels pour une réponse illisible. */
+  const f = faireSemblant({
+    fournisseurs: null,
+    reponses: { "gemini-flash": { statut: 200, texte: "{}" } },  // invalide
+  });
+  try {
+    const r = await servir(requete(PITCH));
+    assertEquals(JSON.stringify(await r.json()), '{"indisponible":true}');
+    assertEquals(f.etages().length, 1,
+      "une tâche sans `escalade_vers` a fait un second appel : la spec l'interdit");
+    assert((f.etages()[0] || "").indexOf("gemini-3.6-flash") >= 0);
+    assertEquals(f.appels("/rpc/ia_reserver_budget").length, 1);
+  } finally { f.rendre(); }
+});
+
+Deno.test("RETOUR-10 §1 : la règle d'escalade et le droit d'escalader sont d'accord", () => {
+  /* Deux fichiers portent la décision : `config.ts` dit QUI a le droit,
+     `gabarits.ts` dit SUR QUOI. S'ils divergent, le résultat n'est pas une
+     erreur mais un silence — soit une tâche qui n'escalade jamais alors qu'on
+     l'a réglée pour, soit une règle écrite pour personne. */
+  for (const [nom, t] of Object.entries(TACHES)) {
+    const aLaRegle = meriteEscalade(nom, null);
+    assertEquals(aLaRegle, t.escalade_vers !== undefined,
+      "`" + nom + "` : le droit d'escalader (config.ts) et la règle (gabarits.ts) " +
+      "ne disent pas la même chose");
+  }
+  // Et la règle ne se déclenche pas sur une réponse valide.
+  assertEquals(meriteEscalade("interpreter_recherche", { mode: "filtres" }), false,
+    "on redemanderait le modèle fort alors que la réponse était bonne");
 });
 
 /* ---- RETOUR-01 POINT 8 — `classer_grille` rend UN ORDRE, pas des titres ---- */

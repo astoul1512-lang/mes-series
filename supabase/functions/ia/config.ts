@@ -217,6 +217,14 @@ export function cleParDefaut(nom: string): string {
 // ---------------------------------------------------------------------------
 export type Tache = {
   etage_depart: number;
+  /* L'ÉTAGE OÙ REPARTIR SI LA PREMIÈRE RÉPONSE NE VAUT RIEN — RETOUR-10 §1
+     (01/09/2026). Absent : la tâche n'escalade jamais, ce qui reste le cas de
+     huit tâches sur neuf. Ce champ dit le DROIT d'escalader ; la RÈGLE — sur
+     quoi on juge qu'une réponse ne vaut rien — vit dans `gabarits.ts`
+     (`meriteEscalade`), avec les formes de sortie. Un `escalade_vers` posé ici
+     sans règle correspondante ne fait donc rien du tout : c'est voulu, les deux
+     doivent être d'accord. */
+  escalade_vers?: number;
   // Longueur maximale du texte rendu, en caractères. Au-delà : rejet.
   maxlong: number;
   // Combien de titres au plus le client a le droit de faire voyager.
@@ -347,7 +355,33 @@ export const TACHES: Record<string, Tache> = {
   //
   // `maxtitres` vaut 5 : c'est le plafond de candidats du mode `titre`, et
   // `maxlong` 80, la longueur d'un nom d'œuvre.
-  interpreter_recherche: { etage_depart: 1, maxlong: 80, maxtitres: 5 },
+  //
+  // ---- RETOUR-10 §1 (01/09/2026) — LA SEULE TÂCHE QUI NE PART PAS DE L'ÉTAGE 1
+  //
+  // Elle démarre au FLASH-LITE (rang 3) et ne remonte au modèle fort que si la
+  // réponse ne vaut rien. C'est une EXCEPTION ASSUMÉE à RETOUR-01 point 4
+  // (« toutes les tâches démarrent à l'étage 1, pertinence d'abord »), et elle
+  // s'appuie sur des chiffres, pas sur une intuition — relevés dans
+  // `ia_journal` le 31/08 sur cette tâche précisément :
+  //
+  //     gemini-flash        7 succès       MÉDIANE 3 983 ms  (2 910 → 7 895)
+  //     gemini-flash        2 délais       8 096 ms perdus, puis bascule
+  //     gemini-flash-lite   2 succès       MÉDIANE   949 ms  (945 → 953)
+  //
+  // Pire cas d'alors : NEUF SECONDES pour une phrase simple. Le point 4 disait
+  // « on paie d'abord la pertinence » — l'argument tenait parce qu'on ne
+  // pouvait pas RATTRAPER un petit modèle qui se trompe. Maintenant on le peut :
+  // une réponse qui ne vaut rien fait repartir la requête sur le rang 1. On ne
+  // renonce donc à aucune qualité, on renonce à la PAYER quand elle ne sert pas.
+  //
+  // ET POURQUOI ELLE SEULE. Découper « un film d'action avec Will Smith » en
+  // critères est de l'ANALYSE DE TEXTE : le petit modèle la fait en une seconde
+  // avec une régularité parfaite. Écrire le pitch du jour ou expliquer
+  // « pourquoi il te correspond », non — c'est de la rédaction, elle se voit, et
+  // il n'existe aucun test automatique pour dire qu'une phrase est moins bonne.
+  // Les huit autres tâches gardent l'échelle d'origine, et un cas de test le
+  // vérifie : la spec l'exige noir sur blanc.
+  interpreter_recherche: { etage_depart: 3, escalade_vers: 1, maxlong: 80, maxtitres: 5 },
 };
 
 // ---------------------------------------------------------------------------

@@ -7,13 +7,14 @@
    Demande d'Adrien (31/08) : « montrer que l'IA est en train de chercher, sinon
    on a l'impression que ça bugue. »
 
-   CE LOT NE COUVRE QUE LE §2. Le §1 (démarrer sur le petit modèle et n'escalader
-   qu'au besoin) touche la fonction Edge `ia` et ne peut pas être éprouvé sans
-   `deno test` : il est livré à part. L'état « ✦ Je cherche plus loin… » existe
-   donc dans le code et dans cette suite, mais rien ne le DÉCLENCHE encore —
-   c'est l'escalade du §1 qui le fera. On le teste quand même : une forme sans
-   appelant se remet en service par accident, et celle-ci a son appelant qui
-   arrive.
+   LE §1 EST ARRIVÉ (01/09/2026), et il change ce que cette suite doit tenir.
+   L'escalade — démarrer sur le petit modèle, ne remonter au fort qu'au besoin —
+   vit ENTIÈREMENT dans la fonction Edge `ia` (éprouvée par `deno test`). Le
+   serveur ne parle au téléphone qu'UNE fois, à la fin : l'écran ne peut donc pas
+   APPRENDRE l'escalade pendant qu'elle a lieu, il la DÉDUIT de la durée. C'est
+   un choix d'Adrien, pris en connaissance de cause. Les cas 10 à 12 tiennent les
+   deux moitiés de ce choix : la ligne apparaît quand l'attente se prolonge, et
+   elle n'apparaît JAMAIS quand la réponse arrive vite.
 
    CE QUI EST FACILE À CASSER ET QUE CES CAS TIENNENT :
 
@@ -200,6 +201,72 @@ const lire = page => page.evaluate(()=>({
   const libelles = await page.evaluate(()=> Object.keys(IA_STATUTS));
   ok(libelles.length === 3 && libelles.indexOf('loin') >= 0,
      'les trois états sont déclarés au même endroit ('+libelles.join(', ')+')');
+
+  titre('10. §1 — une attente qui se prolonge dit POURQUOI');
+  const loin = await page.evaluate(async ()=>{
+    oublierCachePhraseIA();
+    /* Deux secondes : bien au-delà des 949 ms de médiane du petit modèle
+       mesurées le 31/08, donc l'écran doit conclure à une escalade. */
+    window.__delaiIA = 2000;
+    window.appelIA = async ()=> { await new Promise(r=> setTimeout(r, 2000));
+                                  return { mode:'filtres', filtres:{ famille:'film' } }; };
+    const p = interpreterRechercheIA('le film ou DiCaprio est courtier et se drogue');
+    const vu = [];
+    for(let i = 0; i < 120; i++){
+      const s = etatRech().iaStatut;
+      if(s && vu.indexOf(s.etat) < 0) vu.push(s.etat);
+      if(s && s.etat === 'loin'){
+        vu.push('#' + ((document.querySelector('.iastat .iatx b')||{}).textContent || ''));
+        vu.push('§' + ((document.querySelector('.iastat .iatx span')||{}).textContent || ''));
+        vu.push('~' + (document.querySelector('.qbar.qcherche') ? 'liseré' : 'sans'));
+        break;
+      }
+      await new Promise(x=> setTimeout(x, 20));
+    }
+    await p;
+    return vu;
+  });
+  ok(loin[0] === 'lit', 'elle commence par « je lis ta phrase »');
+  ok(loin.indexOf('loin') > 0, 'puis elle passe à l\'état « plus loin » ('+loin.join(' → ')+')');
+  ok(loin.some(x => /^#.*plus loin/.test(x)), 'la ligne dit « ✦ Je cherche plus loin… »');
+  ok(loin.some(x => /^§.*demande de la mémoire/.test(x)),
+     'et elle JUSTIFIE l\'attente au lieu de la subir');
+  ok(loin.indexOf('~liseré') >= 0, 'le liseré court toujours pendant le second essai');
+
+  titre('11. §1 — une réponse rapide ne parle JAMAIS d\'escalade');
+  const vite = await page.evaluate(async ()=>{
+    oublierCachePhraseIA();
+    /* 300 ms : le cas ordinaire, une phrase de critères que le petit modèle
+       découpe tout seul. Dire « ta description demande de la mémoire » ici
+       serait un mensonge, et un mensonge que personne ne pourrait démentir. */
+    window.appelIA = async ()=> { await new Promise(r=> setTimeout(r, 300));
+                                  return { mode:'filtres', filtres:{ famille:'film' } }; };
+    const vus = {};
+    const t = setInterval(()=>{ const s = etatRech().iaStatut; if(s) vus[s.etat] = true; }, 10);
+    await interpreterRechercheIA('un film d\'action avec Will Smith');
+    clearInterval(t);
+    return Object.keys(vus);
+  });
+  ok(vite.indexOf('lit') >= 0, 'on a bien vu « je lis ta phrase »');
+  ok(vite.indexOf('loin') < 0,
+     'et JAMAIS « plus loin » sur une réponse rapide ('+vite.join(', ')+')');
+
+  titre('12. §1 — la minuterie ne survit pas à la réponse');
+  const apres = await page.evaluate(async ()=>{
+    oublierCachePhraseIA();
+    window.appelIA = async ()=> { await new Promise(r=> setTimeout(r, 100));
+                                  return { mode:'filtres', filtres:{ famille:'film' } }; };
+    await interpreterRechercheIA('une autre phrase courte');
+    /* Bien au-delà des 1 400 ms : si la minuterie n'était pas désarmée, la
+       ligne réapparaîtrait ICI — c'est-à-dire APRÈS les résultats, ce qui est
+       pire que de ne rien montrer. */
+    await new Promise(r=> setTimeout(r, 1800));
+    return { ligne:!!document.querySelector('.iastat'),
+             etat:(etatRech().iaStatut || {}).etat || null,
+             liseré:!!document.querySelector('.qbar.qcherche') };
+  });
+  ok(!apres.ligne && !apres.etat, 'aucune ligne ne réapparaît après coup');
+  ok(!apres.liseré, 'et la barre ne se remet pas à courir toute seule');
 
   await nav.close();
   console.log(soucis ? '\nÉCHEC — ' + soucis + ' problème(s)' : '\nTout est vert.');
