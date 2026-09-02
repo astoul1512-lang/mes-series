@@ -35,6 +35,7 @@ import {
 import {
   construire, meriteEscalade, valider, tacheConnue, INTERDIT_EMOTION, CONSIGNE_COMMUNE,
 } from "./gabarits.ts";
+import { ALERTE_TAG, corpsAlerte, texteAlerte } from "./alerte.ts";
 import {
   BUDGET_GLOBAL_JOUR, BUDGET_UTILISATEUR_JOUR, FOURNISSEURS, MAX_JETONS_SORTIE,
   ORIGINES, TACHES, TIMEOUT_MS, TIMEOUT_REQUETE_MS,
@@ -81,6 +82,10 @@ type Plan = {
   /* Le budget de temps de la requête entière, en millisecondes. Un cas qui
      vérifie la borne des cinq étages ne peut pas attendre vingt secondes. */
   budgetTemps?: number;
+  /* Ce que rend `ia_ouvrir_incident` : `true` = c'est LA BASCULE, une alerte
+     doit partir ; `false` = l'incident était déjà ouvert, on se tait.
+     Par défaut `true` — le cas le plus intéressant. */
+  bascule?: boolean;
 };
 
 // Les RPC dont la fonction SQL rend `void` — celles qui répondent 204.
@@ -122,6 +127,17 @@ function faireSemblant(plan: Plan) {
       const nom = (corps as Record<string, string>)?.p_fournisseur;
       const p = plan.place || {};
       return rendre(p[nom] === undefined ? true : p[nom]);
+    }
+    if (u.indexOf("/rpc/ia_ouvrir_incident") >= 0) {
+      return rendre(plan.bascule === undefined ? true : plan.bascule);
+    }
+    if (u.indexOf("/rpc/ia_fermer_incident") >= 0) return rendre(false);
+    if (u.indexOf("/push_appareils") >= 0) {
+      /* Aucun appareil abonné dans le faux monde : `envoyerAlerte` s'arrête
+         donc AVANT d'importer `npm:web-push`, ce qui garde la suite hors
+         ligne. Ce qu'on éprouve ici, c'est QUAND l'alerte est déclenchée —
+         le contenu du message, lui, a ses propres cas, sans réseau. */
+      return rendre([]);
     }
     if (RPC_VOID.some((n) => u.indexOf("/rpc/" + n) >= 0)) {
       return plan.rpcVide ? vide() : rendre(null);
@@ -574,8 +590,16 @@ Deno.test("les chiffres du §4.2 sont figés ici, et nulle part ailleurs", () =>
   // Mutations survivantes au 10/08 : TIMEOUT_MS 8 000 → 600 000, les deux
   // budgets multipliés par mille. Aucun test ne bronchait.
   assertEquals(TIMEOUT_MS, 8000, "le délai par fournisseur du §4.2 a bougé");
-  assertEquals(BUDGET_UTILISATEUR_JOUR, 30, "le budget par personne du §4.2 a bougé");
   assertEquals(BUDGET_GLOBAL_JOUR, 1000, "le budget global du §4.2 a bougé");
+  /* LE PLAFOND PAR PERSONNE EST SUPPRIMÉ — décision d'Adrien du 01/09/2026. Il
+     valait 30. Ce cas ne fige donc plus un chiffre mais une PROPRIÉTÉ : le
+     plafond individuel ne doit jamais pouvoir mordre AVANT le plafond global,
+     c'est-à-dire ne plus exister. L'écrire ainsi laisse intacts le comptage par
+     personne (`ia_budget_jour`, la seule trace de qui a consommé quoi) et le
+     levier d'urgence de 014 (poser 0 coupe l'IA pour tout le monde). */
+  assert(BUDGET_UTILISATEUR_JOUR >= BUDGET_GLOBAL_JOUR,
+    "le plafond par personne est revenu : il vaut " + BUDGET_UTILISATEUR_JOUR +
+    " contre " + BUDGET_GLOBAL_JOUR + " en global");
 });
 
 Deno.test("la liste blanche des origines est celle du relais TMDB, au mot près", () => {
@@ -1729,6 +1753,189 @@ Deno.test("RETOUR-01 point 4 : une tâche ne part bas que si elle sait remonter"
       "la qualité sans rien gagner d'autre que de la vitesse");
     assert((t.escalade_vers || 0) < t.etage_depart, "l'escalade doit remonter, pas descendre");
   }
+});
+
+/* ============ L'ALERTE QUAND L'IA TOMBE (01/09/2026, migration 018) ============
+
+   ELLE EST LE SEUL SIGNAL QUI RESTE. Le plafond par utilisateur est supprimé le
+   même jour : plus rien d'autre ne prévient qu'une panne ou une boucle a vidé
+   le quota partagé. Ces cas tiennent les quatre choses qui la rendent croyable
+   — elle part quand il faut, elle ne part pas quand il ne faut pas, elle nomme
+   la bonne panne, et elle ne coûte rien à une requête qui a marché.
+============================================================================ */
+
+Deno.test("alerte : l'échelle épuisée ouvre l'incident et dit « injoignable »", async () => {
+  const f = faireSemblant({
+    fournisseurs: null,
+    reponses: { "gemini-flash": { statut: 500 }, "gemini-flash-lite": { statut: 500 },
+                "openrouter": { statut: 500 } },
+  });
+  try {
+    const r = await servir(requete(PITCH));
+    assertEquals(JSON.stringify(await r.json()), '{"indisponible":true}');
+    const o = f.appels("/rpc/ia_ouvrir_incident");
+    assertEquals(o.length, 1, "personne n'a répondu et rien n'a été signalé");
+    assertEquals(o[0].p_motif, "injoignable",
+      "cinq fournisseurs sont TOMBÉS : dire « quota atteint » serait faux");
+  } finally { f.rendre(); }
+});
+
+Deno.test("alerte : tout saturé dit « quota », pas « injoignable »", async () => {
+  /* La différence n'est pas cosmétique. « Quota atteint » veut dire « c'est
+     nous, ça repart demain » ; « injoignable » veut dire « ce n'est pas nous,
+     ça peut repartir dans cinq minutes ». Les deux appellent des gestes
+     différents, et une alerte qui se trompe cesse d'être lue. */
+  const f = faireSemblant({
+    fournisseurs: null,
+    place: { "gemini-flash": false, "gemini-flash-2": false, "gemini-flash-lite": false,
+             "gemini-flash-lite-2": false, "openrouter": false },
+  });
+  try {
+    await servir(requete(PITCH));
+    const o = f.appels("/rpc/ia_ouvrir_incident");
+    assertEquals(o.length, 1);
+    assertEquals(o[0].p_motif, "quota");
+  } finally { f.rendre(); }
+});
+
+Deno.test("alerte : un seul fournisseur tombé suffit à dire « injoignable »", async () => {
+  /* Quatre compteurs pleins et UN fournisseur en panne : « quota atteint »
+     serait une demi-vérité, et une demi-vérité envoyée à 3 h du matin fait
+     chercher au mauvais endroit. */
+  const f = faireSemblant({
+    fournisseurs: null,
+    place: { "gemini-flash": false, "gemini-flash-2": false, "gemini-flash-lite": false,
+             "gemini-flash-lite-2": false },
+    reponses: { "openrouter": { statut: 503 } },
+  });
+  try {
+    await servir(requete(PITCH));
+    assertEquals(f.appels("/rpc/ia_ouvrir_incident")[0].p_motif, "injoignable");
+  } finally { f.rendre(); }
+});
+
+Deno.test("alerte : le budget global refusé est un incident", async () => {
+  const f = faireSemblant({ budget: false });
+  try {
+    await servir(requete(PITCH));
+    const o = f.appels("/rpc/ia_ouvrir_incident");
+    assertEquals(o.length, 1, "le quota global atteint est exactement ce qu'Adrien veut savoir");
+    assertEquals(o[0].p_motif, "quota");
+  } finally { f.rendre(); }
+});
+
+Deno.test("alerte : une réponse MALFORMÉE n'est PAS un incident", async () => {
+  /* Le fournisseur a répondu : l'IA est debout, elle a juste mal écrit une
+     fois. Faire sonner le téléphone ici, c'est apprendre à ne plus le regarder.
+     C'est le cas qui protège la crédibilité de tous les autres. */
+  const f = faireSemblant({
+    fournisseurs: null,
+    reponses: { "gemini-flash": { statut: 200, texte: '{"texte":"Un film que tu as adoré."}' } },
+  });
+  try {
+    const r = await servir(requete(PITCH));
+    assertEquals(JSON.stringify(await r.json()), '{"indisponible":true}');
+    assertEquals(f.appels("/rpc/ia_ouvrir_incident").length, 0,
+      "une réponse mal écrite a déclenché une alerte de panne");
+  } finally { f.rendre(); }
+});
+
+Deno.test("alerte : une seule notification par incident — c'est la base qui décide", async () => {
+  /* « Je veux juste une notif. » La bascule est décidée par un `update … where
+     not en_panne` atomique (migration 018) : le relais ne fait qu'obéir à sa
+     valeur de retour. Ce cas éprouve l'obéissance — le SQL, lui, a son propre
+     test. Sans cette règle, une panne de six heures enverrait des dizaines de
+     notifications, et Adrien couperait les notifications de l'app pour de bon. */
+  const f = faireSemblant({
+    fournisseurs: null, bascule: false,   // l'incident était DÉJÀ ouvert
+    reponses: { "gemini-flash": { statut: 500 }, "gemini-flash-lite": { statut: 500 },
+                "openrouter": { statut: 500 } },
+  });
+  try {
+    await servir(requete(PITCH));
+    assertEquals(f.appels("/rpc/ia_ouvrir_incident").length, 1,
+      "on demande toujours à la base, c'est elle qui tranche");
+    assertEquals(f.appels("/push_appareils").length, 0,
+      "une seconde notification est partie pour le même incident");
+  } finally { f.rendre(); }
+});
+
+Deno.test("alerte : la bascule, elle, va jusqu'aux appareils", async () => {
+  /* Le pendant du cas précédent : si la base dit « c'est la bascule », on va
+     chercher les appareils. Sans ce cas, un `if` inversé passerait au vert
+     partout — l'alerte ne partirait JAMAIS, et rien ne le dirait. */
+  const cle = Deno.env.get("IA_ALERTE_UID");
+  const vapid = Deno.env.get("VAPID_PRIVEE");
+  Deno.env.set("IA_ALERTE_UID", "u-admin");
+  Deno.env.set("VAPID_PRIVEE", "cle-vapid");
+  const f = faireSemblant({
+    fournisseurs: null, bascule: true,
+    reponses: { "gemini-flash": { statut: 500 }, "gemini-flash-lite": { statut: 500 },
+                "openrouter": { statut: 500 } },
+  });
+  try {
+    await servir(requete(PITCH));
+    const dem = f.vues.filter((v) => v.url.indexOf("/push_appareils") >= 0);
+    assertEquals(dem.length, 1, "la bascule n'a pas cherché à qui envoyer");
+    assert(dem[0].url.indexOf("user_id=eq.u-admin") >= 0,
+      "l'alerte ne vise pas le compte de `IA_ALERTE_UID` : " + dem[0].url);
+  } finally {
+    f.rendre();
+    if (cle === undefined) Deno.env.delete("IA_ALERTE_UID"); else Deno.env.set("IA_ALERTE_UID", cle);
+    if (vapid === undefined) Deno.env.delete("VAPID_PRIVEE"); else Deno.env.set("VAPID_PRIVEE", vapid);
+  }
+});
+
+Deno.test("alerte : sans destinataire configuré, rien ne part et rien ne casse", async () => {
+  /* C'est l'état du dépôt tant qu'Adrien n'a pas posé `IA_ALERTE_UID`. Une
+     alerte éteinte ne doit pas empêcher le relais de rendre son écran normal —
+     le socle ne meurt jamais, y compris quand c'est le garde-fou qui manque. */
+  const cle = Deno.env.get("IA_ALERTE_UID");
+  Deno.env.delete("IA_ALERTE_UID");
+  const f = faireSemblant({
+    fournisseurs: null,
+    reponses: { "gemini-flash": { statut: 500 }, "gemini-flash-lite": { statut: 500 },
+                "openrouter": { statut: 500 } },
+  });
+  try {
+    const r = await servir(requete(PITCH));
+    assertEquals(r.status, 200);
+    assertEquals(JSON.stringify(await r.json()), '{"indisponible":true}');
+    assertEquals(f.appels("/push_appareils").length, 0);
+  } finally { f.rendre(); if (cle !== undefined) Deno.env.set("IA_ALERTE_UID", cle); }
+});
+
+Deno.test("alerte : une réponse réussie ferme l'incident", async () => {
+  const f = faireSemblant({ fournisseurs: null });
+  try {
+    const r = await servir(requete(PITCH));
+    assertEquals(JSON.stringify(await r.json()), '{"texte":"Une phrase honnête."}');
+    assertEquals(f.appels("/rpc/ia_fermer_incident").length, 1,
+      "un incident jamais fermé éteint TOUTES les alertes suivantes");
+    assertEquals(f.appels("/rpc/ia_ouvrir_incident").length, 0);
+  } finally { f.rendre(); }
+});
+
+Deno.test("alerte : le texte nomme la panne, et dit que l'app marche encore", () => {
+  /* Deux pannes, deux vérités — et dans les deux cas une seconde phrase qui
+     désamorce. Une notification « ⚠️ » reçue à 23 h laisse croire que l'app est
+     morte ; elle ne l'est pas, le repli local existe partout. */
+  const q = texteAlerte("quota");
+  const i = texteAlerte("injoignable");
+  assert(/quota/i.test(q.titre), "le titre du quota ne parle pas de quota : " + q.titre);
+  assert(/injoignable/i.test(i.titre), "le titre de la panne ne la nomme pas : " + i.titre);
+  assert(q.titre !== i.titre, "les deux pannes portent le même titre");
+  for (const t of [q, i]) {
+    assert(/⚠️/.test(t.titre), "l'alerte ne se signale pas comme telle");
+    assert(/continue sans l'IA/.test(t.corps),
+      "le corps ne dit pas que l'app marche encore : « " + t.corps + " »");
+  }
+  /* La forme que `sw.js` sait lire, et un tag STABLE : deux alertes se
+     remplacent sur le téléphone au lieu de s'empiler (`renotify: true`). */
+  const charge = JSON.parse(corpsAlerte("quota"));
+  assertEquals(Object.keys(charge).sort().join(","), "corps,tag,titre,url");
+  assertEquals(charge.tag, ALERTE_TAG);
+  assert(charge.url.indexOf("astoul1512-lang.github.io") >= 0);
 });
 
 /* ========== RETOUR-10 §1 — L'ESCALADE, VUE DE L'ÉCHELLE (01/09/2026) ========== */

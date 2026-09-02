@@ -387,13 +387,42 @@ export const TACHES: Record<string, Tache> = {
 // ---------------------------------------------------------------------------
 // LES BUDGETS DE PROTECTION (§4.2)
 //
-// Deux plafonds, deux rôles différents. Celui par utilisateur protège le quota
-// contre un appareil qui s'emballe ; celui global protège le palier gratuit ET
-// signale un abus. Dépassement → `{indisponible:true}`, jamais un message
-// anxiogène côté client.
+// Il y en avait DEUX, avec deux rôles différents : celui par utilisateur
+// protégeait le quota contre un appareil qui s'emballe, celui global protège le
+// palier gratuit et signale un abus. Dépassement → `{indisponible:true}`,
+// jamais un message anxiogène côté client.
 // ---------------------------------------------------------------------------
-export const BUDGET_UTILISATEUR_JOUR = 30;   // l'usage nominal est de 5 à 6
 export const BUDGET_GLOBAL_JOUR = 1000;
+
+// ---------------------------------------------------------------------------
+// LE PLAFOND PAR UTILISATEUR EST SUPPRIMÉ — décision d'Adrien du 01/09/2026.
+//
+// SA RAISON, ET ELLE TIENT : le repli local existe partout — le relais rend
+// `{indisponible:true}`, `appelIA` le mue en `null`, chaque appelant retombe
+// sur le moteur local, et `CLAUDE.md` en fait une règle non négociable. Une
+// panne de quota DÉGRADE donc sans casser, et un plafond individuel n'achetait
+// rien qu'on ne puisse perdre.
+//
+// MON OBJECTION, POUR MÉMOIRE, PARCE QU'ELLE RESTE VRAIE : l'échelle des
+// fournisseurs protège contre un fournisseur EN PANNE, pas contre l'app qui
+// APPELLE TROP. Les quotas amont sont PARTAGÉS : une boucle sur un seul
+// appareil épuise le palier gratuit et fait tomber TOUS les comptes en dégradé,
+// pas seulement le fautif. Le plafond individuel bornait l'incident à un
+// compte. Adrien a tranché en connaissance de cause, et la contrepartie est le
+// lot de l'alerte (migration 018) : c'est maintenant le SEUL signal.
+//
+// COMMENT « SUPPRIMÉ » EST ÉCRIT ICI, ET POURQUOI PAS AUTREMENT. La fonction
+// SQL `ia_reserver_budget` (014) refuse dès que `p_max_utilisateur <= 0`, et
+// un NULL y ferait échouer la comparaison — donc refuserait TOUT. Passer le
+// plafond GLOBAL comme plafond individuel est la seule écriture qui :
+//   · ne peut jamais mordre avant le plafond global, donc n'existe plus ;
+//   · ne touche à AUCUNE fonction SQL, donc reste sûre quel que soit l'ordre de
+//     déploiement de la fonction et de la migration ;
+//   · garde `ia_budget_jour` en train de COMPTER par personne — le seul endroit
+//     où l'on pourra lire, après un incident, quel compte a tout consommé ;
+//   · laisse intact le levier d'urgence documenté en 014 : poser 0 ici coupe
+//     l'IA pour tout le monde, tout de suite.
+export const BUDGET_UTILISATEUR_JOUR = BUDGET_GLOBAL_JOUR;
 
 // Une seule tentative par fournisseur, huit secondes chacune (§4.2).
 //
