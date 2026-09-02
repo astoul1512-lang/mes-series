@@ -28,6 +28,7 @@ import {
   type Fournisseur,
 } from "./config.ts";
 import { construire, meriteEscalade, valider } from "./gabarits.ts";
+import { envoyerAlerte, type MotifPanne } from "./alerte.ts";
 
 const URL_SB = () => Deno.env.get("SUPABASE_URL") || "";
 const CLE_ADMIN = () => Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -458,6 +459,59 @@ async function journaliser(
   } catch (_e) { /* le journal n'a jamais le droit de casser l'appel */ }
 }
 
+/* ---------------------------------------------------------------------------
+   L'ALERTE — UNE PAR INCIDENT, ET JAMAIS SUR LE CHEMIN CRITIQUE (01/09/2026)
+
+   Depuis que le plafond par utilisateur est supprimé (voir `config.ts`), plus
+   rien ne PRÉVIENT qu'une panne ou une boucle a vidé le quota partagé. Ces deux
+   fonctions sont le signal qui reste.
+
+   TROIS RÈGLES, ET ELLES SONT TOUTES LÀ POUR QUE LA NOTIFICATION RESTE CROYABLE :
+
+   · UNE SEULE ALERTE PAR INCIDENT. La bascule « ça marchait → ça ne marche
+     plus » est décidée EN SQL, par un `update … where not en_panne` atomique
+     (migration 018). Deux requêtes simultanées ne peuvent donc pas envoyer deux
+     notifications pour une seule panne. C'est la demande d'Adrien — « je veux
+     juste une notif » — et c'est aussi ce qui évite de faire couper les
+     notifications de l'app pour de bon après une panne de six heures.
+
+   · UNE RÉPONSE MALFORMÉE N'EST PAS UN INCIDENT. Un fournisseur qui répond mal
+     a répondu : l'IA est debout. On n'alerte que si PERSONNE n'a répondu, ou si
+     le budget global est refusé.
+
+   · RIEN N'EST ATTENDU SUR LE CHEMIN QUI RÉUSSIT. La fermeture de l'incident
+     part en tâche de fond (`EdgeRuntime.waitUntil` chez Supabase), donc elle ne
+     coûte pas une milliseconde à une requête qui a marché — ce qui compte
+     d'autant plus que RETOUR-10 vient d'accélérer ce chemin-là.
+--------------------------------------------------------------------------- */
+async function arrierePlan(f: () => Promise<unknown>): Promise<void> {
+  const p = f().catch(() => { /* une alerte ne casse jamais ce qu'elle signale */ });
+  const rt = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } })
+    .EdgeRuntime;
+  if (rt && typeof rt.waitUntil === "function") { rt.waitUntil(p); return; }
+  /* Hors Supabase — les tests, un autre hébergeur — il n'y a personne pour
+     tenir la promesse en vie après la réponse : on attend. Mieux vaut quelques
+     millisecondes de plus qu'un incident qui ne se ferme jamais, parce qu'un
+     incident resté ouvert ÉTEINT toutes les alertes suivantes. */
+  await p;
+}
+
+/* Ouvre l'incident et, SI c'est la bascule, envoie la notification. La valeur
+   de retour de la RPC est la seule chose qui décide : voir la migration 018. */
+async function signalerPanne(motif: MotifPanne): Promise<void> {
+  await arrierePlan(async () => {
+    const bascule = await rpc("ia_ouvrir_incident", { p_motif: motif });
+    if (bascule === true) await envoyerAlerte(motif);
+  });
+}
+
+/* Appelée sur chaque réponse réussie. Le `where … and en_panne` de la fonction
+   SQL fait que le cas ordinaire n'écrit rien : c'est ce qui permet de l'appeler
+   à chaque fois sans créer un point de contention sur une ligne unique. */
+async function signalerRetour(): Promise<void> {
+  await arrierePlan(() => rpc("ia_fermer_incident", {}));
+}
+
 // ---------------------------------------------------------------------------
 // Qui appelle ? Le serveur d'authentification répond, jamais le client.
 // Même principe que `supprimer-compte` : on ne fait confiance à aucun
@@ -572,6 +626,13 @@ async function servirAccepte(req: Request, cors: Record<string, string>): Promis
   }
   if (!budgetOk) {
     await journaliser(tache, null, false, 3, Date.now() - debut);
+    /* LE BUDGET REFUSÉ EST UN INCIDENT. Depuis que le plafond par utilisateur
+       ne mord plus (voir `config.ts`), il ne reste qu'une raison de passer ici :
+       le plafond GLOBAL du jour est atteint — c'est-à-dire, très exactement, la
+       situation qu'Adrien veut savoir. La base injoignable y mène aussi, mais
+       elle ferait alors échouer `ia_ouvrir_incident` de la même façon : pas
+       d'alerte, pas de fausse alerte. */
+    await signalerPanne("quota");
     return indisponible(cors);
   }
 
@@ -623,6 +684,17 @@ async function servirAccepte(req: Request, cors: Record<string, string>): Promis
   --------------------------------------------------------------------- */
   const tentes: Record<string, true> = {};
 
+  /* POURQUOI ON COMPTE LES DEUX SORTES D'ÉCHEC (01/09/2026). L'alerte doit
+     nommer la panne, et il y en a deux qui ne se disent pas pareil : « quota
+     atteint » (c'est nous qui avons tout consommé, ça repart demain) et « IA
+     injoignable » (personne ne répond, ça peut repartir dans cinq minutes).
+     Annoncer l'une pour l'autre serait faux une fois sur deux, et une alerte
+     fausse ne se croit plus — ce qu'on ne peut pas se permettre du seul signal
+     qui reste. On ne dit « quota » que si TOUS les refus étaient des
+     saturations : dès qu'un fournisseur est réellement tombé, « aucun
+     fournisseur ne répond » est la phrase vraie. */
+  const echecs = { saturation: 0, panne: 0 };
+
   const parcourir = async (depuis: number): Promise<{ propre?: unknown; malformee?: boolean }> => {
   for (const f of tous.filter((x) => x.rang >= depuis && !tentes[x.nom])) {
     /* L'HORLOGE REPART À CHAQUE ÉTAGE. Voir `journaliser` : `duree_ms` mesure
@@ -637,6 +709,7 @@ async function servirAccepte(req: Request, cors: Record<string, string>): Promis
        elle, une échelle tronquée ressemblerait à une échelle épuisée. */
     if (departEtage - debut > budgetTempsMs) {
       await journaliser(tache, f.nom, false, 5, 0);
+      echecs.panne++;
       break;
     }
     /* L'étage est VISITÉ à partir d'ici — même s'il est sauté deux lignes plus
@@ -652,6 +725,7 @@ async function servirAccepte(req: Request, cors: Record<string, string>): Promis
        qu'on n'a aucune envie de ralentir davantage. */
     if (!Deno.env.get(f.cle_env)) {
       await journaliser(tache, f.nom, false, 0, Date.now() - departEtage);
+      echecs.panne++;
       continue;
     }
 
@@ -669,6 +743,7 @@ async function servirAccepte(req: Request, cors: Record<string, string>): Promis
       // Le compteur a dit non : on le NOTE, sinon le journal ne saura pas
       // distinguer « étage sauté parce que plein » de « étage jamais atteint ».
       await journaliser(tache, f.nom, false, 2, Date.now() - departEtage);
+      echecs.saturation++;
       continue;
     }
 
@@ -685,6 +760,10 @@ async function servirAccepte(req: Request, cors: Record<string, string>): Promis
     }
 
     await journaliser(tache, f.nom, false, r.statut, Date.now() - departEtage);
+    /* Un 429 est une SATURATION — le fournisseur va bien, il nous rationne.
+       Tout le reste est une PANNE, y compris la réponse tronquée (statut 4) :
+       le fournisseur a beau avoir consommé des jetons, il n'a rien livré. */
+    if (r.statut === 429) echecs.saturation++; else echecs.panne++;
 
     if (r.statut === 429) {
       /* Ce fournisseur est plein. On le marque saturé jusqu'à la fin de la
@@ -789,10 +868,29 @@ async function servirAccepte(req: Request, cors: Record<string, string>): Promis
     const corpsRep = escalade
       ? { ...(res.propre as Record<string, unknown>), escalade: true }
       : res.propre;
+    /* L'IA RÉPOND : s'il y avait un incident ouvert, il est clos — et le
+       prochain aura donc le droit d'alerter. En tâche de fond, pour ne rien
+       coûter à la requête qui vient de réussir. */
+    await signalerRetour();
     return json(corpsRep, 200, cors);
   }
 
-  // Tous épuisés. `{indisponible:true}`, HTTP 200, et le client ne montre rien.
   await rendreBudget();
+
+  /* UNE RÉPONSE MALFORMÉE N'EST PAS UNE PANNE. Un fournisseur a répondu : l'IA
+     est debout, elle a juste mal écrit une fois. Alerter ici ferait sonner le
+     téléphone pour un incident qui n'existe pas, et une alerte qui se trompe
+     cesse d'être lue. On n'ouvre l'incident que si PERSONNE n'a répondu. */
+  if (!res.malformee) {
+    /* « QUOTA » NE SE DIT QUE SI TOUT ÉTAIT SATURÉ. Un seul fournisseur
+       réellement tombé, et « aucun fournisseur ne répond » devient la phrase
+       vraie. Une échelle vide — aucun fournisseur configuré — tombe aussi ici,
+       et c'est bien « injoignable » qu'il faut dire alors : personne n'a
+       rationné quoi que ce soit, il n'y avait personne. */
+    const quota = echecs.saturation > 0 && echecs.panne === 0;
+    await signalerPanne(quota ? "quota" : "injoignable");
+  }
+
+  // Tous épuisés. `{indisponible:true}`, HTTP 200, et le client ne montre rien.
   return indisponible(cors);
 }

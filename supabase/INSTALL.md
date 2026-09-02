@@ -54,6 +54,17 @@ Dans *SQL Editor*, exécuter les fichiers de `migrations/` **dans l'ordre**.
 | `012_durcissements.sql` | verrou sur les codes de partage, droits alignés, purge, défaut corrigé |
 | `013_push_endpoint.sql` | **SPEC-01 · C7** — un appareil sonne pour le compte connecté, et pour lui seul |
 | `014_relais_ia.sql` | **SPEC-04 · lot B** — l'échelle des fournisseurs d'IA, les compteurs, les budgets et le journal |
+| `015_semis_limites_ia.sql` | **RETOUR-01 · point 4** — des limites prudentes là où il n'y en avait aucune (le garde-fou anti-429 était désarmé) |
+| `016_recos_centre.sql` | **SPEC-10** — le centre de notifications : recos reçues, retours et sorties |
+| `017_deux_cles_gemini.sql` | **01/09/2026** — `cle_env`, et l'échelle passe à cinq étages sur deux comptes Google |
+| `018_alerte_ia.sql` | **01/09/2026** — l'incident IA et sa bascule atomique : une seule notification par panne |
+
+> **Les trois dernières lignes manquaient à ce tableau** avant le 01/09/2026 :
+> `015` et `016` étaient passées en production sans y être inscrites. Une
+> installation neuve montée sur ce fichier seul aurait donc eu un garde-fou
+> anti-429 désarmé et pas de centre de notifications. C'est le même défaut que
+> celui signalé pour `011` plus bas, et il se répare de la même façon : les
+> fichiers sont rejouables, il n'y a rien à défaire avant de les jouer.
 
 Avant d'exécuter `005`, y remplacer deux marques :
 
@@ -114,6 +125,7 @@ Dans *Edge Functions → Secrets* :
 | `GEMINI_API_KEY` | une clé Google AI Studio. Elle sert aux étages **1** et **3** de l'échelle IA (Flash et Flash-Lite du premier compte). |
 | `GEMINI_API_KEY2` | une clé Google AI Studio d'un **autre projet ET d'un autre compte**. Elle sert aux étages **2** et **4** — les mêmes modèles, sur un second quota gratuit. Facultative : sans elle, ces deux étages sont sautés et l'échelle se comporte comme avant le 01/09/2026. |
 | `OPENROUTER_API_KEY` | une clé OpenRouter, pour l'étage de secours. |
+| `IA_ALERTE_UID` | l'identifiant du compte à prévenir quand l'IA tombe (voir §9). Facultatif : sans lui, l'alerte est simplement éteinte. |
 
 **La condition qui rend `GEMINI_API_KEY2` utile, et il faut la vérifier avant de
 la poser** : le quota gratuit de Gemini se compte **par projet Google Cloud**,
@@ -556,3 +568,75 @@ jours. À appeler de temps en temps, ou à greffer sur le planificateur de `005`
 ```sql
 select public.ia_menage();
 ```
+
+## 9. L'alerte quand l'IA tombe — le seul signal qui reste
+
+**À faire une fois, après le déploiement de `ia`.** Sans cette étape, l'alerte
+est simplement éteinte : le relais fonctionne, mais personne n'est prévenu.
+
+Le plafond par utilisateur a été **supprimé** le 01/09/2026 (décision d'Adrien —
+le repli local existe partout, donc une panne de quota dégrade sans casser).
+Conséquence à connaître : les quotas amont sont **partagés**, donc une boucle sur
+un seul appareil peut faire tomber tous les comptes en dégradé. Plus rien ne le
+signale — sauf ceci.
+
+**Ce qui déclenche une notification :** l'échelle entièrement épuisée (personne
+ne répond) ou le budget **global** du jour atteint. **Une seule par incident**,
+à la bascule « ça marchait → ça ne marche plus » ; une nouvelle seulement si
+l'IA repart puis retombe. Une réponse mal écrite par un fournisseur n'est PAS un
+incident : il a répondu.
+
+**Deux textes, parce qu'il y a deux pannes** — annoncer l'une pour l'autre serait
+faux une fois sur deux, et une alerte fausse ne se croit plus :
+
+> ⚠️ Quota IA atteint
+> Plus de requêtes jusqu'à demain — l'app continue sans l'IA.
+
+> ⚠️ IA injoignable
+> Aucun fournisseur ne répond — l'app continue sans l'IA.
+
+### Les deux secrets à poser sur la fonction `ia`
+
+1. **`VAPID_PRIVEE`** — la même valeur que sur `notifier`. C'est la clé qui
+   signe les notifications ; sans elle, rien ne peut partir. Elle vit désormais
+   sur deux fonctions : c'est le prix d'une alerte immédiate plutôt qu'au
+   prochain passage du facteur (qui tourne toutes les deux heures).
+2. **`IA_ALERTE_UID`** — l'identifiant du compte à prévenir. Dans le tableau de
+   bord Supabase, *Authentication → Users*, chercher l'adresse voulue et copier
+   la colonne **UID**. En SQL :
+
+```sql
+select id from auth.users where email = 'adrien.astoul@yahoo.fr';
+```
+
+Le compte doit avoir **au moins un appareil abonné** (`push_appareils`) — donc
+avoir activé les notifications au moins une fois depuis l'app, sur le téléphone
+qui doit sonner :
+
+```sql
+select count(*) from public.push_appareils
+ where user_id = (select id from auth.users where email = 'adrien.astoul@yahoo.fr');
+```
+
+**Zéro ici veut dire que l'alerte ne partira jamais**, sans le moindre message.
+C'est le point de défaillance silencieux de tout ce dispositif : à revérifier
+après chaque changement de téléphone, et après une longue période sans
+notifications (trois échecs d'affilée suppriment un abonnement — voir `notifier`).
+
+### Vérifier que ça marche, sans attendre une vraie panne
+
+```sql
+-- 1. Simuler la bascule : doit rendre `true` la PREMIÈRE fois, `false` ensuite.
+select public.ia_ouvrir_incident('injoignable');
+select public.ia_ouvrir_incident('injoignable');   -- attendu : false
+
+-- 2. Remettre à zéro
+select public.ia_fermer_incident();
+
+-- 3. L'état, et l'historique
+select * from public.ia_incident;
+```
+
+`alertes` qui grimpe de plusieurs unités par jour veut dire que l'IA bat de
+l'aile par intermittence : c'est alors `ia_journal` (statuts 429 et 599) qui dit
+chez quel fournisseur.
