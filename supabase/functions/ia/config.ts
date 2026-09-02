@@ -329,6 +329,28 @@ export const TACHES: Record<string, Tache> = {
   // qu'Adrien n'a pas tranché sur les votes du banc.
   suggestions_famille: { etage_depart: 1, maxlong: 60, maxtitres: 12 },
 
+  // ---- SPEC-09 LOT 1 (01/09/2026) — L'IA CONTRÔLE LES RANGÉES LOCALES ----
+  //
+  // `ordonner_rangee` reçoit une rangée COMPOSÉE LOCALEMENT — les vraies
+  // requêtes TMDB d'« Acclamés par la critique », « Des pépites que tu as
+  // ratées », « À finir en un week-end », « Les classiques à rattraper », les
+  // incontournables d'une décennie — et rend deux choses : l'ORDRE affiné, et
+  // les titres à ÉCARTER parce qu'ils jurent franchement avec le profil.
+  //
+  // CE QU'ELLE NE FAIT PAS, ET C'EST L'ÉQUILIBRE DU LOT : elle ne compose pas.
+  // La source reste la requête TMDB, ce qui garantit qu'« Acclamés par la
+  // critique » reste VRAI. Le schéma ne porte que des NUMÉROS : le modèle n'a
+  // aucun champ pour ajouter un titre, donc la borne 1 de la spec (« le
+  // contrôle n'invente rien ») est tenue par construction et non par vigilance.
+  //
+  // `maxtitres` vaut 40, et c'est la taille maximale d'une liste de rangée côté
+  // client (`SUGG_MAX`). C'est aussi la borne des indices acceptés au retour :
+  // un numéro au-delà ne désigne rien et tombe.
+  //
+  // `maxlong` = 60 : la longueur d'un MOTIF d'écart. Il n'est jamais affiché
+  // (la spec le dit), il sert au journal — raison de plus pour qu'il soit court.
+  ordonner_rangee: { etage_depart: 1, maxlong: 60, maxtitres: 40 },
+
   // ---- SPEC-11 (29/08/2026) — LA BARRE ✦ DEVIENT UN VRAI INTERPRÈTE ----
   //
   // « Je veux pouvoir taper "je cherche un film d'action avec Will Smith" comme

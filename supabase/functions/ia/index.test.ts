@@ -1705,7 +1705,7 @@ Deno.test("SPEC-05 — les nouvelles tâches n'échappent pas au jeton ni à l'o
    Le pendant côté front est le contrôle n° 15 de `tests/lance-tests.js` : il
    relit les `appelIA('…')` des fichiers d'écran et les recoupe avec cette
    liste. Les deux ensemble ferment la boucle ; l'un sans l'autre ne dit rien. */
-Deno.test("la liste blanche compte NEUF tâches, exactement celles qui ont un appelant", () => {
+Deno.test("la liste blanche compte DIX tâches, exactement celles qui ont un appelant", () => {
   /* RETOUR-01 POINT 8 (11/08/2026) — `classer_grille` entre, AVEC son appelant :
      le tri « ✦ mes goûts » de la Recherche (`toucherClassementIA`, app-14). Le
      seuil passe de six à sept, et il reste écrit en dur pour la raison dite
@@ -1715,11 +1715,18 @@ Deno.test("la liste blanche compte NEUF tâches, exactement celles qui ont un ap
      SPEC-11 (29/08/2026) — `interpreter_recherche` entre avec le sien : la
      validation en mode ✦ de la barre de Recherche (`interpreterRechercheIA`,
      app-14). Huit → neuf. `envie_phrase` RESTE : elle sert l'autre déclencheur,
-     le routeur automatique du mode ⌕, et les deux ne partent jamais ensemble. */
+     le routeur automatique du mode ⌕, et les deux ne partent jamais ensemble.
+     SPEC-09 LOT 1 (01/09/2026) — `ordonner_rangee` entre avec son appelant : le
+     contrôle de cohérence des rangées locales de Découvrir (`ordresIAduJour`,
+     app-14), calculé dans le lot du jour. Neuf → dix. `classer_grille` RESTE :
+     elle range une grille de RECHERCHE et ne sait pas écarter ; celle-ci range
+     une rangée de DÉCOUVRIR et doit pouvoir en retirer. Deux tâches, deux
+     sorties, et les fusionner obligerait à un champ « écarter » que le tri de
+     la Recherche n'a aucune raison d'accepter. */
   const attendues = ["pitch_jour", "pitch_humeur", "intitules_rangees",
                      "envie_phrase", "ambiance_desc", "pourquoi_lui",
                      "classer_grille", "suggestions_famille",
-                     "interpreter_recherche"].sort();
+                     "interpreter_recherche", "ordonner_rangee"].sort();
   assertEquals(JSON.stringify(Object.keys(TACHES).sort()), JSON.stringify(attendues),
     "la liste blanche ne correspond plus aux tâches appelées — ajoute l'appelant, " +
     "ou retire la tâche, mais pas les deux à moitié");
@@ -1753,6 +1760,110 @@ Deno.test("RETOUR-01 point 4 : une tâche ne part bas que si elle sait remonter"
       "la qualité sans rien gagner d'autre que de la vitesse");
     assert((t.escalade_vers || 0) < t.etage_depart, "l'escalade doit remonter, pas descendre");
   }
+});
+
+/* ====== SPEC-09 LOT 1 — `ordonner_rangee` : RANGER *ET* ÉCARTER ======
+
+   La borne n° 1 de la spec — « le contrôle n'invente rien » — est tenue par le
+   SCHÉMA : il n'y a pas de champ pour ajouter un titre, il n'y a que des
+   numéros. Ces cas vérifient que la validation ne rouvre pas cette porte par
+   une autre voie. */
+
+const ORDONNER = {
+  tache: "ordonner_rangee",
+  params: {
+    rangee: "Acclamés par la critique",
+    candidats: ["Whiplash (2014) · drame · 8,4", "Sinister (2012) · horreur · 6,8",
+                "Arrival (2016) · science-fiction · 7,6"],
+    profil: "genres les plus regardés : drame, science-fiction",
+    ecartes: ["horreur"],
+  },
+};
+
+Deno.test("ordonner_rangee : un numéro inventé ne désigne rien, il tombe", () => {
+  /* C'est la borne 1 rendue vraie. Un indice hors bornes n'a aucun titre
+     derrière lui : le laisser passer ferait au mieux un trou, au pire un
+     décalage — la rangée afficherait alors des titres à la place d'autres. */
+  const r = valider("ordonner_rangee", { ordre: [2, 99, 0, -1, 1.7] });
+  assertEquals(JSON.stringify(r), '{"ordre":[2,0,1]}',
+    "un indice hors bornes ou fractionnaire est passé");
+});
+
+Deno.test("ordonner_rangee : un numéro répété ne compte qu'une fois", () => {
+  const r = valider("ordonner_rangee", { ordre: [1, 1, 2, 1] });
+  assertEquals(JSON.stringify(r), '{"ordre":[1,2]}');
+});
+
+Deno.test("ordonner_rangee : gardé ET écarté → on GARDE", () => {
+  /* Une réponse qui se contredit ne doit pas retirer un titre. Retirer sur la
+     foi d'un modèle qui vient de dire le contraire, c'est faire disparaître un
+     titre pour une raison qui n'existe pas — et personne ne le verrait. */
+  const r = valider("ordonner_rangee", {
+    ordre: [0, 1, 2],
+    ecartes: [{ i: 1, motif: "horreur" }],
+  }) as { ordre: number[]; ecartes?: unknown[] };
+  assertEquals(JSON.stringify(r.ordre), "[0,1,2]");
+  assertEquals(r.ecartes, undefined, "un titre gardé a quand même été écarté");
+});
+
+Deno.test("ordonner_rangee : les écartés portent leur motif, borné et nettoyé", () => {
+  const r = valider("ordonner_rangee", {
+    ordre: [0, 2],
+    ecartes: [{ i: 1, motif: "  horreur, un genre   écarté par   contact@example.com  " }],
+  }) as { ordre: number[]; ecartes: { i: number; motif: string }[] };
+  assertEquals(JSON.stringify(r.ordre), "[0,2]");
+  assertEquals(r.ecartes.length, 1);
+  assertEquals(r.ecartes[0].i, 1);
+  assert(r.ecartes[0].motif.indexOf("@") < 0,
+    "une adresse a traversé le motif : « " + r.ecartes[0].motif + " »");
+  assert(r.ecartes[0].motif.length <= 60);
+});
+
+Deno.test("ordonner_rangee : un écarté sans motif lisible en reçoit un", () => {
+  /* Le motif ne s'affiche jamais, mais il part au journal. Une chaîne vide y
+     ressemblerait à une colonne oubliée plutôt qu'à un modèle avare. */
+  const r = valider("ordonner_rangee", {
+    ordre: [0], ecartes: [{ i: 1, motif: "   " }],
+  }) as { ecartes: { motif: string }[] };
+  assertEquals(r.ecartes[0].motif, "sans motif");
+});
+
+Deno.test("ordonner_rangee : un ordre vide ou illisible rend null", () => {
+  // Le client garde alors son ordre local — borne 4 de la spec.
+  assertEquals(valider("ordonner_rangee", { ordre: [] }), null);
+  assertEquals(valider("ordonner_rangee", { ordre: "0,1,2" }), null);
+  assertEquals(valider("ordonner_rangee", { ordre: [99, 100] }), null);
+  assertEquals(valider("ordonner_rangee", {}), null);
+});
+
+Deno.test("ordonner_rangee : le gabarit numérote et interdit d'ajouter", () => {
+  const g = construire("ordonner_rangee", ORDONNER.params)!;
+  assert(g, "le gabarit n'est pas construit");
+  assert(g.consigne.indexOf("0. Whiplash") >= 0, "les titres ne sont pas numérotés");
+  assert(/n'invente aucun|N'invente aucun/.test(g.consigne),
+    "la consigne n'interdit pas d'inventer un numéro");
+  assert(g.consigne.indexOf("ÉCARTER DOIT RESTER RARE") >= 0,
+    "rien ne dit au modèle que l'écart doit rester rare — il en fera une habitude");
+  assert(g.consigne.indexOf("Acclamés par la critique") >= 0,
+    "le nom de la rangée ne part pas : le modèle juge sans savoir ce qu'il juge");
+  assert(g.consigne.indexOf("horreur") >= 0, "les genres écartés ne partent pas");
+});
+
+Deno.test("ordonner_rangee : moins de deux titres, il n'y a rien à ranger", () => {
+  assertEquals(construire("ordonner_rangee", { candidats: ["Whiplash (2014)"] }), null);
+  assertEquals(construire("ordonner_rangee", { candidats: [] }), null);
+});
+
+Deno.test("ordonner_rangee : `avenir` n'a aucun moyen d'arriver ici", () => {
+  /* Ce cas ne teste pas du code : il fige une DÉCISION. « Bientôt » est un
+     calendrier — l'ordre EST l'information, et un titre qui « ne correspond pas
+     au profil » y a quand même sa place puisqu'on annonce une DATE. La spec y
+     insiste en toutes lettres. La garde est côté client (`IA_RANGEES_CONTROLE`
+     et `IA_RANGEES_ORDRE_SEUL`, app-14) ; ce qu'on vérifie ici, c'est que rien
+     dans le gabarit ne rendrait un jour ce chemin possible côté serveur. */
+  const g = construire("ordonner_rangee", ORDONNER.params)!;
+  assert(g.consigne.indexOf("date de sortie") < 0 && g.consigne.indexOf("calendrier") < 0,
+    "le gabarit s'est mis à parler de dates : `avenir` n'est plus si loin");
 });
 
 /* ============ L'ALERTE QUAND L'IA TOMBE (01/09/2026, migration 018) ============
