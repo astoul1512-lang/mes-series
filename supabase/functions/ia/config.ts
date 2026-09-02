@@ -16,6 +16,15 @@ export type Fournisseur = {
   nom: string;
   rang: number;
   modele: string;
+  /* LE SECRET OÙ LIRE LA CLÉ — neuf le 01/09/2026, et c'est le champ qui rend
+     les deux comptes Gemini possibles. Il valait la peine d'être ajouté plutôt
+     que déduit : `relais.ts` devinait la clé à partir du NOM du fournisseur
+     (`gemini…` → `GEMINI_API_KEY`), donc deux étages Gemini ne pouvaient
+     matériellement pas porter deux clés différentes.
+     Le NOM continue, lui, de décider du DIALECTE (Gemini ou OpenAI) : c'est le
+     protocole qu'on parle, pas le compte qu'on débite. Les deux informations
+     étaient confondues dans une seule ligne ; elles sont maintenant séparées. */
+  cle_env: string;
   // `null` VEUT DIRE « INCONNUE », PAS « ILLIMITÉE ». Voir le pavé ci-dessous.
   limite_minute: number | null;
   limite_jour: number | null;
@@ -84,6 +93,37 @@ export type Fournisseur = {
 // `nvidia/nemotron-nano-9b-v2:free` a été essayé pour de vrai le 10/08 : 200,
 // JSON valide, champ `texte` présent.
 // ---------------------------------------------------------------------------
+/* ---------------------------------------------------------------------------
+   DEUX CLÉS GEMINI, ET CE N'EST PAS UN DOUBLON — 01/09/2026
+
+   L'échelle passe de trois à CINQ étages. Le même modèle y apparaît deux fois,
+   sur deux comptes différents, et c'est tout l'objet du lot.
+
+   POURQUOI ÇA MARCHE, ET LA CONDITION QUI LE REND VRAI. Le quota gratuit de
+   Gemini se compte PAR PROJET GOOGLE CLOUD, pas par clé : deux clés du MÊME
+   projet auraient partagé le même compteur, donc la bascule n'aurait rien
+   apporté et aurait juste ajouté un étage qui échoue. Adrien a confirmé le
+   01/09 que `GEMINI_API_KEY` et `GEMINI_API_KEY2` viennent de DEUX projets ET
+   DE DEUX COMPTES distincts. C'est cette phrase-là qui justifie le lot ; si
+   elle cessait d'être vraie un jour, les étages 2 et 4 deviendraient des
+   allers-retours perdus. À revérifier avant d'ajouter une troisième clé.
+
+   LES COMPTEURS SUIVENT TOUT SEULS. `ia_compteurs` est indexé par (fournisseur,
+   fenêtre) et le fournisseur est un NOM : deux noms distincts, donc deux
+   compteurs séparés, sans une ligne de SQL de plus. C'est la raison pour
+   laquelle les nouveaux étages s'appellent `gemini-flash-2` et
+   `gemini-flash-lite-2` plutôt que de partager le nom de leur jumeau.
+
+   LES LIMITES SONT RECOPIÉES TELLES QUELLES sur le jumeau, et c'est voulu :
+   ce sont les mêmes modèles chez le même fournisseur, sur un palier gratuit
+   identique. Ce ne sont toujours pas les vrais chiffres de Google — personne
+   ne les connaît (voir le pavé plus haut) — ce sont des bornes prudentes.
+
+   L'ORDRE : on épuise un modèle SUR LES DEUX COMPTES avant de descendre en
+   qualité. Un second compte de Flash vaut mieux qu'un premier compte de
+   Flash-Lite : on ne descend que contraint, c'est la ligne de RETOUR-01
+   point 4 et elle ne bouge pas.
+--------------------------------------------------------------------------- */
 export const FOURNISSEURS: Fournisseur[] = [
   /* Étage 1 — la qualité. Le Flash courant du catalogue Gemini.
      RETOUR-01 POINT 4 (11/08/2026) — LES LIMITES NE SONT PLUS NULLES. Elles
@@ -94,15 +134,38 @@ export const FOURNISSEURS: Fournisseur[] = [
      prudente et fausse protège ; une limite absente ne protège rien. Ce sont
      les valeurs qu'Adrien a posées à la main le 10/08, et elles font foi. */
   { nom: "gemini-flash", rang: 1, modele: "gemini-3.6-flash",
-    limite_minute: 10, limite_jour: 1000, actif: true },
-  // Étage 2 — le volume. Même clé, limites plus hautes, réponses plus courtes.
-  { nom: "gemini-flash-lite", rang: 2, modele: "gemini-3.5-flash-lite",
-    limite_minute: 15, limite_jour: 1500, actif: true },
-  /* Étage 3 — le secours, chez quelqu'un d'autre. Un modèle du palier gratuit
+    cle_env: "GEMINI_API_KEY", limite_minute: 10, limite_jour: 1000, actif: true },
+  // Étage 2 — le MÊME modèle, le second compte. Voir le pavé ci-dessus.
+  { nom: "gemini-flash-2", rang: 2, modele: "gemini-3.6-flash",
+    cle_env: "GEMINI_API_KEY2", limite_minute: 10, limite_jour: 1000, actif: true },
+  // Étage 3 — le volume. Limites plus hautes, réponses plus courtes.
+  { nom: "gemini-flash-lite", rang: 3, modele: "gemini-3.5-flash-lite",
+    cle_env: "GEMINI_API_KEY", limite_minute: 15, limite_jour: 1500, actif: true },
+  // Étage 4 — le volume, second compte.
+  { nom: "gemini-flash-lite-2", rang: 4, modele: "gemini-3.5-flash-lite",
+    cle_env: "GEMINI_API_KEY2", limite_minute: 15, limite_jour: 1500, actif: true },
+  /* Étage 5 — le secours, chez quelqu'un d'autre. Un modèle du palier gratuit
      QUI DÉCLARE `structured_outputs`, et ce mot compte : voir le pavé ci-dessous. */
-  { nom: "openrouter", rang: 3, modele: "nvidia/nemotron-nano-9b-v2:free",
-    limite_minute: 20, limite_jour: 50, actif: true },
+  { nom: "openrouter", rang: 5, modele: "nvidia/nemotron-nano-9b-v2:free",
+    cle_env: "OPENROUTER_API_KEY", limite_minute: 20, limite_jour: 50, actif: true },
 ];
+
+/* UNE CLÉ ABSENTE N'EST PAS UNE ERREUR DE CONFIGURATION — c'est l'état normal
+   du dépôt tant qu'Adrien n'a pas posé le secret. Sans `GEMINI_API_KEY2`, les
+   étages 2 et 4 sont simplement SAUTÉS (`relais.ts` les journalise en statut 0
+   et passe au suivant) et l'échelle se comporte exactement comme avant ce lot.
+   C'est ce qui permet de déployer la fonction et la migration dans n'importe
+   quel ordre, et de vivre indéfiniment avec une seule clé. */
+
+/* LA CLÉ PAR DÉFAUT, POUR UNE LIGNE DE TABLE QUI N'EN PORTE PAS.
+   La migration 017 remplit `cle_env` sur toutes les lignes existantes. Mais
+   l'ordre de déploiement n'est pas garanti : une fonction déployée AVANT que la
+   migration ne passe lira des lignes sans `cle_env`. Cette règle est celle
+   qu'appliquait `relais.ts` en dur jusqu'au 01/09 — la garder ici, nommée, fait
+   que le pire cas de cet entre-deux est « comme avant », jamais « aucune clé ». */
+export function cleParDefaut(nom: string): string {
+  return nom.indexOf("gemini") === 0 ? "GEMINI_API_KEY" : "OPENROUTER_API_KEY";
+}
 
 // Les modèles Gemini Pro de dernière génération sont hors palier gratuit
 // (`gemini-3.1-pro-preview` : « Not available » en Free Tier sur la page
@@ -311,6 +374,32 @@ export const BUDGET_GLOBAL_JOUR = 1000;
 // douzaine d'appels de base à 3 s — et un test refuse désormais qu'un seul appel
 // sortant parte sans minuteur.
 export const TIMEOUT_MS = 8000;
+
+// ---------------------------------------------------------------------------
+// LE TEMPS DE LA REQUÊTE ENTIÈRE — 20 S, ET C'EST LE PRIX DES CINQ ÉTAGES
+//
+// 01/09/2026. L'échelle passait de trois étages à cinq, donc le pire cas passait
+// mécaniquement de 24 s à QUARANTE (5 × 8 s de délai fournisseur), et personne
+// ne l'avait demandé. Quarante secondes d'attente, ce n'est plus un mode
+// dégradé, c'est une page qui a l'air cassée — et ce lot arrive justement en
+// même temps que RETOUR-10, dont tout l'objet est de rendre la recherche plus
+// RAPIDE. Ajouter des étages sans borner le total aurait défait l'autre lot.
+//
+// AVANT D'ATTAQUER UN NOUVEL ÉTAGE, on regarde l'heure : au-delà de ce budget,
+// on s'arrête et on rend `{indisponible:true}`, c'est-à-dire l'écran normal.
+// Le contrôle est posé AVANT l'étage et jamais pendant : couper un appel en
+// cours ferait payer un travail qu'on jetterait.
+//
+// POURQUOI UN BUDGET DE TEMPS ET PAS UN NOMBRE D'ÉTAGES. Parce que les étages
+// ne coûtent pas tous la même chose : un compteur saturé, une clé absente ou un
+// 429 immédiat se traversent en quelques millisecondes. Compter les étages
+// aurait fermé l'échelle après trois refus instantanés, alors qu'il restait
+// tout le temps du monde pour essayer les deux suivants. On borne ce qui gêne
+// — l'attente — pas ce qui est gratuit.
+//
+// 20 s : deux étages lents (16 s) plus la dizaine d'allers-retours de base qui
+// les accompagnent. C'est DÉJÀ plus serré que les 24 s d'avant ce lot.
+export const TIMEOUT_REQUETE_MS = 20000;
 
 // ---------------------------------------------------------------------------
 // LE PLAFOND DE JETONS DE SORTIE — 2 000, ET CE N'EST PAS DU CONFORT

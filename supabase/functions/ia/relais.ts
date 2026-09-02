@@ -23,8 +23,9 @@
 //     sur ses textes d'origine, sans un mot (§4.4).
 
 import {
-  BUDGET_GLOBAL_JOUR, BUDGET_UTILISATEUR_JOUR, FOURNISSEURS, MAX_JETONS_SORTIE,
-  ORIGINES, TACHES, TIMEOUT_MS, type Fournisseur,
+  BUDGET_GLOBAL_JOUR, BUDGET_UTILISATEUR_JOUR, cleParDefaut, FOURNISSEURS,
+  MAX_JETONS_SORTIE, ORIGINES, TACHES, TIMEOUT_MS, TIMEOUT_REQUETE_MS,
+  type Fournisseur,
 } from "./config.ts";
 import { construire, valider } from "./gabarits.ts";
 
@@ -93,6 +94,18 @@ function indisponible(cors: Record<string, string>) {
    millisecondes ou pas du tout.
 --------------------------------------------------------------------------- */
 export const TIMEOUT_BASE_MS = 3000;
+
+/* LE BUDGET DE TEMPS DE LA REQUÊTE EST UNE VARIABLE, ET C'EST POUR LES TESTS.
+   Sa valeur de production est `TIMEOUT_REQUETE_MS` (20 s) et rien ne la change
+   jamais en service. Mais un cas qui vérifie que l'échelle s'arrête au bout du
+   budget devrait sinon attendre vingt secondes pour le prouver — donc il ne
+   serait pas écrit, donc la borne ne serait tenue par personne. Même raison
+   que `CACHE_FOURNISSEURS_MS` : ce qu'un test ne peut pas figer, il ne le
+   vérifie pas. Le nom dit à quoi ça sert, pour qu'on ne l'appelle pas ailleurs. */
+let budgetTempsMs = TIMEOUT_REQUETE_MS;
+export function bornerTempsRequetePourTest(ms: number) {
+  budgetTempsMs = ms > 0 ? ms : TIMEOUT_REQUETE_MS;
+}
 
 function minuteur(ms: number): { signal?: AbortSignal; fini: () => void } {
   if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
@@ -179,7 +192,15 @@ export function oublierFournisseurs() { cacheFournisseurs = null; }
        fois dans une requête, contre le « une seule tentative chacun » du §4.2,
        et les compteurs sont tenus sur ce `nom`.
    Une ligne mal formée est donc ÉCARTÉE, pas rafistolée : la table est éditée à
-   la main, et une ligne qu'on ne comprend pas ne doit pas décider d'un appel. */
+   la main, et une ligne qu'on ne comprend pas ne doit pas décider d'un appel.
+
+   `cle_env` (01/09/2026) EST LA SEULE COLONNE QUI A LE DROIT DE MANQUER, et
+   c'est réfléchi : une fonction déployée avant que la migration 017 ne passe
+   lit des lignes qui ne la portent pas encore. Écarter ces lignes-là viderait
+   l'échelle entière au pire moment — c'est-à-dire pendant un déploiement. Elle
+   retombe donc sur `cleParDefaut`, qui est exactement la règle qu'appliquait ce
+   fichier en dur jusqu'à ce lot. Une colonne PRÉSENTE mais vide, en revanche,
+   est une ligne qu'on ne comprend pas : elle est écartée comme les autres. */
 function fournisseurValide(x: unknown): Fournisseur | null {
   if (!x || typeof x !== "object") return null;
   const o = x as Record<string, unknown>;
@@ -187,12 +208,16 @@ function fournisseurValide(x: unknown): Fournisseur | null {
   const modele = typeof o.modele === "string" ? o.modele.trim() : "";
   const rang = Number(o.rang);
   if (!nom || !modele || !isFinite(rang) || rang < 1) return null;
+  const aCle = o.cle_env !== null && o.cle_env !== undefined;
+  const cle_env = typeof o.cle_env === "string" ? o.cle_env.trim() : "";
+  if (aCle && !cle_env) return null;
   const limite = (v: unknown) => {
     const n = Number(v);
     return (v === null || v === undefined || !isFinite(n) || n < 0) ? null : Math.floor(n);
   };
   return {
     nom, modele, rang,
+    cle_env: cle_env || cleParDefaut(nom),
     limite_minute: limite(o.limite_minute),
     limite_jour: limite(o.limite_jour),
     actif: o.actif !== false,
@@ -266,10 +291,17 @@ export function attenteDe(entete: string | null): number {
   return 0;
 }
 
+/* LE NOM DIT LE DIALECTE, `cle_env` DIT LE COMPTE — et il a fallu séparer les
+   deux (01/09/2026). Cette ligne lisait `GEMINI_API_KEY` dès que le nom
+   commençait par `gemini`, ce qui rendait deux comptes Gemini impossibles :
+   c'était LE point en dur du lot des deux clés. Le nom garde son autre rôle,
+   celui-là légitime — savoir si on parle `generateContent` ou le dialecte
+   OpenAI. Un fournisseur qui parlerait un troisième dialecte demanderait une
+   colonne de plus, pas un nom bien choisi. */
 async function appeler(f: Fournisseur, consigne: string, schema: Record<string, unknown>): Promise<Reponse> {
   const m = minuteur(TIMEOUT_MS);
   const gemini = f.nom.indexOf("gemini") === 0;
-  const cle = Deno.env.get(gemini ? "GEMINI_API_KEY" : "OPENROUTER_API_KEY") || "";
+  const cle = Deno.env.get(f.cle_env) || "";
   if (!cle) { m.fini(); return { ok: false, statut: 0, brut: null, attente: 0 }; }
 
   let url: string, entetes: Record<string, string>, corps: unknown;
@@ -395,7 +427,8 @@ function extraire(gemini: boolean, d: unknown): unknown {
    ressemble trait pour trait à un dégradé qui fonctionne.
    Les codes hors HTTP : 0 clé absente · 1 réponse invalide · 2 quota local plein
    (aucun appel) · 3 budget refusé · 4 réponse TRONQUÉE (le fournisseur n'a pas
-   fini — C1) · 599 délai ou réseau. */
+   fini — C1) · 5 étage non tenté, temps de requête épuisé (01/09) · 599 délai
+   ou réseau. */
 /* R-5 (relecture du 10/08, second tour) — `duree_ms` EST LA DURÉE DE L'ÉTAGE,
    plus celle de la requête entière. On passait `Date.now() - debut`, l'écoulé
    depuis l'entrée dans `servir` : mesuré, trois étages à 300 ms rendaient 306,
@@ -559,6 +592,29 @@ async function servirAccepte(req: Request, cors: Record<string, string>): Promis
     /* L'HORLOGE REPART À CHAQUE ÉTAGE. Voir `journaliser` : `duree_ms` mesure
        l'étage, pas la requête. */
     const departEtage = Date.now();
+
+    /* LA BORNE DE TEMPS DE LA REQUÊTE (01/09/2026). Cinq étages à huit secondes
+       feraient quarante secondes d'attente ; voir `TIMEOUT_REQUETE_MS`. On
+       regarde l'heure AVANT d'engager un étage, jamais pendant : couper un
+       appel en cours ferait payer un travail qu'on jetterait.
+       La ligne de journal est là pour qu'on puisse compter ces arrêts — sans
+       elle, une échelle tronquée ressemblerait à une échelle épuisée. */
+    if (departEtage - debut > budgetTempsMs) {
+      await journaliser(tache, f.nom, false, 5, 0);
+      break;
+    }
+
+    /* UN ÉTAGE SANS CLÉ SE SAUTE AVANT DE RÉSERVER SA PLACE. `appeler` sait
+       déjà rendre le statut 0 quand le secret manque — mais il le fait APRÈS
+       que le compteur a été réservé, donc il faut ensuite le rembourser : deux
+       allers-retours de base pour un étage dont on savait d'avance qu'il ne
+       partirait pas. C'est le cas ORDINAIRE tant que `GEMINI_API_KEY2` n'est
+       pas posée, et il tombe précisément sur le chemin déjà dégradé, celui
+       qu'on n'a aucune envie de ralentir davantage. */
+    if (!Deno.env.get(f.cle_env)) {
+      await journaliser(tache, f.nom, false, 0, Date.now() - departEtage);
+      continue;
+    }
 
     // ON N'APPELLE PAS UN FOURNISSEUR DONT LE COMPTEUR DIT QU'IL EST PLEIN.
     // C'est la phrase du §4.2, et c'est cette ligne-là. Quand les limites sont
