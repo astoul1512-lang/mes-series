@@ -216,6 +216,39 @@ const SCHEMA_ORDRE = {
   required: ["ordre"],
 };
 
+/* ---------------------------------------------------------------------------
+   SPEC-09 LOT 1 — RANGER *ET* ÉCARTER (01/09/2026)
+
+   `ecartes` PORTE DES NUMÉROS, PAS DES TITRES, et c'est la borne n° 1 de la
+   spec rendue vraie par construction : « le contrôle n'invente rien, l'IA ne
+   peut que RANGER et ÉCARTER dans la liste qu'on lui donne ». Un titre en
+   toutes lettres aurait ouvert la porte à un nom que personne ne lui a soumis —
+   il aurait fallu le recoller à la liste par comparaison de chaînes, donc
+   parfois à côté. Un numéro hors bornes, lui, ne désigne rien : il tombe.
+
+   La spec écrit `ecartes:[{titre, motif}]`. On rend `{i, motif}` : c'est la
+   même information, moins une occasion de se tromper. Le `motif` ne sert qu'au
+   journal et au débogage — il n'est JAMAIS affiché, la spec le dit — mais il
+   est quand même borné et nettoyé, parce qu'un texte non affiché aujourd'hui
+   est un texte affiché un jour.
+--------------------------------------------------------------------------- */
+const SCHEMA_ORDRE_ECARTES = {
+  type: "object",
+  properties: {
+    ordre: { type: "array", items: { type: "integer" }, maxItems: 40 },
+    ecartes: {
+      type: "array",
+      maxItems: 16,
+      items: {
+        type: "object",
+        properties: { i: { type: "integer" }, motif: { type: "string" } },
+        required: ["i", "motif"],
+      },
+    },
+  },
+  required: ["ordre"],
+};
+
 // ---------------------------------------------------------------------------
 // SPEC-05 §6 — LE VOCABULAIRE FERMÉ DES CRITÈRES
 //
@@ -423,6 +456,63 @@ export function construire(tache: string, params: unknown): Gabarit | null {
     };
   }
 
+  if (tache === "ordonner_rangee") {
+    /* SPEC-09 lot 1 §1.C — LE CONTRÔLE DE COHÉRENCE. Décision d'Adrien du
+       31/08 : « j'aimerais quand même que l'IA check ça pour être sûr de la
+       cohérence avec le profil : Acclamés, Pépites, Week-end, Classiques,
+       Incontournables. »
+
+       LA SOURCE RESTE LOCALE, ET C'EST TOUT L'ÉQUILIBRE DU LOT. Ces rangées
+       sont fabriquées par des requêtes TMDB objectives et mesurées ; les faire
+       COMPOSER par l'IA ferait mentir leur titre — « Acclamés par la critique »
+       cesserait d'être vrai. L'IA ne fait donc que deux choses sur une liste
+       qu'elle reçoit : la RANGER, et en RETIRER ce qui jure franchement.
+
+       LA CONSIGNE INSISTE SUR LA RARETÉ DE L'ÉCART, et ce n'est pas de la
+       politesse : le plafond de 40 % du client est un garde-fou, pas une cible.
+       Un modèle qui écarte les trois quarts d'une rangée ne contrôle plus, il
+       recompose — et ce n'est pas ce qui a été demandé pour ces rangées-là. */
+    const cands = liste(p.candidats, t.maxtitres, 120);
+    if (cands.length < 2) return null;          // ranger un titre n'a pas de sens
+    const profil = texte(p.profil, 400);
+    const ecartesGenres = liste(p.ecartes, 8, 40);
+    const rangee = texte(p.rangee, 60);
+    const numerotes = cands.map((c, i) => i + ". " + c);
+    return {
+      consigne: [
+        CONSIGNE_COMMUNE,
+        "",
+        "Voici une liste numérotée de titres, composée par un moteur local pour",
+        rangee ? "la rangée « " + rangee + " » d'un écran de découverte."
+               : "une rangée d'un écran de découverte.",
+        "",
+        "Fais DEUX choses, et rien d'autre :",
+        "1. RANGE ces titres du plus pertinent au moins pertinent POUR CETTE",
+        "   PERSONNE, d'après le profil ci-dessous.",
+        "2. ÉCARTE ceux qui JURENT FRANCHEMENT avec ce profil : un genre qu'elle",
+        "   refuse explicitement, un registre qu'elle refuse systématiquement.",
+        "",
+        "RÈGLES, et elles ne se négocient pas :",
+        "— N'utilise QUE les numéros de la liste. N'en invente aucun, n'en",
+        "  répète aucun, n'ajoute aucun titre : tu ne peux que ranger et retirer.",
+        "— `ordre` contient les numéros GARDÉS, dans le nouvel ordre.",
+        "— `ecartes` contient les numéros RETIRÉS, chacun avec un motif de",
+        "  quelques mots. Un numéro écarté ne doit PAS figurer dans `ordre`.",
+        "— ÉCARTER DOIT RESTER RARE. Dans le doute, GARDE le titre et range-le",
+        "  plus bas. Une liste dont tu retires plus d'un titre sur quatre sera",
+        "  refusée en entier, et personne n'y gagnera.",
+        "— N'écris aucun titre, aucune explication, aucun texte hors des motifs.",
+        "",
+        profil ? "PROFIL DE LA PERSONNE : " + profil : "",
+        ecartesGenres.length ? "GENRES QU'ELLE ÉCARTE : " + ecartesGenres.join(", ") : "",
+        "",
+        "TITRES :",
+        numerotes.join("\n"),
+      ].filter(Boolean).join("\n"),
+      schema: SCHEMA_ORDRE_ECARTES,
+    };
+  }
+
   if (tache === "interpreter_recherche") {
     const phrase = texte(p.phrase, 300);
     if (!phrase) return null;
@@ -622,8 +712,10 @@ export type FiltresIA = {
   origine?: string; epoque?: string; duree?: string; note_mini?: string;
   plateformes?: string[];
 };
+export type EcarteIA = { i: number; motif: string };
 export type Rendu = { texte?: string; textes?: string[]; criteres?: Critere[];
                       nom?: string; emoji?: string; ordre?: number[];
+                      ecartes?: EcarteIA[];
                       rangees?: RangeeIA[];
                       mode?: string; filtres?: FiltresIA; titres?: TitreIA[] };
 
@@ -704,6 +796,58 @@ export function valider(tache: string, brut: unknown): Rendu | null {
       l.push(i);
     }
     return l.length ? { ordre: l } : null;
+  }
+
+  if (tache === "ordonner_rangee") {
+    /* SPEC-09 lot 1 §1.C, BORNE 1 — « le contrôle n'invente rien ». Elle est
+       tenue ICI, et par construction : on ne garde que des NUMÉROS qui sont de
+       vrais indices, jamais vus deux fois, et jamais à la fois gardés et
+       écartés. Un modèle qui ajouterait un titre n'a rien à ajouter — il n'y a
+       pas de champ pour ça.
+
+       CE QUI MANQUE N'EST PAS AJOUTÉ, comme pour `classer_grille` : le client
+       complète avec son ordre local. C'est ce qui fait qu'une réponse
+       partiellement lisible reste utile au lieu d'être jetée en entier.
+
+       LE PLAFOND D'ÉCARTÉS N'EST PAS ICI, ET C'EST VOULU. Le relais ne sait pas
+       combien de titres la rangée doit afficher, ni ce que le tamis local va
+       encore en retirer : c'est le client qui a l'information, donc c'est lui
+       qui applique les 40 % de la spec. Ici on borne la FORME, là-bas la
+       QUANTITÉ. */
+    if (!Array.isArray(o.ordre)) return null;
+    const vus: Record<number, boolean> = {};
+    const ordre: number[] = [];
+    for (const x of o.ordre) {
+      if (typeof x !== "number" || !isFinite(x)) continue;
+      const i = Math.trunc(x);
+      if (i < 0 || i >= t.maxtitres) continue;
+      if (vus[i]) continue;
+      vus[i] = true;
+      ordre.push(i);
+    }
+    if (!ordre.length) return null;
+
+    const ecartes: EcarteIA[] = [];
+    if (Array.isArray(o.ecartes)) {
+      for (const x of o.ecartes.slice(0, 40)) {
+        if (!x || typeof x !== "object" || Array.isArray(x)) continue;
+        const e = x as Record<string, unknown>;
+        if (typeof e.i !== "number" || !isFinite(e.i)) continue;
+        const i = Math.trunc(e.i);
+        if (i < 0 || i >= t.maxtitres) continue;
+        /* GARDÉ *ET* ÉCARTÉ N'A PAS DE SENS, et il faut choisir sans hésiter :
+           on garde. Écarter sur une réponse qui se contredit, c'est retirer un
+           titre sur la foi d'un modèle qui vient de dire le contraire. */
+        if (vus[i]) continue;
+        vus[i] = true;
+        /* Le motif n'est jamais affiché (§1.C) — il est quand même nettoyé et
+           borné : un texte non affiché aujourd'hui est un texte affiché un
+           jour, et `texte()` retire au passage adresses et identifiants. */
+        const motif = texte(e.motif, 60) || "sans motif";
+        ecartes.push({ i, motif });
+      }
+    }
+    return ecartes.length ? { ordre, ecartes } : { ordre };
   }
 
   if (tache === "interpreter_recherche") {

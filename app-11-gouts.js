@@ -1316,6 +1316,39 @@ const SUGG_PAGES_MAX = 3;
    que d'en écrire une seconde qui se désynchroniserait. */
 const SUGG_CIBLE = (typeof RANGEE_APERCU === 'number') ? RANGEE_APERCU : 10;
 
+/* ---------------------------------------------------------------------------
+   SPEC-09 LOT 1 (01/09/2026) — LA CIBLE DES RANGÉES ÉDITORIALES, QUAND L'IA
+   LES CONTRÔLE.
+
+   L'IA range ces rangées et en ÉCARTE ce qui jure avec le profil. Si on ne lui
+   soumet que les dix titres du rail, quatre écartés font tomber la rangée à
+   six — donc sous la règle des 10 — et il faut alors aller chercher des
+   remplaçants PLUS BAS dans la liste TMDB, c'est-à-dire des titres que l'IA n'a
+   jamais vus. On présenterait comme contrôlée une rangée qui ne l'est qu'à
+   moitié, ce qui est pire que de ne rien contrôler.
+
+   DÉCISION D'ADRIEN (02/09) : « on n'a qu'à faire une requête plus importante à
+   TMDB ». On vise donc VINGT titres pour en afficher dix : les écartés sont
+   remplacés par des titres que l'IA a vus et rangés, et un écarté ne revient
+   jamais (sauf sous le plancher des 10 — la règle des 10 prime, spec §1.C
+   borne 3).
+
+   CE QUE ÇA COÛTE, ET POURQUOI ÇA RESTE BORNÉ. `remplirSugg` s'arrête dès que
+   la cible est atteinte OU au bout de `SUGG_PAGES_MAX` tours : viser vingt
+   consomme donc au plus UNE page de plus par flux, et souvent zéro (une page
+   TMDB rend vingt résultats, deux médias en rendent quarante avant tamis). Le
+   plafond du budget mesuré — trois pages par flux — ne bouge pas d'un cran.
+
+   IA ÉTEINTE, RIEN NE CHANGE : on reste sur `SUGG_CIBLE`, donc exactement le
+   nombre de requêtes d'avant ce lot. Le socle ne paie pas pour une
+   fonctionnalité qu'il n'a pas.
+--------------------------------------------------------------------------- */
+const SUGG_CIBLE_IA = 20;
+function cibleEdito(){
+  const actif = (typeof iaActive === 'function') && iaActive('decouvrir');
+  return actif ? SUGG_CIBLE_IA : SUGG_CIBLE;
+}
+
 /* Un FLUX : une requête `/discover` et l'endroit où l'on en est. `tampon` porte
    ce qui a été reçu et pas encore tamisé — le tamis ne peut pas se faire à la
    réception, il dépend de ce que les rangées servies plus tôt ont déjà pris. */
@@ -2933,12 +2966,12 @@ async function chargerSuggestions(force){
        premier, « Classiques » hérite. */
     const edito = {};
     for(const def of RANGEES_EDITO)
-      edito[def.cle] = hum ? [] : await remplirSugg(fluxDe(def.cle), vus, cadre, false, SUGG_CIBLE);
+      edito[def.cle] = hum ? [] : await remplirSugg(fluxDe(def.cle), vus, cadre, false, cibleEdito());
 
     /* 7 — Les incontournables de la décennie du jour */
     let incontPret = null;
     {
-      const l = await remplirSugg(fluxDe('incont'), vus, cadre, false, SUGG_CIBLE);
+      const l = await remplirSugg(fluxDe('incont'), vus, cadre, false, cibleEdito());
       if(l.length) incontPret = { cle:dec.cle, titre:dec.titre, l:l };
     }
 
@@ -3185,6 +3218,16 @@ function rangeesSuggerees(){
     /* Anti-déjà-vu : trois jours d'affilée sous les yeux sans être ouvert, et
        le titre passe derrière. Il ne sort pas de la rangée — il recule. */
     liste = reculerDejaVus(liste);
+    /* SPEC-09 LOT 1 (01/09/2026) — L'ORDRE DE L'IA, S'IL Y EN A UN.
+       DERNIER, et c'est réfléchi : les deux étapes ci-dessus disent ce que MOI
+       je sais de cette personne (ce qu'elle a refusé, ce qu'elle a déjà vu
+       passer), et ce sont des faits ; l'IA, elle, donne un avis. Un avis se
+       pose au-dessus des faits, jamais dessous.
+       Lecture SYNCHRONE d'un résultat calculé la veille : aucun appel réseau
+       ici, donc aucun risque de faire bouger l'écran sous le doigt. `avenir`
+       n'est jamais dans ce chemin — voir le pavé d'`ordreIARangee` (app-14) :
+       c'est un calendrier, l'ordre EST l'information. */
+    if(typeof ordreIARangee === 'function') liste = ordreIARangee(cle, liste);
     if(liste.length) brut.push(Object.assign({ cle:cle, titre:titre, l:liste }, opts || {}));
   };
 

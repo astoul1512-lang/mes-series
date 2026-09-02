@@ -139,6 +139,10 @@ function lireCacheIA(){
   if(typeof o.jour !== 'string') o.jour = '';
   if(!o.humeurs || typeof o.humeurs !== 'object' || Array.isArray(o.humeurs)) o.humeurs = {};
   if(!o.rech || typeof o.rech !== 'object' || Array.isArray(o.rech)) o.rech = { pourquoi:{} };
+  /* SPEC-09 lot 1 — l'ordre du jour des rangées locales. Normalisé comme le
+     reste : un cache écrit par une version antérieure n'a pas ce champ, et
+     `ordreIARangee` doit lire `null` plutôt que `undefined.ids`. */
+  if(!o.ordres || typeof o.ordres !== 'object' || Array.isArray(o.ordres)) o.ordres = null;
   if(!o.rech.pourquoi || typeof o.rech.pourquoi !== 'object' || Array.isArray(o.rech.pourquoi))
     o.rech.pourquoi = {};
   /* RETOUR-01 point 5 — le compteur de pitchs se remet à zéro au changement de
@@ -165,7 +169,7 @@ function oublierCacheIA(quoi){
      Découvrir, mais le COMPTEUR de la journée reste : couper puis rallumer
      l'IA ne doit pas rendre trente nouvelles requêtes. */
   if(quoi === 'decouvrir'){
-    o.jour = ''; o.pitch = null; o.titres = null; o.humeurs = {};
+    o.jour = ''; o.pitch = null; o.titres = null; o.humeurs = {}; o.ordres = null;
     o.pitchs = { jour:o.pitchs.jour, n:o.pitchs.n, t:{} };
   }
   if(quoi === 'recherche') o.rech = { pourquoi:{} };
@@ -400,19 +404,28 @@ async function lotIAduJour(){
       }
     }
 
-    /* Le marqueur de jour se pose même si les deux requêtes ont échoué : une
-       journée de dégradé silencieux vaut mieux qu'un écran qui redemande à
-       chaque repeint. C'est la lecture stricte de « une tentative, pas de
-       rafale » appliquée à la journée entière. */
+    /* Requête 3 et suivantes — SPEC-09 lot 1 : ranger les rangées locales, et
+       contrôler la cohérence des éditoriales. Une requête par rangée
+       RÉELLEMENT à l'écran ; `rangees` a déjà été calculé plus haut pour les
+       intitulés, on ne le redemande pas (il a des effets de bord persistés). */
+    const ordres = await ordresIAduJour(rangees);
+
+    /* Le marqueur de jour se pose même si les requêtes ont échoué : une journée
+       de dégradé silencieux vaut mieux qu'un écran qui redemande à chaque
+       repeint. C'est la lecture stricte de « une tentative, pas de rafale »
+       appliquée à la journée entière. */
     const maj = lireCacheIA();
     maj.jour = jour;
     maj.pitch = pitch ? { cle: cle, texte: pitch } : null;
     maj.titres = titres;
+    /* SPEC-09 lot 1 — l'ordre du jour des rangées locales. `null` veut dire
+       « aucune n'a répondu » : chaque rangée garde alors son ordre local, ce
+       qui est le dégradé exigé par la borne 4 de la spec. */
+    maj.ordres = ordres;
     /* RETOUR-01 point 5 — le résultat va dans le cache par titre comme les
        autres. Le lot n'est plus un cas à part : c'est le premier pitch de la
        journée, rien de plus. Les places, elles, ont été prises AU DÉPART, en
-       tête de cette fonction — et il en faut DEUX, parce que le lot fait deux
-       requêtes (le pitch et les intitulés). Il n'en comptait qu'une. */
+       tête de cette fonction. */
     maj.pitchs.t['-:' + cle] = pitch || '';
     ecrireCacheIA(maj);
 
@@ -580,6 +593,238 @@ function intituleIA(cle, defaut){
   if(o.jour !== todayISO() || !o.titres) return defaut;
   const v = o.titres[cle];
   return (typeof v === 'string' && v) ? v : defaut;
+}
+
+/* ===========================================================================
+   SPEC-09 LOT 1 §1.B et §1.C — L'IA RANGE LES RANGÉES LOCALES, ET EN ÉCARTE
+
+   Décision d'Adrien du 31/08 : « L'IA compose une partie des rangées, les
+   autres restent locales (Bientôt, Nouveautés, Vu par tes proches), mais
+   vérifié sur TMDB » — puis, le même jour : « j'aimerais quand même que l'IA
+   check ça pour être sûr de la cohérence avec le profil : Acclamés, Pépites,
+   Week-end, Classiques, Incontournables. »
+
+   DEUX NIVEAUX, ET LA DIFFÉRENCE COMPTE :
+     · les ÉDITORIALES sont rangées ET contrôlées — un titre qui jure
+       franchement avec le profil sort de la rangée ;
+     · `nouv` et `cercle` sont seulement RANGÉES. « Vu par tes proches » est un
+       FAIT SOCIAL, pas une suggestion : écarter un titre qu'un proche a
+       réellement vu, ce serait effacer une information vraie parce qu'elle ne
+       plaît pas. Et une nouveauté écartée serait une nouveauté cachée.
+     · `avenir` (« Bientôt ») n'est NI rangée NI contrôlée, et la spec y insiste
+       en toutes lettres : c'est un CALENDRIER, l'ordre EST l'information. Un
+       titre qui « ne correspond pas au profil » y a sa place, puisque ce qu'on
+       annonce est une DATE. Son absence de cette liste est la ligne la plus
+       importante du lot.
+
+   QUAND ÇA SE CALCULE : dans le lot du jour, APRÈS le premier rendu, jamais
+   avant. Ce qui s'affiche aujourd'hui est ce qui a été calculé au lot
+   précédent — donc rien ne bouge sous le doigt, c'est la règle transverse du
+   dépôt et elle prime sur la fraîcheur.
+   =========================================================================== */
+
+/* Les rangées CONTRÔLÉES (rangées + écartées). Ce sont exactement les cinq que
+   la phrase d'Adrien nomme. `incont` est la clé de la décennie du jour — les
+   « incontournables des années 90 » s'affichent sous cette clé-là, pas sous
+   « 1990 ». */
+const IA_RANGEES_CONTROLE = ['acclames', 'weekend', 'pepites', 'classiques', 'incont'];
+/* Les rangées seulement RANGÉES. Voir le pavé : on ne cache pas un fait. */
+const IA_RANGEES_ORDRE_SEUL = ['nouv', 'cercle'];
+
+/* LE PLAFOND D'ÉCARTÉS — 40 % de la liste soumise (spec §1.C, borne 2).
+   Au-delà, l'IA ne contrôle plus, elle recompose : on garde alors son ORDRE et
+   on ignore les écartés en trop, les moins bien classés revenant en premier.
+   C'est le comportement que la spec décrit mot pour mot, et il vaut mieux qu'un
+   rejet total : l'ordre, lui, était bon. */
+const IA_ECARTES_MAX_PCT = 0.40;
+/* Combien de titres on soumet au jugement. La rangée n'en affiche que dix
+   (`RANGEE_APERCU`) : en soumettre vingt laisse de quoi absorber les écartés
+   SANS descendre chercher, plus bas dans la liste, des titres que l'IA n'aurait
+   jamais vus. C'est la décision d'Adrien du 02/09 — « on n'a qu'à faire une
+   requête plus importante à TMDB » — et c'est ce qui fait qu'un titre écarté
+   n'est jamais remplacé par un titre non contrôlé. */
+const IA_ORDRE_SOUMIS = 20;
+
+/* La ligne d'un titre telle que le modèle la lit. Le même format que
+   `classer_grille` : « 0. Whiplash (2014) · drame, musique · 8,4 ». Aucun
+   identifiant ne part — le gabarit serveur les retirerait de toute façon, et
+   le modèle n'en a aucun usage. */
+function ligneTitreIA(x){
+  const nom = String((x && x.nom) || '').slice(0, 70);
+  if(!nom) return '';
+  const an = String((x && x.date) || '').slice(0, 4);
+  /* Les genres partent EN TOUTES LETTRES : un identifiant TMDB ne dit rien à un
+     modèle, et `nomGenreParId` est déjà la traduction qu'emploie tout l'écran
+     Découvrir. Sans nom de genre, le contrôle de cohérence n'aurait rien à
+     confronter aux « genres écartés » du profil. */
+  const g = ((x && x.genre_ids) || []).slice(0, 3)
+    .map(id => (typeof nomGenreParId === 'function') ? nomGenreParId(x.media, id) : '')
+    .filter(Boolean).join(', ');
+  const n = (x && typeof x.note === 'number' && x.note > 0) ? x.note.toFixed(1) : '';
+  return [nom + (an ? ' (' + an + ')' : ''), g, n].filter(Boolean).join(' · ');
+}
+/* La clé stable d'un titre. C'est elle qu'on stocke, JAMAIS l'indice : la liste
+   est recalculée à chaque chargement de suggestions, et un indice mémorisé la
+   veille désignerait alors n'importe quoi. */
+function cleTitreIA(x){ return (x && x.media ? x.media : '') + ':' + (x && x.id); }
+
+/* ------------------------- LA LECTURE (à chaque rendu) -------------------------
+
+   SYNCHRONE, ET SANS LE MOINDRE APPEL RÉSEAU. Elle lit ce que le lot de la
+   veille a écrit. C'est le même motif qu'`intituleIA`, et pour la même raison :
+   ce qui s'affiche aujourd'hui a été décidé avant, donc rien ne bouge sous le
+   doigt de personne.
+
+   LES QUATRE BORNES DE LA SPEC SONT TENUES ICI, ET C'EST LE SEUL ENDROIT :
+     1. RIEN N'EST AJOUTÉ. On part de la liste locale et on la RÉORDONNE ; une
+        clé mémorisée qui ne correspond à aucun titre de la liste du jour est
+        ignorée. La source reste la requête TMDB, donc « Acclamés par la
+        critique » reste vrai.
+     2. Le plafond de 40 % a déjà été appliqué à l'écriture (`ordonnerRangeeIA`).
+     3. LA RÈGLE DES 10 PRIME. Si les écartés font passer la rangée sous
+        `RANGEE_MINI`, on en réintègre juste assez pour repasser la barre — et
+        on réintègre les DERNIERS écartés, ceux dont le modèle a parlé en
+        dernier. Une rangée n'est jamais maigre, et jamais supprimée.
+     4. ÉCHEC = ORDRE LOCAL. Pas de mémoire, IA éteinte, réponse d'hier : on
+        rend la liste telle qu'elle est arrivée. Aucun écran ne se vide.
+
+   CE QU'ELLE NE FAIT PAS : aller chercher un remplaçant plus bas dans la liste
+   TMDB. Un titre écarté est remplacé par un titre que l'IA A VU ET RANGÉ — on
+   lui en soumet vingt pour n'en afficher que dix, justement pour ça. Descendre
+   à l'aveugle ramènerait des titres jamais contrôlés dans une rangée qu'on
+   présente comme contrôlée, ce qui est pire que de ne rien contrôler. */
+/* « Bientôt » NE PASSE JAMAIS PAR L'IA, et la garde est écrite deux fois : ici,
+   et dans la liste des rangées éligibles au calcul. C'est volontairement
+   redondant. La spec en fait sa phrase la plus catégorique — « `avenir` est
+   hors de tout ça : ni réordonné, ni contrôlé, ni écarté » — parce qu'un
+   calendrier dont on change l'ordre n'est plus un calendrier, et qu'un titre
+   retiré d'un calendrier est une sortie qu'on ne verra pas venir. Une seule
+   garde, côté calcul, laisserait un cache forgé ou une version future rouvrir
+   le chemin ; celle-ci ferme la porte à l'endroit où l'ordre s'applique. */
+const IA_RANGEE_INTOUCHABLE = 'avenir';
+
+function ordreIARangee(cle, liste){
+  if(cle === IA_RANGEE_INTOUCHABLE) return liste;
+  if(!Array.isArray(liste) || liste.length < 2) return liste;
+  if(!iaActive('decouvrir')) return liste;
+  const o = lireCacheIA();
+  if(o.jour !== todayISO() || !o.ordres) return liste;
+  const v = o.ordres[cle];
+  if(!v || !Array.isArray(v.ids) || !v.ids.length) return liste;
+
+  const parCle = {};
+  liste.forEach(x => { parCle[cleTitreIA(x)] = x; });
+  const pris = {};
+  const rangs = [];
+  v.ids.forEach(c => {
+    if(!parCle[c] || pris[c]) return;    // borne 1 : on n'ajoute jamais rien
+    pris[c] = true;
+    rangs.push(parCle[c]);
+  });
+  if(!rangs.length) return liste;
+
+  /* Les écartés, puis TOUT LE RESTE de la liste locale dans son ordre d'origine
+     — les titres que l'IA n'a pas vus (au-delà des vingt soumis) gardent leur
+     place derrière ceux qu'elle a rangés. */
+  const hors = {};
+  (Array.isArray(v.hors) ? v.hors : []).forEach(c => { if(parCle[c]) hors[c] = true; });
+  const suite = liste.filter(x => !pris[cleTitreIA(x)] && !hors[cleTitreIA(x)]);
+  let out = rangs.concat(suite);
+
+  /* BORNE 3 — LA RÈGLE DES 10 PRIME SUR LE CONTRÔLE. On réintègre les derniers
+     écartés jusqu'à repasser le plancher : mieux vaut un titre discutable qu'une
+     rangée maigre, et la spec tranche exactement dans ce sens. */
+  const mini = (typeof RANGEE_MINI === 'number') ? RANGEE_MINI : 10;
+  if(out.length < mini){
+    const repris = (Array.isArray(v.hors) ? v.hors : []).slice().reverse()
+      .map(c => parCle[c]).filter(Boolean);
+    for(const x of repris){
+      if(out.length >= mini) break;
+      out.push(x);
+    }
+  }
+  return out;
+}
+
+/* --------------------------- LE CALCUL (une fois par jour) --------------------------- */
+
+/* Le tour complet : une requête par rangée éligible RÉELLEMENT à l'écran.
+   Rend `{cle: {ids, hors}}`, ou `null` si rien n'a abouti.
+
+   LES PLACES SE PRENNENT UNE PAR UNE, juste avant chaque requête, et pas en
+   bloc au départ. En bloc, un plafond atteint aurait fait sauter TOUT le
+   contrôle alors que deux rangées tenaient encore ; une par une, on range ce
+   qu'on peut et on s'arrête où le budget s'arrête. Les rangées non traitées
+   gardent simplement leur ordre local — c'est le dégradé, pas une panne.
+
+   SÉQUENTIEL, JAMAIS EN PARALLÈLE. Sept requêtes lancées ensemble, c'est un
+   429 sur le fournisseur, donc l'échelle qui descend, donc des réponses moins
+   bonnes pour tout le monde — et ce lot tourne APRÈS le rendu, personne
+   n'attend. */
+async function ordresIAduJour(rangees){
+  const eligibles = (rangees || []).filter(r =>
+    r && r.l && r.l.length &&
+    (IA_RANGEES_CONTROLE.indexOf(r.cle) >= 0 || IA_RANGEES_ORDRE_SEUL.indexOf(r.cle) >= 0));
+  if(!eligibles.length) return null;
+  const out = {};
+  for(const r of eligibles){
+    /* ON PREND LES PLACES DANS LE MÊME COMPTEUR QUE LES PITCHS, et c'est un
+       choix, pas une facilité. `IA_PITCH_MAX` est un plafond de CONFORT côté
+       client : il borne ce que Découvrir dépense en une journée, toutes tâches
+       confondues. Depuis que le plafond par utilisateur est supprimé côté
+       serveur (01/09), c'est le dernier frein journalier qui existe — lui
+       donner un second compteur privé reviendrait à le contourner. Sept
+       rangées prennent donc sept places sur les trente : le pitch du hero, qui
+       est le plus visible, garde les vingt-trois autres. */
+    if(!reserverPitchIA(1)) break;      // plafond de confort atteint : on s'arrête
+    let o = null;
+    try{ o = await ordonnerRangeeIA(r, IA_RANGEES_CONTROLE.indexOf(r.cle) >= 0); }
+    catch(e){ o = null; }
+    if(o) out[r.cle] = o;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/* Une rangée, une requête. Rend `{ids, hors}` — les clés gardées dans le nouvel
+   ordre, et les clés écartées — ou `null` si rien d'exploitable.
+   `avecEcartes` à faux : on ignore ce que le modèle a pu écarter. */
+async function ordonnerRangeeIA(r, avecEcartes){
+  const liste = ((r && r.l) || []).slice(0, IA_ORDRE_SOUMIS);
+  if(liste.length < 4) return null;      // trop court pour que ranger ait un sens
+  const lignes = liste.map(ligneTitreIA);
+  if(lignes.some(x => !x)) return null;  // une liste incomplète ne se juge pas
+  const d = await appelIA('ordonner_rangee', {
+    rangee: String(r.titre || '').slice(0, 60),
+    candidats: lignes,
+    profil: profilBancIA(),
+    ecartes: genresEcartesBancIA()
+  });
+  if(!d || !Array.isArray(d.ordre) || !d.ordre.length) return null;
+
+  const dedans = {};
+  const ids = [];
+  d.ordre.forEach(i => {
+    const x = liste[i];
+    if(!x || dedans[cleTitreIA(x)]) return;
+    dedans[cleTitreIA(x)] = true;
+    ids.push(cleTitreIA(x));
+  });
+  if(!ids.length) return null;
+
+  /* LE PLAFOND DES 40 % (spec §1.C, borne 2), APPLIQUÉ ICI PARCE QUE C'EST ICI
+     QU'ON SAIT COMBIEN DE TITRES ONT ÉTÉ SOUMIS — le relais, lui, ne le sait
+     pas. Au-delà, « on garde l'ordre proposé et on ignore les écartés en
+     trop » : on retient les premiers de la liste rendue par le modèle, les
+     suivants REVIENNENT dans la rangée. Une IA qui écarte les trois quarts
+     d'une rangée ne contrôle plus, elle recompose. */
+  let hors = [];
+  if(avecEcartes && Array.isArray(d.ecartes)){
+    hors = d.ecartes.map(e => liste[e && e.i]).filter(Boolean).map(cleTitreIA)
+                    .filter(c => !dedans[c]);
+    const max = Math.floor(liste.length * IA_ECARTES_MAX_PCT);
+    if(hors.length > max) hors = hors.slice(0, max);
+  }
+  return { ids: ids, hors: hors };
 }
 
 /* ---------------------- LES HUMEURS (SPEC-04 §2) ------------------------- */
