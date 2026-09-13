@@ -86,6 +86,13 @@ type Plan = {
      doit partir ; `false` = l'incident était déjà ouvert, on se tait.
      Par défaut `true` — le cas le plus intéressant. */
   bascule?: boolean;
+  /* CE QUE REND UN FOURNISSEUR DONT LE CAS NE PARLE PAS — RETOUR-12.
+     Le défaut du faux monde est un pitch, parce que tous les cas d'échelle
+     passaient par `pitch_jour`. Depuis que les cas de MÉCANIQUE passent par
+     `suggestions_famille` (la seule tâche qui parte encore du rang 1, voir
+     `SUGG`), il faut pouvoir changer cette réponse par défaut sans énumérer
+     les cinq étages dans chaque cas. */
+  defaut?: string;
 };
 
 // Les RPC dont la fonction SQL rend `void` — celles qui répondent 204.
@@ -166,9 +173,30 @@ function faireSemblant(plan: Plan) {
        `gemini-flash-2` explicitement, et cette clé-là gagne. Sans ce repli, les
        vingt cas écrits avant ce lot auraient tous eu à énumérer cinq étages
        pour continuer à dire la même chose. */
-    const r = rep[cle] || rep[base] || { statut: 200, texte: '{"texte":"Une phrase honnête."}' };
+    const r = rep[cle] || rep[base] ||
+      { statut: 200, texte: plan.defaut || '{"texte":"Une phrase honnête."}' };
+    /* UN FOURNISSEUR LENT DOIT POUVOIR ÊTRE INTERROMPU — RETOUR-12 (13/09/2026).
+       Le faux monde ignorait le `signal` : il finissait par répondre au bout de
+       `lenteur`, quoi qu'il arrive. Aucun cas ne pouvait donc éprouver le
+       minuteur lui-même — ni celui des huit secondes, ni celui, neuf, borné par
+       ce qu'il reste du budget de la requête. C'est précisément la ligne qui
+       rend vraie la borne des dix secondes : la laisser hors de portée des
+       tests, c'est la laisser se faire supprimer un jour sans que rien rougisse.
+       On rejette donc comme le ferait `fetch`, et `appeler` traduira en 599. */
+    const sig = (init && (init as RequestInit).signal) || null;
     const attendre = <T>(v: T): Promise<T> =>
-      plan.lenteur ? new Promise((ok) => setTimeout(() => ok(v), plan.lenteur)) : Promise.resolve(v);
+      plan.lenteur
+        ? new Promise<T>((ok, non) => {
+          const t = setTimeout(() => ok(v), plan.lenteur);
+          if (sig) {
+            if (sig.aborted) { clearTimeout(t); non(new Error("AbortError")); return; }
+            sig.addEventListener("abort", () => {
+              clearTimeout(t);
+              non(new Error("AbortError"));
+            });
+          }
+        })
+        : Promise.resolve(v);
     if (r.statut !== 200) {
       return rendre({ erreur: r.statut }, r.statut, r.retry ? { "Retry-After": r.retry } : {})
         .then(attendre);
@@ -221,6 +249,35 @@ function requete(corps: unknown, opts: { origine?: string | null; jeton?: string
 }
 
 const PITCH = { tache: "pitch_jour", params: { titre: "Severance", genres: ["Drame"], note: 8.7 } };
+
+/* ---- LES DEUX VÉHICULES DE TEST — RETOUR-12 (13/09/2026) ----
+
+   `PITCH` a servi de tâche générique à toute cette suite pendant un mois, parce
+   que TOUTES les tâches partaient du rang 1 et qu'aucune n'escaladait : n'importe
+   laquelle racontait donc la même histoire d'échelle. Ce n'est plus vrai, et
+   confondre les deux familles ferait passer des cas pour de mauvaises raisons.
+
+   · `PITCH` — GROUPE A. Part du rang 3 (le modèle léger), sait escalader vers le
+     rang 1. Il éprouve désormais ce qui est PROPRE au groupe A : le point de
+     départ, le rattrapage, et le fait que l'escalade double la file.
+   · `SUGG` — GROUPE B. `suggestions_famille` est la seule tâche qui parte encore
+     du rang 1 SANS escalade : c'est donc la seule qui parcoure l'échelle entière
+     dans l'ordre, et le seul véhicule honnête pour les cas de MÉCANIQUE — 429,
+     compteur plein, remboursement, journal, alerte. Ils n'ont pas changé de
+     sens, ils ont changé de porteur.
+
+   Un cas qui n'a besoin ni de l'un ni de l'autre (origine, jeton, gabarits)
+   garde `PITCH` : il ne descend jamais l'échelle. */
+const SUGG = { tache: "suggestions_famille", params: { famille: "film" } };
+/* La réponse VALIDE de cette tâche-là : le défaut du faux monde est un pitch,
+   qui ne passerait pas `valider`. Voir `Plan.defaut`. */
+/* L'ORDRE DES CLÉS EST CELUI QUE REND `valider`, pas celui qu'on écrirait
+   naturellement : la même chaîne sert de RÉPONSE du faux fournisseur et
+   d'ATTENDU du client, et les cas comparent du JSON sérialisé. */
+const SUGG_OK = JSON.stringify({
+  rangees: [{ titre: "Des huis clos tendus",
+              titres: [{ nom: "Prisoners", media: "film", annee: 2013 }] }],
+});
 
 /* ======================= L'ORIGINE ET LE JETON ======================= */
 
@@ -343,18 +400,23 @@ Deno.test("base injoignable : un budget qu'on ne peut pas lire vaut un budget at
 Deno.test("étage 1 saturé (429) → bascule sur l'étage 2, transparent", async () => {
   /* DEPUIS LE 01/09, L'ÉTAGE 2 EST LE MÊME MODÈLE SUR L'AUTRE COMPTE. Le
      « cran » de l'échelle n'est plus forcément une descente en qualité : on
-     épuise d'abord le second compte, et on ne descend que contraint. */
+     épuise d'abord le second compte, et on ne descend que contraint.
+     RETOUR-12 : le cas passe au groupe B (voir `SUGG`) — c'est la seule tâche
+     qui parte encore du rang 1, donc la seule dont « l'étage 1 » veuille encore
+     dire `gemini-flash`. Il gagne au passage une seconde raison d'exister : il
+     prouve qu'un 429 ESSAIE le jumeau, là où une panne le saute (cas suivant). */
   const f = faireSemblant({
     fournisseurs: null,                       // repli sur la config du fichier
+    defaut: SUGG_OK,
     reponses: {
       "gemini-flash": { statut: 429 },
-      "gemini-flash-2": { statut: 200, texte: '{"texte":"Une phrase honnête."}' },
+      "gemini-flash-2": { statut: 200, texte: SUGG_OK },
     },
   });
   try {
-    const r = await servir(requete(PITCH));
+    const r = await servir(requete(SUGG));
     assertEquals(r.status, 200);
-    assertEquals(JSON.stringify(await r.json()), '{"texte":"Une phrase honnête."}');
+    assertEquals(JSON.stringify(await r.json()), SUGG_OK);
     const e = f.etages();
     assertEquals(e.length, 2, "l'échelle n'a pas été descendue d'un cran exactement");
     assertEquals(f.clesGemini().join(","), "cle-gemini," + CLE_2,
@@ -368,32 +430,130 @@ Deno.test("étage 1 saturé (429) → bascule sur l'étage 2, transparent", asyn
 });
 
 Deno.test("un compteur plein évite l'appel au lieu de le découvrir", async () => {
-  const f = faireSemblant({ fournisseurs: null, place: { "gemini-flash": false } });
+  const f = faireSemblant({
+    fournisseurs: null, defaut: SUGG_OK, place: { "gemini-flash": false },
+  });
   try {
-    await servir(requete(PITCH));
+    await servir(requete(SUGG));
     const e = f.etages();
     assertEquals(e.length, 1, "on a appelé un fournisseur que le compteur disait plein");
-    // Le compteur du compte n° 1 est plein ; celui du compte n° 2 ne l'est pas.
+    /* Le compteur du compte n° 1 est plein ; celui du compte n° 2 ne l'est pas.
+       ET LE JUMEAU N'EST PAS SAUTÉ : un compteur local plein n'est pas une
+       panne du MODÈLE, c'est notre propre comptabilité. Le garde-fou 1 du
+       RETOUR-12 ne doit surtout pas mordre ici — il fermerait le second compte
+       pour la seule raison que le premier est plein, ce qui est exactement
+       l'inverse de ce pour quoi la migration 017 l'a créé. */
     assert(e[0].indexOf("gemini-3.6-flash") >= 0, "on est descendu en qualité sans y être forcé");
     assertEquals(f.clesGemini().join(","), CLE_2);
   } finally { f.rendre(); }
 });
 
 Deno.test("une seule tentative par fournisseur, jamais deux", async () => {
+  /* LE REFUS EST UN 429, ET C'EST NÉCESSAIRE DEPUIS RETOUR-12. Ce cas dit
+     « chaque étage est essayé une fois et une seule », donc il lui faut un
+     motif de refus qui n'écarte AUCUN étage : le 429 est le seul. Avec un 500
+     les jumeaux seraient sautés (garde-fou 1) et le cas mesurerait autre chose
+     que ce que dit son titre — c'est le cas qui suit qui mesure ça. */
   const f = faireSemblant({
     fournisseurs: null,
+    defaut: SUGG_OK,
     reponses: {
-      "gemini-flash": { statut: 500 },
-      "gemini-flash-lite": { statut: 500 },
-      "openrouter": { statut: 500 },
+      "gemini-flash": { statut: 429 },
+      "gemini-flash-lite": { statut: 429 },
+      "openrouter": { statut: 429 },
     },
   });
   try {
-    await servir(requete(PITCH));
-    assertEquals(f.etages().length, 5, "un étage a été rappelé, ou un a été sauté");
-    // Cinq appels, et CINQ clés distinctes d'étage : deux comptes par modèle.
-    assertEquals(f.clesGemini().join(","),
-      ["cle-gemini", CLE_2, "cle-gemini", CLE_2].join(","));
+    await servir(requete(SUGG));
+    const e = f.etages();
+    /* TROIS, ET PLUS CINQ — c'est le garde-fou 2 du RETOUR-12 qui referme
+       l'échelle, et ce cas est le premier endroit où ça se voit. On garde
+       néanmoins ce qu'il prouvait déjà : les étages appelés sont DISTINCTS. */
+    assertEquals(e.length, 3, "le plafond de trois étages appelés n'a pas tenu");
+    assertEquals(new Set(e.map((u) => u + "")).size >= 2, true);
+    // Deux comptes sur le premier modèle, puis le second modèle : chacun une fois.
+    assertEquals(f.clesGemini().join(","), ["cle-gemini", CLE_2, "cle-gemini"].join(","),
+      "un compte a été présenté deux fois pour le même modèle");
+  } finally { f.rendre(); }
+});
+
+/* ---- RETOUR-12 GARDE-FOU 1 — LE JUMEAU NE REJOUE PAS UNE PANNE (13/09/2026)
+
+   Le cas précédent refuse par 429 et voit ses cinq étages ; celui-ci refuse par
+   panne et doit en voir DEUX FOIS MOINS. C'est la même échelle, le même code,
+   et c'est le motif du refus — lui seul — qui change la route. Les deux cas
+   ensemble sont la preuve demandée par l'acceptation du RETOUR : « sur un
+   timeout, l'échelle saute le jumeau ; sur un 429, elle l'essaie ». */
+Deno.test("garde-fou 1 : une panne saute le jumeau, un 429 ne le saute pas", async () => {
+  const f = faireSemblant({
+    fournisseurs: null,
+    defaut: SUGG_OK,
+    reponses: {
+      "gemini-flash": { statut: 500 },        // le MODÈLE tombe, sur les deux comptes
+      "gemini-flash-lite": { statut: 200, texte: SUGG_OK },
+    },
+  });
+  try {
+    const r = await servir(requete(SUGG));
+    assertEquals(r.status, 200);
+    const e = f.etages();
+    assertEquals(e.length, 2,
+      "le second compte du modèle tombé a été rappelé : quinze secondes pour le même silence");
+    assert(e[0].indexOf("gemini-3.6-flash") >= 0, "l'échelle ne part plus du rang 1");
+    assert(e[1].indexOf("flash-lite") >= 0, "on n'a pas sauté AU MODÈLE SUIVANT");
+    /* La clé n° 2 n'a jamais été présentée sur le modèle fort : c'est ce qui
+       distingue « sauté » de « essayé et tombé », et aucune autre observation
+       ne le dirait — les deux laisseraient la même trace dans `etages()`. */
+    assertEquals(f.clesGemini().join(","), "cle-gemini,cle-gemini");
+    // Le saut est TRACÉ (statut 6), sinon une échelle raccourcie ressemblerait
+    // à une échelle épuisée — c'est la règle de lecture du journal.
+    const j = f.journal().filter((l) => l.statut === 6);
+    assertEquals(j.length, 1, "le jumeau sauté n'a pas laissé de ligne de journal");
+    assertEquals(j[0].fournisseur, "gemini-flash-2");
+  } finally { f.rendre(); }
+});
+
+/* Une réponse TRONQUÉE compte comme une panne du modèle, et c'est le cas le
+   moins évident du garde-fou : le fournisseur a répondu 200. Mais il a buté sur
+   le plafond de jetons, et le jumeau butera au même endroit sur la même
+   consigne — après avoir consommé ses jetons une seconde fois. C'est le refus
+   le plus cher de la liste ; le rejouer à l'identique est ce qu'il ne faut
+   surtout pas faire. */
+Deno.test("garde-fou 1 : une réponse tronquée saute aussi le jumeau", async () => {
+  const f = faireSemblant({
+    fournisseurs: null,
+    defaut: SUGG_OK,
+    reponses: {
+      "gemini-flash": { statut: 200, texte: SUGG_OK, coupee: true },
+      "gemini-flash-lite": { statut: 200, texte: SUGG_OK },
+    },
+  });
+  try {
+    const r = await servir(requete(SUGG));
+    assertEquals(r.status, 200);
+    assertEquals(f.etages().length, 2, "le jumeau a rejoué une troncature");
+    assertEquals(f.clesGemini().join(","), "cle-gemini,cle-gemini");
+  } finally { f.rendre(); }
+});
+
+/* Un 4xx qui n'est PAS un 429 parle de la clé ou de la requête, jamais du
+   moteur — et le jumeau porte justement une autre clé. Il reste donc essayé.
+   Ce cas existe pour que « tout ce qui n'est pas 200 saute le jumeau » ne
+   s'installe pas par simplification le jour où quelqu'un relira la condition. */
+Deno.test("garde-fou 1 : un 403 parle de la clé, pas du modèle — le jumeau est essayé", async () => {
+  const f = faireSemblant({
+    fournisseurs: null,
+    defaut: SUGG_OK,
+    reponses: {
+      "gemini-flash": { statut: 403 },
+      "gemini-flash-2": { statut: 200, texte: SUGG_OK },
+    },
+  });
+  try {
+    const r = await servir(requete(SUGG));
+    assertEquals(r.status, 200);
+    assertEquals(f.clesGemini().join(","), "cle-gemini," + CLE_2,
+      "le second compte n'a pas été essayé après un refus qui ne le concernait pas");
   } finally { f.rendre(); }
 });
 
@@ -413,47 +573,104 @@ Deno.test("tous épuisés → {indisponible:true}, aucune erreur brute", async (
   } finally { f.rendre(); }
 });
 
-/* RETOUR-01 POINT 4 (11/08/2026) — LE CONTRÔLE EST RETOURNÉ. Il vérifiait
-   qu'une tâche courte partait de l'étage 2 (« une phrase de quinze mots ne
-   dépense pas le quota de l'étage qualité »). Décision d'Adrien : toutes les
-   tâches démarrent à l'étage 1, la cascade ne joue que sur saturation ou
-   erreur. Ce cas prouve désormais l'inverse — et il prouve AUSSI que le retour
-   à l'étage 1 est automatique, puisque chaque requête reconstruit son échelle
-   depuis le rang 1 sans qu'aucun état ne soit remis à zéro. */
-Deno.test("RETOUR-01 point 4 : toute tâche part de l'étage 1, et y revient seule", async () => {
+/* RETOUR-12 (13/09/2026) — LE CONTRÔLE EST RETOURNÉ UNE SECONDE FOIS, ET IL
+   FAUT SAVOIR LEQUEL EST LE BON.
+
+   Le 11/08 (RETOUR-01 point 4), ce cas vérifiait que toute tâche partait du
+   rang 1 : « pertinence d'abord ». Le 13/09 il vérifie l'inverse pour huit
+   tâches sur neuf. Ce n'est pas une girouette, c'est une prémisse qui est
+   tombée : le point 4 supposait que le gros modèle RÉPOND, et un mois de
+   journal dit qu'il échoue une fois sur deux à trois en cinq à sept secondes.
+   Voir le pavé de tête de `TACHES` pour les chiffres.
+
+   CE QUE CE CAS PROTÈGE VRAIMENT : qu'une tâche du groupe A ne réveille PLUS le
+   gros modèle en premier — c'est l'acceptation n° 2 du RETOUR, mot pour mot —
+   et que `suggestions_famille` le réveille toujours. Les deux moitiés comptent
+   autant : basculer tout le monde aurait été aussi faux que ne rien basculer. */
+Deno.test("RETOUR-12 : le groupe A part du léger, le groupe B part du fort", async () => {
   const f = faireSemblant({ fournisseurs: null });
   try {
-    await servir(requete({ tache: "intitules_rangees", params: { intitules: ["Nouveautés"] } }));
+    /* `PITCH` et pas `intitules_rangees` : le faux monde rend un `{texte}` par
+       défaut, que seules les tâches à texte savent valider. Une tâche dont la
+       réponse par défaut est malformée escaladerait, et le cas compterait deux
+       étages pour une raison qui n'a rien à voir avec ce qu'il vérifie. */
+    await servir(requete(PITCH));
     const e = f.etages();
-    assertEquals(e.length, 1);
+    assertEquals(e.length, 1, "une tâche servie du premier coup a coûté plus d'un étage");
     /* L'URL porte le MODÈLE, pas le nom de l'étage : « gemini-3.6-flash » pour
-       le rang 1, « gemini-3.5-flash-lite » pour le rang 2. */
-    assert(e[0].indexOf("flash-lite") < 0 && e[0].indexOf("gemini-3.6-flash") >= 0,
-      "une tâche courte part encore de l'étage 2 : « pertinence d'abord » n'est pas tenu");
+       les rangs 1-2, « gemini-3.5-flash-lite » pour les rangs 3-4. */
+    assert(e[0].indexOf("flash-lite") >= 0,
+      "une tâche du groupe A réveille encore le gros modèle : les 15 s sont toujours là");
   } finally { f.rendre(); }
 
-  /* Étage 1 saturé : on descend. Puis, la fenêtre rouverte, on remonte — sans
-     aucune intervention, parce qu'il n'y a rien à remonter. */
-  const g = faireSemblant({ fournisseurs: null, reponses: { "gemini-flash": { statut: 429 } } });
+  /* GROUPE B — `suggestions_famille` doit proposer des titres DE TÊTE. C'est le
+     seul endroit de la liste blanche où la culture générale du gros modèle sert
+     vraiment, et la seule tâche dont une faiblesse ne se rattrape pas par
+     validation : un titre médiocre mais réel passe TMDB sans broncher. */
+  const b = faireSemblant({ fournisseurs: null, defaut: SUGG_OK });
+  try {
+    await servir(requete(SUGG));
+    assert((b.etages()[0] || "").indexOf("gemini-3.6-flash") >= 0,
+      "`suggestions_famille` est descendue au petit modèle : elle n'a plus de mémoire");
+  } finally { b.rendre(); }
+
+  /* LE RETOUR AU DÉPART EST AUTOMATIQUE, ET IL L'EST PAR CONSTRUCTION : chaque
+     requête reconstruit son échelle, aucun état ne survit d'une demande à
+     l'autre. Étage de départ saturé → on essaie son jumeau (un 429 ne saute pas
+     le jumeau), puis on escalade. */
+  const g = faireSemblant({
+    fournisseurs: null, reponses: { "gemini-flash-lite": { statut: 429 } },
+  });
   try {
     await servir(requete(PITCH));
     const e = g.etages();
     assert(e.length >= 3, "la cascade ne joue plus sur saturation");
-    /* L'ORDRE DES RANGS DEPUIS LE 01/09 : le modèle est épuisé sur les DEUX
-       comptes avant qu'on descende en qualité. Le 429 porte ici sur le modèle,
-       donc sur les deux comptes ; c'est seulement après qu'on voit Flash-Lite. */
-    assert(e[0].indexOf("gemini-3.6-flash") >= 0 && e[1].indexOf("gemini-3.6-flash") >= 0,
-      "on descend en qualité avant d'avoir essayé le second compte");
-    assert(e[2].indexOf("flash-lite") >= 0, "la cascade ne descend pas dans l'ordre des rangs");
+    assert(e[0].indexOf("flash-lite") >= 0 && e[1].indexOf("flash-lite") >= 0,
+      "on quitte le modèle léger avant d'avoir essayé son second compte");
     assertEquals(g.clesGemini().slice(0, 2).join(","), "cle-gemini," + CLE_2);
+    assert(e[2].indexOf("gemini-3.6-flash") >= 0,
+      "l'escalade ne remonte pas au modèle fort une fois le léger épuisé");
   } finally { g.rendre(); }
 
   const h = faireSemblant({ fournisseurs: null });
   try {
     await servir(requete({ tache: "pourquoi_lui", params: { titre: "Dark" } }));
-    assert((h.etages()[0] || "").indexOf("gemini-3.6-flash") >= 0,
-      "`pourquoi_lui` ne repart pas de l'étage 1 une fois la fenêtre rouverte");
+    assert((h.etages()[0] || "").indexOf("flash-lite") >= 0,
+      "`pourquoi_lui` ne repart pas de son étage de départ une fois la fenêtre rouverte");
   } finally { h.rendre(); }
+});
+
+/* ---- RETOUR-12 — L'ESCALADE DOUBLE LA FILE, ELLE NE LA SUIT PAS (13/09/2026)
+
+   Le chiffre qui a décidé : OpenRouter a été appelé CINQ FOIS depuis l'origine
+   et n'a JAMAIS rendu une réponse (dernier essai le 01/09). Tant que le premier
+   passage descendait toute l'échelle avant d'escalader, une tâche du groupe A
+   dépensait son dernier étage payant sur ce fournisseur-là et arrivait au
+   modèle fort à court de budget — quand elle y arrivait.
+
+   L'ORDRE ATTENDU EST DONC 3 → 4 → 1 → 2 → 5, et la table n'a pas bougé d'une
+   ligne : c'est l'escalade qui s'insère avant la fin de la file. */
+Deno.test("RETOUR-12 : l'escalade passe AVANT le dernier recours", async () => {
+  const f = faireSemblant({
+    fournisseurs: null,
+    // Tout le monde rationne : l'échelle va au bout de ce que le plafond permet.
+    reponses: {
+      "gemini-flash-lite": { statut: 429 }, "gemini-flash": { statut: 429 },
+      "openrouter": { statut: 429 },
+    },
+  });
+  try {
+    await servir(requete(PITCH));
+    const e = f.etages();
+    assertEquals(e.length, 3, "le plafond de trois étages appelés n'a pas tenu");
+    assert(e[0].indexOf("flash-lite") >= 0 && e[1].indexOf("flash-lite") >= 0,
+      "le premier passage a quitté le modèle de départ avant d'en avoir fini");
+    assert(e[2].indexOf("gemini-3.6-flash") >= 0,
+      "OpenRouter est passé avant le modèle fort : un étage payé à un fournisseur " +
+      "qui n'a jamais répondu en un mois");
+    assertEquals(e.filter((u) => u.indexOf("openrouter") >= 0).length, 0,
+      "le dernier recours n'est plus le dernier");
+  } finally { f.rendre(); }
 });
 
 Deno.test("la table l'emporte sur le fichier, et son ordre est respecté", async () => {
@@ -475,22 +692,60 @@ Deno.test("la table l'emporte sur le fichier, et son ordre est respecté", async
 /* ======================= CE QUI REVIENT ======================= */
 
 Deno.test("réponse malformée → dégradé silencieux, sans réessai", async () => {
+  /* LE §4.4 N'A PAS BOUGÉ : un fournisseur qui a répondu, même mal, ne fait pas
+     DESCENDRE l'échelle — payer l'étage suivant pour la même phrase serait
+     payer deux fois. Le cas passe au groupe B parce que c'est la seule tâche
+     qui n'a plus rien au-dessus d'elle : chez elle, « pas de réessai » veut
+     encore dire « pas d'appel du tout ». Le rattrapage du groupe A, lui, est
+     une décision SÉPARÉE et il a son propre cas, juste en dessous. */
   const f = faireSemblant({
-    fournisseurs: null,
-    reponses: { "gemini-flash": { statut: 200, texte: "je ne sais pas faire du JSON" } },
+    fournisseurs: null, defaut: "je ne sais pas faire du JSON",
   });
   try {
-    const r = await servir(requete(PITCH));
+    const r = await servir(requete(SUGG));
     assertEquals(JSON.stringify(await r.json()), '{"indisponible":true}');
     assertEquals(f.etages().length, 1,
       "une réponse malformée a fait payer un second étage pour la même phrase");
   } finally { f.rendre(); }
 });
 
-Deno.test("réponse trop longue → rejetée, pas tronquée", async () => {
+/* ---- RETOUR-12 — LE RATTRAPAGE DU GROUPE A, ET SON PRIX (13/09/2026)
+
+   C'est la contrepartie exacte du lot : on part du petit modèle, donc il faut
+   pouvoir remonter. Sans ce chemin, RETOUR-12 aurait troqué de la qualité
+   contre de la vitesse au lieu de ne payer que la seconde — et le `escalade_vers`
+   posé dans `config.ts` n'aurait rien fait du tout, faute de règle en face
+   (`meriteEscalade`). Deux choses se vérifient ici, et la seconde autant que la
+   première : que la remontée a lieu, et qu'elle a lieu UNE SEULE FOIS. */
+Deno.test("RETOUR-12 : une réponse qui ne vaut rien fait remonter au modèle fort", async () => {
   const f = faireSemblant({
     fournisseurs: null,
-    reponses: { "gemini-flash": { statut: 200, texte: JSON.stringify({ texte: "a".repeat(400) }) } },
+    reponses: {
+      "gemini-flash-lite": { statut: 200, texte: "je ne sais pas faire du JSON" },
+      "gemini-flash": { statut: 200, texte: '{"texte":"Une phrase honnête."}' },
+    },
+  });
+  try {
+    const r = await servir(requete(PITCH));
+    assertEquals(r.status, 200);
+    const corps = await r.json();
+    assertEquals(corps.texte, "Une phrase honnête.", "le rattrapage n'a pas eu lieu");
+    assertEquals(corps.escalade, true,
+      "l'escalade ne voyage pas avec la réponse : impossible d'en mesurer le taux après coup");
+    const e = f.etages();
+    assertEquals(e.length, 2, "la remontée a coûté plus d'un étage, ou n'a pas eu lieu");
+    assert(e[0].indexOf("flash-lite") >= 0 && e[1].indexOf("gemini-3.6-flash") >= 0);
+    /* DEUX RÉSERVATIONS DE BUDGET, PAS UNE. Une seconde réponse d'IA pour la
+       même phrase est une seconde unité — la spec de RETOUR-10 le demandait
+       explicitement, et huit tâches de plus passent maintenant par ce chemin. */
+    assertEquals(f.appels("/rpc/ia_reserver_budget").length, 2,
+      "la seconde réponse d'IA n'a pas été facturée au budget");
+  } finally { f.rendre(); }
+});
+
+Deno.test("réponse trop longue → rejetée, pas tronquée", async () => {
+  const f = faireSemblant({
+    fournisseurs: null, defaut: JSON.stringify({ texte: "a".repeat(400) }),
   });
   try {
     const r = await servir(requete(PITCH));
@@ -504,9 +759,13 @@ Deno.test("une réponse qui prête un sentiment est rejetée (§0.4)", async () 
     "Ton coup de cœur de la semaine.",
     "Dans la veine de ton film préféré.",
   ]) {
+    /* `defaut` PLUTÔT QU'UN FOURNISSEUR NOMMÉ : le contrôle de sortie doit
+       tenir quel que soit l'étage qui a parlé, et depuis RETOUR-12 il y en a
+       deux (le léger, puis le fort en rattrapage). Nommer `gemini-flash` aurait
+       laissé le rattrapage rendre une phrase propre et le cas serait passé au
+       vert sans rien avoir éprouvé. */
     const f = faireSemblant({
-      fournisseurs: null,
-      reponses: { "gemini-flash": { statut: 200, texte: JSON.stringify({ texte: mauvais }) } },
+      fournisseurs: null, defaut: JSON.stringify({ texte: mauvais }),
     });
     try {
       const r = await servir(requete(PITCH));
@@ -664,14 +923,29 @@ Deno.test("R3 — le budget est rendu quand aucun étage n'aboutit", async () =>
 });
 
 Deno.test("R3 — une réponse malformée rend aussi le budget", async () => {
-  const f = faireSemblant({
-    fournisseurs: null,
-    reponses: { "gemini-flash": { statut: 200, texte: "pas du JSON" } },
-  });
+  // Groupe B : une seule unité prise, donc une seule rendue. Le cas du groupe A
+  // — deux unités prises, deux rendues — est celui qui suit.
+  const f = faireSemblant({ fournisseurs: null, defaut: "pas du JSON" });
   try {
-    await servir(requete(PITCH));
+    await servir(requete(SUGG));
     assertEquals(f.appels("/rpc/ia_rendre_budget").length, 1,
       "on a payé une unité de budget pour une phrase jamais rendue");
+  } finally { f.rendre(); }
+});
+
+/* RETOUR-12 — LE BUDGET SE REND AUTANT DE FOIS QU'IL A ÉTÉ PRIS. Une escalade
+   prend une SECONDE unité ; n'en rendre qu'une laisserait fuir un compteur, et
+   une fuite de compteur ne se voit qu'au bout de plusieurs jours. Le chemin
+   existait depuis RETOUR-10 pour une tâche ; il en porte neuf désormais, donc
+   la fuite serait neuf fois plus rapide. */
+Deno.test("RETOUR-12 : deux unités prises sur une escalade, deux unités rendues", async () => {
+  const f = faireSemblant({ fournisseurs: null, defaut: "pas du JSON" });
+  try {
+    const r = await servir(requete(PITCH));
+    assertEquals(JSON.stringify(await r.json()), '{"indisponible":true}');
+    assertEquals(f.appels("/rpc/ia_reserver_budget").length, 2, "l'escalade n'a pas été facturée");
+    assertEquals(f.appels("/rpc/ia_rendre_budget").length, 2,
+      "une unité de budget est restée prise pour une phrase jamais rendue");
   } finally { f.rendre(); }
 });
 
@@ -693,16 +967,22 @@ Deno.test("un 5xx rend la réservation du fournisseur ; un 429 ne la rend pas", 
   // reviendrait à ne jamais consommer le quota des refus, donc à retenter.
   const f = faireSemblant({
     fournisseurs: null,
+    defaut: SUGG_OK,
     reponses: {
       "gemini-flash": { statut: 503 },        // le modèle tombe, sur les deux comptes
       "gemini-flash-lite": { statut: 429 },   // le modèle refuse, sur les deux comptes
     },
   });
   try {
-    await servir(requete(PITCH));
+    await servir(requete(SUGG));
     const rendus = f.appels("/rpc/ia_rendre_fournisseur").map((c) => c.p_fournisseur);
     assert(rendus.indexOf("gemini-flash") >= 0, "un 5xx a consommé du quota pour rien");
-    assert(rendus.indexOf("gemini-flash-2") >= 0, "le second compte, lui, n'est pas remboursé");
+    /* LE SECOND COMPTE DU MODÈLE TOMBÉ N'EST PLUS REMBOURSÉ, ET C'EST MIEUX :
+       depuis le garde-fou 1 du RETOUR-12 il n'est pas appelé du tout, donc il
+       n'a jamais rien réservé. Un remboursement ici voudrait dire qu'on a
+       repayé huit secondes pour le même silence avant de se rattraper. */
+    assert(rendus.indexOf("gemini-flash-2") < 0,
+      "le jumeau du modèle tombé a réservé une place : il n'aurait pas dû être appelé");
     assert(rendus.indexOf("gemini-flash-lite") < 0, "un 429 a été remboursé");
     /* Deux comptes refusent, donc DEUX saturations — une par compteur. Un seul
        appel ici voudrait dire que les deux comptes partagent une ligne de
@@ -725,11 +1005,11 @@ Deno.test("une clé absente ne coûte plus une réservation du tout", async () =
   const cle2 = Deno.env.get("GEMINI_API_KEY2");
   Deno.env.set("GEMINI_API_KEY", "");
   Deno.env.set("GEMINI_API_KEY2", "");
-  const f = faireSemblant({ fournisseurs: null });
+  const f = faireSemblant({ fournisseurs: null, defaut: SUGG_OK });
   try {
-    const r = await servir(requete(PITCH));
+    const r = await servir(requete(SUGG));
     // Le socle ne meurt pas : OpenRouter reste et répond.
-    assertEquals(JSON.stringify(await r.json()), '{"texte":"Une phrase honnête."}');
+    assertEquals(JSON.stringify(await r.json()), SUGG_OK);
     assertEquals(f.etages().length, 1, "on a appelé un fournisseur sans clé");
     const reserves = f.appels("/rpc/ia_reserver_fournisseur").map((c) => c.p_fournisseur);
     assertEquals(reserves.join(","), "openrouter",
@@ -758,10 +1038,11 @@ Deno.test("deux comptes Gemini : le second est réellement débité", async () =
      les deux appels ont la même adresse. */
   const f = faireSemblant({
     fournisseurs: null,
+    defaut: SUGG_OK,
     reponses: { "gemini-flash": { statut: 429 } },   // le modèle refuse sur les DEUX comptes
   });
   try {
-    await servir(requete(PITCH));
+    await servir(requete(SUGG));
     const cles = f.clesGemini();
     assertEquals(cles[0], "cle-gemini", "le premier étage n'utilise pas la clé n° 1");
     assertEquals(cles[1], CLE_2, "le second étage retape sur la clé n° 1 : le quota n'est pas doublé");
@@ -774,20 +1055,25 @@ Deno.test("deux comptes Gemini : deux compteurs, et donc deux quotas", async () 
      SQL de plus — mais si quelqu'un donnait un jour le même nom aux deux
      comptes, les deux seraient comptés ENSEMBLE et le lot serait annulé en
      silence. Ce cas est là pour que ça se voie. */
+  /* TROIS ÉTAGES ET PLUS CINQ DEPUIS RETOUR-12 : le plafond d'étages payants
+     referme l'échelle avant la fin. Ce que ce cas doit montrer tient largement
+     dans trois — deux noms pour le même modèle, deux compteurs distincts, et un
+     429 qui ne mure QUE le compte qui l'a rendu. Le troisième étage répond, ce
+     qui évite au passage de confondre « le plafond a mordu » et « l'échelle
+     était finie ». */
   const f = faireSemblant({
     fournisseurs: null,
-    reponses: { "gemini-flash": { statut: 429 }, "gemini-flash-lite": { statut: 429 } },
+    defaut: SUGG_OK,
+    reponses: { "gemini-flash": { statut: 429 } },
   });
   try {
-    await servir(requete(PITCH));
+    await servir(requete(SUGG));
     const reserves = f.appels("/rpc/ia_reserver_fournisseur").map((c) => c.p_fournisseur);
-    assertEquals(reserves.join(","),
-      "gemini-flash,gemini-flash-2,gemini-flash-lite,gemini-flash-lite-2,openrouter");
-    assertEquals(new Set(reserves).size, 5, "deux étages partagent un compteur");
+    assertEquals(reserves.join(","), "gemini-flash,gemini-flash-2,gemini-flash-lite");
+    assertEquals(new Set(reserves).size, 3, "deux étages partagent un compteur");
     // Et un 429 sur un compte ne mure pas l'autre.
     const satures = f.appels("/rpc/ia_saturer").map((c) => c.p_fournisseur);
-    assertEquals(satures.join(","),
-      "gemini-flash,gemini-flash-2,gemini-flash-lite,gemini-flash-lite-2");
+    assertEquals(satures.join(","), "gemini-flash,gemini-flash-2");
   } finally { f.rendre(); }
 });
 
@@ -818,10 +1104,11 @@ Deno.test("une ligne de table sans `cle_env` retombe sur l'ancienne règle", asy
       { nom: "gemini-flash", rang: 1, modele: "gemini-3.6-flash",
         limite_minute: 10, limite_jour: 1000, actif: true },
     ],
+    defaut: SUGG_OK,
   });
   try {
-    const r = await servir(requete(PITCH));
-    assertEquals(JSON.stringify(await r.json()), '{"texte":"Une phrase honnête."}');
+    const r = await servir(requete(SUGG));
+    assertEquals(JSON.stringify(await r.json()), SUGG_OK);
     assertEquals(f.clesGemini().join(","), "cle-gemini");
   } finally { f.rendre(); }
 });
@@ -875,6 +1162,44 @@ Deno.test("cinq étages ne font pas quarante secondes d'attente", async () => {
   } finally { f.rendre(); }
 });
 
+/* ---- RETOUR-12 — LA BORNE DE DIX SECONDES EST VRAIE, PAS DÉCORATIVE
+
+   C'EST LE CAS LE PLUS IMPORTANT DU LOT, et il n'existait pas — parce qu'il ne
+   POUVAIT pas exister : le faux monde ignorait le `signal`, donc aucun cas ne
+   voyait jamais un appel se faire couper (voir `attendre`).
+
+   LE DÉFAUT QU'IL ATTRAPE : le contrôle de budget se fait AVANT un étage et
+   jamais pendant, et le délai d'un appel était une constante de huit secondes
+   indépendante du budget. Un étage engagé à 9,9 s rendait donc la main à 17,9 —
+   « dix secondes » ne bornait que le moment où l'on cessait d'AJOUTER des
+   étages. Ici le budget est de 1 200 ms et le fournisseur met NEUF SECONDES :
+   si le minuteur d'appel valait toujours `TIMEOUT_MS`, ce cas durerait huit
+   secondes. Il en dure une. C'est la durée elle-même qui est l'assertion. */
+Deno.test("RETOUR-12 : un appel est coupé par le budget restant, pas par les 8 s", async () => {
+  const f = faireSemblant({
+    fournisseurs: null,
+    lenteur: 9000,          // le fournisseur ne répondra jamais à temps
+    budgetTemps: 1200,
+  });
+  const debut = Date.now();
+  try {
+    const r = await servir(requete(PITCH));
+    const duree = Date.now() - debut;
+    assertEquals(JSON.stringify(await r.json()), '{"indisponible":true}',
+      "le dégradé local doit primer, sans message d'erreur");
+    assert(duree < 5000,
+      "la requête a duré " + duree + " ms : le minuteur d'appel ignore le budget " +
+      "restant, donc la borne de dix secondes ne borne rien");
+    /* L'appel a bien EU LIEU — sans ça, le cas passerait au vert en ne faisant
+       rien du tout, ce qui est le piège exact de toute assertion de durée. */
+    assertEquals(f.etages().length, 1, "aucun appel n'est parti : le cas ne prouve rien");
+    // Coupé = panne réseau du point de vue du relais : 599, et remboursement.
+    assertEquals(f.journal()[0].statut, 599);
+    assertEquals(f.appels("/rpc/ia_rendre_fournisseur").length, 1,
+      "un appel coupé chez nous a quand même consommé du quota");
+  } finally { f.rendre(); }
+});
+
 /* ------------------- R1 : `Retry-After` CHOISIT LA FENÊTRE --------------- */
 
 Deno.test("R1 — `Retry-After` long mure le jour, court mure la minute", async () => {
@@ -887,16 +1212,17 @@ Deno.test("R1 — `Retry-After` long mure le jour, court mure la minute", async 
   for (const c of cas) {
     const f = faireSemblant({
       fournisseurs: null,
+      defaut: SUGG_OK,
       reponses: {
         "gemini-flash": { statut: 429, retry: c.retry },
         // Le second compte répond : le cas ne parle que de la FENÊTRE murée,
         // pas de la cascade. Sans ça, les deux comptes refuseraient et il y
         // aurait deux saturations à démêler pour rien.
-        "gemini-flash-2": { statut: 200, texte: '{"texte":"Une phrase honnête."}' },
+        "gemini-flash-2": { statut: 200, texte: SUGG_OK },
       },
     });
     try {
-      await servir(requete(PITCH));
+      await servir(requete(SUGG));
       const s = f.appels("/rpc/ia_saturer");
       assertEquals(s.length, 1, "Retry-After « " + c.retry + " » : le 429 n'a pas été retenu");
       assertEquals(s[0].p_fournisseur, "gemini-flash");
@@ -915,12 +1241,13 @@ Deno.test("R2 — une ligne de journal par étage tenté, avec son statut", asyn
     fournisseurs: null,
     // Compteurs pleins sur les deux comptes du Flash : aucun appel ne part.
     place: { "gemini-flash": false, "gemini-flash-2": false },
+    defaut: SUGG_OK,
     reponses: { "gemini-flash-lite": { statut: 429 } }, // refus, sur les deux comptes
     // openrouter répond bien.
   });
   try {
-    const r = await servir(requete(PITCH));
-    assertEquals(JSON.stringify(await r.json()), '{"texte":"Une phrase honnête."}');
+    const r = await servir(requete(SUGG));
+    assertEquals(JSON.stringify(await r.json()), SUGG_OK);
     const j = f.journal();
     assertEquals(j.length, 5, "le journal ne raconte pas les cinq étages");
     assertEquals(j.map((l) => l.fournisseur).join(","),
@@ -949,7 +1276,7 @@ Deno.test("R2 — le journal distingue les quatre façons d'échouer", async () 
   // Réponse invalide : statut 1, et non « échec » tout court.
   f = faireSemblant({
     fournisseurs: null,
-    reponses: { "gemini-flash": { statut: 200, texte: '{"texte":"Un film que tu as adoré."}' } },
+    defaut: '{"texte":"Un film que tu as adoré."}',
   });
   try {
     await servir(requete(PITCH));
@@ -997,11 +1324,12 @@ Deno.test("tout le parcours tient quand les RPC `void` répondent 204", async ()
   const f = faireSemblant({
     rpcVide: true,
     fournisseurs: null,
+    defaut: SUGG_OK,
     reponses: { "gemini-flash": { statut: 429, retry: "300" } },
   });
   try {
-    const r = await servir(requete(PITCH));
-    assertEquals(JSON.stringify(await r.json()), '{"texte":"Une phrase honnête."}');
+    const r = await servir(requete(SUGG));
+    assertEquals(JSON.stringify(await r.json()), SUGG_OK);
     assertEquals(f.appels("/rpc/ia_saturer")[0].p_fenetre, "jour");
   } finally { f.rendre(); }
 });
@@ -1143,10 +1471,11 @@ Deno.test("R-3 — `Retry-After` en date HTTP mure bien la journée", async () =
 
   const f = faireSemblant({
     fournisseurs: null,
+    defaut: SUGG_OK,
     reponses: { "gemini-flash": { statut: 429, retry: new Date(Date.now() + 3600_000).toUTCString() } },
   });
   try {
-    await servir(requete(PITCH));
+    await servir(requete(SUGG));
     assertEquals(f.appels("/rpc/ia_saturer")[0].p_fenetre, "jour",
       "un reset de quota journalier n'a muré que la minute");
   } finally { f.rendre(); }
@@ -1230,8 +1559,7 @@ Deno.test("le client reçoit le texte VALIDÉ, pas la réponse brute du fourniss
      c'est-à-dire la moitié de la raison d'être de `gabarits.ts`. */
   const f = faireSemblant({
     fournisseurs: null,
-    reponses: { "gemini-flash": { statut: 200,
-      texte: JSON.stringify({ texte: "  Une   phrase\n  espacée.  ", bavardage: "à jeter" }) } },
+    defaut: JSON.stringify({ texte: "  Une   phrase\n  espacée.  ", bavardage: "à jeter" }),
   });
   try {
     const r = await servir(requete(PITCH));
@@ -1398,12 +1726,21 @@ Deno.test("M33 — chaque fournisseur réserve avec SES limites, dans le bon sen
      OpenRouter serait devenu 20 par JOUR au lieu de 50, et 50 par minute au
      lieu de 20 — un étage de secours étranglé, et personne pour le voir.
      Aucun test ne regardait les arguments envoyés à `ia_reserver_fournisseur`. */
+  /* TOUS LES COMPTEURS PLEINS, ET C'EST CE QUI REND LE CAS POSSIBLE DEPUIS
+     RETOUR-12 : un étage refusé par son compteur RÉSERVE quand même — c'est
+     ainsi qu'il découvre qu'il est plein — mais il n'APPELLE personne, donc il
+     ne compte pas dans le plafond de trois étages payants. Les cinq lignes de
+     limites redeviennent lisibles en une seule requête, ce qu'un refus 500 ou
+     429 ne permettrait plus. */
   const f = faireSemblant({
     fournisseurs: null,
-    reponses: { "gemini-flash": { statut: 500 }, "gemini-flash-lite": { statut: 500 } },
+    place: {
+      "gemini-flash": false, "gemini-flash-2": false, "gemini-flash-lite": false,
+      "gemini-flash-lite-2": false, "openrouter": false,
+    },
   });
   try {
-    await servir(requete(PITCH));
+    await servir(requete(SUGG));
     const a = f.appels("/rpc/ia_reserver_fournisseur");
     assertEquals(a.length, 5);
     /* RETOUR-01 point 4 — les deux étages Gemini ne partent plus avec des
@@ -1459,22 +1796,27 @@ Deno.test("C1 — une réponse tronquée fait DESCENDRE l'échelle, elle ne dég
      toutes les tâches qui en partent, sans jamais essayer l'étage 2 qui marche. */
   const f = faireSemblant({
     fournisseurs: null,
+    defaut: SUGG_OK,
     reponses: {
       "gemini-flash": { statut: 200, texte: '{"texte', coupee: true },
-      // Le compte suivant, lui, répond : c'est le cran d'exactement un étage.
-      "gemini-flash-2": { statut: 200, texte: '{"texte":"Une phrase honnête."}' },
+      // Le MODÈLE SUIVANT répond. Depuis RETOUR-12, ce n'est plus le compte
+      // jumeau : une troncature vient du modèle, pas du compte, et le jumeau
+      // tronquerait à l'identique après avoir reconsommé ses jetons.
+      "gemini-flash-lite": { statut: 200, texte: SUGG_OK },
     },
   });
   try {
-    const r = await servir(requete(PITCH));
-    assertEquals(JSON.stringify(await r.json()), '{"texte":"Une phrase honnête."}',
+    const r = await servir(requete(SUGG));
+    assertEquals(JSON.stringify(await r.json()), SUGG_OK,
       "une réponse tronquée n'a pas fait descendre l'échelle");
     const e = f.etages();
     assertEquals(e.length, 2, "l'échelle n'a pas été descendue d'un cran exactement");
-    assertEquals(f.clesGemini().join(","), "cle-gemini," + CLE_2);
+    assertEquals(f.clesGemini().join(","), "cle-gemini,cle-gemini",
+      "le jumeau a rejoué la troncature au lieu d'être sauté");
     const j = f.journal();
     assertEquals(j[0].statut, 4, "une troncature doit se lire dans le journal (statut 4)");
-    assertEquals(j[1].statut, 200);
+    assertEquals(j[1].statut, 6, "le jumeau sauté n'a pas laissé de trace");
+    assertEquals(j[2].statut, 200);
   } finally { f.rendre(); }
 });
 
@@ -1504,20 +1846,22 @@ Deno.test("C1 — le plafond de jetons laisse la place à la réflexion", () => 
 });
 
 Deno.test("C1 — tronqué partout : dégradé propre, budget rendu, rien de saturé", async () => {
-  const f = faireSemblant({
-    fournisseurs: null,
-    reponses: {
-      "gemini-flash": { statut: 200, texte: "{", coupee: true },
-      "gemini-flash-lite": { statut: 200, texte: "{", coupee: true },
-      "openrouter": { statut: 200, texte: "{", coupee: true },
-    },
-  });
+  const f = faireSemblant({ fournisseurs: null, defaut: "{" , reponses: {
+    "gemini-flash": { statut: 200, texte: "{", coupee: true },
+    "gemini-flash-lite": { statut: 200, texte: "{", coupee: true },
+    "openrouter": { statut: 200, texte: "{", coupee: true },
+  } });
   try {
-    const r = await servir(requete(PITCH));
+    const r = await servir(requete(SUGG));
     assertEquals(JSON.stringify(await r.json()), '{"indisponible":true}');
-    assertEquals(f.etages().length, 5, "les cinq étages doivent être tentés");
+    /* TROIS ÉTAGES APPELÉS, DEUX SAUTÉS — et le journal doit raconter les cinq.
+       C'est la lecture même du garde-fou 1 : 4 (tronqué), 6 (jumeau sauté),
+       4, 6, 4. Une suite « 4,4,4 » voudrait dire qu'on a repayé deux
+       troncatures ; une suite de trois lignes seulement voudrait dire que deux
+       étages ont disparu sans qu'on puisse le savoir. */
+    assertEquals(f.etages().length, 3, "un jumeau a rejoué une troncature");
     assertEquals(f.appels("/rpc/ia_rendre_budget").length, 1, "aucun texte rendu : le budget se rend");
-    assertEquals(f.journal().map((l) => l.statut).join(","), "4,4,4,4,4");
+    assertEquals(f.journal().map((l) => l.statut).join(","), "4,6,4,6,4");
   } finally { f.rendre(); }
 });
 
@@ -1745,20 +2089,39 @@ Deno.test("la liste blanche compte DIX tâches, exactement celles qui ont un app
    partirait bas SANS escalade retomberait dans le défaut que le point 4 a
    corrigé, et c'est exactement ce que ce cas interdit. */
 
-Deno.test("RETOUR-01 point 4 : une tâche ne part bas que si elle sait remonter", () => {
+Deno.test("RETOUR-12 : une tâche ne part bas que si elle sait remonter", () => {
+  /* LE GROUPE B EST ÉCRIT EN TOUTES LETTRES, ET C'EST VOLONTAIRE. Une boucle
+     qui se contenterait de vérifier la COHÉRENCE (« si elle part bas, elle
+     escalade ») laisserait passer en silence le seul accident qui compte
+     vraiment : une tâche qui CHANGE DE GROUPE. `suggestions_famille` basculée
+     au petit modèle par distraction perdrait sa mémoire du monde sans qu'un
+     seul cas rougisse — et ça ne se verrait qu'à l'écran, des semaines plus
+     tard, sous la forme de rangées un peu moins justes. */
+  const GROUPE_B = ["suggestions_famille"];
   for (const [nom, t] of Object.entries(TACHES)) {
-    if (t.etage_depart === 1) {
+    if (GROUPE_B.indexOf(nom) >= 0) {
+      assertEquals(t.etage_depart, 1,
+        "`" + nom + "` est du groupe B : elle doit partir du modèle fort (mémoire du monde)");
       assertEquals(t.escalade_vers, undefined,
         "`" + nom + "` part déjà de l'étage 1 : elle n'a rien vers quoi escalader");
       continue;
     }
-    assertEquals(nom, "interpreter_recherche",
-      "`" + nom + "` démarre à l'étage " + t.etage_depart +
-      " — seule `interpreter_recherche` a une mesure qui le justifie (RETOUR-10 §1)");
+    assertEquals(t.etage_depart, 3,
+      "`" + nom + "` ne part pas du modèle léger : elle repaiera les quinze " +
+      "secondes que RETOUR-12 a supprimées");
     assertEquals(t.escalade_vers, 1,
       "une tâche qui part bas DOIT pouvoir remonter au rang 1, sinon on a perdu " +
       "la qualité sans rien gagner d'autre que de la vitesse");
     assert((t.escalade_vers || 0) < t.etage_depart, "l'escalade doit remonter, pas descendre");
+    /* LES DEUX LISTES DOIVENT ÊTRE D'ACCORD. `escalade_vers` dit le DROIT
+       d'escalader, `meriteEscalade` dit la RÈGLE : un droit sans règle ne fait
+       RIEN DU TOUT, et c'est le genre de panne qui passe une relecture sans se
+       faire voir — le code est là, il est simplement inerte. */
+    assertEquals(meriteEscalade(nom, null), true,
+      "`" + nom + "` a le droit d'escalader mais aucune règle en face : " +
+      "son `escalade_vers` ne sert à rien");
+    assertEquals(meriteEscalade(nom, { texte: "x" }), false,
+      "`" + nom + "` escaladerait sur une réponse VALIDE : le budget doublerait pour rien");
   }
 });
 
@@ -1909,6 +2272,40 @@ Deno.test("alerte : tout saturé dit « quota », pas « injoignable »", async 
   } finally { f.rendre(); }
 });
 
+/* ---- RETOUR-12 — NOS PROPRES GARDE-FOUS NE SONT PAS DES PANNES (13/09/2026)
+
+   `echecs` ne sert qu'à choisir LE MOT de l'alerte. Le plafond de trois étages
+   et le budget de temps sont NOTRE montre, pas un fournisseur qui tombe : les
+   compter comme des pannes faisait dire « IA injoignable » à une journée de
+   429 dont l'échelle avait simplement été refermée par nous.
+
+   CE N'EST PAS DE LA COSMÉTIQUE, et ce n'est pas théorique non plus. Le budget
+   de temps passe de 20 s à 10 s dans ce même lot, et le plafond d'étages
+   n'existait pas : ce chemin, qui était rare, devient ordinaire. Un défaut qui
+   ne se déclenchait jamais commence à se déclencher tous les jours — c'est le
+   moment exact où il fallait le voir. */
+Deno.test("alerte : le plafond d'étages n'invente pas une panne", async () => {
+  const f = faireSemblant({
+    fournisseurs: null,
+    defaut: SUGG_OK,
+    // Tout le monde rationne : trois étages appelés, puis le plafond referme.
+    reponses: { "gemini-flash": { statut: 429 }, "gemini-flash-lite": { statut: 429 },
+                "openrouter": { statut: 429 } },
+  });
+  try {
+    const r = await servir(requete(SUGG));
+    assertEquals(JSON.stringify(await r.json()), '{"indisponible":true}');
+    assertEquals(f.etages().length, 3, "le plafond n'a pas refermé l'échelle");
+    // Le plafond a bien mordu : une ligne de journal en statut 7 le dit.
+    assertEquals(f.journal().filter((l) => l.statut === 7).length >= 1, true,
+      "l'arrêt au plafond doit se lire dans le journal");
+    const o = f.appels("/rpc/ia_ouvrir_incident");
+    assertEquals(o.length, 1);
+    assertEquals(o[0].p_motif, "quota",
+      "un arrêt décidé par NOUS a été annoncé comme une panne des fournisseurs");
+  } finally { f.rendre(); }
+});
+
 Deno.test("alerte : un seul fournisseur tombé suffit à dire « injoignable »", async () => {
   /* Quatre compteurs pleins et UN fournisseur en panne : « quota atteint »
      serait une demi-vérité, et une demi-vérité envoyée à 3 h du matin fait
@@ -1941,7 +2338,7 @@ Deno.test("alerte : une réponse MALFORMÉE n'est PAS un incident", async () => 
      C'est le cas qui protège la crédibilité de tous les autres. */
   const f = faireSemblant({
     fournisseurs: null,
-    reponses: { "gemini-flash": { statut: 200, texte: '{"texte":"Un film que tu as adoré."}' } },
+    defaut: '{"texte":"Un film que tu as adoré."}',
   });
   try {
     const r = await servir(requete(PITCH));
@@ -2177,16 +2574,15 @@ Deno.test("RETOUR-10 §1 : budget refusé → pas d'escalade, et l'écran normal
   } finally { globalThis.fetch = vrai; f.rendre(); }
 });
 
-Deno.test("RETOUR-10 §1 : les autres tâches gardent l'échelle d'origine", async () => {
-  /* « Rien d'autre ne change » — la spec l'écrit, et c'est vérifiable dans le
-     journal. Une tâche de rédaction part toujours du modèle fort et ne fait
-     jamais deux appels pour une réponse illisible. */
-  const f = faireSemblant({
-    fournisseurs: null,
-    reponses: { "gemini-flash": { statut: 200, texte: "{}" } },  // invalide
-  });
+Deno.test("RETOUR-12 : la tâche du groupe B garde l'échelle d'origine", async () => {
+  /* Ce cas s'appelait « les AUTRES tâches gardent l'échelle d'origine » et il
+     en couvrait huit ; il n'en couvre plus qu'une, et c'est tout le lot. Ce
+     qu'il protège n'a pas changé d'un mot : une tâche SANS `escalade_vers`
+     part du modèle fort et ne fait jamais deux appels pour une réponse
+     illisible — sinon le budget doublerait sans que personne l'ait décidé. */
+  const f = faireSemblant({ fournisseurs: null, defaut: "{}" });  // invalide
   try {
-    const r = await servir(requete(PITCH));
+    const r = await servir(requete(SUGG));
     assertEquals(JSON.stringify(await r.json()), '{"indisponible":true}');
     assertEquals(f.etages().length, 1,
       "une tâche sans `escalade_vers` a fait un second appel : la spec l'interdit");

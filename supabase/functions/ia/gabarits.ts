@@ -744,11 +744,43 @@ export type Rendu = { texte?: string; textes?: string[]; criteres?: Critere[];
    depuis SPEC-09 lot 0). À rouvrir si le taux d'escalade mesuré est bas alors
    que les réponses déçoivent : ce serait le symptôme.
 --------------------------------------------------------------------------- */
+/* ---- RETOUR-12 (13/09/2026) — LES HUIT TÂCHES DU GROUPE A ENTRENT ICI ----
+
+   Elles partent maintenant du modèle léger, donc elles ont besoin du même droit
+   de rattrapage qu'`interpreter_recherche` : sans règle correspondante,
+   l'`escalade_vers` posé dans `config.ts` n'aurait rien fait DU TOUT (c'est ce
+   que dit le commentaire du champ), et le lot aurait troqué de la qualité
+   contre de la vitesse au lieu de ne payer que la seconde.
+
+   LA RÈGLE EST LA MÊME POUR TOUTES : une réponse qui ne passe pas `valider` ne
+   vaut rien, on redemande au modèle fort. C'est volontairement le critère le
+   plus simple possible, et il faut savoir ce qu'il ne sait pas faire — voir le
+   paragraphe « CE QU'ELLE NE COUVRE PAS » ci-dessus, qui vaut mot pour mot pour
+   `classer_grille` et `ordonner_rangee` : `valider` rend un résultat dès qu'UN
+   indice est exploitable, donc un ordre médiocre mais lisible compte comme un
+   succès et n'escalade pas. Aucune assertion ne sait dire qu'un classement est
+   moins bon ; seul l'écran le dit. C'est le point à regarder si les rangées
+   paraissent moins justes après ce lot — pas la latence, qui, elle, sera bonne.
+
+   LA LISTE RESTE NOMMÉE, ET C'EST DÉLIBÉRÉ. « Toute tâche qui porte
+   `escalade_vers` » aurait été plus court d'une ligne et aurait supprimé le
+   garde-fou d'origine : un champ posé par distraction doublerait alors la
+   consommation d'une tâche sans que personne l'ait décidé. Deux listes qui
+   doivent s'accorder valent mieux qu'une seule qui décide toute seule — et un
+   cas d'`index.test.ts` les confronte, justement pour qu'elles ne divergent
+   jamais en silence. */
+const ESCALADENT: Record<string, true> = {
+  interpreter_recherche: true,
+  pitch_jour: true, pitch_humeur: true, intitules_rangees: true,
+  envie_phrase: true, ambiance_desc: true, pourquoi_lui: true,
+  classer_grille: true, ordonner_rangee: true,
+};
+
 export function meriteEscalade(tache: string, propre: unknown): boolean {
-  if (tache === "interpreter_recherche") return !propre;
-  /* Par défaut, JAMAIS. Une tâche qui veut escalader se nomme ici — sinon un
-     `escalade_vers` posé par distraction dans `config.ts` doublerait la
-     consommation d'une tâche sans que personne l'ait décidé. */
+  if (ESCALADENT[tache]) return !propre;
+  /* Par défaut, JAMAIS. Une tâche qui veut escalader se nomme ci-dessus.
+     `suggestions_famille` est aujourd'hui la seule à ne pas y être, et elle n'a
+     de toute façon rien au-dessus d'elle vers quoi remonter. */
   return false;
 }
 

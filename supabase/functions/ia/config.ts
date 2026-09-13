@@ -190,40 +190,69 @@ export function cleParDefaut(nom: string): string {
 // `etage_depart` est un RANG, comparé au `rang` de la table : renuméroter la
 // table (10, 20, 30) viderait l'échelle sans un mot. À savoir avant d'y toucher.
 //
-// `etage_depart` : RETOUR-01 POINT 4 (11/08/2026) — IL VAUT 1 POUR TOUTES LES
-// TÂCHES, sur décision d'Adrien. « Plus d'étages de départ par tâche : TOUTES
-// les tâches IA démarrent à l'étage 1 (pertinence d'abord). »
+// ATTENTION, ET C'EST NEUF DEPUIS RETOUR-12 : ce couplage engageait UNE tâche
+// (`interpreter_recherche`), il en engage maintenant NEUF. Une migration qui
+// renumérote `ia_fournisseurs` déplacerait donc en silence le point de départ
+// de presque toute la liste blanche, et aucun test ne rougirait — les tests
+// d'ici comparent des nombres entre eux, pas des nombres à la table. Le jour où
+// l'on renumérote, on relit CE bloc d'abord. La migration 017 portait déjà
+// l'avertissement ; il pèse maintenant neuf fois plus lourd.
 //
-// CE QUE FAISAIT L'ANCIEN RÉGLAGE, et pourquoi il tombe. Trois tâches sur six
-// partaient de l'étage 2 pour « ne pas dépenser le quota du Flash sur une
-// phrase de quinze mots ». C'était une économie raisonnée — mais elle
-// arbitrait un quota que PERSONNE NE CONNAÎT (les limites du palier gratuit
-// Gemini ne sont plus publiées, voir le pavé plus haut), au prix d'une chose
-// qui, elle, se mesure : la qualité de la phrase affichée. On paie d'abord la
-// pertinence, et on ne descend que contraint.
+// ---- RETOUR-12 (13/09/2026) — L'ÉCHELLE COMMENCE PAR LE MODÈLE QUI RÉPOND ----
 //
-// LE RETOUR À L'ÉTAGE 1 EST AUTOMATIQUE, ET IL L'EST PAR CONSTRUCTION : chaque
-// requête reconstruit son échelle à partir du rang 1 (`servirAccepte`), et
-// `ia_reserver_fournisseur` ne refuse un fournisseur que TANT QUE sa fenêtre
-// — minute ou jour — est saturée. Dès que la fenêtre se rouvre, l'étage 1
-// reprend la main sans qu'aucun état ait à être remis à zéro. La cascade
-// 1→2→3 ne joue donc que sur saturation minute/jour ou sur erreur, jamais par
-// choix a priori.
+// CE QUI A CHANGÉ D'AVIS, ET CE QUI NE CHANGE PAS. RETOUR-01 point 4 (11/08)
+// posait « toutes les tâches démarrent à l'étage 1, pertinence d'abord ». Son
+// argument était juste et reste vrai : on ne renonce pas à la qualité pour
+// économiser un quota que personne ne connaît. Mais il reposait sur une
+// prémisse devenue fausse — que le gros modèle RÉPOND. Relevé dans `ia_journal`
+// sur tout l'historique, au 13/09 :
 //
-// LE CHAMP RESTE, VIDE DE VARIÉTÉ MAIS PAS DE SENS : il documente qu'un étage
-// de départ EST un réglage possible, et il garde la porte ouverte pour une
-// tâche future qu'on voudrait volontairement mettre en second. Le supprimer
-// obligerait à réécrire `servirAccepte` pour le réintroduire un jour.
+//     tâche            gemini-3.6-flash (fort)      gemini-3.5-flash-lite
+//     pitch_jour       32 succès /  93   5 300 ms   54 /  56   1 200 ms
+//     pitch_humeur      3 succès /  11   6 900 ms   11 /  11     800 ms
+//     pourquoi_lui     40 succès / 107   4 800 ms   80 /  80     800 ms
+//     ordonner_rangee   0 succès /   8   7 331 ms    8 /   8   1 145 ms
+//
+// Le fort échoue une fois sur deux à trois, en cinq à sept secondes, et les
+// deux premiers étages sont le MÊME modèle sur deux clés : ~15 s brûlées par
+// demande avant d'être servie en une seconde par l'étage 3.
+//
+// LA CONSÉQUENCE QUI TRANCHE LE DÉBAT DE QUALITÉ, et c'est Adrien qui l'a vue :
+// la majorité des textes affichés aujourd'hui sont DÉJÀ écrits par le petit
+// modèle — puisque c'est lui qui finit par répondre. On ne décide donc pas de
+// « descendre en qualité », on décide d'arrêter de payer quinze secondes pour
+// un brouillon qui finit à la poubelle. Aucun problème de plume n'a été relevé
+// en un mois ; c'est la lenteur qui l'a été.
+//
+// SI LA PLUME SE DÉGRADE : `pitch_jour`, `pitch_humeur` et `pourquoi_lui`
+// repassent à `etage_depart: 1`, une ligne chacune, et rien d'autre à toucher.
+// C'est le seul réglage réversible de ce lot, et c'est voulu.
+//
+// GROUPE A — CE QUI DEMANDE DE LA MISE EN FORME OU DE L'ANALYSE DE TEXTE part
+// du modèle LÉGER (rang 3) et remonte au fort si la réponse ne vaut rien : les
+// huit tâches ci-dessous, plus `interpreter_recherche` qui le faisait déjà.
+//
+// GROUPE B — CE QUI DEMANDE DE LA MÉMOIRE DU MONDE part du modèle FORT :
+// `suggestions_famille` seule. Elle doit proposer des titres DE TÊTE ; c'est le
+// seul cas où la culture générale du gros modèle sert vraiment, et c'est aussi
+// la seule tâche dont une erreur ne se rattrape pas par validation (un titre
+// inventé existe grammaticalement, il n'existe juste pas).
+//
+// LE RETOUR À L'ÉTAGE FORT EST AUTOMATIQUE, ET IL L'EST PAR CONSTRUCTION :
+// chaque requête reconstruit son échelle (`servirAccepte`), et
+// `ia_reserver_fournisseur` ne refuse un fournisseur que TANT QUE sa fenêtre —
+// minute ou jour — est saturée. Rien n'a d'état à remettre à zéro.
 // ---------------------------------------------------------------------------
 export type Tache = {
   etage_depart: number;
   /* L'ÉTAGE OÙ REPARTIR SI LA PREMIÈRE RÉPONSE NE VAUT RIEN — RETOUR-10 §1
-     (01/09/2026). Absent : la tâche n'escalade jamais, ce qui reste le cas de
-     huit tâches sur neuf. Ce champ dit le DROIT d'escalader ; la RÈGLE — sur
-     quoi on juge qu'une réponse ne vaut rien — vit dans `gabarits.ts`
+     (01/09/2026). Absent : la tâche n'escalade jamais, ce qui n'est plus le cas
+     que de `suggestions_famille` depuis RETOUR-12 — et pour cause, elle part
+     déjà du plus haut. Ce champ dit le DROIT d'escalader ; la RÈGLE — sur quoi
+     on juge qu'une réponse ne vaut rien — vit dans `gabarits.ts`
      (`meriteEscalade`), avec les formes de sortie. Un `escalade_vers` posé ici
      sans règle correspondante ne fait donc rien du tout : c'est voulu, les deux
-     doivent être d'accord. */
+     doivent être d'accord, et un test les confronte. */
   escalade_vers?: number;
   // Longueur maximale du texte rendu, en caractères. Au-delà : rejet.
   maxlong: number;
@@ -234,12 +263,17 @@ export type Tache = {
 export const TACHES: Record<string, Tache> = {
   // Le pitch du hero. Jusqu'à trente par jour depuis RETOUR-01 point 5 (il
   // suit chaque changement de hero, plus seulement le premier du matin).
-  pitch_jour:        { etage_depart: 1, maxlong: 220, maxtitres: 8 },
+  // GROUPE A depuis RETOUR-12 : 32 succès sur 93 au modèle fort contre 54 sur
+  // 56 au léger — ce pitch-là est déjà écrit par le petit modèle une fois sur
+  // deux, il l'est maintenant du premier coup.
+  pitch_jour:        { etage_depart: 3, escalade_vers: 1, maxlong: 220, maxtitres: 8 },
   // Le pitch d'une humeur : quelques mots, à la demande, plusieurs fois par
-  // soirée. Étage 1 comme tout le reste depuis RETOUR-01 point 4.
-  pitch_humeur:      { etage_depart: 1, maxlong: 220, maxtitres: 8 },
-  // Des variantes de titres de rangées : court, une fois par jour.
-  intitules_rangees: { etage_depart: 1, maxlong: 60,  maxtitres: 12 },
+  // soirée. GROUPE A — c'est la tâche où le fort était le plus mauvais :
+  // 3 succès sur 11, en 6,9 s de moyenne.
+  pitch_humeur:      { etage_depart: 3, escalade_vers: 1, maxlong: 220, maxtitres: 8 },
+  // Des variantes de titres de rangées : court, une fois par jour. GROUPE A —
+  // réécrire un intitulé est de la mise en forme, pas de la mémoire.
+  intitules_rangees: { etage_depart: 3, escalade_vers: 1, maxlong: 60,  maxtitres: 12 },
   //
   // ---- `profil_humeur` A ÉTÉ RETIRÉE — décision d'Adrien du 10/08/2026 ----
   //
@@ -280,14 +314,18 @@ export const TACHES: Record<string, Tache> = {
   // `envie_phrase` et `ambiance_desc` ne rendent PAS du texte libre : elles
   // rendent des IDENTIFIANTS de critères, choisis dans les tables que le
   // gabarit énumère. C'est ce qui les rend sûres — un critère inventé ne
-  // s'applique pas, il tombe. Elles partent de l'étage 1 : traduire une envie
-  // en critères demande de la compréhension, pas de la fluidité, et une erreur
-  // s'y voit tout de suite (des pilules fausses à l'écran).
-  envie_phrase:      { etage_depart: 1, maxlong: 60,  maxtitres: 8  },
-  ambiance_desc:     { etage_depart: 1, maxlong: 60,  maxtitres: 8  },
+  // s'applique pas, il tombe.
+  //
+  // GROUPE A depuis RETOUR-12, et c'est le cas le plus net de la liste :
+  // traduire une envie en critères est EXACTEMENT le travail qui a fait passer
+  // `interpreter_recherche` au petit modèle le 01/09 (« de l'analyse de texte,
+  // pas de la culture générale »). Ces deux-là faisaient la même chose au même
+  // vocabulaire fermé, et partaient pourtant du gros modèle.
+  envie_phrase:      { etage_depart: 3, escalade_vers: 1, maxlong: 60,  maxtitres: 8  },
+  ambiance_desc:     { etage_depart: 3, escalade_vers: 1, maxlong: 60,  maxtitres: 8  },
   // « Pourquoi il te correspond » : deux lignes, à l'ouverture d'un aperçu.
-  // Étage 1 depuis RETOUR-01 point 4.
-  pourquoi_lui:      { etage_depart: 1, maxlong: 220, maxtitres: 8  },
+  // GROUPE A — 40 succès sur 107 au fort (4,8 s) contre 80 sur 80 au léger.
+  pourquoi_lui:      { etage_depart: 3, escalade_vers: 1, maxlong: 220, maxtitres: 8  },
   // ---- SPEC-05 / RETOUR-01 point 8 — LE TRI « ✦ MES GOÛTS » ----
   //
   // `classer_grille` reçoit le profil agrégé et les ~100 premiers candidats
@@ -301,7 +339,11 @@ export const TACHES: Record<string, Tache> = {
   // RETOUR l'impose : classer 24 478 titres par IA est impossible, classer les
   // 100 premiers d'un pré-classement local ne l'est pas. Une requête par
   // grille, cache par signature côté client.
-  classer_grille:    { etage_depart: 1, maxlong: 60,  maxtitres: 100 },
+  //
+  // GROUPE A depuis RETOUR-12 : elle ne rend que des NUMÉROS. Le modèle ne
+  // rédige rien, il ordonne — et c'est la validation, pas la plume, qui décide
+  // de ce qui passe.
+  classer_grille:    { etage_depart: 3, escalade_vers: 1, maxlong: 60,  maxtitres: 100 },
 
   // ---- SPEC-09 LOT 0 (29/08/2026) — L'IA COMPOSE DES RANGÉES, POUR LE BANC ----
   //
@@ -327,6 +369,15 @@ export const TACHES: Record<string, Tache> = {
   // BORNE DURE DU LOT : cette tâche ne sert QUE l'écran caché « Banc d'essai
   // IA ». Rien de ce qu'elle rend n'atteint l'écran Découvrir réel tant
   // qu'Adrien n'a pas tranché sur les votes du banc.
+  //
+  // GROUPE B — LA SEULE TÂCHE QUI RESTE AU MODÈLE FORT (RETOUR-12, 13/09/2026),
+  // et la liste blanche explique elle-même pourquoi : « le modèle PROPOSE des
+  // noms, TMDB décide s'ils existent ». Proposer des noms DE TÊTE est la seule
+  // chose de cette liste blanche qui demande de la mémoire du monde. C'est
+  // aussi la seule dont une faiblesse ne se rattrape pas par la validation :
+  // un titre médiocre mais réel passe TMDB sans broncher, là où un indice faux
+  // ou un critère inventé tombe tout seul. Elle n'a pas d'`escalade_vers` —
+  // partant du rang 1, elle n'a rien au-dessus vers quoi remonter.
   suggestions_famille: { etage_depart: 1, maxlong: 60, maxtitres: 12 },
 
   // ---- SPEC-09 LOT 1 (01/09/2026) — L'IA CONTRÔLE LES RANGÉES LOCALES ----
@@ -349,7 +400,12 @@ export const TACHES: Record<string, Tache> = {
   //
   // `maxlong` = 60 : la longueur d'un MOTIF d'écart. Il n'est jamais affiché
   // (la spec le dit), il sert au journal — raison de plus pour qu'il soit court.
-  ordonner_rangee: { etage_depart: 1, maxlong: 60, maxtitres: 40 },
+  //
+  // GROUPE A depuis RETOUR-12, et c'est la tâche qui a déclenché le lot :
+  // ZÉRO succès sur huit tentatives au modèle fort (7 331 ms de moyenne), huit
+  // sur huit au léger (1 145 ms). Les deux premiers étages ne servaient donc
+  // strictement à rien d'autre qu'à faire attendre.
+  ordonner_rangee: { etage_depart: 3, escalade_vers: 1, maxlong: 60, maxtitres: 40 },
 
   // ---- SPEC-11 (29/08/2026) — LA BARRE ✦ DEVIENT UN VRAI INTERPRÈTE ----
   //
@@ -378,7 +434,13 @@ export const TACHES: Record<string, Tache> = {
   // `maxtitres` vaut 5 : c'est le plafond de candidats du mode `titre`, et
   // `maxlong` 80, la longueur d'un nom d'œuvre.
   //
-  // ---- RETOUR-10 §1 (01/09/2026) — LA SEULE TÂCHE QUI NE PART PAS DE L'ÉTAGE 1
+  // ---- RETOUR-10 §1 (01/09/2026) — LA PREMIÈRE TÂCHE À NE PAS PARTIR DE L'ÉTAGE 1
+  //
+  // Elle a été SEULE pendant douze jours, et ce paragraphe disait « et pourquoi
+  // elle seule ». RETOUR-12 (13/09) lui a donné huit compagnes : le
+  // raisonnement ci-dessous était juste, il était seulement trop prudent sur
+  // son propre périmètre — voir le pavé de tête de `TACHES`. Son réglage à elle
+  // ne bouge PAS d'un chiffre, et la spec l'exigeait noir sur blanc.
   //
   // Elle démarre au FLASH-LITE (rang 3) et ne remonte au modèle fort que si la
   // réponse ne vaut rien. C'est une EXCEPTION ASSUMÉE à RETOUR-01 point 4
@@ -401,8 +463,16 @@ export const TACHES: Record<string, Tache> = {
   // avec une régularité parfaite. Écrire le pitch du jour ou expliquer
   // « pourquoi il te correspond », non — c'est de la rédaction, elle se voit, et
   // il n'existe aucun test automatique pour dire qu'une phrase est moins bonne.
-  // Les huit autres tâches gardent l'échelle d'origine, et un cas de test le
-  // vérifie : la spec l'exige noir sur blanc.
+  //
+  // CETTE DERNIÈRE PHRASE EST TOMBÉE LE 13/09, ET IL FAUT DIRE COMMENT. Elle
+  // n'était pas fausse : il n'existe toujours aucun test qui juge une plume.
+  // Elle était INCOMPLÈTE — elle comparait la qualité du fort à celle du léger
+  // en supposant que le fort RÉPONDAIT. Un mois de journal dit le contraire
+  // (32/93, 3/11, 40/107) : les textes qu'Adrien lit sont déjà, en majorité,
+  // écrits par le petit modèle. L'arbitrage ne portait donc pas sur « une belle
+  // phrase contre une phrase quelconque », mais sur « la même phrase, tout de
+  // suite ou dans quinze secondes ». Ce qui protège la plume n'est plus ce
+  // paragraphe, c'est l'œil d'Adrien et la réversibilité du réglage.
   interpreter_recherche: { etage_depart: 3, escalade_vers: 1, maxlong: 80, maxtitres: 5 },
 };
 
@@ -461,30 +531,68 @@ export const BUDGET_UTILISATEUR_JOUR = BUDGET_GLOBAL_JOUR;
 export const TIMEOUT_MS = 8000;
 
 // ---------------------------------------------------------------------------
-// LE TEMPS DE LA REQUÊTE ENTIÈRE — 20 S, ET C'EST LE PRIX DES CINQ ÉTAGES
+// LE TEMPS DE LA REQUÊTE ENTIÈRE — 10 S, ET LA BORNE EST ENFIN VRAIE
 //
 // 01/09/2026. L'échelle passait de trois étages à cinq, donc le pire cas passait
 // mécaniquement de 24 s à QUARANTE (5 × 8 s de délai fournisseur), et personne
 // ne l'avait demandé. Quarante secondes d'attente, ce n'est plus un mode
-// dégradé, c'est une page qui a l'air cassée — et ce lot arrive justement en
-// même temps que RETOUR-10, dont tout l'objet est de rendre la recherche plus
-// RAPIDE. Ajouter des étages sans borner le total aurait défait l'autre lot.
+// dégradé, c'est une page qui a l'air cassée.
 //
-// AVANT D'ATTAQUER UN NOUVEL ÉTAGE, on regarde l'heure : au-delà de ce budget,
-// on s'arrête et on rend `{indisponible:true}`, c'est-à-dire l'écran normal.
-// Le contrôle est posé AVANT l'étage et jamais pendant : couper un appel en
-// cours ferait payer un travail qu'on jetterait.
+// RETOUR-12 (13/09/2026) — CE BUDGET ÉTAIT DÉCORATIF, ET LE DIRE COÛTE UNE
+// PHRASE. Le contrôle se faisait AVANT un étage et jamais pendant, avec un délai
+// fournisseur de 8 s indépendant : un étage engagé à 19,9 s rendait la main à
+// 27,9. « 20 s » ne bornait donc rien du tout, c'était le moment à partir duquel
+// on cessait d'en AJOUTER. Corrigé ici en deux temps, et les deux comptent :
+//   · le budget descend à 10 s — le chiffre demandé par le RETOUR ;
+//   · le délai d'UN appel fournisseur devient `min(TIMEOUT_MS, ce qu'il reste)`
+//     (voir `appeler` dans `relais.ts`). C'est cette seconde ligne qui rend la
+//     borne vraie ; sans elle, changer le nombre n'aurait rien changé.
+// Couper un appel en cours fait bien « payer un travail qu'on jette » — mais
+// c'est déjà ce que fait `TIMEOUT_MS` depuis le 10/08. On ne change pas de
+// mécanisme, on lui donne la bonne échéance.
 //
-// POURQUOI UN BUDGET DE TEMPS ET PAS UN NOMBRE D'ÉTAGES. Parce que les étages
-// ne coûtent pas tous la même chose : un compteur saturé, une clé absente ou un
-// 429 immédiat se traversent en quelques millisecondes. Compter les étages
-// aurait fermé l'échelle après trois refus instantanés, alors qu'il restait
-// tout le temps du monde pour essayer les deux suivants. On borne ce qui gêne
-// — l'attente — pas ce qui est gratuit.
+// ET POURQUOI MAINTENANT AUSSI UN NOMBRE D'ÉTAGES, alors que ce pavé disait
+// l'inverse. L'argument d'origine tient toujours, mot pour mot : « un compteur
+// saturé, une clé absente ou un 429 immédiat se traversent en quelques
+// millisecondes ; compter les étages fermerait l'échelle après trois refus
+// instantanés ». Il tient parce qu'il parle des étages GRATUITS. Le plafond
+// posé ici ne compte QUE les étages où un fournisseur a réellement été appelé
+// (voir `MAX_ETAGES_APPELES`) : un étage sauté reste gratuit et ne consomme
+// rien. Les deux règles ne se contredisent donc pas, elles bornent deux choses
+// différentes — l'attente, et le nombre de fois qu'on paie pour l'obtenir.
 //
-// 20 s : deux étages lents (16 s) plus la dizaine d'allers-retours de base qui
-// les accompagnent. C'est DÉJÀ plus serré que les 24 s d'avant ce lot.
-export const TIMEOUT_REQUETE_MS = 20000;
+// 10 s : un étage léger (1 s mesurée) plus un étage fort (8 s au pire), plus la
+// dizaine d'allers-retours de base qui les accompagnent.
+export const TIMEOUT_REQUETE_MS = 10000;
+
+// ---------------------------------------------------------------------------
+// AU PLUS TROIS ÉTAGES PAYANTS PAR DEMANDE — RETOUR-12 §garde-fou 2 (13/09/2026)
+//
+// « Aucune demande IA ne doit pouvoir brûler 30 secondes en silence. » Le budget
+// de temps ci-dessus le dit déjà en secondes ; ce compteur le redit en APPELS,
+// et les deux ne se recouvrent pas : trois fournisseurs qui répondent lentement
+// mais sous l'échéance passeraient le premier contrôle et videraient quand même
+// trois quotas pour une seule phrase.
+//
+// ON NE COMPTE QUE CE QUI EST PAYÉ, et c'est toute la finesse du réglage : un
+// étage sans clé, un étage dont le compteur local est plein, un jumeau écarté
+// par la règle du même modèle — aucun n'a parlé à un fournisseur, aucun n'a
+// coûté une milliseconde d'attente, aucun ne compte. Sans cette précision le
+// plafond aurait fermé l'échelle sur trois refus instantanés, ce que le pavé
+// de `TIMEOUT_REQUETE_MS` interdit depuis le 10/08 pour de bonnes raisons.
+export const MAX_ETAGES_APPELES = 3;
+
+// ---------------------------------------------------------------------------
+// LE PLANCHER D'UN ÉTAGE — RETOUR-12 (13/09/2026)
+//
+// Depuis que le délai d'un appel est borné par ce qu'il reste du budget, un
+// étage peut être engagé avec 80 ms devant lui. C'est un appel condamné : il
+// occupera une place de quota, écrira une ligne de journal en 599, et n'aura
+// jamais eu la moindre chance d'aboutir. `gemini-flash-lite`, le plus rapide de
+// l'échelle, répond en 800 à 1 200 ms (mesuré les 31/08 et 13/09) : en dessous
+// d'une seconde, il n'y a rien à espérer de personne. On s'arrête, et on rend
+// le dégradé local — qui est, lui, instantané.
+export const PLANCHER_ETAGE_MS = 1000;
 
 // ---------------------------------------------------------------------------
 // LE PLAFOND DE JETONS DE SORTIE — 2 000, ET CE N'EST PAS DU CONFORT

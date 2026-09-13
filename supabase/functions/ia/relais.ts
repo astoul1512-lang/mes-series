@@ -24,7 +24,8 @@
 
 import {
   BUDGET_GLOBAL_JOUR, BUDGET_UTILISATEUR_JOUR, cleParDefaut, FOURNISSEURS,
-  MAX_JETONS_SORTIE, ORIGINES, TACHES, TIMEOUT_MS, TIMEOUT_REQUETE_MS,
+  MAX_ETAGES_APPELES, MAX_JETONS_SORTIE, ORIGINES, PLANCHER_ETAGE_MS, TACHES,
+  TIMEOUT_MS, TIMEOUT_REQUETE_MS,
   type Fournisseur,
 } from "./config.ts";
 import { construire, meriteEscalade, valider } from "./gabarits.ts";
@@ -299,8 +300,18 @@ export function attenteDe(entete: string | null): number {
    celui-là légitime — savoir si on parle `generateContent` ou le dialecte
    OpenAI. Un fournisseur qui parlerait un troisième dialecte demanderait une
    colonne de plus, pas un nom bien choisi. */
-async function appeler(f: Fournisseur, consigne: string, schema: Record<string, unknown>): Promise<Reponse> {
-  const m = minuteur(TIMEOUT_MS);
+/* `delaiMax` — RETOUR-12 (13/09/2026). L'appelant passe CE QU'IL RESTE du budget
+   de la requête, et c'est la ligne qui rend vraie la borne des dix secondes :
+   tant que le délai d'un appel était une constante indépendante du budget
+   global, celui-ci ne bornait que le moment où l'on cessait d'AJOUTER des
+   étages, jamais la durée totale. Voir le pavé de `TIMEOUT_REQUETE_MS`.
+   Le paramètre est FACULTATIF pour que les cas de test existants — et un
+   appelant futur qui n'aurait pas de budget à défendre — gardent les huit
+   secondes d'origine. */
+async function appeler(
+  f: Fournisseur, consigne: string, schema: Record<string, unknown>, delaiMax?: number,
+): Promise<Reponse> {
+  const m = minuteur(Math.min(TIMEOUT_MS, delaiMax && delaiMax > 0 ? delaiMax : TIMEOUT_MS));
   const gemini = f.nom.indexOf("gemini") === 0;
   const cle = Deno.env.get(f.cle_env) || "";
   if (!cle) { m.fini(); return { ok: false, statut: 0, brut: null, attente: 0 }; }
@@ -441,6 +452,32 @@ function extraire(gemini: boolean, d: unknown): unknown {
    LES CINQ CLÉS DU CORPS SONT ÉNUMÉRÉES ICI ET NULLE PART AILLEURS. Le §4.2 les
    fixe : ni prompt, ni réponse, ni identifiant de personne. Un test vérifie la
    liste exacte — sans lui, ajouter `uid` un jour de fatigue ne casserait rien. */
+/* LES CODES DE `statut`, EN UN SEUL ENDROIT — RETOUR-12 (13/09/2026).
+
+   La liste vivait dans le `comment on column` de la migration 014 et elle y est
+   restée à la version du 10/08 : les codes 4 et 5 y manquent déjà depuis le
+   01/09, 6 et 7 arrivent ici. Une doc de colonne ne se met à jour qu'en jouant
+   une migration, donc elle vieillit toujours plus vite que le code qui écrit
+   dedans. La voici là où elle ne peut plus décrocher — c'est cette liste qui
+   fait foi, et le tableau avant/après du RETOUR-12 se lit avec elle :
+
+     200   le fournisseur a répondu ET la réponse est valide
+     4xx   le code du fournisseur tel quel (429 = rationné, voir plus bas)
+     5xx   le code du fournisseur tel quel
+     599   délai dépassé ou réseau coupé (notre minuteur, pas le leur)
+       0   clé absente — l'étage est sauté sans appel
+       1   réponse reçue mais invalide (`valider` a dit non)
+       2   compteur local plein — l'étage est sauté sans appel
+       3   budget refusé (global, ou seconde unité d'escalade)
+       4   réponse tronquée : le fournisseur n'a pas FINI (voir `tronquee`)
+       5   budget de temps de la requête épuisé — l'échelle s'arrête
+       6   jumeau du même modèle sauté (RETOUR-12, garde-fou 1)
+       7   plafond de trois étages appelés atteint (RETOUR-12, garde-fou 2)
+
+   0, 2, 5, 6 et 7 N'ONT COÛTÉ AUCUN APPEL SORTANT. Ils sont écrits quand même,
+   et c'est le point : sans eux, une échelle tronquée ressemblerait trait pour
+   trait à une échelle épuisée, et le tableau qu'Adrien doit relire après ce lot
+   serait illisible. `duree_ms` mesure l'étage, jamais la requête entière. */
 async function journaliser(
   tache: string, fournisseur: string | null, ok: boolean, statut: number, duree: number,
 ) {
@@ -695,26 +732,113 @@ async function servirAccepte(req: Request, cors: Record<string, string>): Promis
      fournisseur ne répond » est la phrase vraie. */
   const echecs = { saturation: 0, panne: 0 };
 
-  const parcourir = async (depuis: number): Promise<{ propre?: unknown; malformee?: boolean }> => {
-  for (const f of tous.filter((x) => x.rang >= depuis && !tentes[x.nom])) {
+  /* ---- RETOUR-12 GARDE-FOU 1 (13/09/2026) — JAMAIS DEUX FOIS LE MÊME MODÈLE
+     APRÈS UNE PANNE.
+
+     Les deux clés d'un même modèle sont un SECOURS DE QUOTA, pas deux chances
+     de répondre. La distinction se lit sur le motif du refus :
+       · 429 — le fournisseur va bien, il nous rationne. Le jumeau porte un
+         autre compte, donc un autre compteur : on l'essaie, c'est exactement ce
+         pour quoi la migration 017 l'a créé.
+       · délai, 5xx, réponse tronquée — c'est le MODÈLE qui n'a pas livré. Le
+         jumeau lui reposerait la même question dans le même moteur, et paierait
+         huit secondes de plus pour le même silence. On saute au modèle suivant.
+     Ce qui n'entre PAS dans ce sac, et il faut le dire parce que c'est
+     contre-intuitif : un 401/403 parle de la CLÉ, pas du modèle, et le jumeau en
+     porte justement une autre. Il reste donc essayé.
+
+     LA RÉPONSE TRONQUÉE (statut 4) EST DANS LE SAC, elle, et c'est un choix.
+     `tronquee` dit que le modèle a buté sur `MAX_JETONS_SORTIE` : le jumeau
+     bute au même endroit sur la même consigne, après avoir de nouveau consommé
+     ses jetons. C'est le refus le plus CHER de la liste, et le rejouer à
+     l'identique est la seule chose qu'il ne faut surtout pas faire.
+
+     C'est le `modele` qui identifie, jamais le `nom` : `gemini-flash` et
+     `gemini-flash-2` sont deux noms pour `gemini-3.6-flash`, et c'est
+     précisément ce que la migration 017 a séparé — le nom dit le compte, la
+     colonne `modele` dit le moteur. */
+  const modelesTombes: Record<string, true> = {};
+
+  /* ---- RETOUR-12 GARDE-FOU 2 — AU PLUS TROIS ÉTAGES PAYANTS.
+     Incrémenté APRÈS `appeler`, jamais avant : un étage sauté ne compte pas.
+     Voir `MAX_ETAGES_APPELES` pour la raison, qui n'est pas évidente. */
+  let appels = 0;
+
+  const parcourir = async (
+    depuis: number, bloc?: string,
+  ): Promise<{ propre?: unknown; malformee?: boolean }> => {
+  for (const f of tous.filter((x) =>
+    x.rang >= depuis && !tentes[x.nom] && (!bloc || x.modele === bloc)
+  )) {
     /* L'HORLOGE REPART À CHAQUE ÉTAGE. Voir `journaliser` : `duree_ms` mesure
        l'étage, pas la requête. */
     const departEtage = Date.now();
 
-    /* LA BORNE DE TEMPS DE LA REQUÊTE (01/09/2026). Cinq étages à huit secondes
-       feraient quarante secondes d'attente ; voir `TIMEOUT_REQUETE_MS`. On
-       regarde l'heure AVANT d'engager un étage, jamais pendant : couper un
-       appel en cours ferait payer un travail qu'on jetterait.
+    /* LE PLAFOND D'ÉTAGES PAYANTS. Posé avant le budget de temps parce qu'il
+       est plus dur : il ne dépend d'aucune horloge, donc il est vrai même sur
+       une machine qui a passé sa journée en pause.
+
+       IL NE COMPTE PAS COMME UNE PANNE, et c'est la seule subtilité de ces
+       trois lignes. `echecs` ne sert qu'à CHOISIR LE MOT de l'alerte — « quota
+       atteint » si tout était saturé, « IA injoignable » dès qu'un fournisseur
+       est réellement tombé. Or nous arrêter nous-mêmes n'est le symptôme de
+       rien : si les étages essayés avaient tous rendu 429, la phrase vraie
+       reste « quota atteint ». Ajouter une panne ici ferait dire à la
+       notification l'exact contraire de ce qui s'est passé — et une alerte qui
+       se trompe une fois sur deux cesse d'être lue, ce qui est le seul signal
+       qu'il nous reste depuis que le plafond par personne a disparu. */
+    if (appels >= MAX_ETAGES_APPELES) {
+      await journaliser(tache, f.nom, false, 7, 0);
+      break;
+    }
+
+    /* LA BORNE DE TEMPS DE LA REQUÊTE (01/09/2026, resserrée le 13/09). On
+       regarde l'heure AVANT d'engager un étage ; voir `TIMEOUT_REQUETE_MS`.
        La ligne de journal est là pour qu'on puisse compter ces arrêts — sans
-       elle, une échelle tronquée ressemblerait à une échelle épuisée. */
-    if (departEtage - debut > budgetTempsMs) {
+       elle, une échelle tronquée ressemblerait à une échelle épuisée.
+
+       RETOUR-12 : ON S'ARRÊTE AU PLANCHER, PLUS À ZÉRO. Il restait jusqu'ici
+       « du budget » tant qu'il en restait une milliseconde, et l'étage partait
+       quand même avec ses huit secondes à lui. Maintenant que le délai d'un
+       appel est borné par ce reste (`appeler(..., restant)`), engager un étage
+       avec 80 ms devant lui ne produirait qu'un 599 certain, une place de quota
+       prise et une ligne de journal trompeuse. Voir `PLANCHER_ETAGE_MS`.
+
+       LE PLANCHER NE S'APPLIQUE PAS AU PREMIER ÉTAGE, et ce n'est pas un
+       aménagement pour les tests. Renoncer AVANT d'avoir appelé qui que ce soit,
+       c'est garantir le dégradé sans avoir rien tenté — alors que le plancher
+       existe pour l'inverse : ne pas engager un étage SUPPLÉMENTAIRE qui n'a
+       plus la place d'aboutir. Le premier prend donc ce qu'il reste, quoi qu'il
+       reste. En service il reste toujours près de dix secondes ; c'est sous
+       budget resserré — les cas de test, une base qui a traîné — que la
+       différence se voit, et elle se voit alors comme une échelle VIDE au lieu
+       de courte. Un garde-fou qui ne tient que sur les valeurs de production
+       n'est pas un garde-fou, c'est une coïncidence. */
+    const restant = budgetTempsMs - (departEtage - debut);
+    if (appels > 0 && restant < PLANCHER_ETAGE_MS) {
+      /* Pas de panne comptée ici non plus — même raison qu'au plafond
+         d'étages : c'est NOTRE montre qui arrête l'échelle, pas un fournisseur
+         qui tombe. Elle en comptait une jusqu'ici, ce qui faisait dire « IA
+         injoignable » à une journée de 429 dont l'échelle avait simplement
+         traîné. Le budget est deux fois plus serré depuis ce lot : ce chemin,
+         qui était rare, devient ordinaire, et son défaut avec lui. */
       await journaliser(tache, f.nom, false, 5, 0);
-      echecs.panne++;
       break;
     }
     /* L'étage est VISITÉ à partir d'ici — même s'il est sauté deux lignes plus
        bas. Voir le pavé de `parcourir` : un étage visité ne se rejoue pas. */
     tentes[f.nom] = true;
+
+    /* LE JUMEAU D'UN MODÈLE TOMBÉ — garde-fou 1, voir `modelesTombes`. Sauté
+       AVANT la clé et avant la réservation : c'est un refus gratuit, il ne doit
+       ni coûter un aller-retour de base, ni compter comme un étage payant. */
+    if (modelesTombes[f.modele]) {
+      /* Pas de panne comptée : elle l'a DÉJÀ été sur l'étage qui est réellement
+         tombé — c'est lui qui a rempli `modelesTombes`. La recompter ici ferait
+         peser deux voix à un seul incident dans le choix du mot de l'alerte. */
+      await journaliser(tache, f.nom, false, 6, Date.now() - departEtage);
+      continue;
+    }
 
     /* UN ÉTAGE SANS CLÉ SE SAUTE AVANT DE RÉSERVER SA PLACE. `appeler` sait
        déjà rendre le statut 0 quand le secret manque — mais il le fait APRÈS
@@ -747,7 +871,21 @@ async function servirAccepte(req: Request, cors: Record<string, string>): Promis
       continue;
     }
 
-    const r = await appeler(f, gabarit.consigne, gabarit.schema);
+    /* LE RESTE SE RECALCULE ICI, ET PAS PLUS HAUT. Entre le contrôle de budget
+       et cette ligne, il y a eu la réservation du compteur — un aller-retour de
+       base qui a le droit de prendre jusqu'à `TIMEOUT_BASE_MS`. Passer le
+       `restant` d'il y a trois secondes rendrait la borne fausse d'autant.
+
+       LE `max` AVEC LE PLANCHER NE SERT QUE LE PREMIER ÉTAGE — le seul qui ait
+       le droit de partir avec un budget déjà mangé (voir plus haut). Sans lui,
+       une base qui aurait traîné lui laisserait quelques millisecondes, donc un
+       599 certain : on aurait remplacé « personne n'a répondu » par « personne
+       n'a eu le temps de répondre », ce qui est pire, parce que c'est nous. */
+    appels++;
+    const r = await appeler(
+      f, gabarit.consigne, gabarit.schema,
+      Math.max(budgetTempsMs - (Date.now() - debut), PLANCHER_ETAGE_MS),
+    );
 
     if (r.ok) {
       const propre = valider(tache, r.brut);
@@ -764,6 +902,15 @@ async function servirAccepte(req: Request, cors: Record<string, string>): Promis
        Tout le reste est une PANNE, y compris la réponse tronquée (statut 4) :
        le fournisseur a beau avoir consommé des jetons, il n'a rien livré. */
     if (r.statut === 429) echecs.saturation++; else echecs.panne++;
+
+    /* CE MODÈLE-LÀ N'A PAS LIVRÉ : son jumeau ne livrera pas davantage
+       (garde-fou 1, voir `modelesTombes` pour le raisonnement complet). Trois
+       motifs seulement — délai/réseau, erreur serveur, réponse tronquée. Le 429
+       n'y est pas, c'est tout l'intérêt de la seconde clé ; les 4xx non plus,
+       ils parlent de la clé ou de la requête, pas du moteur. */
+    if (r.statut === 599 || r.statut === 4 || (r.statut >= 500 && r.statut <= 599)) {
+      modelesTombes[f.modele] = true;
+    }
 
     if (r.statut === 429) {
       /* Ce fournisseur est plein. On le marque saturé jusqu'à la fin de la
@@ -791,11 +938,43 @@ async function servirAccepte(req: Request, cors: Record<string, string>): Promis
   return {};
   };
 
-  let res = await parcourir(conf.etage_depart);
+  /* =====================================================================
+     RETOUR-12 (13/09/2026) — L'ESCALADE DOUBLE LA FILE, ELLE NE LA SUIT PAS.
+
+     Décision d'Adrien, et elle repose sur un chiffre qu'on n'avait jamais
+     regardé : OPENROUTER A ÉTÉ APPELÉ CINQ FOIS DEPUIS L'ORIGINE, IL N'A JAMAIS
+     RENDU UNE SEULE RÉPONSE (dernier essai le 01/09). Tant que le premier
+     passage descendait TOUTE l'échelle avant d'escalader, une tâche partie du
+     modèle léger consommait son dernier étage payant sur un fournisseur qui ne
+     répond pas — et arrivait au modèle fort à court de budget, quand elle y
+     arrivait.
+
+     LE PREMIER PASSAGE EST DONC BORNÉ AU MODÈLE DE DÉPART (`bloc`) : les deux
+     clés du léger, et rien d'autre. L'escalade repart ensuite du rang 1 et
+     parcourt le reste dans l'ordre de la table, ce qui donne 3 → 4 → 1 → 2 → 5.
+     L'ordre déclaré dans `ia_fournisseurs` reste la source de vérité — on ne
+     réordonne aucune ligne, on insère seulement l'escalade avant la fin de la
+     file. OpenRouter garde sa place de dernier recours ; il est simplement
+     devenu le dernier pour de bon.
+
+     `bloc` N'EST POSÉ QUE SI LA TÂCHE SAIT ESCALADER, et l'oublier serait le
+     défaut le plus grave de ce lot : sans escalade, borner le premier passage
+     enfermerait `suggestions_famille` sur les deux seuls étages du modèle fort
+     et lui retirerait en silence les trois étages de secours. Elle part du rang
+     1 sans `escalade_vers` — donc pas de `bloc`, donc l'échelle entière, comme
+     avant ce lot.
+
+     On lit le modèle sur le PREMIER ÉTAGE RÉELLEMENT DISPONIBLE à partir du
+     rang de départ, jamais sur le rang exact : `rang` n'est pas une clé, une
+     ligne peut être inactive ou mal formée, et `tous` est déjà filtré.
+  ===================================================================== */
+  const premierEtage = tous.find((x) => x.rang >= conf.etage_depart);
+  const bloc = conf.escalade_vers && premierEtage ? premierEtage.modele : undefined;
+  let res = await parcourir(conf.etage_depart, bloc);
 
   /* =====================================================================
      RETOUR-10 §1 — DÉMARRER SUR LE PETIT MODÈLE, N'ESCALADER QU'AU BESOIN
-     (01/09/2026)
+     (01/09/2026, généralisé aux neuf tâches le 13/09 — voir `config.ts`)
 
      MESURÉ DANS `ia_journal` LE 31/08, sur `interpreter_recherche` :
        · gemini-flash      7 succès, MÉDIANE 3 983 ms (2 910 → 7 895)
