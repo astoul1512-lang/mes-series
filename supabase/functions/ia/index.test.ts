@@ -1889,15 +1889,35 @@ Deno.test("C2 — un 400 « sortie structurée non supportée » n'est pas un 42
 
 Deno.test("C2 — le modèle OpenRouter est celui qui sait faire de la sortie structurée", () => {
   /* Ce test ne peut pas appeler le catalogue — il tournerait hors ligne. Ce
-     qu'il fige, c'est la DÉCISION : `inclusionai/ling-3.0-tiny:free` a été
-     essayé pour de vrai et refuse (`model features structured outputs not
-     support`, HTTP 400) ; `nvidia/nemotron-nano-9b-v2:free` a été essayé et
-     répond. Si quelqu'un change ce modèle un jour, ce cas tombe et pose la
-     question qui n'avait pas été posée : as-tu lu `supported_parameters` ? */
+     qu'il fige, c'est la DÉCISION, et il y en a maintenant deux à figer.
+
+     LA LISTE NOIRE EST LA PARTIE QUI COMPTE, et elle s'allonge : ce sont des
+     modèles ESSAYÉS EN PRODUCTION, dont on connaît la façon exacte d'échouer.
+       · `inclusionai/ling-3.0-tiny:free` — ne déclare pas `structured_outputs`.
+         HTTP 400, « model features structured outputs not support » (014, 10/08).
+       · `nvidia/nemotron-nano-9b-v2:free` — RETIRÉ du catalogue OpenRouter.
+         HTTP 404 du 25/08 au 14/09, et trois semaines de silence (019).
+     Les remettre coûterait la même panne une troisième fois. Un `assertEquals`
+     sur le modèle courant serait tombé de lui-même — mais il aurait laissé
+     croire que le seul risque est de CHANGER le modèle, alors que le vrai
+     risque est d'y REVENIR, ou d'en prendre un qui meurt pareil.
+
+     `:free` EST UNE CIBLE MOUVANTE : 19 modèles au 14/09, dont 5 déclarent
+     `structured_outputs`. Ce cas ne peut donc PAS garantir que le modèle courant
+     est vivant — seul `ia_etages_muets()` (migration 019) le dira, après coup.
+     Il garantit deux choses plus modestes et vérifiables hors ligne : qu'on n'a
+     pas repris un mort connu, et que changer ce nom oblige à relire ce pavé. */
+  const MORTS: Record<string, string> = {
+    "inclusionai/ling-3.0-tiny:free": "pas de `structured_outputs` — HTTP 400 (014)",
+    "nvidia/nemotron-nano-9b-v2:free": "retiré du catalogue — HTTP 404 (019)",
+  };
   const or_ = FOURNISSEURS.find((x) => x.nom === "openrouter")!;
-  assertEquals(or_.modele, "nvidia/nemotron-nano-9b-v2:free",
+  assertEquals(or_.modele, "nex-agi/nex-n2.5-mini:free",
     "modèle OpenRouter changé : vérifier `structured_outputs` dans /api/v1/models avant");
-  assert(!/ling-3\.0-tiny/.test(or_.modele), "le modèle sans sortie structurée est revenu");
+  assertEquals(MORTS[or_.modele], undefined,
+    "ce modèle a DÉJÀ échoué en production : " + MORTS[or_.modele]);
+  assert(or_.modele.endsWith(":free"),
+    "un modèle payant sur l'étage de secours : ce relais n'a pas de budget");
 });
 
 Deno.test("R-γ — une liste de sortie trop longue est refusée", () => {
