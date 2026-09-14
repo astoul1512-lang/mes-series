@@ -79,6 +79,17 @@ par le cache. Un état visible a besoin d'une durée minimale, ou de ne pas êtr
 du tout. Un scintillement ressemble à une panne — c'est-à-dire l'inverse exact de
 ce qu'un indicateur d'attente est censé produire.
 
+**Un garde-fou que les tests ne peuvent pas ATTEINDRE n'en est pas un** (13/09).
+Le budget de temps d'une requête IA bornait le moment où l'on cessait d'AJOUTER des
+étages, pas la durée totale : le contrôle se faisait avant un étage et jamais
+pendant, et le délai d'un appel était une constante indépendante. « 20 s » laissait
+donc passer 27,9 s, et baisser le nombre n'aurait rien changé. Personne ne l'avait
+vu parce que personne ne POUVAIT le voir : le faux monde d'`index.test.ts` ignorait
+l'`AbortSignal` et finissait toujours par répondre. **Deux minuteurs vivaient là
+depuis un mois sans qu'une seule assertion les regarde.** Avant d'écrire une borne,
+écrire le cas qui la dépasse — et si le cas est impossible à écrire, c'est le faux
+monde qu'il faut corriger d'abord, pas la borne qu'il faut croire.
+
 ## Conventions maison
 
 - **Tout en français** : code, commits, PR, et surtout les commentaires — qui
@@ -128,6 +139,15 @@ les deux fonctions serveur font ce test, elles doivent rester d'accord.
   Supabase ne sont PAS ton travail : les fichiers vont dans le dépôt, et tu
   listes ces étapes en « **Hors GitHub** » dans ta PR — Adrien les fait avec
   Claude (l'assistant).
+- **Ce qui est fusionné sur GitHub n'est pas ce qui part chez Supabase** (13/09).
+  `supabase functions deploy` lit LE DISQUE, dans le dossier d'où on le lance.
+  Le dépôt principal était resté sur la branche du lot précédent : la commande a
+  tranquillement redéployé la version d'AVANT, avec le même message de succès et
+  la même liste de cinq fichiers. **Rien dans sa sortie ne dit quelle version
+  part.** Avant de déployer, vérifier le contenu réellement présent sur le
+  disque — une ligne du fichier suffit — et non la branche qu'on croit avoir.
+  Après coup, le seul juge est `ia_journal` : le nom du fournisseur appelé dit
+  quelle version tourne.
 
 ## Supabase — les pièges payés
 
