@@ -507,27 +507,78 @@ relais qu'on ne peut pas relire est un relais qu'on ne peut pas garder.
 
 ### Avant de changer le modèle OpenRouter — lire son catalogue
 
-Le premier modèle choisi ne déclarait pas `structured_outputs`, et l'étage 3
-refusait donc **toutes** les requêtes en HTTP 400, silencieusement. Le catalogue
-le disait d'avance ; il n'avait pas été lu. Avant de poser un modèle ici :
+**Cet étage est mort deux fois en un mois, des deux façons possibles.** Les
+connaître évite la troisième :
+
+| quand | modèle | code | cause |
+|---|---|---|---|
+| 10/08 (014) | `inclusionai/ling-3.0-tiny:free` | **400** | ne déclare pas `structured_outputs` |
+| 25/08 → 14/09 (019) | `nvidia/nemotron-nano-9b-v2:free` | **404** | **retiré du catalogue** |
+
+Dans les deux cas l'étage refusait **toutes** les requêtes, silencieusement. Le
+second a tenu trois semaines avant qu'on s'en aperçoive : les étages du dessus
+répondaient, donc rien n'était cassé pour l'utilisateur — un filet de sécurité
+ne manque à personne tant qu'on ne tombe pas dedans.
+
+Avant de poser un modèle ici, deux vérifications, pas une :
 
 ```
 curl -s https://openrouter.ai/api/v1/models \
   | jq '.data[] | select(.id=="<le modèle>") | .supported_parameters'
 ```
 
-`structured_outputs` doit y figurer. Un modèle qui ne l'a pas **ne dégrade pas,
-il refuse** — et l'étage est mort sans un mot dans l'interface. Le changement se
-fait en une ligne, sans redéploiement :
+1. La commande doit **rendre quelque chose** — sinon le modèle n'existe pas (404).
+2. `structured_outputs` doit **y figurer** — sinon le modèle refuse (400).
+
+Pour voir d'un coup les candidats viables (ils sont rares — 19 modèles `:free`
+au 14/09, dont **5** seulement conviennent) :
+
+```
+curl -s https://openrouter.ai/api/v1/models | jq -r '.data[]
+  | select(.id|endswith(":free"))
+  | select(.supported_parameters|index("structured_outputs"))
+  | .id'
+```
+
+Un modèle avec `preview` dans le nom est à **écarter** : c'est un candidat au
+retrait, donc à la panne n° 2. Le changement se fait en une ligne, sans
+redéploiement :
 
 ```sql
 update public.ia_fournisseurs
-   set modele = 'nvidia/nemotron-nano-9b-v2:free', maj = now()
+   set modele = 'nex-agi/nex-n2.5-mini:free', maj = now()
  where nom = 'openrouter';
 ```
 
 (À reporter aussi dans `config.ts`, qui sert de repli quand la table est
-injoignable — sinon le repli réintroduit la panne.)
+injoignable — sinon le repli réintroduit la panne. Un cas d'`index.test.ts`
+tient la liste noire des modèles déjà morts et tombe si l'un revient.)
+
+### Un étage peut mourir sans que rien ne le dise — la requête qui le voit
+
+L'alerte de la migration 018 ne parle que si **personne** ne répond : un seul
+étage mort est invisible par conception, et c'est ce qui a coûté trois semaines.
+La migration 019 ajoute le moyen de constater :
+
+```sql
+select * from public.ia_etages_muets();     -- aucune ligne = tout va bien
+```
+
+Une ligne veut dire : cet étage a été essayé au moins 3 fois en 3 jours et n'a
+**jamais** abouti. La colonne `statut_frequent` dit quoi faire —
+`404` modèle retiré · `400` pas de sortie structurée · `0` clé absente ·
+`429` quota · `599` ne répond pas. Les trois premiers se réparent **sans écrire
+une ligne de code**.
+
+Son complément, pour ne pas confondre « en bonne santé » et « jamais sollicité » :
+
+```sql
+select * from public.ia_etages_jamais_atteints();
+```
+
+Un rang 5 qui n'apparaît jamais pendant que les rangs 1 à 4 tiennent est la
+situation **normale** — mais c'est aussi ce à quoi ressemble un étage mort. Les
+deux requêtes ensemble font la différence.
 
 **OpenRouter, lui, publie ses chiffres** et ils sont déjà en base : 20 requêtes
 par minute, 50 par jour tant que le compte n'a pas acheté 10 $ de crédits
