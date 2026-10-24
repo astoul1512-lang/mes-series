@@ -389,25 +389,70 @@ function basculerPause(id){
   /* Dernier rempart : l'écran peut être en retard sur la base. */
   if(!s.pause && !peutSeMettreEnPause(s))
     return toast('Commence-la d\'abord : il n\'y a rien à mettre en pause');
+  /* RETOUR-13 — `pauseMaj` est posée DANS LES DEUX BRANCHES, y compris la
+     reprise qui, elle, n'a plus de `pause` à porter. C'est la date du GESTE,
+     pas de l'état : sans elle, « j'ai repris à l'instant » arriverait à la
+     fusion avec un 0 et perdrait contre « j'avais mis en pause hier ». Même
+     raison qu'`unwatched` pour un épisode décoché — voir `mergeRemote`. */
   if(s.pause){
     delete s.pause; delete s.pauseLe;
+    s.pauseMaj = Date.now();
     s.updated = Date.now(); saveDB(); render();
     toast('« '+s.name+' » reprise');
   } else {
     s.pause = true; s.pauseLe = Date.now();
+    s.pauseMaj = s.pauseLe;
     s.updated = Date.now(); saveDB(); render();
     toast('« '+s.name+' » mise en pause');
   }
 }
+
+/* ---------------------------------------------------------------------------
+   RETOUR-13 — LA FRONTIÈRE ENTRE LE CONTENU TMDB ET CE QUE J'AI FAIT
+
+   Ce bloc existait en DEUX copies, mot pour mot : dans `refreshShow` juste en
+   dessous et dans `refreshAll` (app-08). Le lot en ajoute une troisième porte
+   — le rafraîchissement automatique — et trois copies d'une liste blanche,
+   c'est la garantie qu'un champ utilisateur ajouté un jour sera effacé au
+   premier rafraîchissement par les deux copies qu'on aura oubliées.
+
+   Elle est donc UNE, ici, et les trois appelants passent par elle. La règle
+   qu'elle porte : TOUT ce qui vient de TMDB est remplacé, TOUT ce qui vient
+   de l'utilisateur est conservé. Si tu ajoutes un champ utilisateur à une
+   série, c'est cette fonction — et elle seule — qu'il faut compléter.
+
+   La garde `if(!ancien)` n'était dans aucune des deux copies : elles lisaient
+   `db.shows[id]` APRÈS l'`await` de la requête, et `ancien.watched` levait un
+   TypeError si une synchro entrante avait retiré la série entre-temps. Au
+   rythme d'un bouton pressé à la main, le cas ne s'était jamais produit ; à
+   25 séries par jour sur tous les appareils, c'était une question de semaines.
+   On rend `null` : l'appelant comprend « cette série n'est plus à nous » et
+   n'écrit rien.
+--------------------------------------------------------------------------- */
+function fusionnerFicheTmdb(ancien, fresh){
+  if(!ancien || !fresh) return null;
+  fresh.watched = ancien.watched; fresh.addedAt = ancien.addedAt;
+  if(ancien.unwatched) fresh.unwatched = ancien.unwatched;
+  /* Une actualisation ne réveille jamais une série mise de côté — et elle
+     emporte `pauseMaj` avec la pause, sinon la date du geste resterait en
+     arrière et la fusion croirait le geste plus vieux qu'il n'est. */
+  if(ancien.pause){ fresh.pause = true; fresh.pauseLe = ancien.pauseLe; }
+  if(ancien.pauseMaj) fresh.pauseMaj = ancien.pauseMaj;
+  /* La date de relecture, celle qui ordonne le travail de fond. Distincte
+     d'`updated`, qui arbitre la fraîcheur du contenu à la fusion. */
+  fresh.majEpisodes = Date.now();
+  return fresh;
+}
 async function refreshShow(id){
   closeSheet(); toast('Actualisation…');
   try{
-    const fresh = await fetchShowFull(id);
-    const ancien = db.shows[id];
-    fresh.watched = ancien.watched; fresh.addedAt = ancien.addedAt;
-    if(ancien.unwatched) fresh.unwatched = ancien.unwatched;
-    if(ancien.pause){ fresh.pause = true; fresh.pauseLe = ancien.pauseLe; }   // l'actualisation ne réveille pas une série mise de côté
-    db.shows[id] = fresh; saveDB(); render(); toast('À jour');
+    /* La fiche locale se relit APRÈS la requête — voir `lotMajSeriesDuJour` :
+       lue avant, une série retirée entre-temps par une synchro entrante
+       serait ressuscitée par cette écriture. */
+    const brut = await fetchShowFull(id);
+    const fiche = fusionnerFicheTmdb(db.shows[id], brut);
+    if(!fiche) return;                       // série retirée pendant la requête
+    db.shows[id] = fiche; saveDB(); render(); toast('À jour');
   }catch(e){ toast('Échec de l\'actualisation'); }
 }
 function markAllAired(id){ closeSheet(); marquerToutVu(id); }
@@ -655,4 +700,209 @@ function quickWatch(id, ev){
   if(!nx) return;
   applyWatched(id, x=>{ x.watched[key(nx.s,nx.e)] = Date.now(); },
                codeEp(nx.s,nx.e)+' vu');
+}
+
+/* ===========================================================================
+   RETOUR-13 (24/10/2026) — LE RAFRAÎCHISSEMENT AUTOMATIQUE
+
+   LE CONSTAT. `refreshShow` n'était appelée QUE depuis le bouton « Actualiser
+   les épisodes » du menu ⋯ d'une fiche. Aucun rafraîchissement automatique
+   n'existait. Mesuré sur la bibliothèque réelle le 24/10 : 150 séries sur 157
+   pas relues depuis plus de 30 jours, 20 séries affichant un « prochain
+   épisode » daté de juillet, et One Piece arrêtée à l'épisode 1089 quand TMDB
+   en est au 1180 — quatre-vingt-dix épisodes absents d'« À rattraper », donc
+   invisibles. Le signe qui ne trompe pas : la fonction serveur des
+   notifications interroge TMDB en direct, si bien que les push étaient JUSTES
+   pendant que les écrans étaient FAUX. L'utilisateur était prévenu d'épisodes
+   que son app ignorait.
+
+   POURQUOI PAS « LE LOT QUOTIDIEN EXISTANT ». Le lot quotidien est accroché à
+   `apresRenduVitrine` (app-04), appelée au rendu de DÉCOUVRIR. Or la vue par
+   défaut est `follow`. Quelqu'un qui vit dans « À suivre » — c'est-à-dire très
+   exactement celui dont « À rattraper » est faux — ne l'aurait jamais
+   déclenché. Le départ est donc accroché après le `render()` de `boot()`, ce
+   qui respecte la règle (« jamais avant le premier affichage ») sans dépendre
+   d'un onglet qu'on peut ne jamais ouvrir.
+
+   POURQUOI UNE PRIORITÉ ET PAS UN BALAYAGE. 157 séries, c'est entre 300 et
+   450 requêtes au relais : impensable à chaque ouverture. Trois rangs, et le
+   budget se dépense dans l'ordre. Avec 25 par jour la bibliothèque entière est
+   à jour en une semaine, et les séries qui diffusent le sont tous les jours ou
+   presque, parce qu'elles remontent d'elles-mêmes au premier rang.
+
+   LE SECOND SIGNAL D'URGENCE. « Le prochain épisode stocké est déjà passé » ne
+   suffit pas : TMDB met `next_episode_to_air` à `null` en fin de saison. Une
+   série qui a une saison entière de retard n'a donc PAS de prochain épisode
+   passé — elle n'aurait jamais été urgente, et c'est une bonne partie des 150.
+   D'où le second test : aucune suite annoncée, et le dernier épisode connu
+   diffusé depuis plus d'une semaine.
+=========================================================================== */
+const MAJ_SERIES_PAR_JOUR  = 25;      // budget quotidien, en séries
+const MAJ_SERIES_PAQUET    = 5;       // lues en parallèle, comme les films à venir
+const MAJ_DORMANTES_JOURS  = 30;      // terminées ou en pause : au plus une fois par mois
+const MAJ_SANS_SUITE_JOURS = 7;       // « plus de suite annoncée depuis une semaine »
+const MAJ_SERIES_CLE = 'ms.majseries.v1';
+
+/* Le marqueur du jour vit en localStorage et pas dans `db` : c'est de l'état
+   d'appareil, même règle que `ms.bientot.v1` et `ms.dueljour.v1`. Deux
+   téléphones feront donc chacun leur lot — et comme `majEpisodes` se fusionne
+   par le MAXIMUM (voir `mergeRemote`), le second travaille sur d'autres séries.
+   La bibliothèque converge deux fois plus vite au lieu de payer deux fois la
+   même requête.
+   Lecture impossible → on répond « déjà fait » : sans mémoire du jour, on ne
+   peut pas garantir de ne pas relancer à chaque ouverture. Choix conservateur,
+   celui de `bientotDejaFaitAujourdhui`. */
+function majSeriesDejaFaiteAujourdhui(){
+  try{ return localStorage.getItem(MAJ_SERIES_CLE) === todayISO(); }catch(e){ return true; }
+}
+function marquerMajSeriesDuJour(){
+  try{ localStorage.setItem(MAJ_SERIES_CLE, todayISO()); }catch(e){}
+}
+
+/* Le dernier épisode DIFFUSÉ que l'on connaisse, en date. Sert au second signal
+   d'urgence ci-dessous. */
+function derniereDiffusionConnue(s){
+  const t = todayISO();
+  let d = '';
+  (allEpisodes(s, false) || []).forEach(ep=>{ if(ep.d && ep.d <= t && ep.d > d) d = ep.d; });
+  return d;
+}
+
+/* Une série « périmée de façon prouvée ». Deux preuves, pas une :
+   · le prochain épisode qu'on a stocké est DÉJÀ PASSÉ — il a été diffusé et on
+     ne l'a jamais relu, donc notre fiche est en retard, c'est mécanique ;
+   · ou bien plus rien n'est annoncé ET le dernier épisode connu date de plus
+     d'une semaine — une série en cours sans suite annoncée depuis sept jours
+     est soit finie (TMDB le dirait), soit en retard sur nous. */
+function serieSuspecte(s){
+  if(s.next && s.next.d) return s.next.d < todayISO();   // une suite annoncée : rien ne presse
+  const d = derniereDiffusionConnue(s);
+  const borne = new Date(Date.now() - MAJ_SANS_SUITE_JOURS * 86400000)
+                  .toISOString().slice(0,10);
+  return !!d && d < borne;
+}
+
+/* Le classement du travail. Rend des identifiants, bornés au budget. Hors du
+   rendu et sans effet de bord : c'est ce qui le rend testable. */
+function seriesAraFraichir(max){
+  const budget = (max == null) ? MAJ_SERIES_PAR_JOUR : max;
+  const urgentes = [], courantes = [], dormantes = [];
+  const limiteDormantes = Date.now() - MAJ_DORMANTES_JOURS * 86400000;
+  Object.values(db.shows || {}).forEach(s=>{
+    if(!s || s.id == null) return;
+    const vieille = Number(s.majEpisodes) || 0;
+    /* `isFinished` est le test maison de « terminée » : tous les épisodes
+       diffusés vus, statut terminal, et plus de suite annoncée. On ne teste PAS
+       `status === 'Returning Series'` — cette chaîne n'apparaît nulle part dans
+       le dépôt, et `Planned`/`In Production` comptent déjà comme « en cours »
+       partout ailleurs. Un seul test de « terminée » dans l'app. */
+    const dormante = !!s.pause || (typeof isFinished === 'function' && isFinished(s));
+    if(dormante){
+      if(vieille <= limiteDormantes) dormantes.push({ id:s.id, q:vieille });
+      return;
+    }
+    (serieSuspecte(s) ? urgentes : courantes).push({ id:s.id, q:vieille });
+  });
+  /* Dans chaque rang, la plus anciennement relue d'abord : c'est ce qui garantit
+     qu'on fait le tour et qu'aucune série ne reste au fond. */
+  const parAge = (a,b)=> a.q - b.q;
+  return urgentes.sort(parAge).concat(courantes.sort(parAge), dormantes.sort(parAge))
+                 .slice(0, budget).map(o=>o.id);
+}
+
+/* L'empreinte du CONTENU TMDB — pas de l'objet entier, qui porte aussi ce que
+   l'utilisateur a fait. Elle répond à une seule question : « cette relecture
+   a-t-elle appris quelque chose ? »
+
+   C'est la réponse au vrai coût du lot. `payload()` envoie `db.shows` EN ENTIER
+   (~1,4 Mo) : sans ce test, 25 fiches réécrites chaque matin feraient une
+   écriture complète au serveur à chaque ouverture, là où une journée sans geste
+   n'en produisait aucune — et deux appareils qui balaient le même matin se
+   feraient tomber mutuellement sur la concurrence optimiste de `sbPousser`.
+   Une série relue à l'identique ne pousse donc PAS `updated`, et ne provoque
+   aucun échange de fiche entre appareils. */
+function empreinteFicheTmdb(s){
+  if(!s) return '';
+  const sa = s.seasons || {};
+  const n = Object.keys(sa).sort((a,b)=>a-b)
+    .map(k=> k+':'+((sa[k]||[]).map(e=> e.e+'@'+(e.d||'')).join('.'))).join('|');
+  const nx = s.next ? (s.next.s+'x'+s.next.e+'@'+(s.next.d||'')) : '-';
+  return [s.name||'', s.status||'', s.poster||'', s.first||'', nx, n].join('~');
+}
+
+/* Le lot du jour. Jamais bloquant, jamais bavard, jamais un `render()`.
+   Rend le nombre de séries réellement DEMANDÉES — les tests s'en servent pour
+   vérifier le budget. */
+let majAutoEnCours = false;
+
+async function lotMajSeriesDuJour(budget){
+  if(majAutoEnCours) return 0;
+  if(majSeriesDejaFaiteAujourdhui()) return 0;
+  const ids = seriesAraFraichir(budget);
+  if(!ids.length){ marquerMajSeriesDuJour(); return 0; }
+  majAutoEnCours = true;
+  let demandees = 0, succes = 0, change = false;
+  try{
+    for(let i = 0; i < ids.length; i += MAJ_SERIES_PAQUET){
+      await Promise.all(ids.slice(i, i + MAJ_SERIES_PAQUET).map(async id=>{
+        /* Le compteur s'incrémente sur la série DEMANDÉE, pas sur celle qui a
+           répondu : c'est la leçon du 13/09. Un budget qui ne compte que les
+           succès laisse passer autant de requêtes qu'il y a d'échecs. */
+        demandees++;
+        try{
+          /* L'ORDRE DE CES DEUX LIGNES EST LE CORRECTIF. La fiche locale se
+             relit APRÈS la requête, jamais avant : lue avant, elle est encore
+             là même si une synchro entrante a retiré la série entre-temps, et
+             on la RESSUSCITE en réécrivant `db.shows[id]`. Protéger du
+             TypeError sans corriger l'ordre ne déplace le bug que d'un cran —
+             c'est le cas « §6 » de test.html qui l'a trouvé. */
+          const brut = await fetchShowFull(id);
+          const ancien = db.shows[id];
+          if(!ancien) return;                      // retirée pendant la requête
+          const avant = empreinteFicheTmdb(ancien);
+          const fiche = fusionnerFicheTmdb(ancien, brut);
+          if(!fiche) return;
+          succes++;
+          /* Rien de neuf : on garde l'ancien `updated` pour ne pas peser sur
+             l'arbitrage de fusion des autres appareils. */
+          if(empreinteFicheTmdb(fiche) === avant) fiche.updated = ancien.updated;
+          else change = true;
+          db.shows[id] = fiche;
+        }catch(e){
+          /* Hors ligne, relais indisponible, série disparue de TMDB : on ne dit
+             RIEN et on réessaiera. Un travail de fond que personne n'a demandé
+             n'a pas le droit de produire un message d'erreur. */
+        }
+      }));
+    }
+  } finally {
+    majAutoEnCours = false;
+  }
+  /* UNE seule sauvegarde pour tout le lot, en fin de course — pas vingt-cinq.
+     Même invariant que `chargerBientotPerso` : « jusqu'à soixante sérialisations
+     complètes du blob d'affilée » est le coût qu'on évite. */
+  if(succes && typeof saveDB === 'function') saveDB();
+  /* PAS UN SEUL SUCCÈS sur tout le lot : c'est la signature de « hors ligne »
+     ou « relais tombé », pas celle d'une bibliothèque à jour. Ne pas poser le
+     marqueur, sinon une seule matinée dans le métro coûterait la journée
+     entière — et c'est précisément le jour où l'app aura été ouverte. */
+  if(succes) marquerMajSeriesDuJour();
+  /* AUCUN `render()`. La règle transverse de CLAUDE.md interdit de faire bouger
+     l'écran sous le doigt : « À rattraper » peut gagner quatre-vingt-dix
+     épisodes d'un coup, et son ordre est gelé à l'entrée d'écran
+     (`ordreRattrapage`). La recomposition arrive à la prochaine entrée. */
+  if(change && typeof scheduleSync === 'function') scheduleSync();
+  return demandees;
+}
+
+/* Le départ, appelé par `boot()` APRÈS le premier rendu. Le délai n'est pas
+   décoratif : `boot` enchaîne déjà `syncNow`, `majProfil`, `chargerPartage` et
+   `inscrireSiBesoin` juste après son `render()`. Partir en même temps, c'est
+   mettre le rafraîchissement en concurrence avec la synchro — dont il DÉPEND,
+   puisqu'une fusion entrante change la liste des séries à relire. On passe
+   derrière, délibérément. */
+function amorcerMajSeriesDuJour(){
+  if(majSeriesDejaFaiteAujourdhui()) return;
+  if(typeof signedIn === 'function' && !signedIn()) return;
+  setTimeout(()=>{ Promise.resolve(lotMajSeriesDuJour()).catch(()=>{}); }, 4000);
 }
