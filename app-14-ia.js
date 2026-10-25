@@ -2605,3 +2605,296 @@ async function poserCandidatsIA(q, titres){
   if(typeof peindreRech === 'function') peindreRech();
   else if(typeof render === 'function') render();
 }
+
+/* ===========================================================================
+   RETOUR-14 (25/10/2026) — L'ENVIE FLOUE QUI S'AFFINE PAR LE DIALOGUE
+
+   LE CONSTAT D'ADRIEN, PARCE QUE C'EST LUI QUI DICTE TOUT CE QUI SUIT : « un
+   petit film cool sans prise de tête » devenait « comédie ». Or il pensait
+   peut-être à Ocean's Eleven, Kingsman ou Hunt for the Wilderpeople — aucun
+   n'est une comédie, tous sont exactement la demande. TANT QU'IL Y A DES CASES
+   AU MILIEU, L'ENVIE PASSE PAR UN ENTONNOIR QUI LA TRAHIT. Les deux modes de
+   SPEC-11 traduisaient tous les deux en catégories, l'un en filtres, l'autre en
+   titres candidats ; ici on ne traduit plus rien, l'IA NOMME.
+
+   CE N'EST PAS UNE MÉCANIQUE NEUVE, et c'est voulu : c'est très exactement
+   celle de `suggestions_famille`, en production depuis la v115 — l'IA nomme,
+   TMDB vérifie, le tamis écarte. On la RÉUTILISE (`bancVerifierTitre`,
+   `bancChoisirResultat`, `tamiser`), on ne la réécrit pas. Seule l'entrée
+   change : une phrase et un fil de réponses, au lieu du profil seul.
+
+   LES DEUX PLAFONDS SONT LE MÊME PLAFOND, et ça valait d'être remarqué plutôt
+   que de poser deux nombres sans rapport. La spec demande « cinq questions au
+   maximum » et « six appels IA par dialogue » : un appel initial (titres + Q1)
+   plus cinq réponses font exactement six appels. Les deux bornes coïncident,
+   elles sont donc tenues par deux gardes qui disent la même chose à deux
+   endroits — ce qui est la seule façon qu'elles ne divergent pas le jour où
+   l'une des deux bougera.
+
+   CE QUE CE FICHIER FAIT, ET CE QU'IL NE FAIT PAS. Ici : l'appel, la
+   résolution TMDB, le tamis, les deux caches, les plafonds. L'ÉCRAN est dans
+   app-12 (le fil, la question, la grille) — même partage que SPEC-11, où
+   `interpreterRechercheIA` appelle et `peindreRech` dessine. Un dialogue est
+   un écran de Recherche, pas un écran d'IA.
+=========================================================================== */
+
+/* Le plafond d'appels par dialogue (spec § « Coût et vitesse »). Au-delà, ON
+   SERT CE QU'ON A : pas de message, pas d'erreur, le dialogue se dit fini et
+   la grille reste celle de la dernière réponse obtenue. */
+const ENVIE_MAX_APPELS = 6;
+/* Le plafond de questions. Il DOIT être tenu chez nous et pas seulement
+   demandé au modèle : le prompt dit « arrête-toi quand une question de plus
+   n'apprendrait rien », ce qui est une consigne de jugement, pas une borne.
+   Un modèle bavard poserait une sixième question, et elle n'aurait aucun appel
+   derrière elle pour y répondre — une question qui ne mène à rien. */
+const ENVIE_MAX_QUESTIONS = 5;
+/* Combien de titres résolus on garde en mémoire d'une session. Un titre ne
+   change pas d'identifiant TMDB : ce cache sert donc AUSSI d'un dialogue à
+   l'autre, et c'est lui qui rend le lot soutenable côté réseau — voir le pavé
+   de `resoudreTitresEnvieIA`. */
+const ENVIE_RESOLUS_MAX = 400;
+/* Le séparateur de signature. Un caractère NON IMPRIMABLE, et c'est voulu : une
+   réponse libre contient ce que la personne a tapé, barres et tabulations
+   comprises, et deux fils différents ne doivent jamais se confondre en un seul
+   (ce qui servirait le cache d'un autre dialogue). */
+const ENVIE_SEP = '\u0001';
+
+/* Signature (phrase + réponses) → l'étape validée. C'est le cache que la spec
+   demande : « revenir en arrière puis refaire le même choix ne redemande
+   rien ». En mémoire, une session, comme `iaPhraseCache`. */
+let envieDialCache = {};
+/* `media:nom normalisé` → la vignette résolue, ou `null` pour « TMDB n'en veut
+   pas ». Le `null` compte autant que le reste : un titre que le modèle
+   reproposera à chaque étape ne doit pas coûter deux requêtes à chaque fois. */
+let envieResolus = {};
+let envieDialEnCours = false;
+
+function oublierCacheEnvieIA(){ envieDialCache = {}; }
+
+/* La phrase est minusculée comme dans `iaPhraseCache` ; les réponses NON —
+   « Seul » et « seul » peuvent être deux options distinctes d'une question. */
+function signatureEnvieIA(phrase, reponses){
+  return String(phrase || '').trim().toLowerCase() + ENVIE_SEP +
+         (reponses || []).map(x => String((x && x.r) || '')).join(ENVIE_SEP);
+}
+
+/* ---------------------------------------------------------------------------
+   LA RÉSOLUTION — ET LE COÛT QUE PERSONNE N'AVAIT CADRÉ
+
+   La spec borne les appels IA (six) et ne dit rien de TMDB. Or chaque étape
+   fait vérifier jusqu'à DIX-HUIT titres, chacun valant une requête et parfois
+   deux (la seconde chance sans l'année). Six étapes sans cache : jusqu'à ~200
+   requêtes au relais TMDB POUR UNE SEULE RECHERCHE.
+
+   Le cache n'est donc pas une optimisation, c'est ce qui rend le lot
+   livrable — et il tombe juste, parce que les titres se RECOUPENT beaucoup
+   d'une étape à l'autre : c'est le propre d'une envie qu'on resserre. Un titre
+   que la précision rend meilleur est reproposé, et il ne coûte plus rien.
+--------------------------------------------------------------------------- */
+async function resoudreTitresEnvieIA(titres, mesures){
+  const gardes = [];
+  const jetes = [];
+  const liste = (titres || []).slice(0, 18);
+  /* Le vidage est BRUTAL et il est volontaire : au-delà du plafond on repart de
+     zéro plutôt que d'écrire une éviction par ancienneté. C'est l'idiome
+     d'`iaPhraseCache`, et il se défend — un cache de session qui se vide coûte
+     quelques requêtes une fois, une éviction mal écrite coûte un bug. */
+  if(Object.keys(envieResolus).length > ENVIE_RESOLUS_MAX) envieResolus = {};
+  for(let k = 0; k < liste.length; k += BANC_VERIF_PAR_FOIS){
+    const paquet = liste.slice(k, k + BANC_VERIF_PAR_FOIS);
+    const rep = await Promise.all(paquet.map(async function(t){
+      const cle = (t.media === 'film' ? 'movie' : 'tv') + ':' + normNomIA(t.nom);
+      /* `hasOwnProperty` et non `envieResolus[cle] !== undefined` : un `null`
+         mémorisé est une RÉPONSE (« TMDB n'en veut pas »), pas une absence. Le
+         confondre avec « jamais demandé » ferait repayer chaque titre jeté à
+         chaque étape — c'est-à-dire précisément les plus coûteux. */
+      if(Object.prototype.hasOwnProperty.call(envieResolus, cle))
+        return { titre:envieResolus[cle], nom:t.nom, raison:'déjà jeté' };
+      const o = await bancVerifierTitre(t, mesures);
+      envieResolus[cle] = o.jete ? null : o.titre;
+      return { titre:o.jete ? null : o.titre, nom:t.nom,
+               raison:o.jete ? o.jete.raison : '' };
+    }));
+    rep.forEach(function(o){
+      mesures.proposes++;
+      if(!o.titre){ jetes.push({ nom:o.nom, raison:o.raison || 'introuvable' }); return; }
+      gardes.push(o.titre);
+    });
+  }
+  return { gardes:gardes, jetes:jetes };
+}
+
+/* Du format du moteur de suggestions (`normaliser`, app-11) vers celui d'une
+   vignette de Recherche (`jaquetteRech`, app-12). Les deux existaient déjà et
+   ne s'étaient jamais parlé : `tamiser` ne sait lire que le premier,
+   `jaquetteRech` que le second.
+   TRADUIRE PLUTÔT QUE TRANSPORTER LES DEUX FORMES : la conversion est sans
+   perte pour tout ce que la vignette lit, et garder l'objet TMDB brut à côté du
+   normalisé ferait vivre deux vérités sur le même titre.
+   `__nom` est ajouté pour une seule raison : c'est ce qui repart au modèle dans
+   `deja`, et le relire depuis `title`/`name` selon le média à chaque fois
+   serait un `if` de plus à l'endroit le plus facile à oublier. */
+function vignetteEnvieIA(x){
+  const v = { __media:x.media, __nom:x.nom, id:x.id, poster_path:x.affiche,
+              backdrop_path:x.bandeau || null, vote_average:x.note || 0,
+              vote_count:x.votes || 0, genre_ids:x.genre_ids || [],
+              original_language:x.langue || null };
+  if(x.media === 'tv'){ v.name = x.nom; v.first_air_date = x.date || ''; }
+  else { v.title = x.nom; v.release_date = x.date || ''; }
+  return v;
+}
+
+/* ---------------------------------------------------------------------------
+   UNE ÉTAPE DU DIALOGUE
+
+   ELLE NE VIDE JAMAIS LA GRILLE. C'est la même règle que `relancerRech` (lot
+   RETOUR-05, points 5 et 7) : les affiches précédentes restent à l'écran
+   jusqu'à l'arrivée des nouvelles. Vider d'abord ferait un trou noir à chaque
+   réponse touchée, c'est-à-dire un scintillement à chaque fois qu'on répond —
+   et un scintillement ressemble à une panne.
+--------------------------------------------------------------------------- */
+async function etapeEnvieIA(){
+  const D = etatRech().envieD;
+  if(!D || envieDialEnCours) return;
+
+  const sig = signatureEnvieIA(D.phrase, D.reponses);
+  /* ① LE CACHE — et AUCUNE ligne de statut sur ce chemin. Elle naîtrait et
+     mourrait dans la même frame : zéro milliseconde à l'écran, donc un
+     scintillement (leçon du 01/09, et le précédent exact est le cache de
+     phrase d'`interpreterRechercheIA`). */
+  if(Object.prototype.hasOwnProperty.call(envieDialCache, sig))
+    return appliquerEtapeEnvieRech(envieDialCache[sig]);
+  /* ② LE PLAFOND — on sert ce qu'on a, sans un mot. Le dialogue se dit fini :
+     la grille de la dernière réponse reste, et le fil reste rouvrable. */
+  if(D.appels >= ENVIE_MAX_APPELS)
+    return appliquerEtapeEnvieRech({ titres:D.titres, question:null, fini:true });
+
+  envieDialEnCours = true;
+  const t0 = Date.now();
+  try{
+    poserStatutIA('lit');
+    guetterEscaladeIA();
+    const f = (typeof familleRech === 'function') ? familleRech() : { id:'tout' };
+    const envoi = {
+      phrase: String(D.phrase).slice(0, 300),
+      famille: f.id,
+      reponses: D.reponses.map(x => ({ q:String(x.q).slice(0, 90), r:String(x.r).slice(0, 60) })),
+      /* Les titres DÉJÀ À L'ÉCRAN. C'est ce qui tient l'acceptation « les
+         titres ne sont plus les mêmes, vérifié titre par titre » : sans cette
+         liste, un modèle qui a bien compris la précision rend un
+         sous-ensemble — juste, et exactement l'écran que le retour refuse. */
+      deja: (D.titres || []).slice(0, 18).map(x => String(x.__nom || '')),
+      profil: profilBancIA(),
+      aimes: titresAimesIA(12),
+      podium: podiumBancIA(f.id),
+      ecartes: genresEcartesBancIA(),
+      plateformes: plateformesBancIA()
+    };
+    const d = await appelIA('envie_dialogue', envoi);
+    D.appels++;
+    if(d) noterRequeteIA();
+    /* ③ RIEN RENDU. Deux cas, et ils ne se traitent pas pareil.
+       À LA PREMIÈRE ÉTAPE il n'y a rien à montrer : on quitte le dialogue et on
+       rend l'écran de la v118, sans message d'erreur — le socle ne meurt jamais.
+       PLUS TARD, il y a une grille à l'écran et elle est bonne : on la garde et
+       on arrête de poser des questions. Effacer ce qui marche parce que la
+       requête suivante a échoué serait punir la personne d'avoir répondu. */
+    if(!d || !Array.isArray(d.titres) || !d.titres.length){
+      if(!D.charge) return abandonnerDialogueEnvieRech();
+      return appliquerEtapeEnvieRech({ titres:D.titres, question:null, fini:true });
+    }
+
+    const mesures = { tmdb:0, proposes:0, tamises:0, ms:0 };
+    const res = await resoudreTitresEnvieIA(d.titres, mesures);
+    /* Le tamis, celui de `suggestions_famille` : déjà vu, écarté, « pas pour
+       moi », genres exclus, cadre de la famille. `vus` est NEUF à chaque étape
+       — il dédoublonne DANS une grille, il n'interdit pas un titre qu'on avait
+       déjà le droit de voir à l'étape précédente. */
+    const cadre = (typeof cadreSugg === 'function')
+      ? cadreSugg((BANC_FAMILLES.find(x => x.cle === f.id) || { puce:'tout' }).puce)
+      : { medias:['tv','movie'], origine:'mixte' };
+    const avant = res.gardes.length;
+    const gardes = (typeof tamiser === 'function') ? tamiser(res.gardes, {}, cadre, false)
+                                                   : res.gardes;
+    /* Ce que le tamis retire est COMPTÉ À PART de ce que TMDB n'a pas trouvé :
+       ce ne sont pas les mêmes reproches. Un titre introuvable est une erreur
+       du modèle ; un titre tamisé est une proposition juste mais déjà vue,
+       écartée ou hors cadre — une information sur la consigne, pas sur la
+       mémoire du modèle. Même partage qu'au banc de SPEC-09. */
+    mesures.tamises = avant - gardes.length;
+    mesures.ms = Date.now() - t0;
+
+    /* ④ LE PLAFOND DE QUESTIONS, TENU ICI ET PAS SEULEMENT DEMANDÉ AU MODÈLE.
+       Au sixième appel, une question de plus n'aurait aucun appel derrière elle
+       pour y répondre : elle mènerait au cul-de-sac du plafond. On la retire
+       plutôt que de la montrer. */
+    const plus = D.reponses.length < ENVIE_MAX_QUESTIONS && D.appels < ENVIE_MAX_APPELS;
+    const etape = {
+      /* Zéro titre survivant au tamis : on GARDE la grille précédente et on
+         continue de poser la question. Le modèle n'a pas forcément mal
+         répondu — tout ce qu'il a nommé peut être déjà vu, ce qui est une
+         information sur la bibliothèque, pas sur la réponse. */
+      titres: gardes.length ? gardes.map(vignetteEnvieIA) : D.titres,
+      question: (!d.fini && d.question && plus) ? d.question : null,
+      fini: !!d.fini || !plus,
+      mesures: mesures,
+      jetes: res.jetes
+    };
+    envieDialCache[sig] = etape;
+    appliquerEtapeEnvieRech(etape);
+  }catch(e){
+    /* Une étape qui tombe laisse la grille précédente et ferme le dialogue.
+       Jamais d'écran de panne sur un chemin d'agrément. */
+    if(!D.charge) abandonnerDialogueEnvieRech();
+    else appliquerEtapeEnvieRech({ titres:D.titres, question:null, fini:true });
+  }finally{
+    envieDialEnCours = false;
+    effacerStatutIA();
+  }
+}
+
+/* Le point d'entrée : ✦ allumé, une phrase validée. */
+async function demarrerDialogueEnvieIA(phrase){
+  const q = String(phrase == null ? '' : phrase).trim();
+  if(!q) return;
+  /* L'interrupteur d'abord. Le bouton ✦ n'est pas rendu quand l'IA de la
+     Recherche est coupée, mais le chemin programmatique existe (un test, un
+     raccourci futur) : on rend alors la recherche de texte d'aujourd'hui, pas
+     un écran muet. */
+  if(typeof iaActive !== 'function' || !iaActive('recherche')) return repliTexteIA(q);
+  ouvrirDialogueEnvieRech(q);
+  await etapeEnvieIA();
+}
+
+/* Une réponse touchée, ou écrite. `q` part avec elle : la question compte
+   autant que la réponse — « Seul » ne veut rien dire sans « tu regardes seul
+   ou accompagné ? », ni pour le modèle, ni dans le fil à l'écran. */
+async function repondreEnvieIA(valeur){
+  const D = etatRech().envieD;
+  if(!D || !D.question || envieDialEnCours) return;
+  const v = String(valeur == null ? '' : valeur).trim().slice(0, 60);
+  if(!v) return;
+  D.reponses.push({ q:D.question.texte, r:v });
+  D.question = null;
+  D.libre = false;
+  /* L'écran se repeint AVANT l'appel : la réponse entre dans le fil tout de
+     suite, et la grille précédente reste dessous. Attendre la réponse du relais
+     pour montrer qu'on a enregistré le toucher, ce sont trois secondes pendant
+     lesquelles rien ne prouve que le doigt a servi. */
+  if(typeof peindreRech === 'function') peindreRech();
+  await etapeEnvieIA();
+}
+
+/* Rouvrir une réponse du fil : on repart de CETTE question-là, les suivantes
+   sont oubliées, la grille se recalcule. Gratuit à l'aller-retour grâce au
+   cache de signature — c'est le cas que la spec demande de vérifier. */
+async function rouvrirEnvieIA(i){
+  const D = etatRech().envieD;
+  if(!D || envieDialEnCours) return;
+  D.reponses = D.reponses.slice(0, Math.max(0, Math.min(i | 0, D.reponses.length)));
+  D.question = null;
+  D.fini = false;
+  D.libre = false;
+  if(typeof peindreRech === 'function') peindreRech();
+  await etapeEnvieIA();
+}

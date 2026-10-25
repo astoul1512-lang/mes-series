@@ -121,14 +121,38 @@ async function decor(page, opts){
     db.notifLus = {};
     db.gouts.ia = { decouvrir:true, recherche: !(o && o.iaCoupee) };
     window.__pause = ms => new Promise(r=>setTimeout(r, ms));
-    /* Taper une phrase en mode ✦ puis valider — le geste exact. */
+    /* ---------------------------------------------------------------------
+       RETOUR-14 (25/10/2026) — CETTE SUITE N'ENTRE PLUS PAR `validerRech`.
+
+       CE QUI A CHANGÉ, ET IL FAUT LE DIRE ICI : depuis RETOUR-14, ✦ + Entrée
+       ouvre le DIALOGUE D'ENVIE. Les deux modes de SPEC-11 n'ont plus de
+       déclencheur — c'est l'arbitrage d'Adrien, pris en connaissance de cause,
+       et il est expliqué au-dessus de la ligne qui le fait (`validerRech`,
+       app-12).
+
+       POURQUOI LA SUITE RESTE, ENTIÈRE, ET NE DEVIENT PAS UN FICHIER MORT.
+       Le code de SPEC-11 est intact et il est à UNE LIGNE d'être rebranché.
+       Une suite supprimée ne prouverait rien de cette promesse ; une suite
+       VERTE la prouve à chaque lancement. Le jour où la ligne revient, on sait
+       déjà que ce qu'elle rebranche marche — et si quelqu'un casse
+       `poserFiltresIA` entre-temps, on l'apprend tout de suite au lieu de
+       l'apprendre le jour du retour en arrière, c'est-à-dire au pire moment.
+
+       ON APPELLE DONC L'INTERPRÈTE DIRECTEMENT. Ce que la suite a cessé de
+       couvrir, et c'est écrit plutôt que tu : le CHEMIN entre la touche Entrée
+       et l'interprète. Il n'existe plus, il n'y a plus rien à couvrir — et le
+       cas ⑤ ci-dessous vérifie qu'il mène bien ailleurs maintenant.
+       --------------------------------------------------------------------- */
     window.__taper = async (phrase)=>{
       go('search', {});
       await window.__pause(250);
       const r = etatRech();
       r.envie = !!(typeof iaActive === 'function' && iaActive('recherche'));
       r.q = phrase; r.touche = true;
-      await validerRech();
+      if(r.envie && typeof interpreterRechercheIA === 'function')
+        await interpreterRechercheIA(phrase);
+      else
+        await validerRech();           // ✦ éteint : la recherche de titre, inchangée
       await window.__pause(900);
     };
   }, opts || {});
@@ -377,6 +401,39 @@ async function decor(page, opts){
       ok(!r.envie && !r.bouton, 'le ✦ n\'est même pas proposé — la barre est celle d\'aujourd\'hui');
       ok(r.titres > 0 && !r.erreur, 'la recherche de titre répond, sans erreur visible');
     }
+    await page.close();
+  }
+
+  /* ===== ⑤ RETOUR-14 — OÙ MÈNE LA TOUCHE ENTRÉE AUJOURD'HUI ============== */
+  {
+    const page = await nav.newPage({ viewport:{width:390,height:844}, hasTouch:true });
+    await decor(page, {});
+    titre('⑤ RETOUR-14 : ✦ + Entrée ouvre le dialogue, plus l\'interprète');
+    const r = await page.evaluate(async ()=>{
+      let interp = 0, dial = 0;
+      const vraiI = window.interpreterRechercheIA, vraiD = window.demarrerDialogueEnvieIA;
+      window.interpreterRechercheIA = async ()=>{ interp++; };
+      window.demarrerDialogueEnvieIA = async ()=>{ dial++; };
+      try{
+        go('search', {});
+        await window.__pause(250);
+        const e = etatRech();
+        e.envie = true; e.q = 'je cherche un film d\'action avec Will Smith'; e.touche = true;
+        await validerRech();
+      }finally{
+        window.interpreterRechercheIA = vraiI; window.demarrerDialogueEnvieIA = vraiD;
+      }
+      return { interp, dial };
+    });
+    ok(r.dial === 1, 'la validation ouvre le dialogue d\'envie (' + r.dial + ')');
+    ok(r.interp === 0,
+       'et l\'interprète n\'est PLUS appelé par ce chemin (' + r.interp + ')');
+    /* LA PROMESSE DE RÉVERSIBILITÉ, ÉPROUVÉE ET PAS SEULEMENT ÉCRITE : les
+       quatre cas ci-dessus viennent de passer en appelant l'interprète
+       directement. Son code marche ; il ne lui manque qu'un appelant. */
+    ok(soucis === 0,
+       'les modes `filtres` et `titre` restent entièrement fonctionnels : ' +
+       'le retour en arrière tient en une ligne de `validerRech`');
     await page.close();
   }
 
