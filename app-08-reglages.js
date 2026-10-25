@@ -404,30 +404,51 @@ async function refreshAll(){
   majSeries = { actif:true, fait:0, total:ids.length, echecs:[], stop:false };
   render();
   let ok = 0;
-  for(const id of ids){
+  /* RETOUR-13 — PAR PAQUETS DE 5, plus une série à la fois.
+     Ce bouton est le « rattrapage immédiat » : il sert à réparer une
+     bibliothèque déjà périmée sans attendre la semaine que met le lot
+     quotidien. Séquentiel avec 120 ms d'attente entre chaque, 157 séries
+     demandaient plus de cinq minutes pendant lesquelles il faut laisser l'app
+     ouverte — assez long pour qu'on l'arrête avant la fin, ce qui est très
+     exactement l'inverse du service rendu. Même cadence que le lot quotidien
+     et que les films à venir : `MAJ_SERIES_PAQUET`, un seul chiffre pour les
+     trois. Deux cadences différentes pour le même geste seraient un second
+     moteur déguisé.
+     L'attente entre paquets disparaît : les cinq requêtes en vol espacent
+     déjà le relais bien mieux qu'un `sleep` arbitraire. */
+  for(let i = 0; i < ids.length; i += MAJ_SERIES_PAQUET){
     if(majSeries.stop) break;
-    /* Le nom est lu AVANT la requête : si elle échoue, `db.shows[id]` est
-       toujours l'ancienne fiche et porte le nom qu'on veut afficher. */
-    const nom = (db.shows[id] && db.shows[id].name) || ('Série '+id);
-    try{
-      const fresh = await fetchShowFull(id);
-      const ancien = db.shows[id];
-      fresh.watched = ancien.watched; fresh.addedAt = ancien.addedAt;
-      if(ancien.unwatched) fresh.unwatched = ancien.unwatched;
-      if(ancien.pause){ fresh.pause = true; fresh.pauseLe = ancien.pauseLe; }   // une actualisation groupée ne réveille pas une série mise de côté
-      db.shows[id] = fresh; ok++;
-    }catch(e){
-      /* P2 — l'échec ne disparaît plus dans un `catch` nu : il porte un nom et
-         il remonte à l'écran à la fin. */
-      majSeries.echecs.push(nom);
-      console.warn('actualisation impossible : '+nom, e);
-    }
-    majSeries.fait++;
-    peindreMajSeries();
-    await sleep(120);
+    await Promise.all(ids.slice(i, i + MAJ_SERIES_PAQUET).map(async id=>{
+      /* Le nom est lu AVANT la requête : si elle échoue, `db.shows[id]` est
+         toujours l'ancienne fiche et porte le nom qu'on veut afficher. */
+      const nom = (db.shows[id] && db.shows[id].name) || ('Série '+id);
+      try{
+        /* La fiche locale se relit APRÈS la requête — voir
+           `lotMajSeriesDuJour` (app-06). Lue avant, une série retirée
+           entre-temps serait ressuscitée par l'écriture qui suit. */
+        const brut = await fetchShowFull(id);
+        const fiche = fusionnerFicheTmdb(db.shows[id], brut);
+        /* `null` : la série a été retirée pendant la requête (une synchro
+           entrante, un autre appareil). Ce n'est pas un échec à nommer — il
+           n'y a plus rien à actualiser. */
+        if(fiche){ db.shows[id] = fiche; ok++; }
+      }catch(e){
+        /* P2 — l'échec ne disparaît plus dans un `catch` nu : il porte un nom
+           et il remonte à l'écran à la fin. */
+        majSeries.echecs.push(nom);
+        console.warn('actualisation impossible : '+nom, e);
+      }
+      majSeries.fait++;
+      peindreMajSeries();
+    }));
   }
   const arrete = majSeries.stop;
   majSeries.actif = false; majSeries.stop = false;
+  /* RETOUR-13 — un balayage COMPLET rend le lot quotidien sans objet pour
+     aujourd'hui : on pose son marqueur, sinon il repartirait relire 25 séries
+     qu'on vient de relire. Pas si l'utilisateur a arrêté en route — là, il
+     reste du travail, et c'est justement au lot de le finir. */
+  if(!arrete && typeof marquerMajSeriesDuJour === 'function') marquerMajSeriesDuJour();
   saveDB(); render();
   toast(arrete ? ('Arrêté · '+ok+' série(s) actualisée(s)')
                : (ok+' série(s) actualisée(s)'));
@@ -585,6 +606,13 @@ async function boot(){
      DANS le `try` de C5, comme tout le corps de `boot` : si elle levait, le
      retrait de « booting » du `finally` doit rester garanti. */
   if(typeof rejouerNotifEnAttente === 'function') rejouerNotifEnAttente();
+  /* RETOUR-13 — LE RAFRAÎCHISSEMENT DES SÉRIES, EN DERNIER ET APRÈS LE RENDU.
+     Sa place est ici et pas dans le lot quotidien de Découvrir : celui-là est
+     accroché au rendu de la vitrine, et la vue par défaut est `follow`. Qui
+     vit dans « À suivre » — donc celui dont « À rattraper » est faux — ne
+     l'aurait jamais déclenché. Le premier affichage a eu lieu bien plus haut ;
+     cet appel ne pose rien à l'écran et part délibérément derrière la synchro. */
+  if(typeof amorcerMajSeriesDuJour === 'function') amorcerMajSeriesDuJour();
   }catch(e){
     /* C5 — on n'avale pas : on journalise ET on affiche. Un `catch` muet ici
        reproduirait l'écran noir avec une couche de politesse en plus. */

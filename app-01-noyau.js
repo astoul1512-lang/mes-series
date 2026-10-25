@@ -339,7 +339,7 @@ async function fetchShowFull(id, onStep, base0){
    ici doit se faire UNE PAR UNE, chacune avec son test : les rapatrier toutes
    dans la même livraison, c'est empiler les risques sur le démarrage.
 --------------------------------------------------------------------------- */
-const SCHEMA = 4;
+const SCHEMA = 5;
 
 const MIGRATIONS = {
   2: function(){
@@ -397,6 +397,33 @@ const MIGRATIONS = {
     const t = Number(g.maj) || 0;
     g.majBlocs = {};
     Object.keys(GOUT_BLOCS).forEach(nom=>{ g.majBlocs[nom] = t; });
+  },
+  5: function(){
+    /* RETOUR-13 (24/10/2026) — LA DATE DU GESTE DE PAUSE.
+
+       `mergeRemote` arbitre maintenant la pause sur `pauseMaj` et non plus sur
+       `updated` (le pavé y explique pourquoi). Une base existante ne porte pas
+       ce champ : sans cette migration, deux appareils auraient tous les deux
+       `pauseMaj` à zéro, le local gagnerait toujours, et une pause posée sur
+       l'AUTRE téléphone ne traverserait plus jamais la synchro. Le correctif
+       aurait protégé le local en cassant la propagation — l'inverse exact du
+       but.
+
+       `pauseLe` est la seule date honnête dont on dispose : c'est le moment du
+       geste, exactement ce que `pauseMaj` signifie. Les séries jamais mises en
+       pause ne reçoivent RIEN : un `pauseMaj` à 0 veut dire « aucun geste de
+       pause connu ici », et c'est la vérité. Leur en poser un ferait gagner
+       cette non-pause contre une vraie pause venue d'ailleurs.
+
+       Pas de `pauseMaj` sur une série en pause SANS `pauseLe` (bases d'avant
+       le champ) : on prend `addedAt`, faute de mieux, plutôt que 0 — 0 perdrait
+       l'arbitrage contre n'importe quoi et réveillerait la série. */
+    const sh = db.shows;
+    if(!sh || typeof sh !== 'object') return;
+    Object.values(sh).forEach(s=>{
+      if(!s || typeof s !== 'object' || s.pauseMaj) return;
+      if(s.pause) s.pauseMaj = Number(s.pauseLe) || Number(s.addedAt) || 1;
+    });
   }
 };
 
@@ -1135,6 +1162,44 @@ function mergeRemote(rem){
     if(!ls){ db.shows[rs.id] = rs; changed = true; return; }
     /* fiche la plus récente, union des épisodes vus — sauf ceux décochés depuis */
     const base = (rs.updated||0) > (ls.updated||0) ? Object.assign({}, rs) : Object.assign({}, ls);
+    /* -----------------------------------------------------------------------
+       RETOUR-13 (24/10/2026) — LA PAUSE SORT DE L'ARBITRAGE PAR `updated`.
+
+       `updated` dit « quelle fiche porte le contenu TMDB le plus frais », et
+       c'est très bien : après un rafraîchissement, la fiche fraîche DOIT
+       gagner. Le problème est que `base` emportait aussi `pause`/`pauseLe` —
+       les deux seuls champs de l'UTILISATEUR encore tranchés par cette date.
+       (`watched`, `unwatched` et `addedAt`, eux, sont fusionnés juste en
+       dessous, hors de tout arbitrage : eux n'ont jamais rien risqué.)
+
+       Tant que rien ne poussait `updated` tout seul, ça ne se voyait pas : la
+       date ne bougeait qu'avec un geste, et le geste venait du porteur de la
+       pause. Le rafraîchissement automatique de ce lot casse ce hasard — un
+       appareil pousse désormais `updated` sans que personne n'ait rien
+       regardé. J'écarte une série sur le téléphone, l'iPad la rafraîchit en
+       fond, sa fiche gagne, et la série ressort de la pause toute seule.
+
+       Même correction que C3 sur les films (voir `marquerFilm`) : ce qui
+       arbitre n'est pas « suis-je en pause », c'est QUAND j'ai touché cette
+       pause pour la dernière fois. `pauseMaj` est posée à la pause ET à la
+       reprise — sans la date de la reprise, « j'ai repris » ne pourrait pas se
+       défendre contre « j'avais mis en pause », exactement comme un décochage
+       sans `unwatched`.
+
+       `>=` et non `>` : à égalité parfaite on garde le local, comme partout
+       ailleurs dans cette fusion.
+    ----------------------------------------------------------------------- */
+    const vp = (ls.pauseMaj||0) >= (rs.pauseMaj||0) ? ls : rs;
+    if(vp.pause){ base.pause = true; base.pauseLe = vp.pauseLe; }
+    else { delete base.pause; delete base.pauseLe; }
+    if(vp.pauseMaj) base.pauseMaj = vp.pauseMaj; else delete base.pauseMaj;
+    /* RETOUR-13 — la date du dernier rafraîchissement TMDB, par le MAXIMUM des
+       deux. Elle n'arbitre rien : elle ORDONNE le travail de fond. Prendre le
+       maximum fait que deux appareils du même compte ne relisent pas les mêmes
+       séries le même matin — la bibliothèque converge deux fois plus vite au
+       lieu de payer deux fois la même requête. */
+    const vme = Math.max(ls.majEpisodes||0, rs.majEpisodes||0);
+    if(vme) base.majEpisodes = vme;
     const t = Date.now();
     const uw = Object.assign({}, ls.unwatched||{});
     Object.keys(rs.unwatched||{}).forEach(k=>{ if(!uw[k] || rs.unwatched[k] > uw[k]) uw[k] = rs.unwatched[k]; });

@@ -489,6 +489,71 @@ window.MODE_TEST = true;
     vrai(db.shows[7].watched['1x1'], 'le recochage n\'a pas pris');
   });
 
+  /* -------------------------------------------------------------------------
+     RETOUR-13 (24/10/2026) — LA PAUSE ÉTAIT LE SEUL CHAMP UTILISATEUR ARBITRÉ
+     PAR `updated`.
+
+     Le lot ajoute un rafraîchissement automatique : à partir de maintenant, un
+     appareil pousse `updated` SANS que son porteur ait rien regardé. La spec
+     redoutait que les épisodes cochés y passent — ils n'y passent pas, et les
+     deux cas au-dessus le prouvaient déjà : `mergeRemote` fait l'UNION de
+     `watched` et d'`unwatched`, clé par clé, hors de tout arbitrage.
+
+     Mais la fiche retenue — `base` — était celle du plus grand `updated`, et
+     elle portait `pause`/`pauseLe`. D'où le vrai dégât, invisible avant ce lot
+     parce que rien ne poussait `updated` tout seul : j'écarte une série sur le
+     téléphone, l'iPad la rafraîchit en fond, et elle ressort de la pause.
+
+     La correction suit le correctif C3 des films (voir `marquerFilm`) : ce qui
+     arbitre n'est pas « suis-je en pause », c'est « QUAND ai-je touché cette
+     pause pour la dernière fois ». D'où `pauseMaj`, posée à la pause ET à la
+     reprise, et lue hors de `updated`.
+  ------------------------------------------------------------------------- */
+  test('RETOUR-13 — une pause posée ici survit à un rafraîchissement venu d\'ailleurs', ()=>{
+    baseVierge();
+    const t = Date.now();
+    /* Ici : la série est écartée à l'instant, et notre fiche est la plus vieille. */
+    db.shows[7] = serie(7, [ep(1,HIER)], {'1x1':1},
+                        { pause:true, pauseLe:t, pauseMaj:t, updated:t - 3600000 });
+    /* Ailleurs : l'appareil vient de RAFRAÎCHIR. Il ne sait rien de la pause,
+       et son `updated` est plus récent — c'est exactement ce que le
+       rafraîchissement automatique va produire tous les matins. */
+    const distant = serie(7, [ep(1,HIER),ep(2,HIER)], {'1x1':1}, { updated:t });
+    mergeRemote({ shows:{ 7: distant }, movies:{} });
+    vrai(db.shows[7].pause, 'la série mise en pause s\'est réveillée toute seule');
+    /* Et le contenu frais doit quand même gagner : c'est tout l'intérêt du lot.
+       Un correctif qui sauve la pause en jetant les nouveaux épisodes ne
+       corrige rien, il déplace le bug. */
+    egal(progress(db.shows[7]).total, 2, 'le contenu TMDB frais n\'est pas arrivé');
+  });
+
+  test('RETOUR-13 — une reprise récente gagne sur une pause plus ancienne', ()=>{
+    baseVierge();
+    const t = Date.now();
+    /* Ici : reprise à l'instant. Plus de `pause`, mais la DATE du geste reste —
+       sans elle, « j'ai repris » ne pourrait pas se défendre contre « j'avais
+       mis en pause », exactement comme un décochage sans `unwatched`. */
+    db.shows[7] = serie(7, [ep(1,HIER)], {}, { pauseMaj:t, updated:t - 7200000 });
+    /* Ailleurs : mise en pause il y a une heure, et fiche plus récente. */
+    const distant = serie(7, [ep(1,HIER)], {},
+                          { pause:true, pauseLe:t - 3600000, pauseMaj:t - 3600000, updated:t });
+    mergeRemote({ shows:{ 7: distant }, movies:{} });
+    vrai(!db.shows[7].pause, 'une pause ancienne a écrasé une reprise récente');
+  });
+
+  test('RETOUR-13 — une pause venue d\'ailleurs s\'applique ici', ()=>{
+    baseVierge();
+    const t = Date.now();
+    /* Le sens inverse du cas précédent : rien ne doit rendre la pause
+       impossible à PROPAGER. Une correction qui protège le local en refusant
+       tout changement distant casse la synchro au lieu de la réparer. */
+    db.shows[7] = serie(7, [ep(1,HIER)], {}, { updated:t });
+    const distant = serie(7, [ep(1,HIER)], {},
+                          { pause:true, pauseLe:t, pauseMaj:t, updated:t - 3600000 });
+    mergeRemote({ shows:{ 7: distant }, movies:{} });
+    vrai(db.shows[7].pause, 'la pause posée sur l\'autre appareil n\'est pas arrivée');
+  });
+
   test('une série supprimée ici ne revient pas de l\'autre appareil', ()=>{
     baseVierge();
     markDeleted('shows', 7);
@@ -10367,6 +10432,336 @@ window.MODE_TEST = true;
     const perdantes = [].concat(RECH_AMBIANCES, RECH_AMBIANCES_TV)
       .filter(a => a.mesureAvant && a.mesure <= a.mesureAvant).map(a=>a.id);
     egal(perdantes, [], 'une recette rend MOINS qu\'avant : ' + perdantes.join(', '));
+  });
+
+  /* ======================================================================
+     RETOUR-13 — LE RAFRAÎCHISSEMENT AUTOMATIQUE DES SÉRIES
+  ====================================================================== */
+  groupe('RETOUR-13 — rafraîchissement automatique des séries');
+
+  const JOURS = n => new Date(Date.now() + n * 86400000).toISOString().slice(0,10);
+  /* Une série « en cours » au sens de l'app : `isFinished` exige tous les
+     épisodes diffusés VUS + statut terminal + aucune suite. Un seul épisode
+     non vu suffit donc à la garder en cours. */
+  function serieEnCours(id, eps, extra){
+    return serie(id, eps, {}, Object.assign({ status:'Returning Series' }, extra||{}));
+  }
+  function serieTerminee(id, eps){
+    /* Tous vus, statut terminal, pas de `next` : les trois conditions. */
+    const vus = {}; eps.forEach(e=>{ vus['1x'+e.e] = 1; });
+    return serie(id, eps, vus, { status:'Ended', next:null });
+  }
+
+  test('§2 — une série dont le prochain épisode est DÉJÀ PASSÉ est urgente', ()=>{
+    baseVierge();
+    db.shows[1] = serieEnCours(1, [ep(1,JOURS(-40))],
+                               { next:{ s:1, e:2, n:'E2', d:JOURS(-10) }, majEpisodes:Date.now() });
+    /* Fraîchement relue, et pourtant première : c'est la preuve qu'elle est
+       périmée qui l'emporte sur l'ancienneté, pas l'inverse. */
+    egal(seriesAraFraichir(1), [1]);
+    vrai(serieSuspecte(db.shows[1]), 'un prochain épisode passé n\'est pas vu comme périmé');
+  });
+
+  test('§2 — une série dont la suite est ANNONCÉE n\'est pas urgente', ()=>{
+    baseVierge();
+    db.shows[1] = serieEnCours(1, [ep(1,JOURS(-40))],
+                               { next:{ s:1, e:2, n:'E2', d:JOURS(+5) } });
+    vrai(!serieSuspecte(db.shows[1]), 'une série qui annonce sa suite n\'a rien d\'urgent');
+  });
+
+  test('§2 — SANS suite annoncée et dernier épisode vieux : urgente aussi', ()=>{
+    /* Le second signal. TMDB met `next_episode_to_air` à `null` en fin de
+       saison : une série avec une saison de retard n'a donc PAS de prochain
+       épisode passé. Sans ce test, elle ne serait jamais urgente — et c'est
+       une bonne partie des 150 séries périmées du constat. */
+    baseVierge();
+    db.shows[1] = serieEnCours(1, [ep(1,JOURS(-30))], { next:null });
+    vrai(serieSuspecte(db.shows[1]),
+         'une série sans suite annoncée depuis un mois passe pour à jour');
+    /* Mais pas deux jours après le dernier épisode : là, TMDB n'a simplement
+       pas encore publié la suite, et il n'y a rien à apprendre. */
+    db.shows[2] = serieEnCours(2, [ep(1,JOURS(-2))], { next:null });
+    vrai(!serieSuspecte(db.shows[2]), 'une série toute fraîche est vue comme périmée');
+  });
+
+  test('§2 — l\'ordre des rangs : urgentes, puis courantes, puis dormantes', ()=>{
+    baseVierge();
+    const vieux = Date.now() - 200 * 86400000;
+    /* Dormante relue il y a très longtemps : malgré son âge, elle passe
+       DERNIÈRE. C'est le rang qui commande, pas l'ancienneté. */
+    db.shows[10] = serieTerminee(10, [ep(1,JOURS(-400))]);
+    db.shows[10].majEpisodes = vieux;
+    /* Courante relue hier. */
+    db.shows[20] = serieEnCours(20, [ep(1,JOURS(-3))],
+                                { next:{ s:1, e:2, n:'E2', d:JOURS(+9) },
+                                  majEpisodes: Date.now() - 86400000 });
+    /* Urgente relue à l'instant. */
+    db.shows[30] = serieEnCours(30, [ep(1,JOURS(-40))],
+                                { next:{ s:1, e:2, n:'E2', d:JOURS(-9) },
+                                  majEpisodes: Date.now() });
+    egal(seriesAraFraichir(10), [30, 20, 10]);
+  });
+
+  test('§2 — dans un rang, la plus anciennement relue passe devant', ()=>{
+    baseVierge();
+    [1,2,3].forEach(i=>{
+      db.shows[i] = serieEnCours(i, [ep(1,JOURS(-3))],
+                                 { next:{ s:1, e:2, n:'E2', d:JOURS(+9) },
+                                   majEpisodes: Date.now() - i * 86400000 });
+    });
+    egal(seriesAraFraichir(10), [3, 2, 1], 'le tour de la bibliothèque n\'est pas garanti');
+  });
+
+  test('§2 — une dormante relue il y a moins d\'un mois n\'est pas relue', ()=>{
+    baseVierge();
+    db.shows[1] = serieTerminee(1, [ep(1,JOURS(-400))]);
+    db.shows[1].majEpisodes = Date.now() - 10 * 86400000;
+    egal(seriesAraFraichir(25), [], 'une série terminée est relue plus d\'une fois par mois');
+    /* En pause : même traitement, quel que soit son statut TMDB. */
+    db.shows[2] = serieEnCours(2, [ep(1,JOURS(-400))], { next:null, pause:true,
+                                majEpisodes: Date.now() - 10 * 86400000 });
+    egal(seriesAraFraichir(25), [], 'une série en pause est relue plus d\'une fois par mois');
+    /* Passé trente jours, elle redevient éligible — mais toujours en dernier. */
+    db.shows[1].majEpisodes = Date.now() - 40 * 86400000;
+    egal(seriesAraFraichir(25), [1]);
+  });
+
+  test('§3 — le budget n\'est jamais dépassé, et c\'est le DEMANDÉ qu\'on compte', ()=>{
+    baseVierge();
+    /* Quarante séries toutes urgentes : de quoi dépasser largement. */
+    for(let i = 1; i <= 40; i++){
+      db.shows[i] = serieEnCours(i, [ep(1,JOURS(-40))],
+                                 { next:{ s:1, e:2, n:'E2', d:JOURS(-9) } });
+    }
+    egal(seriesAraFraichir().length, MAJ_SERIES_PAR_JOUR,
+         'le budget par défaut n\'est pas respecté');
+    egal(MAJ_SERIES_PAR_JOUR, 25); egal(MAJ_SERIES_PAQUET, 5);
+  });
+
+  test('§4 — l\'empreinte TMDB ignore ce que l\'utilisateur a fait', ()=>{
+    /* Le cœur du mécanisme qui évite une écriture serveur quotidienne de
+       1,4 Mo : cocher un épisode, mettre en pause, ajouter la série plus tôt
+       ne doivent PAS passer pour « TMDB a du neuf ». */
+    const a = serie(1, [ep(1,HIER),ep(2,HIER)], {});
+    const b = serie(1, [ep(1,HIER),ep(2,HIER)], {'1x1':Date.now()},
+                    { pause:true, pauseLe:Date.now(), pauseMaj:Date.now(),
+                      addedAt:999, majEpisodes:Date.now(), updated:Date.now() });
+    egal(empreinteFicheTmdb(a), empreinteFicheTmdb(b),
+         'un geste de l\'utilisateur passe pour un changement TMDB');
+    /* En revanche un épisode de plus, ou une date qui bouge, DOIT se voir. */
+    vrai(empreinteFicheTmdb(serie(1, [ep(1,HIER),ep(2,HIER),ep(3,HIER)], {})) !==
+         empreinteFicheTmdb(a), 'un épisode de plus ne se voit pas');
+    vrai(empreinteFicheTmdb(serie(1, [ep(1,HIER),ep(2,DEMAIN)], {})) !==
+         empreinteFicheTmdb(a), 'une date de diffusion qui bouge ne se voit pas');
+    vrai(empreinteFicheTmdb(serie(1, [ep(1,HIER),ep(2,HIER)], {},
+          { next:{s:1,e:3,n:'E3',d:DEMAIN} })) !== empreinteFicheTmdb(a),
+         'un prochain épisode annoncé ne se voit pas');
+  });
+
+  test('§1 — la frontière TMDB / utilisateur, en un seul endroit', ()=>{
+    /* `fusionnerFicheTmdb` est LA liste blanche. Elle existait en deux copies
+       mot pour mot (app-06 et app-08) et le lot en ajoutait une troisième. */
+    const t = Date.now();
+    const ancien = serie(1, [ep(1,HIER)], {'1x1':t},
+                         { addedAt:111, unwatched:{'1x9':t}, pause:true,
+                           pauseLe:t, pauseMaj:t });
+    const frais = serie(1, [ep(1,HIER),ep(2,HIER)], {}, { name:'Nouveau nom' });
+    const f = fusionnerFicheTmdb(ancien, frais);
+    egal(f.name, 'Nouveau nom', 'le contenu TMDB n\'a pas été repris');
+    egal(progress(f).total, 2, 'les nouveaux épisodes ne sont pas arrivés');
+    egal(f.watched['1x1'], t, 'un épisode vu a été effacé par l\'actualisation');
+    egal(f.addedAt, 111, 'la date d\'ajout a été écrasée');
+    egal(f.unwatched['1x9'], t, 'une trace de décochage a été perdue');
+    vrai(f.pause, 'l\'actualisation a réveillé une série mise de côté');
+    egal(f.pauseMaj, t, 'la DATE du geste de pause est restée en arrière');
+    vrai(f.majEpisodes >= t, 'la date de relecture n\'a pas été posée');
+  });
+
+  test('§1 — une série retirée pendant la requête ne plante pas', ()=>{
+    /* Le bug latent des deux copies : `db.shows[id]` était relu APRÈS l'`await`
+       et `ancien.watched` levait un TypeError si une synchro entrante avait
+       retiré la série. Invisible sur un bouton pressé à la main ; à 25 séries
+       par jour sur tous les appareils, une question de semaines. */
+    egal(fusionnerFicheTmdb(null, serie(1, [ep(1,HIER)], {})), null);
+    egal(fusionnerFicheTmdb(serie(1, [ep(1,HIER)], {}), null), null);
+  });
+
+  test('§5 — la migration 5 sème `pauseMaj` sur les séries en pause, et sur elles seules', ()=>{
+    baseVierge();
+    const t = Date.now();
+    db.shows[1] = serie(1, [ep(1,HIER)], {}, { pause:true, pauseLe:t });
+    db.shows[2] = serie(2, [ep(1,HIER)], {}, { pause:true, addedAt:777 });  // pause sans date
+    db.shows[3] = serie(3, [ep(1,HIER)], {});                               // jamais en pause
+    MIGRATIONS[5]();
+    egal(db.shows[1].pauseMaj, t, 'la date du geste de pause n\'a pas été reprise');
+    egal(db.shows[2].pauseMaj, 777, 'une pause sans date tombe à zéro et se fera écraser');
+    egal(db.shows[3].pauseMaj, undefined,
+         'une série jamais mise en pause a reçu une date : sa non-pause gagnera à tort');
+    /* Idempotente : elle tourne à chaque montée de version. */
+    db.shows[1].pauseMaj = 42; MIGRATIONS[5]();
+    egal(db.shows[1].pauseMaj, 42, 'la migration écrase une date déjà posée');
+  });
+
+  test('§5 — le numéro de schéma a bien suivi la migration', ()=>{
+    egal(SCHEMA, 5, 'une migration ajoutée sans monter SCHEMA ne tournera jamais');
+    vrai(typeof MIGRATIONS[SCHEMA] === 'function');
+  });
+
+  /* ----------------------------------------------------------------------
+     LE BUDGET, MESURÉ SUR LES VRAIES REQUÊTES — pas sur la sélection.
+
+     LEÇON DU 13/09, APPLIQUÉE. Le lot RETOUR-12 a montré qu'une borne dont
+     le cas de dépassement n'est pas écrit n'est pas une borne : « 20 s »
+     laissait passer 27,9 s parce que le contrôle se faisait avant un étage et
+     jamais pendant, et personne ne l'avait vu parce que le faux monde
+     ignorait l'`AbortSignal`.
+
+     Ici le piège serait exactement le même : vérifier `seriesAraFraichir()
+     .length <= 25` ne prouve RIEN sur le nombre de requêtes réellement
+     émises, ni sur le nombre en vol. Ces deux cas-là comptent les appels à
+     `fetchShowFull` et mesurent le parallélisme réel. Ils tomberaient si
+     quelqu'un remplaçait le découpage par paquets par un `Promise.all`
+     global — ce que la sélection, elle, ne verrait pas.
+  ---------------------------------------------------------------------- */
+  function sansRelaisSeries(reponse){
+    const vrai0 = window.fetchShowFull;
+    const vraiSave = window.saveDB, vraiSync = window.scheduleSync;
+    const m = { appels:0, enVol:0, maxEnVol:0, sauvegardes:0 };
+    window.fetchShowFull = async id=>{
+      m.appels++; m.enVol++;
+      if(m.enVol > m.maxEnVol) m.maxEnVol = m.enVol;
+      try{ await new Promise(r=>setTimeout(r, 5)); return reponse(id); }
+      finally{ m.enVol--; }
+    };
+    window.saveDB = ()=>{ m.sauvegardes++; };
+    window.scheduleSync = ()=>{};
+    m.rendre = ()=>{ window.fetchShowFull = vrai0; window.saveDB = vraiSave;
+                     window.scheduleSync = vraiSync; };
+    return m;
+  }
+  /* Le marqueur du jour vit en localStorage : sans ce nettoyage, le premier
+     cas consommerait la journée et le second ne ferait rien du tout — en
+     passant au vert, ce qui est le pire des deux. */
+  function oublierJourMajSeries(){
+    try{ localStorage.removeItem(MAJ_SERIES_CLE); }catch(e){}
+  }
+
+  testAsync('§3 — JAMAIS plus de 25 requêtes, JAMAIS plus de 5 en vol', async ()=>{
+    baseVierge(); oublierJourMajSeries();
+    /* Soixante séries toutes urgentes : deux fois et demie le budget. */
+    for(let i = 1; i <= 60; i++){
+      db.shows[i] = serie(i, [ep(1,JOURS(-40))], {},
+                          { status:'Returning Series',
+                            next:{ s:1, e:2, n:'E2', d:JOURS(-9) } });
+    }
+    const m = sansRelaisSeries(id=> serie(id, [ep(1,JOURS(-40)),ep(2,JOURS(-1))], {}));
+    try{
+      const demandees = await lotMajSeriesDuJour();
+      egal(m.appels, 25, 'le budget de 25 séries par jour est dépassé : ' + m.appels);
+      egal(demandees, 25, 'le compteur rendu ne colle pas aux requêtes émises');
+      egal(m.maxEnVol, 5, 'plus de 5 requêtes en parallèle : ' + m.maxEnVol);
+      egal(m.sauvegardes, 1, 'une sauvegarde par série au lieu d\'une pour le lot');
+    } finally { m.rendre(); oublierJourMajSeries(); }
+  });
+
+  testAsync('§3 — le lot ne repart pas deux fois le même jour', async ()=>{
+    baseVierge(); oublierJourMajSeries();
+    db.shows[1] = serie(1, [ep(1,JOURS(-40))], {},
+                        { status:'Returning Series',
+                          next:{ s:1, e:2, n:'E2', d:JOURS(-9) } });
+    const m = sansRelaisSeries(id=> serie(id, [ep(1,JOURS(-40)),ep(2,JOURS(-1))], {}));
+    try{
+      await lotMajSeriesDuJour();
+      egal(m.appels, 1);
+      await lotMajSeriesDuJour();
+      egal(m.appels, 1, 'le lot est reparti à la seconde ouverture de la journée');
+    } finally { m.rendre(); oublierJourMajSeries(); }
+  });
+
+  testAsync('§4 — les nouveaux épisodes arrivent, les épisodes vus restent', async ()=>{
+    /* L'acceptation « One Piece passe de 1089 à l'épisode réel », en petit :
+       la fiche locale s'arrête à l'épisode 1, TMDB en a trois. */
+    baseVierge(); oublierJourMajSeries();
+    const t = Date.now();
+    db.shows[7] = serie(7, [ep(1,JOURS(-40))], {'1x1':t},
+                        { status:'Returning Series', addedAt:111,
+                          next:{ s:1, e:2, n:'E2', d:JOURS(-9) } });
+    const m = sansRelaisSeries(id=> serie(id,
+      [ep(1,JOURS(-40)),ep(2,JOURS(-9)),ep(3,JOURS(-2))], {}, { name:'À jour' }));
+    try{
+      await lotMajSeriesDuJour();
+      egal(progress(db.shows[7]).total, 3, 'les épisodes diffusés n\'ont pas été rattrapés');
+      egal(db.shows[7].watched['1x1'], t, 'un épisode vu a disparu dans l\'actualisation');
+      egal(db.shows[7].addedAt, 111);
+      egal(db.shows[7].name, 'À jour');
+      vrai(nextToWatch(db.shows[7]) && nextToWatch(db.shows[7]).e === 2,
+           '« À rattraper » ne pointe pas sur le premier épisode non vu');
+    } finally { m.rendre(); oublierJourMajSeries(); }
+  });
+
+  testAsync('§4 — une série inchangée ne pousse pas `updated`', async ()=>{
+    /* Le mécanisme qui évite une écriture serveur de 1,4 Mo chaque matin. */
+    baseVierge(); oublierJourMajSeries();
+    const vieux = Date.now() - 50 * 86400000;
+    db.shows[7] = serie(7, [ep(1,JOURS(-40))], {},
+                        { status:'Returning Series', updated:vieux, next:null });
+    /* Le faux relais rend EXACTEMENT la même fiche TMDB — statut compris.
+       Rendre un statut différent de la fiche locale ferait un changement
+       réel, et le cas testerait l'inverse de ce qu'il annonce. */
+    const m = sansRelaisSeries(id=> serie(id, [ep(1,JOURS(-40))], {},
+                                          { status:'Returning Series', next:null }));
+    try{
+      await lotMajSeriesDuJour();
+      egal(db.shows[7].updated, vieux,
+           '`updated` a bougé alors que TMDB n\'avait rien de neuf');
+      vrai(db.shows[7].majEpisodes > vieux,
+           'la date de relecture n\'a pas bougé : la série sera relue demain');
+    } finally { m.rendre(); oublierJourMajSeries(); }
+  });
+
+  testAsync('§8 — hors ligne : aucun message, et la journée n\'est pas perdue', async ()=>{
+    baseVierge(); oublierJourMajSeries();
+    for(let i = 1; i <= 3; i++){
+      db.shows[i] = serie(i, [ep(1,JOURS(-40))], {},
+                          { status:'Returning Series',
+                            next:{ s:1, e:2, n:'E2', d:JOURS(-9) } });
+    }
+    /* Le relais ne répond à rien, comme dans le métro. */
+    const m = sansRelaisSeries(()=>{ throw new Error('hors ligne'); });
+    const vraiToast = window.toast;
+    let messages = 0;
+    window.toast = ()=>{ messages++; };
+    try{
+      await lotMajSeriesDuJour();
+      egal(messages, 0, 'un travail de fond que personne n\'a demandé a parlé');
+      egal(m.sauvegardes, 0, 'une sauvegarde pour rien');
+      /* ET SURTOUT : la journée n'est pas consommée. Sinon une seule matinée
+         hors ligne coûterait le rafraîchissement du jour — précisément le jour
+         où l'app aura été ouverte. */
+      vrai(!majSeriesDejaFaiteAujourdhui(),
+           'une matinée hors ligne a consommé la journée entière');
+    } finally { m.rendre(); window.toast = vraiToast; oublierJourMajSeries(); }
+  });
+
+  testAsync('§6 — une série retirée en vol ne plante pas le lot', async ()=>{
+    baseVierge(); oublierJourMajSeries();
+    for(let i = 1; i <= 3; i++){
+      db.shows[i] = serie(i, [ep(1,JOURS(-40))], {},
+                          { status:'Returning Series',
+                            next:{ s:1, e:2, n:'E2', d:JOURS(-9) } });
+    }
+    /* La série 2 disparaît pendant sa propre requête — une synchro entrante,
+       un autre appareil, un `removeShow`. */
+    const m = sansRelaisSeries(id=>{
+      if(id == 2) delete db.shows[2];
+      return serie(id, [ep(1,JOURS(-40)),ep(2,JOURS(-1))], {});
+    });
+    try{
+      await lotMajSeriesDuJour();
+      vrai(!db.shows[2], 'la série retirée a été ressuscitée par l\'actualisation');
+      egal(progress(db.shows[1]).total, 2, 'les autres séries du paquet ont été perdues');
+      egal(progress(db.shows[3]).total, 2);
+    } finally { m.rendre(); oublierJourMajSeries(); }
   });
 
   /* ==================== Bilan ====================
