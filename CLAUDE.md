@@ -45,6 +45,26 @@ installés ne verront JAMAIS le correctif — il aura l'air livré et ne le sera
 Après fusion, vérifier que la version est réellement servie en ligne (requête
 avec un paramètre anti-cache `?v=...`).
 
+**Une PR qui dort réclame un numéro déjà pris, et git ne le dit pas** (25/10).
+IA-FILET était ouverte depuis le 14/09 en v117 ; RETOUR-13 a été fusionnée entre
+temps et a livré v117. Le conflit n'a PAS eu lieu là où on le cherchait : `sw.js`
+et `index.html` portaient le MÊME TEXTE sur les deux branches — « v117 » de part
+et d'autre — donc ils fusionnaient proprement, en silence. Seul `README.md` était
+marqué en conflit, ce qui attirait l'œil vers le symptôme mineur. Le lot serait
+parti sous une version déjà en cache : **le correctif aurait eu l'air livré sans
+l'être**, exactement ce que le piège n° 1 cherche à empêcher, mais par un chemin
+que personne ne surveille. Un conflit de version ne RESSEMBLE pas à un conflit —
+c'est une égalité. Avant de fusionner un lot ouvert depuis plus de quelques
+jours, comparer sa version à celle de `main`, et la rebaser si elle est égale.
+
+**La migration « déjà jouée à la main » ne l'était qu'à moitié** (25/10). La PR
+d'IA-FILET annonçait la 019 comme appliquée depuis le 14/09 ; seule sa première
+instruction — l'`update` du modèle — l'avait été, et `ia_etages_muets()`
+n'existait pas en base. Le détecteur que tout le lot servait à construire était
+absent, six semaines durant, pendant que la PR affirmait le contraire. Une
+migration se vérifie en l'APPELANT (`select * from <fonction>()`), jamais en
+relisant ce qu'on croit avoir lancé.
+
 ## Lancer les tests (obligatoire avant toute PR)
 
 ```
