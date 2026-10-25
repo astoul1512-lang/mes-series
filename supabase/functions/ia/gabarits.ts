@@ -217,6 +217,60 @@ const SCHEMA_ORDRE = {
 };
 
 /* ---------------------------------------------------------------------------
+   RETOUR-14 (25/10/2026) — DES TITRES *ET* UNE QUESTION, DANS LA MÊME RÉPONSE
+
+   UNE SEULE CLÉ `titres`, PAS DES RANGÉES. `suggestions_famille` rend des
+   rangées parce que Découvrir est fait de rangées ; la grille de Recherche est
+   une grille, et lui faire traverser une structure à deux étages pour l'aplatir
+   à l'arrivée ne ferait que donner au modèle une occasion de se tromper.
+
+   `question` ET `titres` SONT DANS LE MÊME OBJET, et ce n'est pas un détail de
+   forme : c'est la promesse « jamais de questionnaire devant un écran vide »
+   rendue structurellement impossible à casser. Deux appels — un pour les
+   titres, un pour la question — auraient laissé exister l'état où la question
+   est là et la grille pas encore.
+
+   `question` EST OPTIONNELLE, et son absence est un SIGNAL, pas un manque :
+   c'est le modèle qui dit « je crois t'avoir cerné ». `fini` le redit
+   explicitement plutôt que de nous faire déduire une intention d'une clé
+   manquante — un fournisseur qui oublie la clé et un modèle qui a fini ne
+   doivent pas se ressembler à la lecture.
+
+   PAS DE CHAMP POUR « AUTRE CHOSE… ». La réponse libre est un geste de
+   l'écran, pas une donnée du modèle : son libellé est écrit en dur côté
+   client. Un champ de moins à valider, un texte de moins à échapper, et une
+   affordance qui ne peut pas disparaître parce qu'un modèle l'a oubliée.
+--------------------------------------------------------------------------- */
+const SCHEMA_ENVIE = {
+  type: "object",
+  properties: {
+    titres: {
+      type: "array",
+      maxItems: 18,
+      items: {
+        type: "object",
+        properties: {
+          nom: { type: "string" },
+          annee: { type: "integer" },
+          media: { type: "string" },
+        },
+        required: ["nom", "media"],
+      },
+    },
+    question: {
+      type: "object",
+      properties: {
+        texte: { type: "string" },
+        options: { type: "array", maxItems: 4, items: { type: "string" } },
+      },
+      required: ["texte", "options"],
+    },
+    fini: { type: "boolean" },
+  },
+  required: ["titres"],
+};
+
+/* ---------------------------------------------------------------------------
    SPEC-09 LOT 1 — RANGER *ET* ÉCARTER (01/09/2026)
 
    `ecartes` PORTE DES NUMÉROS, PAS DES TITRES, et c'est la borne n° 1 de la
@@ -615,6 +669,116 @@ export function construire(tache: string, params: unknown): Gabarit | null {
     };
   }
 
+  if (tache === "envie_dialogue") {
+    /* RETOUR-14 — ON ENLÈVE LES CASES DU MILIEU. Le constat du retour, mot pour
+       mot : « un petit film cool sans prise de tête » devient « comédie », alors
+       que la personne pensait peut-être à Ocean's Eleven, Kingsman ou Hunt for
+       the Wilderpeople — aucun n'est une comédie, tous sont exactement la
+       demande. Tant qu'il y a des cases au milieu, l'envie passe par un
+       entonnoir qui la trahit. Cette tâche ne traduit donc RIEN : elle nomme. */
+    const phrase = texte(p.phrase, 300);
+    if (!phrase) return null;
+    const famille = texte(p.famille, 12).toLowerCase();
+    if (["tout", "film", "serie", "anime"].indexOf(famille) < 0) return null;
+    const profil = texte(p.profil, 400);
+    const ecartes = liste(p.ecartes, 8, 40);
+    const plateformes = liste(p.plateformes, 8, 30);
+    const podium = liste(p.podium, 5, 80);
+    /* Les titres DÉJÀ MONTRÉS à l'écran. Ils partent pour une raison précise et
+       une seule : l'acceptation du lot exige que les titres CHANGENT VRAIMENT
+       entre deux étapes, « vérifié titre par titre, pas seulement le
+       compteur ». Sans cette liste, un modèle qui a bien compris la précision
+       rend très naturellement un SOUS-ENSEMBLE de ce qu'il venait de proposer
+       — ce qui est juste, et ce qui donne exactement l'écran que le retour
+       refuse : une grille qui diminue au lieu de se déplacer. */
+    const deja = liste(p.deja, 18, 80);
+    /* Le fil des réponses. Pas `liste()` : ce sont des PAIRES, et la question
+       compte autant que la réponse — « Seul » ne veut rien dire sans « tu
+       regardes seul ou accompagné ? ». Bornes séparées, cinq paires au plus
+       (le plafond de questions de la spec), et `texte()` sur les deux côtés. */
+    const fil: string[] = [];
+    if (Array.isArray(p.reponses)) {
+      for (const x of p.reponses.slice(0, 5)) {
+        if (!x || typeof x !== "object" || Array.isArray(x)) continue;
+        const xo = x as Record<string, unknown>;
+        const q = texte(xo.q, 90);
+        const r = texte(xo.r, 60);
+        if (q && r) fil.push("— " + q + " → " + r);
+      }
+    }
+    const nomFamille = famille === "film" ? "des films"
+                     : famille === "serie" ? "des séries (hors animation asiatique)"
+                     : famille === "anime" ? "des animés (animation japonaise, chinoise ou coréenne)"
+                     : "des films ET des séries";
+    return {
+      consigne: [
+        CONSIGNE_COMMUNE,
+        /* LA SEULE TÂCHE QUI A LE DROIT DE POSER UNE QUESTION. `CONSIGNE_COMMUNE`
+           dit « Ne pose aucune question » — c'est juste pour les neuf autres
+           tâches, qui écrivent des pitchs et des intitulés. On lève la règle
+           ICI et explicitement, plutôt que de l'affaiblir là-bas pour tout le
+           monde : une consigne commune qu'une exception a vidée ne protège plus
+           personne. */
+        "",
+        "EXCEPTION À LA RÈGLE CI-DESSUS, et elle ne vaut que pour cette tâche :",
+        "ici tu DOIS poser une question. Une seule, la plus utile.",
+        "",
+        "Quelqu'un a écrit une envie floue dans une application de films et de",
+        "séries. Tu fais DEUX choses dans la même réponse.",
+        "",
+        "① `titres` — de DOUZE à DIX-HUIT titres que tu juges correspondre à",
+        "cette envie, choisis " + nomFamille + " DE TÊTE, au service de cette",
+        "personne et pas de la popularité. Tu ne traduis l'envie en AUCUNE",
+        "catégorie : tu nommes directement les œuvres qui y répondent. Une",
+        "envie de « petit film cool sans prise de tête » peut très bien appeler",
+        "un film de casse, un film d'espionnage drôle ou une comédie néo-",
+        "zélandaise — des registres VARIÉS, et surtout pas un seul genre.",
+        "  · Chaque titre porte son NOM EXACT tel qu'il est connu, son ANNÉE et",
+        "    son média : « film » ou « serie ».",
+        "  · N'invente aucun titre. Un titre dont tu n'es pas sûr sera vérifié",
+        "    et jeté : il ne te sert à rien de remplir.",
+        "",
+        "② `question` — UNE question, née de ce qui reste AMBIGU dans ce que tu",
+        "viens de comprendre, avec 3 ou 4 réponses possibles d'un mot ou d'un",
+        "bout de phrase. Elle doit porter sur ce qu'aucun filtre ne sait dire :",
+        "« seul ou à deux ? », « ému ou léger ? », « du bien comment ? ».",
+        "  · INTERDIT de demander un genre, une époque, une durée, un pays ou",
+        "    une plateforme — l'application a déjà des filtres pour ça, et les",
+        "    nommer ramènerait les cases qu'on vient d'enlever.",
+        "  · INTERDIT de nommer un genre dans la question ou dans une réponse.",
+        "  · Ne repose JAMAIS une question déjà posée dans le fil ci-dessous.",
+        "",
+        "QUAND T'ARRÊTER : si une question de plus ne resserrerait plus rien,",
+        "rends `fini` à vrai et OMETS `question`. Mieux vaut s'arrêter à la",
+        "deuxième qu'en poser une cinquième qui n'apprend rien.",
+        "",
+        fil.length
+          ? "CE QUI A DÉJÀ ÉTÉ DEMANDÉ ET RÉPONDU — tes titres doivent en tenir\n" +
+            "compte, c'est la seule raison pour laquelle on a posé ces questions :\n" +
+            fil.join("\n")
+          : "",
+        /* La consigne de renouvellement est posée APRÈS le fil, volontairement :
+           elle ne se comprend qu'une fois lu ce que la personne a précisé. */
+        deja.length
+          ? "TITRES DÉJÀ À L'ÉCRAN : " + deja.join(", ") + "\n" +
+            "La personne vient de préciser son envie : tes titres doivent se\n" +
+            "DÉPLACER, pas se réduire. Garde ceux que la précision rend MEILLEURS,\n" +
+            "retire les autres, et va chercher ailleurs ce qui colle mieux\n" +
+            "maintenant. Rendre un sous-ensemble de cette liste serait un échec."
+          : "",
+        "",
+        profil ? "PROFIL DE LA PERSONNE : " + profil : "",
+        aimes.length ? "TITRES DÉJÀ AIMÉS (à NE PAS reproposer) : " + aimes.join(", ") : "",
+        podium.length ? "SON PODIUM, DU MEILLEUR AU MOINS BON : " + podium.join(", ") : "",
+        ecartes.length ? "GENRES ÉCARTÉS (interdits) : " + ecartes.join(", ") : "",
+        plateformes.length ? "PLATEFORMES DISPONIBLES : " + plateformes.join(", ") : "",
+        "",
+        "SON ENVIE, DANS SES MOTS : " + phrase,
+      ].filter(Boolean).join("\n"),
+      schema: SCHEMA_ENVIE,
+    };
+  }
+
   if (tache === "intitules_rangees") {
     const base = liste(p.intitules, t.maxtitres, 60);
     if (!base.length) return null;
@@ -713,11 +877,17 @@ export type FiltresIA = {
   plateformes?: string[];
 };
 export type EcarteIA = { i: number; motif: string };
+/* RETOUR-14 — la question d'une étape de dialogue. `options` est garanti non
+   vide par `valider` : une question sans réponse à toucher n'est pas une
+   question, c'est un cul-de-sac (la réponse libre, elle, est toujours là, mais
+   elle demande d'ouvrir le clavier et ne peut donc pas être la seule issue). */
+export type QuestionIA = { texte: string; options: string[] };
 export type Rendu = { texte?: string; textes?: string[]; criteres?: Critere[];
                       nom?: string; emoji?: string; ordre?: number[];
                       ecartes?: EcarteIA[];
                       rangees?: RangeeIA[];
-                      mode?: string; filtres?: FiltresIA; titres?: TitreIA[] };
+                      mode?: string; filtres?: FiltresIA; titres?: TitreIA[];
+                      question?: QuestionIA; fini?: boolean };
 
 /* ---------------------------------------------------------------------------
    RETOUR-10 §1 (01/09/2026) — CETTE RÉPONSE MÉRITE-T-ELLE UN SECOND MODÈLE ?
@@ -774,6 +944,14 @@ const ESCALADENT: Record<string, true> = {
   pitch_jour: true, pitch_humeur: true, intitules_rangees: true,
   envie_phrase: true, ambiance_desc: true, pourquoi_lui: true,
   classer_grille: true, ordonner_rangee: true,
+  /* RETOUR-14 — elle escalade, et il faut savoir ce que ça achète ET ce que ça
+     n'achète pas. Ça achète la FORME : un petit modèle qui rend un JSON cassé,
+     zéro titre, ou une question vide fait repartir la requête sur le rang 1.
+     Ça n'achète RIEN sur la MÉMOIRE : douze titres bien formés et inexistants
+     passent ici sans un mot, et c'est TMDB qui les jettera en silence. Le
+     garde-fou de ce risque-là n'est pas du code, c'est le taux de jetés et la
+     ligne de `config.ts` qu'il déclenche. */
+  envie_dialogue: true,
 };
 
 export function meriteEscalade(tache: string, propre: unknown): boolean {
@@ -1016,6 +1194,83 @@ export function valider(tache: string, brut: unknown): Rendu | null {
       if (titres.length) rangees.push({ titre, titres });
     }
     return rangees.length ? { rangees } : null;
+  }
+
+  if (tache === "envie_dialogue") {
+    /* RETOUR-14 — LA HIÉRARCHIE DES DEUX MOITIÉS N'EST PAS LA MÊME, et c'est
+       tout l'arbitrage de cette fonction.
+
+       LES TITRES SONT OBLIGATOIRES : sans eux il n'y a pas d'écran. Zéro titre
+       retenu ⇒ `null` ⇒ `{indisponible:true}` ⇒ le client ne pose rien. C'est
+       la promesse « jamais de questionnaire devant un écran vide », tenue au
+       dernier endroit où elle peut encore l'être.
+
+       LA QUESTION EST FACULTATIVE, et une question fautive se jette SEULE. Si
+       le modèle la rend trop longue, vide, ou en enfreignant le §0.4, on garde
+       les titres et on dit `fini` : la personne voit sa grille et le dialogue
+       s'arrête un cran plus tôt. Jeter la réponse entière pour une question
+       malformée ferait payer la requête, effacerait douze titres valides et
+       montrerait un écran inchangé — trois dégâts pour un défaut cosmétique. */
+    if (!Array.isArray(o.titres)) return null;
+    if (o.titres.length > 18) return null;
+    const titres: TitreIA[] = [];
+    const vus: Record<string, boolean> = {};
+    for (const x of o.titres) {
+      if (!x || typeof x !== "object" || Array.isArray(x)) continue;
+      const xo = x as Record<string, unknown>;
+      /* Même borne et même raison que `suggestions_famille` : 80 caractères, et
+         PAS par `propre()` — « Tu ne tueras point » est un titre de film et le
+         motif du §0.4 le refuserait. */
+      const nom = typeof xo.nom === "string"
+        ? xo.nom.replace(/\s+/g, " ").trim().slice(0, 80) : "";
+      if (!nom) continue;
+      const media = typeof xo.media === "string" ? xo.media.trim().toLowerCase() : "";
+      if (media !== "film" && media !== "serie") continue;
+      const cle = media + ":" + nom.toLowerCase();
+      if (vus[cle]) continue;
+      vus[cle] = true;
+      const out: TitreIA = { nom, media };
+      const an = typeof xo.annee === "number" ? Math.trunc(xo.annee) : NaN;
+      if (isFinite(an) && an >= 1900 && an <= 2100) out.annee = an;
+      titres.push(out);
+    }
+    if (!titres.length) return null;
+
+    const rendu: Rendu = { titres };
+    const q = (o.question && typeof o.question === "object" && !Array.isArray(o.question))
+      ? o.question as Record<string, unknown> : null;
+    /* Le texte de la question, LUI, passe par `propre()` : c'est une phrase
+       écrite, adressée à quelqu'un, exactement ce que le §0.4 surveille. Une
+       question qui affirmerait « ce que tu as adoré » est précisément ce qu'on
+       ne veut pas lire. */
+    const texteQ = q ? propre(q.texte) : null;
+    if (texteQ && Array.isArray(q!.options)) {
+      const options: string[] = [];
+      for (const op of (q!.options as unknown[]).slice(0, 4)) {
+        const v = propre(op);
+        /* Une option fautive se jette SEULE aussi : trois réponses valides sur
+           quatre font une question parfaitement utilisable. */
+        if (v && options.indexOf(v) < 0) options.push(v);
+      }
+      /* DEUX OPTIONS AU MINIMUM, et ce n'est pas un chiffre rond. À une seule,
+         il n'y a plus de choix à faire : l'écran poserait une question dont la
+         seule réponse d'un toucher est celle qu'on propose. Autant ne rien
+         demander — ce que `fini` dit proprement. */
+      if (options.length >= 2) rendu.question = { texte: texteQ, options };
+    }
+    /* `fini` SE DÉDUIT, IL NE SE RECOPIE PAS, et c'est délibéré : la clé `fini`
+       du schéma existe pour que le modèle puisse DIRE qu'il a fini (ce qui
+       l'aide à omettre `question` au lieu d'en inventer une de trop), mais ce
+       n'est pas elle qui fait foi.
+
+       Recopier `o.fini` ouvrirait un état contradictoire — une question posée
+       ET `fini` à vrai — et le client aurait alors deux clés qui se
+       contredisent sur l'écran à peindre. Ici il n'y a plus qu'une vérité :
+       plus de question ⇒ fini. Le modèle qui rend les deux voit simplement sa
+       `question` respectée, ce qui est le choix le moins surprenant pour la
+       personne devant l'écran. */
+    if (!rendu.question) rendu.fini = true;
+    return rendu;
   }
 
   if (tache === "intitules_rangees") {

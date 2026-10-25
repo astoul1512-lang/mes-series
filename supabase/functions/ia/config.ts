@@ -492,6 +492,49 @@ export const TACHES: Record<string, Tache> = {
   // suite ou dans quinze secondes ». Ce qui protège la plume n'est plus ce
   // paragraphe, c'est l'œil d'Adrien et la réversibilité du réglage.
   interpreter_recherche: { etage_depart: 3, escalade_vers: 1, maxlong: 80, maxtitres: 5 },
+
+  // ---- RETOUR-14 (25/10/2026) — L'ENVIE QUI S'AFFINE PAR LE DIALOGUE
+  //
+  // CE QU'ELLE FAIT, et c'est la première à le faire sur le chemin critique :
+  // elle NOMME DES FILMS de sa propre connaissance, et elle POSE UNE QUESTION.
+  // Les deux dans la même réponse, parce que l'écran ne doit jamais montrer un
+  // questionnaire devant une grille vide — c'est ce qui rend l'exercice
+  // supportable, et ce qui prouve à la personne que répondre sert à quelque
+  // chose. Un appel qui ne rendrait que la question casserait la promesse.
+  //
+  // ELLE RESSEMBLE À `suggestions_famille` ET NE PART PAS DU MÊME ÉTAGE,
+  // et il faut dire pourquoi parce que c'est contre-intuitif. Les deux
+  // demandent la même chose au modèle — de la mémoire du monde, pas de
+  // l'analyse de texte — et `suggestions_famille` est la SEULE tâche du
+  // groupe B pour cette raison exacte (voir le pavé de tête de `TACHES`).
+  // Alors pourquoi l'étage 3 ici ?
+  //
+  // PARCE QUE CELLE-LÀ FAIT ATTENDRE QUELQU'UN. `suggestions_famille` compose
+  // l'écran Découvrir en arrière-plan, une fois par jour : personne ne la
+  // regarde travailler, et six secondes ne coûtent rien. Ici il y a jusqu'à
+  // SIX APPELS EN FILE pour une seule recherche, chacun derrière un doigt qui
+  // vient de toucher une réponse. Mesuré le 31/08 sur `interpreter_recherche` :
+  // le rang 1 rend en 3 983 ms de médiane et jusqu'à 7 895 ms. Quatre étapes à
+  // ce prix font une demi-minute de dialogue — l'écran deviendrait pénible, et
+  // un dialogue pénible n'est pas une version plus lente du dialogue, c'est un
+  // dialogue qu'on n'utilise pas.
+  //
+  // CE QUE CE CHOIX NE PROTÈGE PAS, et c'est le point à comprendre avant de
+  // lire le journal : `escalade_vers` ne se déclenche que sur une réponse
+  // MALFORMÉE (`meriteEscalade`, `gabarits.ts`). Un petit modèle qui rend un
+  // JSON impeccable rempli de films qui n'existent pas est, pour le relais, un
+  // SUCCÈS — statut 200, aucune escalade, et la grille arrive à moitié vide
+  // parce que TMDB a jeté la moitié des titres. L'escalade protège la FORME,
+  // jamais la MÉMOIRE. Il n'y a donc pas de filet automatique sous ce réglage.
+  //
+  // LE SEUL JUGE EST DONC LE TAUX DE TITRES JETÉS, et il se relève après
+  // déploiement — les compteurs partent dans le lot (Réglages › Développeur,
+  // et `ia_journal` pour le fournisseur réellement appelé). AU-DELÀ DE ~30 %
+  // DE TITRES JETÉS, on passe `etage_depart: 1` et on retire `escalade_vers` :
+  // c'est la même ligne et le même seuil que SPEC-09, et c'est réversible en
+  // un déploiement. Comparer au taux de `suggestions_famille` sur la même
+  // fenêtre, pas à zéro : une partie des jetés vient de TMDB, pas du modèle.
+  envie_dialogue: { etage_depart: 3, escalade_vers: 1, maxlong: 90, maxtitres: 12 },
 };
 
 // ---------------------------------------------------------------------------

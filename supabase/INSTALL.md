@@ -610,6 +610,63 @@ pas avant le 10/08 — elle cumulait les étages précédents). Les plafonds, eu
 (`BUDGET_UTILISATEUR_JOUR`, `BUDGET_GLOBAL_JOUR`) — les changer demande un
 redéploiement de la fonction, contrairement à l'échelle.
 
+### RETOUR-14 — les deux chiffres du dialogue d'envie, et le seuil
+
+Le dialogue d'envie (`envie_dialogue`, v119) part du **flash-lite** alors que sa
+jumelle `suggestions_famille` part du modèle fort. Le raisonnement est dans
+`config.ts` : celle-là compose en arrière-plan, celle-ci fait attendre un doigt,
+et six appels en file à 4 s de médiane feraient une demi-minute de dialogue.
+
+**Ce choix n'est pas mesuré, et l'escalade ne le protège pas.** `escalade_vers`
+se déclenche sur une réponse MALFORMÉE ; douze titres bien formés et inexistants
+sont, pour le relais, un succès — statut 200, aucune escalade, et la grille
+arrive à moitié vide parce que TMDB les a jetés. Il n'y a donc pas de filet
+automatique : les deux chiffres ci-dessous SONT le filet.
+
+**1. La durée et le fournisseur réellement servi**, une semaine après la mise en
+service :
+
+```sql
+select fournisseur, statut, count(*) as n,
+       round(avg(duree_ms)) as ms_moyen,
+       percentile_cont(0.5) within group (order by duree_ms) as ms_median
+  from public.ia_journal
+ where tache = 'envie_dialogue'
+ group by fournisseur, statut
+ order by n desc;
+```
+
+Lecture : `gemini-flash-lite` doit porter la quasi-totalité des lignes. Un taux
+d'escalade (des lignes sur `gemini-flash`) **au-dessus de ~40 %** veut dire
+qu'une requête sur deux paie deux appels — même seuil et même geste que
+`interpreter_recherche` au §8 : `etage_depart: 1`, retirer `escalade_vers`.
+
+À comparer sur la MÊME fenêtre, parce que c'est la seule comparaison qui a un
+sens — deux tâches qui demandent la même chose au modèle :
+
+```sql
+select tache, count(*) as n,
+       percentile_cont(0.5) within group (order by duree_ms) as ms_median
+  from public.ia_journal
+ where tache in ('envie_dialogue','suggestions_famille')
+   and jour > current_date - 7
+ group by tache;
+```
+
+**2. Le taux de titres jetés** — il ne se lit PAS en base, le journal ne porte
+aucune réponse. Il est dans **Réglages › Développeur**, avec les compteurs
+`proposes` / `jetes` / `tamises` du banc d'essai, écrits à chaque étape de
+dialogue comme à chaque composition de SPEC-09. `jetes` compte ce que TMDB n'a
+pas reconnu (une erreur du MODÈLE) ; `tamises` compte ce que le tamis a retiré —
+déjà vu, écarté, « pas pour moi » — qui est une information sur la bibliothèque
+et **pas** sur la mémoire du modèle. Ne pas les additionner.
+
+**Le seuil : au-delà de ~30 % de jetés, on resserre le prompt plutôt que de
+livrer** (même seuil que SPEC-09), ou on passe `etage_depart: 1`. Et on compare
+au taux de `suggestions_famille` sur la même fenêtre, pas à zéro : une part des
+jetés vient de TMDB (un titre réel sans affiche, un homonyme ambigu) et ne
+disparaîtra sous aucun modèle.
+
 ### Le ménage
 
 `ia_journal` et `ia_budget_jour` ne font que grossir, et la seconde porte des

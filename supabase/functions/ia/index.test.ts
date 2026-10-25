@@ -2069,7 +2069,7 @@ Deno.test("SPEC-05 — les nouvelles tâches n'échappent pas au jeton ni à l'o
    Le pendant côté front est le contrôle n° 15 de `tests/lance-tests.js` : il
    relit les `appelIA('…')` des fichiers d'écran et les recoupe avec cette
    liste. Les deux ensemble ferment la boucle ; l'un sans l'autre ne dit rien. */
-Deno.test("la liste blanche compte DIX tâches, exactement celles qui ont un appelant", () => {
+Deno.test("la liste blanche compte ONZE tâches, exactement celles qui ont un appelant", () => {
   /* RETOUR-01 POINT 8 (11/08/2026) — `classer_grille` entre, AVEC son appelant :
      le tri « ✦ mes goûts » de la Recherche (`toucherClassementIA`, app-14). Le
      seuil passe de six à sept, et il reste écrit en dur pour la raison dite
@@ -2086,11 +2086,21 @@ Deno.test("la liste blanche compte DIX tâches, exactement celles qui ont un app
      elle range une grille de RECHERCHE et ne sait pas écarter ; celle-ci range
      une rangée de DÉCOUVRIR et doit pouvoir en retirer. Deux tâches, deux
      sorties, et les fusionner obligerait à un champ « écarter » que le tri de
-     la Recherche n'a aucune raison d'accepter. */
+     la Recherche n'a aucune raison d'accepter.
+     RETOUR-14 (25/10/2026) — `envie_dialogue` entre avec son appelant : le
+     dialogue d'envie de la barre ✦ (`dialogueEnvieIA`, app-14). Dix → onze.
+     `interpreter_recherche` RESTE, et il faut dire pourquoi puisque ce lot lui
+     retire son déclencheur : son code est intact et il est à UNE LIGNE de
+     `validerRech` d'être rebranché. La retirer de la liste blanche
+     condamnerait ce retour en arrière à un déploiement de fonction Edge, au
+     lieu d'une ligne de front — exactement le genre de porte qu'on se ferme à
+     soi-même sans le vouloir. Elle ne coûte rien de plus qu'une entrée dans un
+     objet : le budget n'est consommé que par un appel réel. */
   const attendues = ["pitch_jour", "pitch_humeur", "intitules_rangees",
                      "envie_phrase", "ambiance_desc", "pourquoi_lui",
                      "classer_grille", "suggestions_famille",
-                     "interpreter_recherche", "ordonner_rangee"].sort();
+                     "interpreter_recherche", "ordonner_rangee",
+                     "envie_dialogue"].sort();
   assertEquals(JSON.stringify(Object.keys(TACHES).sort()), JSON.stringify(attendues),
     "la liste blanche ne correspond plus aux tâches appelées — ajoute l'appelant, " +
     "ou retire la tâche, mais pas les deux à moitié");
@@ -2850,4 +2860,208 @@ Deno.test("interpreter_recherche : un nom de personne ne fait pas voyager d'iden
   assert(!/adrien@exemple\.fr/.test(gens), "une adresse ne survit pas : " + gens);
   assert(!/https?:/.test(gens), "une URL non plus : " + gens);
   assert(/Zoe Saldana/.test(gens), "le nom honnête, lui, passe");
+});
+
+/* ============ RETOUR-14 — L'ENVIE QUI S'AFFINE PAR LE DIALOGUE ============
+
+   CE QUE CES CAS ÉPROUVENT, ET CE QU'AUCUN D'EUX NE PEUT ÉPROUVER. Ils tiennent
+   la FORME : ce qui part, ce qui revient, ce qui se jette et à quelle maille.
+   Aucun ne dit si les titres nommés sont BONS — ça ne se lit que dans le taux
+   de jetés de TMDB, après déploiement. Écrit ici pour que personne ne lise la
+   ligne verte comme une preuve de pertinence (leçon du 13/09 : un garde-fou
+   qu'on croit tenu parce que la suite est verte est pire qu'un garde-fou
+   absent). */
+Deno.test("envie_dialogue : la phrase et la famille sont toutes deux obligatoires", () => {
+  assertEquals(construire("envie_dialogue", { famille: "tout" }), null,
+    "sans phrase, il n'y a pas d'envie à servir");
+  assertEquals(construire("envie_dialogue", { phrase: "un truc qui fait du bien" }), null,
+    "sans famille, le cadre du tamis est inconnu — on ne devine pas");
+  assertEquals(construire("envie_dialogue",
+    { phrase: "x", famille: "documentaires" }), null,
+    "une famille hors du vocabulaire fermé ne passe pas");
+  assert(construire("envie_dialogue", { phrase: "x", famille: "anime" }),
+    "les quatre familles de la grille, elles, passent");
+});
+
+Deno.test("envie_dialogue : la question est demandée, et le genre interdit dedans", () => {
+  const g = construire("envie_dialogue",
+    { phrase: "je sais pas trop, un truc qui me fasse du bien", famille: "tout" })!;
+  /* L'exception à `CONSIGNE_COMMUNE` doit être EXPLICITE dans le prompt : la
+     consigne commune dit « Ne pose aucune question », et un modèle qui lit les
+     deux sans l'exception obéit à la première. */
+  assert(/EXCEPTION À LA RÈGLE/.test(g.consigne),
+    "l'exception à « ne pose aucune question » n'est pas écrite");
+  assert(/Ne pose aucune question/.test(g.consigne),
+    "la consigne commune est toujours là — on la lève, on ne la retire pas");
+  assert(/INTERDIT de nommer un genre/.test(g.consigne),
+    "rien n'interdit au modèle de ramener les cases qu'on vient d'enlever");
+  assert(/DOUZE à DIX-HUIT/.test(g.consigne), "le nombre de titres n'est pas demandé");
+  assert(/je sais pas trop, un truc qui me fasse du bien/.test(g.consigne),
+    "la phrase de la personne doit partir telle quelle — c'est tout le lot");
+});
+
+Deno.test("envie_dialogue : le fil des réponses part en paires, borné à cinq", () => {
+  const g = construire("envie_dialogue", {
+    phrase: "un truc qui fait du bien", famille: "film",
+    reponses: [
+      { q: "Du bien comment ?", r: "Qui réchauffe" },
+      { q: "Ému ou léger ?", r: "Rester léger" },
+      { q: "Seul ou à deux ?", r: "À deux" },
+      { q: "Quatre", r: "quatre" }, { q: "Cinq", r: "cinq" },
+      /* La sixième ne doit jamais arriver : le plafond de la spec est cinq
+         questions, et une borne qui n'est pas dans le code n'existe pas. */
+      { q: "SIXIEMEQUESTION", r: "six" },
+      { q: "", r: "sans question" },          // une paire boiteuse se jette
+    ],
+  })!;
+  assert(/Du bien comment \? → Qui réchauffe/.test(g.consigne),
+    "la paire question→réponse ne voyage pas entière");
+  assert(!/SIXIEMEQUESTION/.test(g.consigne),
+    "la sixième réponse a franchi le plafond de cinq");
+  assert(!/sans question/.test(g.consigne),
+    "une réponse sans sa question ne veut rien dire et ne doit pas partir");
+});
+
+Deno.test("envie_dialogue : les titres déjà montrés partent, avec la consigne de bouger", () => {
+  const g = construire("envie_dialogue", {
+    phrase: "un truc qui fait du bien", famille: "tout",
+    deja: ["CODA", "Paddington 2", "Little Miss Sunshine"],
+  })!;
+  assert(/CODA, Paddington 2, Little Miss Sunshine/.test(g.consigne),
+    "les titres déjà à l'écran ne partent pas");
+  /* C'EST LA LIGNE DE L'ACCEPTATION : « les titres ne sont plus les mêmes,
+     vérifié titre par titre, pas seulement le compteur ». Sans elle, un modèle
+     qui a bien compris rend un sous-ensemble — ce qui est juste, et ce qui
+     donne l'écran que le retour refuse. */
+  assert(/sous-ensemble de cette liste serait un échec/.test(g.consigne),
+    "rien ne demande au modèle de DÉPLACER ses titres plutôt que de les réduire");
+  const neuf = construire("envie_dialogue",
+    { phrase: "un truc qui fait du bien", famille: "tout" })!;
+  assert(!/déjà à l'écran/i.test(neuf.consigne),
+    "à la première étape il n'y a rien à l'écran : la consigne ne doit pas partir");
+});
+
+Deno.test("envie_dialogue : rien d'identifiant ne part, même dans les cases connues", () => {
+  const g = construire("envie_dialogue", {
+    phrase: "un truc qui fait du bien adrien@exemple.fr",
+    famille: "tout",
+    profil: "aime 8f3c4b21-aa02-4b21-aa02-8f3c4b21aa02 et https://exemple.fr/x",
+    deja: ["CODA adrien@exemple.fr"],
+    reponses: [{ q: "Qui ? adrien@exemple.fr", r: "moi@exemple.fr" }],
+  })!;
+  assert(!/adrien@exemple\.fr/.test(g.consigne), "une adresse a survécu");
+  assert(!/moi@exemple\.fr/.test(g.consigne), "une adresse a survécu dans le fil");
+  assert(!/8f3c4b21-aa02/.test(g.consigne), "un identifiant a survécu");
+  assert(!/https?:\/\//.test(g.consigne), "une URL a survécu");
+});
+
+Deno.test("envie_dialogue : sans un seul titre retenu, toute la réponse tombe", () => {
+  /* LA PROMESSE DU LOT, TENUE AU DERNIER ENDROIT POSSIBLE : « jamais de
+     questionnaire devant un écran vide ». Une réponse qui n'apporte qu'une
+     question doit valoir `null`, donc `{indisponible:true}`, donc rien à
+     l'écran — et surtout pas une question seule. */
+  assertEquals(valider("envie_dialogue", { titres: [] }), null);
+  assertEquals(valider("envie_dialogue", {
+    question: { texte: "Du bien comment ?", options: ["Qui réchauffe", "Qui apaise"] },
+  }), null, "une question sans titres ne doit JAMAIS atteindre l'écran");
+  assertEquals(valider("envie_dialogue", { titres: [{ nom: "X", media: "podcast" }] }), null,
+    "un média hors vocabulaire ne laisse aucun titre, donc rien");
+  assertEquals(valider("envie_dialogue",
+    { titres: new Array(19).fill({ nom: "X", media: "film" }) }), null,
+    "dix-neuf titres : au-delà du schéma, on ne rattrape pas, on refuse");
+});
+
+Deno.test("envie_dialogue : la validation borne les titres et dédoublonne", () => {
+  const r = valider("envie_dialogue", {
+    titres: [
+      { nom: "  CODA  ", annee: 2021, media: "film" },
+      { nom: "CODA", annee: 2021, media: "film" },        // doublon exact
+      { nom: "coda", annee: 1999, media: "film" },        // doublon de casse
+      { nom: "CODA", annee: 2021, media: "serie" },       // média différent : GARDÉ
+      { nom: "Tu ne tueras point", annee: 2016, media: "film" },
+      { nom: "X".repeat(200), media: "film" },
+      { nom: "Sans année", media: "serie" },
+      { nom: "Hors bornes", annee: 1850, media: "film" },
+      { nom: "", media: "film" },                        // jeté
+      { nom: "Mauvais média", media: "livre" },           // jeté
+      "pas un objet", null,                               // jetés
+    ],
+    question: { texte: "Du bien comment ?", options: ["Qui réchauffe", "Qui apaise"] },
+  })!;
+  const noms = r.titres!.map((t) => t.nom);
+  assertEquals(noms.filter((n) => n.toLowerCase() === "coda").length, 2,
+    "le dédoublonnage doit porter sur média+nom, pas sur le nom seul : " + noms.join(" | "));
+  assertEquals(r.titres![0].nom, "CODA", "les espaces de bordure ne sont pas retirés");
+  /* Même raison que `suggestions_famille` : un nom d'œuvre n'est pas une phrase
+     écrite, et le motif du §0.4 refuserait « Tu ne tueras point ». */
+  assert(noms.indexOf("Tu ne tueras point") >= 0,
+    "un titre de film s'est fait refuser par le motif §0.4");
+  assertEquals(r.titres!.find((t) => t.nom.length > 80), undefined,
+    "un nom de 200 caractères n'a pas été borné à 80");
+  assertEquals(r.titres!.find((t) => t.nom === "Sans année")!.annee, undefined,
+    "une année absente ne doit pas être inventée");
+  assertEquals(r.titres!.find((t) => t.nom === "Hors bornes")!.annee, undefined,
+    "1850 est hors des bornes 1900-2100 : l'année tombe, le titre reste");
+  assertEquals(noms.indexOf("Mauvais média"), -1);
+  assertEquals(noms.indexOf(""), -1);
+});
+
+Deno.test("envie_dialogue : une question fautive se jette SEULE, les titres restent", () => {
+  const base = { titres: [{ nom: "CODA", annee: 2021, media: "film" }] };
+  /* §0.4 — une question qui affirme ce que la personne a ressenti. Elle tombe,
+     et c'est tout : jeter les douze titres avec elle ferait payer la requête,
+     effacerait l'écran et n'afficherait rien de neuf. */
+  const emo = valider("envie_dialogue", {
+    ...base,
+    question: { texte: "Dans ton coup de cœur, qu'est-ce qui comptait ?",
+                options: ["L'histoire", "Les gens"] },
+  })!;
+  assertEquals(emo.titres!.length, 1, "les titres doivent survivre à une question refusée");
+  assertEquals(emo.question, undefined, "la question du §0.4 devait tomber");
+  assertEquals(emo.fini, true, "plus de question ⇒ le dialogue se dit fini");
+
+  /* Trop longue : la borne est `maxlong` (90), comme pour tout texte rendu. */
+  const longue = valider("envie_dialogue", {
+    ...base, question: { texte: "Q".repeat(91), options: ["a", "b"] },
+  })!;
+  assertEquals(longue.question, undefined, "91 caractères devaient faire tomber la question");
+  assertEquals(longue.titres!.length, 1);
+
+  /* UNE SEULE OPTION N'EST PAS UN CHOIX. L'écran poserait une question dont la
+     seule réponse d'un toucher est celle qu'on propose. */
+  const seule = valider("envie_dialogue", {
+    ...base, question: { texte: "Du bien comment ?", options: ["Qui réchauffe"] },
+  })!;
+  assertEquals(seule.question, undefined, "une option unique ne fait pas une question");
+
+  /* Une option fautive sur quatre, en revanche, ne coûte que son option. */
+  const partielle = valider("envie_dialogue", {
+    ...base,
+    question: { texte: "Du bien comment ?",
+                options: ["Qui réchauffe", "", "O".repeat(91), "Qui apaise", "Qui épate"] },
+  })!;
+  assertEquals(JSON.stringify(partielle.question!.options),
+    JSON.stringify(["Qui réchauffe", "Qui apaise"]),
+    "les options valides devaient survivre, et la cinquième être hors schéma");
+  assertEquals(partielle.fini, undefined, "une question valide ⇒ le dialogue continue");
+});
+
+Deno.test("envie_dialogue : `fini` se déduit de la question, il ne se recopie pas", () => {
+  const base = { titres: [{ nom: "CODA", annee: 2021, media: "film" }] };
+  /* L'état contradictoire — une question posée ET `fini` à vrai — ne doit pas
+     pouvoir atteindre le client : il aurait deux clés qui se contredisent sur
+     l'écran à peindre, et le choix se ferait à l'endroit le plus mal placé. */
+  const deux = valider("envie_dialogue", {
+    ...base, fini: true,
+    question: { texte: "Du bien comment ?", options: ["Qui réchauffe", "Qui apaise"] },
+  })!;
+  assertEquals(deux.fini, undefined, "`fini` a été recopié par-dessus une question valide");
+  assert(deux.question, "et la question, elle, doit être respectée");
+
+  const sans = valider("envie_dialogue", { ...base, fini: false })!;
+  assertEquals(sans.fini, true, "pas de question ⇒ fini, quoi que dise le modèle");
+
+  const options = valider("envie_dialogue",
+    { ...base, question: { texte: "Du bien comment ?", options: "pas un tableau" } })!;
+  assertEquals(options.fini, true, "des options qui ne sont pas un tableau ⇒ fini");
 });

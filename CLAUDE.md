@@ -72,6 +72,19 @@ chevauchait le titre de la ligne. Les tests mesuraient la HAUTEUR — juste — 
 le DÉBORDEMENT. Une capture d'écran a trouvé en une seconde ce qu'aucune assertion
 ne cherchait. Prendre la capture fait partie du lot, pas de la PR.
 
+**Un décor de test qui raccourcit un geste ne prouve rien de ce geste** (25/10).
+RETOUR-14 : vingt assertions vertes au-dessus d'une barre de recherche GRISE ET
+VIDE, pendant qu'un dialogue tournait dessous. Le défaut n'était pas dans l'app
+mais dans le décor — il posait `r.envie = true` sans le `render()` que
+`basculerEnvieRech` fait en vrai. **Et aucun cas ne pouvait le voir** : la barre
+vit dans le `sub` du `<header>`, que `peindreRech` ne réécrit jamais, alors que
+les vingt cas lisaient tous `#rres`. Un écran a donc DEUX zones de repeint, et
+une suite qui n'en interroge qu'une se croit complète. La capture l'a trouvé en
+une seconde — deuxième fois après RETOUR-09 que l'œil attrape ce qu'aucune
+assertion ne cherchait, et cette fois le coupable était le harnais lui-même.
+**Quand un décor raccourcit un geste, écrire pourquoi le raccourci est sans
+conséquence ; si on ne peut pas l'écrire, c'est qu'il en a une.**
+
 **Ce qui naît et meurt dans la même frame n'existe pas — ou clignote** (01/09).
 Deux fois dans le même lot : « ✓ Compris » s'affichait zéro milliseconde quand rien
 ne restait à charger, et la ligne d'attente aurait scintillé sur une réponse servie

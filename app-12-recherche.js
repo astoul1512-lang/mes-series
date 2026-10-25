@@ -729,6 +729,29 @@ function etatRech(){
        contre deux appels simultanés. Celui-ci ne sert qu'à dire ce qui se
        passe. */
     iaStatut:null,
+    /* RETOUR-14 (25/10/2026) — LE DIALOGUE D'ENVIE EN COURS, ou `null`.
+       `null` = l'écran de la v118, à l'identique. Non nul, il PREND L'ÉCRAN :
+       `corpsRech` ne dessine plus les ambiances, les pilules ni la barre de
+       tri, parce que ce ne sont plus les outils de ce moment-là — on ne fouille
+       pas, on se fait proposer.
+         phrase   la phrase de la personne, TELLE QU'ELLE L'A ÉCRITE. Elle n'est
+                  traduite en rien et ne sert qu'à deux choses : repartir au
+                  relais, et signer le cache.
+         reponses [{q, r}] — le fil, dans l'ordre. La question est gardée avec
+                  la réponse : « Seul » ne veut rien dire sans sa question, ni
+                  pour le modèle, ni à l'écran.
+         question {texte, options[]} de l'étape en cours, ou `null`.
+         titres   les vignettes de la grille, au format `jaquetteRech`.
+         fini     plus de question à poser (modèle arrêté, ou plafond atteint).
+         libre    le champ de réponse libre est ouvert.
+         appels   combien d'appels IA ce dialogue a déjà coûtés (plafond : 6).
+         charge   une étape a abouti au moins une fois. C'est ce qui distingue
+                  « ça n'a jamais démarré » (on quitte le dialogue, écran v118)
+                  de « ça s'est arrêté en route » (on garde la grille) — deux
+                  situations que `titres.length` seul confondrait.
+       Comme le reste de la phrase, il ne survit pas à une nouvelle ouverture
+       de Recherche (§4.8). */
+    envieD:null,
     jeu:null
   };
   return ui.rech;
@@ -961,6 +984,15 @@ function nouvelleOuvertureRech(){
      code qui avait tort. */
   r.personnes = []; r.candIA = null;
   if(typeof oublierCachePhraseIA === 'function') oublierCachePhraseIA();
+  /* RETOUR-14 — le dialogue part avec la phrase, et SON cache avec lui. Le
+     laisser vivre rouvrirait Recherche sur un fil de questions dont on ne se
+     souvient pas, ce qui est le défaut qu'on vient de décrire deux pavés plus
+     haut, en pire : un genre oublié se voit dans la phrase, un fil de dialogue
+     oublié raconte une envie qu'on n'a plus. Le cache de RÉSOLUTION TMDB, lui,
+     survit — un titre ne change pas d'identifiant, et le relire serait payer
+     deux fois la même réponse. */
+  r.envieD = null;
+  if(typeof oublierCacheEnvieIA === 'function') oublierCacheEnvieIA();
   r.jeu = null;
   r.touche = false;
   /* POINT 1 DU CYCLE 3 — plus de proposition du jour : la phrase s'ouvre VIDE,
@@ -2981,15 +3013,30 @@ function validerRech(){
   if(!r.envie) return lancerTitre(true);
   const q = rechTexte();
   if(!q) return;
-  /* SPEC-11 (29/08/2026) — LA VALIDATION EN MODE ✦ PASSE PAR L'INTERPRÈTE.
-     C'est lui qui sait les trois choses que le routeur d'envie ne savait pas :
-     les personnes, les descriptions d'intrigue, et le ET entre deux genres.
-     UNE SEULE REQUÊTE IA PART : l'interprète remplace `envie_phrase` sur ce
-     chemin-là, il ne s'y ajoute pas. `envie_phrase` garde son propre
-     déclencheur, le routeur AUTOMATIQUE du mode ⌕ (`lancerTitre`), où personne
-     n'a dit que c'était une envie et où l'heuristique doit deviner.
+  /* ---------------------------------------------------------------------
+     RETOUR-14 (25/10/2026) — LE ✦ OUVRE LE DIALOGUE. C'EST *LA* LIGNE DU LOT.
+
+     Arbitrage d'Adrien, pris en connaissance de cause après que la question lui
+     a été posée avec sa conséquence : le ✦ EST le geste explicite de
+     « propose-moi », et il n'y a rien de neuf à l'écran — la maquette fait foi
+     et elle ne montre aucun contrôle de plus.
+
+     CE QUE ÇA RETIRE, ET IL FAUT L'ÉCRIRE ICI parce que c'est ici que ça se
+     décide : les deux modes de SPEC-11 (`filtres` et `titre`) n'ont plus de
+     déclencheur. « un film d'action avec Will Smith » ouvre désormais un
+     dialogue au lieu de poser deux filtres. La spec du RETOUR-14 écrivait
+     « INCHANGÉS » ; l'arbitrage dit l'inverse, et c'est l'arbitrage qui gagne.
+
+     POURQUOI `interpreterRechercheIA` RESTE DANS LE DÉPÔT, intacte, et sa tâche
+     dans la liste blanche du relais : le retour en arrière est CETTE LIGNE.
+     Supprimer le code aurait transformé un changement d'avis en réécriture, et
+     retirer la tâche l'aurait transformé en déploiement de fonction Edge. Une
+     décision réversible mérite de le rester.
+
      Absent (fichier plus ancien, IA coupée) → le comportement d'aujourd'hui,
-     à l'identique : le ✦ ne meurt jamais. */
+     à l'identique : le ✦ ne meurt jamais.
+     --------------------------------------------------------------------- */
+  if(typeof demarrerDialogueEnvieIA === 'function') return demarrerDialogueEnvieIA(q);
   if(typeof interpreterRechercheIA === 'function') return interpreterRechercheIA(q);
   if(typeof routerEnvieIA === 'function') routerEnvieIA(q, 0, 0, true);
 }
@@ -3008,6 +3055,13 @@ function basculerEnvieRech(){
   r.envie = !r.envie;
   clearTimeout(rechTimer); avorterRech();
   r.qtitres = []; r.qgens = []; r.qloading = false; r.qerr = '';
+  /* RETOUR-14 — ÉTEINDRE LE ✦ FERME LE DIALOGUE. Le laisser ouvert rendrait la
+     barre à la recherche de titre avec un fil de questions encore dessous : un
+     écran qui raconte deux histoires. La ligne de statut part avec lui, sinon
+     « ✦ Je lis ta phrase… » resterait au-dessus d'un mode qui ne lit plus
+     rien. */
+  r.envieD = null;
+  poserStatutIA(null);
   oublierDefil('search');
   if(view === 'search') window.scrollTo(0, 0);
   /* Le champ lui-même n'est jamais réécrit par `peindreRech` (il perdrait le
@@ -3074,7 +3128,200 @@ function peindreRech(){
    Les tuiles d'envie ne disparaissent pas : le §7 dit qu'elles rejoignent la
    section Genre de la feuille Filtres, et qu'elles restent des données. Elles
    ne sont donc plus une rangée d'écran, elles sont une liste dans la feuille. */
+/* ===========================================================================
+   RETOUR-14 (25/10/2026) — LE DIALOGUE D'ENVIE, CÔTÉ ÉCRAN
+
+   Maquette qui fait foi : `30-recherche-ia-dialogue.html`. L'écran est fait de
+   quatre choses, dans cet ordre : la ligne de statut (RETOUR-10 §2, inchangée),
+   le FIL des réponses, la QUESTION en cours, la GRILLE.
+
+   CE QUI DISPARAÎT PENDANT UN DIALOGUE, et c'est délibéré : la rangée
+   d'ambiances, les pilules de critères et la barre de tri. Ce ne sont pas les
+   outils de ce moment-là. Les filtres servent à FOUILLER les 24 000 titres ;
+   ici on se fait PROPOSER, et laisser à l'écran des pilules qui ne décrivent
+   rien de ce qu'on voit inviterait à les toucher pour comprendre pourquoi elles
+   ne font rien.
+
+   LA RÈGLE N° 1 DU LOT TIENT ICI, à une ligne près : NULLE PART cet écran
+   n'affiche de genre ni de catégorie déduite. La phrase reste dans la barre,
+   telle qu'elle a été tapée ; le fil ne montre que des questions et des
+   réponses ; le compteur dit « d'après ton envie » et pas « comédie ». C'est
+   pour ça qu'aucun `resumeComprisIA` ne passe par ce chemin : son travail est
+   justement de nommer les catégories comprises, et c'est exactement ce qu'on
+   vient d'enlever.
+
+   TOUT CE QUI VIENT DU MODÈLE EST NON SÛR. Les questions et les options sont
+   du texte de l'IA (règle S3 du 09/08) : `esc` à l'insertion, `escJs` dans les
+   gestionnaires — et les variables destinées à un `onclick` se nomment `…Js`,
+   c'est la convention que le contrôle n° 9 des tests ne peut pas voir seul.
+=========================================================================== */
+
+/* Le libellé de la réponse libre. ÉCRIT EN DUR, et c'est un choix : la maquette
+   le fait varier (« Autre chose… », « Je précise… », « Autre… »), le modèle
+   pourrait le rendre — et il pourrait aussi l'oublier. Une affordance qui est
+   la SEULE issue quand aucune proposition ne parle ne doit pas pouvoir
+   disparaître parce qu'un fournisseur a sauté une clé. */
+const ENVIE_LIBRE = 'Autre chose…';
+
+/* Ouvrir : la phrase, et rien de compris. `charge` à faux dit « rien n'a encore
+   abouti » — c'est ce qui permet au premier échec de rendre l'écran de la v118
+   au lieu de laisser un dialogue vide. */
+function ouvrirDialogueEnvieRech(phrase){
+  const r = etatRech();
+  r.envieD = { phrase:String(phrase || ''), reponses:[], question:null, titres:[],
+               fini:false, libre:false, appels:0, charge:false,
+               mesures:null, jetes:[] };
+  /* La grille de FOUILLE est abandonnée : son moteur de flux n'a plus rien à
+     dire pendant un dialogue, et ses requêtes en vol arriveraient dans un écran
+     qui ne les attend plus (B5 — on abandonne avant de jeter). */
+  avorterGrilleRech();
+  r.flux = null;
+  oublierDefil('search');
+  if(view === 'search') window.scrollTo(0, 0);
+  peindreRech();
+}
+
+/* Une étape est arrivée. UN SEUL endroit écrit l'écran du dialogue, et c'est
+   celui-ci : app-14 décide, app-12 peint. */
+function appliquerEtapeEnvieRech(etape){
+  const r = etatRech();
+  const D = r.envieD;
+  if(!D || !etape) return;
+  D.titres = etape.titres || [];
+  D.question = etape.question || null;
+  D.fini = !!etape.fini;
+  D.charge = true;
+  D.libre = false;
+  if(etape.mesures) D.mesures = etape.mesures;
+  if(etape.jetes) D.jetes = etape.jetes;
+  peindreRech();
+}
+
+/* Rien n'a abouti à la PREMIÈRE étape : on quitte le dialogue et on rend
+   l'écran de la v118, sans un message. IA coupée, saturée, hors ligne — la
+   personne voit la recherche de texte sur ce qu'elle a tapé, ce qui est la
+   chose la plus utile qu'on puisse faire sans rien lui demander.
+   « Le socle ne meurt jamais » : c'est cette fonction. */
+function abandonnerDialogueEnvieRech(){
+  const r = etatRech();
+  if(!r.envieD) return;
+  r.envieD = null;
+  r.envie = false;
+  poserStatutIA(null);
+  render();
+  if(enRechercheTitre()) lancerTitre(true);
+  else peindreRech();
+}
+
+/* « Ça me va, montre-moi » — présent à CHAQUE étape, et il coupe court
+   immédiatement : aucun appel, aucune attente. La grille à l'écran est déjà la
+   bonne, c'est tout l'intérêt d'avoir affiché les titres avant les questions. */
+function assezEnvieRech(){
+  const D = etatRech().envieD;
+  if(!D) return;
+  D.question = null;
+  D.fini = true;
+  D.libre = false;
+  peindreRech();
+}
+
+/* La réponse libre. Elle OUVRE LE CLAVIER et n'appelle rien : l'appel part à la
+   validation seulement (règle RB-1 — jamais d'IA pendant la frappe). */
+function ouvrirLibreEnvieRech(){
+  const D = etatRech().envieD;
+  if(!D || !D.question) return;
+  D.libre = true;
+  peindreRech();
+  const i = document.getElementById('nvlibre');
+  if(i) i.focus();
+}
+
+function blocFilEnvieRech(){
+  const D = etatRech().envieD;
+  if(!D || !D.reponses.length) return '';
+  return '<div class="nvfil">' + D.reponses.map(function(x, i){
+    return '<button class="nvrep" onclick="rouvrirEnvieIA('+i+')" '+
+      'aria-label="Revenir à cette question">'+
+      '<span class="nvrepq">'+esc(x.q)+'</span>'+
+      '<span class="nvrepv">'+esc(x.r)+'</span>'+
+      '<span class="nvreped">modifier</span></button>';
+  }).join('') + '</div>';
+}
+
+function blocQuestionEnvieRech(){
+  const D = etatRech().envieD;
+  if(!D) return '';
+  /* Le champ libre remplace les options, il ne s'y ajoute pas : deux façons de
+     répondre en même temps, c'est une question qu'on ne sait plus lire. */
+  if(D.libre && D.question)
+    return '<div class="nvq"><div class="nvqt">'+esc(D.question.texte)+'</div>'+
+      '<input type="text" id="nvlibre" class="nvlib" maxlength="60" '+
+        'enterkeyhint="send" autocomplete="off" placeholder="Dis-le avec tes mots…" '+
+        'onkeydown="if(event.key===\'Enter\'){this.blur();repondreEnvieIA(this.value)}">'+
+      '<button class="nvassez" onclick="assezEnvieRech()">Ça me va, montre-moi</button>'+
+      '</div>';
+  if(D.question){
+    /* `escJs` et une variable en `…Js` : le texte vient du modèle et traverse
+       DEUX analyseurs (HTML puis JavaScript) avant d'arriver dans l'appel.
+       `esc` seul laisserait passer une apostrophe — le bug des acteurs du 09/08,
+       au même endroit, sur une donnée encore moins sûre. */
+    const opts = D.question.options.map(function(o){
+      const oJs = escJs(o);
+      return '<button class="nvopt" onclick="repondreEnvieIA(\''+oJs+'\')">'+esc(o)+'</button>';
+    }).join('');
+    return '<div class="nvq"><div class="nvqt">'+esc(D.question.texte)+'</div>'+
+      '<div class="nvopts">'+opts+
+      '<button class="nvopt nvlibre" onclick="ouvrirLibreEnvieRech()">'+
+        esc(ENVIE_LIBRE)+'</button></div>'+
+      '<button class="nvassez" onclick="assezEnvieRech()">Ça me va, montre-moi</button>'+
+      '</div>';
+  }
+  /* Fini. Deux phrases possibles, et elles ne disent pas la même chose : « je
+     crois t'avoir cerné » est le modèle qui s'arrête de lui-même, « c'est
+     noté » est la personne qui a coupé court. Les confondre ferait dire à
+     l'écran « je t'ai cerné » à quelqu'un qui vient justement de refuser de
+     répondre. */
+  if(!D.fini || !D.charge) return '';
+  const cerne = D.reponses.length > 0;
+  return '<div class="nvfini"><b>'+(cerne ? '✓ Je crois t’avoir cerné' : '✓ C’est noté')+'</b>'+
+    (cerne ? 'Plus de questions — voilà ce qui colle le mieux.'
+           : 'Je garde ton envie telle quelle — touche une réponse pour affiner.')+
+    '</div>';
+}
+
+function blocGrilleEnvieRech(){
+  const D = etatRech().envieD;
+  if(!D) return '';
+  /* PREMIER CHARGEMENT — des cadres qui brillent, pas un écran vide. C'est la
+     maquette, et c'est aussi la seule fois où le dialogue n'a rien à montrer :
+     ensuite la grille précédente reste toujours en place. */
+  if(!D.charge)
+    return '<div class="gtitre">Résultats</div><div class="rang3">'+
+      new Array(6).fill('<div class="nvsq"></div>').join('')+'</div>';
+  const n = D.titres.length;
+  if(!n)
+    return '<div class="empty">'+I.search+'<h3>Rien à proposer sur cette envie</h3>'+
+      '<p>Reformule-la, ou reviens sur une réponse au-dessus.</p></div>';
+  /* LE COMPTEUR DIT LA VÉRITÉ, et elle est petite. La maquette annonce « 142
+     titres » puis « 64 » : ces nombres-là sont ceux d'une requête de catalogue,
+     et ils n'existent pas ici — on affiche ce que le modèle a nommé et que TMDB
+     a reconnu, soit une douzaine. Gonfler le chiffre pour ressembler à la
+     maquette serait mentir sur la seule chose que cet écran mesure.
+     `rgenvie` et non `rgtitre` : `peindreCompteurRech` réécrit `rgtitre` pendant
+     un amorçage de grille, et il y poserait « Résultats » par-dessus. */
+  const mot = D.reponses.length ? 'au plus près de ce que tu as dit' : 'd’après ton envie';
+  return '<div class="gtitre" id="rgenvie">'+n+' titre'+(n > 1 ? 's' : '')+
+    ' <i class="nvdit">· '+mot+'</i></div>'+
+    '<div class="rang3">'+D.titres.map(x => jaquetteRech(x)).join('')+'</div>';
+}
+
 function corpsRech(){
+  /* RETOUR-14 — LE DIALOGUE PREND L'ÉCRAN. Testé AVANT `enRechercheTitre` : en
+     mode ✦ celle-ci rend déjà faux, mais s'appuyer sur ça ferait dépendre cet
+     écran d'un détail d'un autre. */
+  if(etatRech().envieD)
+    return ligneStatutIA() + blocFilEnvieRech() + blocQuestionEnvieRech() +
+           blocGrilleEnvieRech();
   if(enRechercheTitre()) return corpsTitreRech();
   /* Le mode duo a besoin de la bibliothèque du proche pour ses raisons. Elle
      est souvent déjà là (Découvrir la charge pour « Vu par tes proches ») ;
