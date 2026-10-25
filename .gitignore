@@ -27,3 +27,10 @@
 node_modules/
 package-lock.json
 package.json
+
+# Le CLI Supabase sème son cache ici dès qu'on déploie une fonction
+# (`cli-latest`, `linked-project.json` — la référence du projet et son
+# organisation). Ce n'est pas du code, et c'est entré dans un commit le
+# 14/09/2026 sans que personne l'ait demandé, en même temps que le premier
+# déploiement fait depuis ce dépôt.
+supabase/.temp/

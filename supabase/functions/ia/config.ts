@@ -145,8 +145,26 @@ export const FOURNISSEURS: Fournisseur[] = [
   { nom: "gemini-flash-lite-2", rang: 4, modele: "gemini-3.5-flash-lite",
     cle_env: "GEMINI_API_KEY2", limite_minute: 15, limite_jour: 1500, actif: true },
   /* Étage 5 — le secours, chez quelqu'un d'autre. Un modèle du palier gratuit
-     QUI DÉCLARE `structured_outputs`, et ce mot compte : voir le pavé ci-dessous. */
-  { nom: "openrouter", rang: 5, modele: "nvidia/nemotron-nano-9b-v2:free",
+     QUI DÉCLARE `structured_outputs`, et ce mot compte : voir le pavé ci-dessous.
+
+     LE NOM DU MODÈLE A CHANGÉ DEUX FOIS EN UN MOIS, ET IL FAUT SAVOIR POURQUOI
+     AVANT D'Y TOUCHER UNE TROISIÈME.
+       · 014 (10/08) — `inclusionai/ling-3.0-tiny:free` ne déclarait pas
+         `structured_outputs` : HTTP 400 sur chaque appel, étage muet.
+       · 019 (14/09) — `nvidia/nemotron-nano-9b-v2:free` a été RETIRÉ du
+         catalogue : HTTP 404 du 25/08 au 14/09, étage muet, et trois semaines
+         avant qu'on s'en aperçoive.
+     LE PALIER GRATUIT D'OPENROUTER EST UNE CIBLE MOUVANTE : dix-neuf modèles
+     `:free` au 14/09, dont CINQ déclarent `structured_outputs`. Tout nom écrit
+     ici a une espérance de vie de quelques semaines. C'est la raison d'être de
+     `ia_etages_muets()` (migration 019) : on ne peut pas empêcher le retrait,
+     on peut refuser de l'apprendre trois semaines plus tard.
+
+     CETTE LIGNE N'EST QU'UN REPLI — la table `ia_fournisseurs` fait foi et se
+     corrige sans redéploiement. Elle sert quand la base est injoignable,
+     c'est-à-dire au pire moment : un modèle mort ici est un cinquième étage
+     qui disparaît exactement le jour où il servirait. */
+  { nom: "openrouter", rang: 5, modele: "nex-agi/nex-n2.5-mini:free",
     cle_env: "OPENROUTER_API_KEY", limite_minute: 20, limite_jour: 50, actif: true },
 ];
 
